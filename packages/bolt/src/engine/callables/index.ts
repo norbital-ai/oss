@@ -29,7 +29,6 @@ import { approvalHook } from '../approvals/approvals.ts';
 import { FILE_SYNC_INPUT, fileSyncAdmits } from '../sync/file.ts';
 import { WriteOutcome as importedOutcome } from '../../protocol/schema.ts';
 import { replayOnce } from '../write/replay.ts';
-import { delegatedVerbAuthority, type AutomationDelegation } from '../access/delegation.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	LIMITS,
@@ -63,9 +62,7 @@ import { canonical, sha256Hex } from '@norbital-ai/store';
 import { Chain, decided, KEY_REUSE, storedOutcome } from '../write/sql.ts';
 import { decodeInput, type Decoded } from './decode.ts';
 
-type Caller = CallerContext & {
-	delegation?: AutomationDelegation | undefined;
-};
+type Caller = CallerContext & {};
 type Sink = (planned: PlannedCommit) => void;
 type ActsRequest = Caller & {
 	name: string;
@@ -177,21 +174,13 @@ export function parseCallable(
 		BoltError.make('unknownCallable', 'decode', `'${callable}' is not a declared callable`)
 	);
 }
-/** Without a declared `limit`, an automation's manual starts per starter. */
 const START_LIMIT = '30/min';
-/** The one bucket a manual start charges: the automation's `limit`, per starter (rule 38). */
-export const startCharge = (
-	m: EngineManifest,
-	automation: string,
-	authority: Authority
-): Charge => {
-	const rate = m.automations[automation]?.limit ?? START_LIMIT;
-	return {
-		rule: `start:${automation}:${rate}`,
-		bucket: actorRef(authority.actor),
-		...parseRate(rate)
-	};
-};
+/** Manual starts are limited per automation and starter (rule 38). */
+export const startCharge = (automation: string, authority: Authority): Charge => ({
+	rule: `start:${automation}:${START_LIMIT}`,
+	bucket: actorRef(authority.actor),
+	...parseRate(START_LIMIT)
+});
 
 function makeCallables(config: CallablesConfig): CallablesShape {
 	const e = config.engine,
@@ -202,7 +191,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	// runs, and the acts a run's body performs, are never rate limited
 	const starts = new RateWindows();
 
-	/** Rule 33: a start or schedule needs the automation in `policy.automations`; its input decodes (rule 23). */
+	/** Rule 33: a start or schedule needs the automation in `capabilities.automations`; its input decodes (rule 23). */
 	function startable(name: string, auth: Authority, input: Json): Refused | null {
 		const parsed = parseCallable(name, m);
 		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
@@ -253,7 +242,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				input,
 				key: c.invocationId,
 				issuedAt: rec.issuedAt,
-				authority: delegatedVerbAuthority(m, c.authority, c.delegation, `${model}.${verb}`),
+				authority: c.authority,
 				observed: c.observed,
 				readGuards: c.readGuards,
 				bindings: c.bindings,
@@ -542,7 +531,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	): Effect.fn.Return<Outcome, import('../errors.ts').EngineError> {
 		if (r.runs.length === 0)
 			return refused('invalidInput', 'A start names at least one run.', 'runs');
-		if (!starts.charge([startCharge(m, r.automation, r.authority)], Date.parse(r.bindings.now)).ok)
+		if (!starts.charge([startCharge(r.automation, r.authority)], Date.parse(r.bindings.now)).ok)
 			return refused('rateLimited', RATE_LIMITED);
 		for (const run of r.runs) {
 			const no = startable(r.automation, r.authority, run.input);
@@ -554,24 +543,22 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			const refs = decoded?.refs ?? [];
 			if (refs.length > 0) {
 				// an id input names a record the starter reads, in any output it holds (its view output)
-				const found = yield* e
-					.read(
-						refs.map((ref) => {
-							const read = ir.read(cat, ref.model, {
-								where:
-									ref.where === undefined || Object.keys(ref.where).length === 0
-										? { id: { eq: ref.id } }
-										: { and: [{ id: { eq: ref.id } }, ref.where] },
-								select: { id: true },
-								limit: 1
-							});
-							const output = viewOutput(m, r.authority, ref.model);
-							return read.kind === 'read' && output !== undefined ? { ...read, output } : read;
-						}),
-						{ as: 'caller', authority: r.authority },
-						r.bindings
-					)
-					.pipe(Effect.catch(() => Effect.succeed(refs.map(() => null))));
+				const found = yield* e.read(
+					refs.map((ref) => {
+						const read = ir.read(cat, ref.model, {
+							where:
+								ref.where === undefined || Object.keys(ref.where).length === 0
+									? { id: { eq: ref.id } }
+									: { and: [{ id: { eq: ref.id } }, ref.where] },
+							select: { id: true },
+							limit: 1
+						});
+						const output = viewOutput(m, r.authority, ref.model);
+						return read.kind === 'read' && output !== undefined ? { ...read, output } : read;
+					}),
+					{ as: 'caller', authority: r.authority },
+					r.bindings
+				);
 				const missing = refs.find((_, index) => {
 					const page = found[index];
 					const rows = Predicate.isObject(page) ? page['rows'] : undefined;

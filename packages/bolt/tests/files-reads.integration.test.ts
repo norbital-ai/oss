@@ -1,4 +1,4 @@
-// `ctx.files.image/text/table/sheet` (§5.8.1): the engine reads a stored file host-side, over real small files.
+// `ctx.files.get` and `ctx.files.image` (§5.8.1): the engine reads a stored file host-side, over real small files.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect } from '@effect/vitest';
@@ -20,18 +20,21 @@ const manifest = {
 	},
 	relationships: {},
 	exposures: {
-		docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } }
+		docs: { outputs: { default: { docs: { fields: 'all' } } }, create: { columns: { docs: ['title', 'file'] } } }
 	},
 	integrations: {},
 	teams: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
 	policies: {
-		ops: { description: 'Ops', grants: { docs: { read: true } }, automations: ['read'] }
+		ops: {
+			description: 'Ops',
+			grants: { docs: { read: true } },
+			capabilities: { automations: ['read'] }
+		}
 	},
 	automations: {
 		read: {
@@ -45,8 +48,9 @@ const manifest = {
 
 const guest = program(`import { Effect, Result } from 'effect';
 export default { automation: { read: { body: function* ({ ref, how }, ctx) {
-	if (how === 'jpeg') { const small = yield* ctx.files.image(ref, { jpeg: { maxEdge: 40 } }); return { small, facts: yield* ctx.files.image(small) }; }
-	const result = yield* Effect.result(ctx.files[how](ref));
+	if (how === 'jpeg') { const small = yield* ctx.files.image(ref, { jpeg: { max_edge: 40 } }); return { small, facts: yield* ctx.files.image(small) }; }
+	if (how === 'get') return new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(ref));
+	const result = yield* Effect.result(ctx.files.image(ref));
 	return Result.isSuccess(result) ? result.success : result.failure;
 } } } };`);
 
@@ -156,33 +160,11 @@ layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, gues
 				})
 		);
 
-		it.effect('text as UTF-8, CSV and xlsx as tables, xlsx as typed sheets', () =>
+		it.effect('reads stored UTF-8 bytes', () =>
 			Effect.gen(function* () {
-				expect(yield* read('items.csv', 'text/csv', 'text')).toBe(
+				expect(yield* read('items.csv', 'text/csv', 'get')).toBe(
 					'name,qty\r\n"Bolt, M8",4\r\n"say ""hi""",2\r\n'
 				);
-				expect(yield* read('items.csv', 'text/csv', 'table')).toEqual([
-					['name', 'qty'],
-					['Bolt, M8', '4'],
-					['say "hi"', '2']
-				]);
-				expect(yield* read('photo.png', 'image/png', 'text')).toMatchObject({ kind: 'invalid' });
-				const xlsx = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-				expect(yield* read('items.xlsx', xlsx, 'table')).toEqual([
-					['name', 'qty', 'ok'],
-					['Bolt, M8', '4', 'true'],
-					['Nut', '2.5', 'false']
-				]);
-				expect(yield* read('items.xlsx', xlsx, 'sheet')).toEqual([
-					{
-						name: 'Stock',
-						rows: [
-							['name', 'qty', 'ok'],
-							['Bolt, M8', 4, true],
-							['Nut', 2.5, false]
-						]
-					}
-				]);
 			})
 		);
 	}

@@ -161,6 +161,72 @@ const patches = (frames: readonly Frame[]) =>
 	frames.flatMap((f) => (f.t === 'patch' ? [[f.view, f.ops] as const] : []));
 const page = (...rows: Json[]) => ({ rows, next: null });
 
+describe('engine/live connection recovery', () => {
+	it.effect('disconnects a slow consumer whose frame queue fills', () =>
+		Effect.gen(function* () {
+			const hub = yield* makeHub(() => Effect.succeed([]));
+			const hello = yield* Deferred.make<string>();
+			const resume = yield* Deferred.make<void>();
+			const frames: Frame[] = [];
+			const consumer = yield* hub.connect(admin).pipe(
+				Stream.runForEach((frame) =>
+					frame.t === 'hello'
+						? Deferred.succeed(hello, frame.conn).pipe(Effect.andThen(Deferred.await(resume)))
+						: Effect.sync(() => {
+								frames.push(frame);
+							})
+				),
+				Effect.forkScoped
+			);
+			const id = yield* Deferred.await(hello);
+			for (let n = 0; n <= LIVE.connectionFrames; n++) {
+				hub.syncChanged('orders');
+				yield* hub.settled;
+			}
+			expect(yield* hub.authorityOf(id)).toMatchObject({ _tag: 'None' });
+			yield* Deferred.succeed(resume, undefined);
+			yield* Fiber.join(consumer);
+			expect(frames).toEqual([]);
+		})
+	);
+
+	it.effect('resets existing streams and routes later commits after a reader defect', () =>
+		Effect.gen(function* () {
+			let broken = false;
+			let title = 'Initial';
+			const hub = yield* makeHub((batch) =>
+				Effect.suspend(() =>
+					broken
+						? Effect.die('read defect')
+						: Effect.succeed(batch.map(() => page(order({ title }))))
+				)
+			);
+			const view = { read: read(cat, 'orders', { all: true }) };
+			const before = yield* connection(hub, admin, []);
+			yield* hub.register(before.id, 'orders', view);
+			broken = true;
+			hub.syncChanged('orders');
+			yield* hub.settled;
+			yield* Fiber.join(before.fiber);
+			expect(yield* hub.authorityOf(before.id)).toMatchObject({ _tag: 'None' });
+			broken = false;
+			const frames: Frame[] = [];
+			const after = yield* connection(hub, admin, frames);
+			yield* hub.register(after.id, 'orders', view);
+			title = 'After the defect';
+			hub.syncChanged('orders');
+			yield* hub.settled;
+			yield* TestClock.adjust(0);
+			expect(frames).toContainEqual(
+				expect.objectContaining({
+					t: 'answer',
+					value: page(order({ title }))
+				})
+			);
+		})
+	);
+});
+
 describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 	it.effect(
 		'coalesces sync metadata refreshes for visible records and retains caller authority',

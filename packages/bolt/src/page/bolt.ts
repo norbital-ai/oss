@@ -35,7 +35,7 @@ import {
 	RestorePreviewSchema,
 	type RecordParentContext
 } from '../protocol/record-contracts.ts';
-import type { ApprovalView } from '../engine/approvals/approvals.ts';
+import { ApprovalViewSchema } from '../protocol/approval-view.ts';
 import {
 	HEADERS,
 	PATHS,
@@ -59,14 +59,11 @@ import { browserCatalog, type BrowserCatalog } from '../protocol/catalog.ts';
 import { decodeView, type Catalog } from '@norbital-ai/store';
 import { storeSync } from '../protocol/errors.ts';
 import type { Query } from './page-bolt.ts';
-import type {
-	ConvertRequest,
-	ConvertSource,
-	PreviewPdfOptions
-} from '../decl/runtime/facilities.ts';
+import { readValue } from './read-value.ts';
+import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
 import { browserTransport } from '../protocol/client.ts';
 import { FileRefSchema, storedFileUrl } from './file-ref.ts';
-import { encodeWire, reviveWire, type Wired } from '@norbital-ai/std/wire';
+import { encodeWire, type Wired } from '@norbital-ai/std/wire';
 
 export type BoltConfig = {
 	actor: Json;
@@ -82,6 +79,7 @@ export type BoltConfig = {
 	signals?: Signals;
 	uuid?: () => string;
 	now?: () => string;
+	initialRead?: (read: WireRead) => Json | undefined;
 	catalog?: BrowserCatalog;
 	describe?: boolean;
 	contract?: string;
@@ -105,17 +103,7 @@ type View = {
 	registered: boolean;
 	state: SubscriptionRef.SubscriptionRef<ViewState>;
 };
-const typed = (v: Json): Json =>
-	reviveWire(
-		'',
-		jsonArray(v)
-			? v.map(typed)
-			: isRow(v)
-				? Object.fromEntries(
-						Object.entries(v).map(([key, item]): [string, Json] => [key, typed(item)])
-					)
-				: v
-	) as Json;
+const typed = readValue<Json>;
 const CapabilitiesAnswer = Schema.Struct({ value: RecordCapabilitiesSchema });
 const FileAnswer = FileRefSchema;
 const FilterStep = Schema.Union([
@@ -563,15 +551,18 @@ export const createBolt = (config: BoltConfig) =>
 					return yield* Effect.fail(
 						new ReadFailed({ code: 'protocol', message: 'The host returned no read answer.' })
 					);
-				return typed(first);
+				return first;
 			});
 		const q = <T>(method: WireRead['m'], args: readonly Wired[]): Query<T> => {
 			const read: WireRead = { m: method, a: args.map(encodeWire) };
 			const once = answer(read).pipe(
 				Effect.tap((value) => Effect.sync(() => track(value))),
-				Effect.map((value) => value as T)
+				Effect.map(readValue<T>)
 			);
-			return Object.assign(reactiveQuery(once, observe<T>({ read })), { read });
+			const seeded = config.initialRead?.(read);
+			if (seeded !== undefined) track(seeded);
+			const initial = seeded === undefined ? Option.none<T>() : Option.some(readValue<T>(seeded));
+			return Object.assign(reactiveQuery(once, observe<T>({ read }), initial), { read });
 		};
 		function observe<T>(query: {
 			readonly read: WireRead;
@@ -581,7 +572,7 @@ export const createBolt = (config: BoltConfig) =>
 				return Stream.fromEffectSchedule(
 					answer(query.read).pipe(
 						Effect.tap((value) => Effect.sync(() => track(value))),
-						Effect.map(Option.some),
+						Effect.map((value) => Option.some(typed(value))),
 						Effect.catchTag('TransportFailed', () => Effect.succeed(Option.none<Json>()))
 					),
 					Schedule.spaced(config.poll)
@@ -798,7 +789,7 @@ export const createBolt = (config: BoltConfig) =>
 					() => (config.now === undefined ? new Date() : new Date(config.now()))
 				),
 			act,
-			recordCapabilities: (model: string, id: string, parent?: RecordParentContext) =>
+			record_capabilities: (model: string, id: string, parent?: RecordParentContext) =>
 				getValue(
 					`${PATHS.recordCapabilities}?${new URLSearchParams({
 						model,
@@ -912,9 +903,9 @@ export const createBolt = (config: BoltConfig) =>
 							error instanceof ProtocolFailed ? new TransportFailed({ status: 0 }) : error
 						)
 					),
-			fileUrl: (ref: { readonly id: string }, options: FileUrlOptions = {}) =>
+			file_url: (ref: { readonly id: string }, options: FileUrlOptions = {}) =>
 				storedFileUrl(base, ref.id, options),
-			previewPdf: (source: ConvertSource, options: PreviewPdfOptions = {}) =>
+			preview_pdf: (source: ConvertSource, options: PreviewPdfOptions = {}) =>
 				Effect.gen(function* () {
 					const issuedAt = config.now?.() ?? new Date(yield* Clock.currentTimeMillis).toISOString();
 					const response = yield* transport.requestPdf(
@@ -940,58 +931,6 @@ export const createBolt = (config: BoltConfig) =>
 						return yield* new ActRefused({ code, message: refusal.value.error.message });
 					return yield* new TransportFailed({ status: response.status });
 				}),
-			convert: (
-				source: ConvertSource,
-				request: ConvertRequest
-			): Effect.Effect<FileRef, ActRefused | TransportFailed | Unavailable> =>
-				Effect.gen(function* () {
-					const issuedAt =
-						config.now === undefined
-							? yield* Effect.map(Clock.currentTimeMillis, (millis) =>
-									new Date(millis).toISOString()
-								)
-							: config.now();
-					const response = yield* transport.request(
-						'POST',
-						PATHS.act,
-						{
-							callable: 'convert.document',
-							input: encodeWire({ source, request }),
-							issuedAt
-						},
-						{
-							[HEADERS.key]: uuid(),
-							...(config.contract === undefined ? {} : { [HEADERS.contract]: config.contract })
-						}
-					);
-					const refusal = errorOf(response.body);
-					if (Option.isSome(refusal)) {
-						if (refusal.value.error.code === 'unavailable')
-							return yield* Effect.fail(
-								new Unavailable({
-									facility: 'convert.document',
-									reason: refusal.value.error.message
-								})
-							);
-						const code = refusalOfStatus(response.status);
-						return yield* Effect.fail(
-							code === null
-								? new TransportFailed({ status: response.status })
-								: new ActRefused({ code, message: refusal.value.error.message })
-						);
-					}
-					const { outcome } = yield* decode(ActReply, response.body);
-					if (outcome.kind === 'refused') return yield* Effect.fail(new ActRefused(outcome));
-					if (outcome.kind !== 'committed')
-						return yield* Effect.fail(
-							new ProtocolFailed({ message: 'The document could not be converted.' })
-						);
-					return yield* decode(FileAnswer, encodeWire(outcome.output));
-				}).pipe(
-					Effect.mapError((error) =>
-						error instanceof ProtocolFailed ? new TransportFailed({ status: 0 }) : error
-					)
-				),
 			// a per-record restore (rule 17), never point-in-time recovery or a source rollback
 			restore: {
 				preview: (model: string, record: string, revision: number) =>
@@ -1032,13 +971,9 @@ export const createBolt = (config: BoltConfig) =>
 				get: (requestId: string) =>
 					getValue(
 						`${PATHS.approval}?id=${encodeURIComponent(requestId)}`,
-						Schema.NullOr(Schema.Struct({ value: Schema.Json })),
+						Schema.NullOr(Schema.Struct({ value: Schema.NullOr(ApprovalViewSchema) })),
 						null
-					).pipe(
-						Effect.map((answer) =>
-							answer === null ? null : (typed(answer.value) as ApprovalView | null)
-						)
-					),
+					).pipe(Effect.map((answer) => answer?.value ?? null)),
 				list: (
 					filter: {
 						model?: string;
@@ -1054,8 +989,8 @@ export const createBolt = (config: BoltConfig) =>
 					if (filter.all === true) params.set('all', '1');
 					return getValue(
 						`${PATHS.approval}?${params}`,
-						Schema.Struct({ value: Schema.Array(Schema.Json) })
-					).pipe(Effect.map((answer) => answer.value.map(typed) as ApprovalView[]));
+						Schema.Struct({ value: Schema.Array(ApprovalViewSchema) })
+					).pipe(Effect.map((answer) => answer.value));
 				}
 			},
 			session: {

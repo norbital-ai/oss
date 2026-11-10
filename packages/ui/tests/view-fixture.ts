@@ -187,12 +187,12 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 		...(script.uuid === undefined ? {} : { uuid: script.uuid })
 	});
 	disposals.push(fixture.dispose);
-	const { recordCapabilities: _capabilities, ...core } = fixture.bolt;
+	const { record_capabilities: _capabilities, ...core } = fixture.bolt;
 	const bolt: ViewBolt = {
 		...core,
 		...(script.capabilities === undefined
 			? {}
-			: { recordCapabilities: fixture.client.recordCapabilities }),
+			: { record_capabilities: fixture.client.record_capabilities }),
 		...(script.options === undefined ? {} : { options: script.options }),
 		...(script.describe === undefined ? {} : { describe: script.describe })
 	};
@@ -202,7 +202,7 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 		script,
 		setCapabilities: (capabilities: NonNullable<ViewScript['capabilities']>) => {
 			script.capabilities = capabilities;
-			bolt.recordCapabilities = fixture.client.recordCapabilities;
+			bolt.record_capabilities = fixture.client.record_capabilities;
 		}
 	};
 }

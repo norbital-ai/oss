@@ -1,10 +1,8 @@
-// `ctx.convert.ingest` and `ctx.ai.speak` (optional host capabilities): the engine reads the FileRef and hands the host's
-// ingest port its bytes (Norbital Convert transcribes audio); `speak`'s audio and an ingest's images are stored like
-// `files.put`. A host without the port answers `unavailable`.
+// An authored ingest reads the stored file, decodes the host's answer and stores the images of an owned result.
 import { uuidv7 } from '../src/protocol/wire.ts';
 import { Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
-import { Convert, Speech, Files } from '../src/engine/ports.ts';
+import { Convert } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { decodeProjectedManifest } from '../src/engine/manifest.ts';
 import { actReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
@@ -27,28 +25,27 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			calls: {
-				read: { calls: { fields: 'all' } },
+				outputs: { default: { calls: { fields: 'all' } } },
 				create: { columns: { calls: ['title', 'audio'] } }
 			}
 		},
 		integrations: {},
 		teams: {},
 		connections: {},
-		envoys: {},
+
 		mcp: {},
 		apps: {},
 		customFields: {},
 		agent: { skills: {} },
 		policies: {
-			ops: { description: 'Ops', grants: { calls: { read: true } }, automations: ['listen', 'say'] }
+			ops: { description: 'Ops', grants: { calls: { read: true } }, capabilities: { automations: ['listen'] } }
 		},
 		automations: {
 			listen: {
 				description: 'Reads a call',
 				policies: ['ops'],
 				input: { file: { kind: 'json' }, options: { kind: 'json' } }
-			},
-			say: { description: 'Speaks a line', policies: ['ops'], input: { options: { kind: 'json' } } }
+			}
 		}
 	})
 );
@@ -58,8 +55,7 @@ const caught = (effect) => effect.pipe(Effect.catch((error) => Effect.succeed(er
 	? { kind: 'unavailable', facility: error.facility, reason: error.reason }
 	: { kind: error.kind, message: error.message, ...(error.status === undefined ? {} : { status: error.status }) })));
 export default { automation: {
-	listen: { body: function* ({ file, options }, ctx) { return yield* caught(ctx.convert.ingest(file, options)); } },
-	say: { body: function* ({ options }, ctx) { return yield* caught(ctx.ai.speak('Hello there', { for: 'say', ...options })); } }
+	listen: { body: function* ({ file, options }, ctx) { return yield* caught(ctx.convert.ingest(file, options)); } }
 } };`);
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
@@ -79,19 +75,14 @@ const ingested: Ingested = {
 const audio = new Uint8Array([0xff, 0xf3, 1, 2, 3]);
 
 type Ingest = NonNullable<Convert['Service']['ingest']>;
-const unavailable: Speech['Service'] = { speak: () => Port.unavailable('ai.speak') };
 const noIngest: Ingest = () => Port.unavailable('convert.ingest');
 // One workspace; each run swaps the ports the host answers with.
-let speech = unavailable,
-	ingest = noIngest;
-const ports = Layer.merge(
-	Layer.succeed(Speech, { speak: (...args) => Effect.suspend(() => speech.speak(...args)) }),
-	Layer.succeed(Convert, {
-		targets: [],
-		convert: () => Port.unavailable('convert'),
-		ingest: (...args) => Effect.suspend(() => ingest(...args))
-	})
-);
+let ingest = noIngest;
+const ports = Layer.succeed(Convert, {
+	targets: [],
+	convert: () => Port.unavailable('convert'),
+	ingest: (...args) => Effect.suspend(() => ingest(...args))
+});
 // one route and one stored call for the file; each run swaps the port and starts the automation
 let fixture: { route: FixtureRoute; file: Json } | undefined;
 const fileScope = Effect.runSync(Scope.make());
@@ -118,19 +109,17 @@ const prepared = Effect.gen(function* () {
 	return (fixture = { route, file });
 });
 const run = (
-	automation: 'listen' | 'say',
 	input: (file: Json) => Json,
-	port: Partial<Speech['Service']> & { ingest?: Ingest } = {}
+	port: { ingest?: Ingest } = {}
 ) =>
 	Effect.gen(function* () {
-		speech = { ...unavailable, ...port };
 		ingest = port.ingest ?? noIngest;
 		const t = yield* TestWorkspace,
 			{ route, file } = yield* prepared;
 		const id = uuidv7(Date.parse(t.clock.now()));
 		yield* actReply(route, t.as(t.member(['ops'])).authority, {
 			callable: 'start',
-			input: { automation, input: input(file), id },
+			input: { automation: 'listen', input: input(file), id },
 			issuedAt: t.clock.now()
 		});
 		yield* t.runDue();
@@ -153,7 +142,7 @@ const LIVE = { excludeTestServices: true };
 layer(
 	Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, guest: g, ports }))),
 	LIVE
-)('ctx.convert.ingest and ctx.ai.speak', (it) => {
+)('ctx.convert.ingest', (it) => {
 	it.effect(
 		'ingest hands the port the stored bytes and options, stores images only for an owner; unsupported, a bad shape, a missing file and an absent port are refused',
 		() =>
@@ -161,7 +150,6 @@ layer(
 				const seen: Parameters<Ingest>[] = [];
 				const port: Ingest = (...args) => Effect.sync(() => (seen.push(args), ingested));
 				const { row, output } = yield* run(
-					'listen',
 					(file) => ({ file, options: { diarize: true, speakers: 2, language: 'en' } }),
 					{ ingest: port }
 				);
@@ -194,7 +182,7 @@ layer(
 				expect([...(file?.bytes ?? [])]).toEqual([...audio]);
 				expect(options).toEqual({ diarize: true, speakers: 2, language: 'en' });
 				seen.length = 0;
-				const owned = yield* run('listen', (file) => ({ file, options: { for: 'listen' } }), {
+				const owned = yield* run((file) => ({ file, options: { for: 'listen' } }), {
 					ingest: port
 				});
 				expect(seen[0]?.[1]).toEqual({});
@@ -202,13 +190,13 @@ layer(
 					expect.objectContaining({ name: 'image-1.png', mime: 'image/png', bytes: PNG.byteLength })
 				]);
 				expect(
-					(yield* run('listen', (file) => ({ file, options: {} }), {
+					(yield* run((file) => ({ file, options: {} }), {
 						ingest: () => Effect.succeed({ unsupported: 'no parser for CAD drawings' })
 					})).output
 				).toEqual({ kind: 'unsupported', message: 'no parser for CAD drawings' });
 				const json = { sheets: [{ name: 'Rates', columns: ['Item'], rows: [['Labour']] }] };
 				expect(
-					(yield* run('listen', (file) => ({ file, options: {} }), {
+					(yield* run((file) => ({ file, options: {} }), {
 						ingest: () =>
 							Effect.succeed({
 								kind: 'data',
@@ -220,58 +208,20 @@ layer(
 				).toEqual({ kind: 'data', json });
 				seen.length = 0;
 				expect(
-					(yield* run('listen', (file) => ({ file, options: { speakers: 'two' } }), {
+					(yield* run((file) => ({ file, options: { speakers: 'two' } }), {
 						ingest: port
 					})).output
 				).toMatchObject({ kind: 'invalid' });
 				expect(seen).toEqual([]);
 				expect(
-					(yield* run('listen', () => ({ file: { id: crypto.randomUUID() }, options: {} }), {
+					(yield* run(() => ({ file: { id: crypto.randomUUID() }, options: {} }), {
 						ingest: port
 					})).output
 				).toMatchObject({ kind: 'invalid', message: expect.stringContaining('cannot read file') });
-				expect((yield* run('listen', (file) => ({ file, options: {} }))).output).toMatchObject({
+				expect((yield* run((file) => ({ file, options: {} }))).output).toMatchObject({
 					kind: 'unavailable',
 					facility: 'convert.ingest'
 				});
-			})
-	);
-
-	it.effect(
-		"speak stores the port's audio as a FileRef, defaults to mp3 and refuses another format",
-		() =>
-			Effect.gen(function* () {
-				const files = yield* Files;
-				const seen: unknown[] = [];
-				const speak: Speech['Service']['speak'] = (text, o) =>
-					Effect.sync(() => (seen.push([text, o]), { bytes: audio, mime: 'audio/wav' }));
-				const { t, row, output } = yield* run(
-					'say',
-					() => ({ options: { voice: 'Kore', format: 'wav' } }),
-					{ speak }
-				);
-				expect(row).toMatchObject({ state: 'succeeded', error: null });
-				expect(seen).toEqual([['Hello there', { voice: 'Kore', format: 'wav' }]]);
-				expect(output).toMatchObject({
-					name: 'speech.wav',
-					mime: 'audio/wav',
-					bytes: audio.byteLength
-				});
-				const [file] = yield* t.db.rows(
-					Schema.Struct({ key: Schema.String, field: Schema.String }),
-					{
-						text: `SELECT key, field FROM sys_file WHERE id = $1`,
-						params: [String(output['id'])]
-					}
-				);
-				expect(file?.field).toBe('say');
-				expect([...(yield* files.get(file?.key ?? '', 1024))]).toEqual([...audio]);
-				seen.length = 0;
-				yield* run('say', () => ({ options: { name: 'hi.mp3' } }), { speak });
-				expect(seen).toEqual([['Hello there', { format: 'mp3' }]]);
-				expect(
-					(yield* run('say', () => ({ options: { format: 'flac' } }), { speak })).output
-				).toMatchObject({ kind: 'invalid' });
 			})
 	);
 });

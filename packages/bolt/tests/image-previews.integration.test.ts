@@ -21,7 +21,6 @@ const manifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

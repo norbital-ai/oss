@@ -34,7 +34,6 @@ const manifest = {
 	teams: {},
 	automations: {},
 	connections: { whatsapp: { integration: 'whatsapp' } },
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -244,7 +243,7 @@ it.live(
 					},
 					exposures: {
 						photos: {
-							read: { photos: { fields: 'all' } },
+							outputs: { default: { photos: { fields: 'all' } } },
 							create: { columns: { photos: ['name', 'photo'] } }
 						}
 					},
@@ -310,7 +309,7 @@ it.live(
 						controller: {
 							description: 'Reads handovers',
 							grants: {},
-							automations: ['handover']
+							capabilities: { automations: ['handover'] }
 						}
 					},
 					automations: {
@@ -434,7 +433,7 @@ it.live("a file sync's upload keeps its dotted field: `<model>.$import.<sync>`",
 				},
 				exposures: {
 					documents: {
-						read: { documents: { fields: 'all' } },
+						outputs: { default: { documents: { fields: 'all' } } },
 						syncs: { sheet: { with: 'file', parser: ['csv'], schema: { title: { kind: 'text' } } } }
 					}
 				}

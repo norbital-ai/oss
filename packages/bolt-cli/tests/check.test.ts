@@ -6,7 +6,8 @@ import { Effect, Result } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { describe, expect } from 'vitest';
 import { it } from '@effect/vitest';
-import { checkRules, cronValid } from '../src/compiler/check/rules.ts';
+import { checkRules } from '../src/compiler/check/rules.ts';
+import { parseCron } from '@norbital-ai/bolt/tooling';
 import { evaluationCpuMs } from '../src/compiler/check/index.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { decodeProjectedManifest } from '../../bolt/src/engine/manifest.ts';
@@ -21,7 +22,6 @@ const emptyManifest: EngineManifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -204,7 +204,7 @@ describe('bolt check', () => {
 			},
 			exposures: {
 				customers: {
-					read: { customers: { fields: 'all' } },
+					outputs: { default: { customers: { fields: 'all' } } },
 					syncs: {
 						sheet: { with: 'file', parser: ['xlsx', 'csv'] },
 						ofx: {
@@ -218,7 +218,7 @@ describe('bolt check', () => {
 					}
 				},
 				events: {
-					read: { events: { fields: 'all' } },
+					outputs: { default: { events: { fields: 'all' } } },
 					syncs: {
 						calendar: { with: 'calendar', partitions: 'calendars', read: true, write: true },
 						typo: { with: 'calendar', partitions: 'calendar', read: true }
@@ -240,39 +240,35 @@ describe('bolt check', () => {
 			"sync/partitions events: syncs.typo: 'calendar' is no configuration field of 'calendar'"
 		]);
 	});
-	it('an embedding origin is https://host[:port], and only a kiosk or a portal page is embedded (kiosk/embed, app/embed)', () => {
+	it('an embedding origin is https://host[:port], for an app or kiosk (app/embed)', () => {
 		const page = { title: 'P' };
 		const m: EngineManifest = {
 			...emptyManifest,
 			policies: { lobby: { description: 'l', grants: {} } },
-			kiosks: {
+			apps: {
 				lobby: {
 					title: 'L',
 					description: 'L',
 					icon: 'x',
-					auth: 'members',
+					shell: 'kiosk',
 					policies: ['lobby'],
 					pages: { home: page },
 					embed: ['https://partner.example', 'https://partner.example:8443/path', 'https://a b']
-				}
-			},
-			apps: {
+				},
 				shop: {
 					title: 'S',
 					description: 'S',
 					icon: 'x',
-					pages: {
-						home: { ...page, portal: true, embed: ['https://*.example'] },
-						open: { ...page, portal: true, embed: ['https://partner.example'] }
-					}
+					embed: ['https://*.example', 'https://partner.example'],
+					pages: { home: page, open: page }
 				}
 			}
 		};
 		expect(
 			checkRules(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`)
 		).toEqual([
-			"kiosk/embed lobby: embed: 'https://partner.example:8443/path' is an origin, https://host[:port] (no path, no wildcard)",
-			"kiosk/embed lobby: embed: 'https://a b' is an origin, https://host[:port] (no path, no wildcard)",
+			"app/embed lobby: embed: 'https://partner.example:8443/path' is an origin, https://host[:port] (no path, no wildcard)",
+			"app/embed lobby: embed: 'https://a b' is an origin, https://host[:port] (no path, no wildcard)",
 			"app/embed shop: embed: 'https://*.example' is an origin, https://host[:port] (no path, no wildcard)"
 		]);
 	});
@@ -290,11 +286,7 @@ describe('bolt check', () => {
 			},
 			exposures: {
 				items: {
-					read: { items: { fields: 'all' } },
-					outputs: {
-						public: { items: { fields: ['name'] } },
-						unlabelled: { items: { fields: ['cost'] } }
-					},
+					outputs: { default: { items: { fields: 'all' } }, public: { items: { fields: ['name'] } }, unlabelled: { items: { fields: ['cost'] } } },
 					create: { columns: { items: ['name', 'cost'] } },
 					delete: {}
 				}
@@ -310,13 +302,13 @@ describe('bolt check', () => {
 					grants: { items: { outputs: { public: true }, create: true, delete: true } }
 				}
 			},
-			apps: { shop: { ...shop, audience: { public: ['anyone', 'wide'] } } },
-			kiosks: {
+			apps: {
+				shop: { ...shop, audience: { public: ['anyone', 'wide'] } },
 				lobby: {
 					title: 'L',
 					description: 'L',
 					icon: 'x',
-					auth: 'members',
+					shell: 'kiosk',
 					policies: ['desk'],
 					pages: { home: page }
 				}
@@ -339,8 +331,8 @@ describe('bolt check', () => {
 	});
 	it.live('parses cron strings at build (rule 52)', () =>
 		Effect.gen(function* () {
-			for (const ok of ['0 2 * * *', '*/15 * * * *', '0 9-17 * * 1-5', '5,35 0 1 1,6 0', '@daily'])
-				expect(cronValid(ok)).toBe(true);
+			for (const ok of ['0 2 * * *', '*/15 * * * *', '0 9-17 * * 1-5', '5,35 0 1 1,6 0', ' @daily '])
+				expect(Result.isSuccess(parseCron(ok))).toBe(true);
 			for (const bad of [
 				'61 * * * *',
 				'* * * *',
@@ -348,9 +340,10 @@ describe('bolt check', () => {
 				'*/0 * * * *',
 				'0 0 * 13 *',
 				'5-1 * * * *',
+				'*/60 * * * *',
 				'@often'
 			])
-				expect(cronValid(bad)).toBe(false);
+				expect(Result.isSuccess(parseCron(bad))).toBe(false);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it('grades evaluation CPU at reference speed: a thread slowed by load is not over budget (rule 6)', () => {

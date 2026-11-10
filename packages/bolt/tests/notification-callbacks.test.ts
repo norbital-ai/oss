@@ -81,9 +81,9 @@ export default { model: { orders: { bodies: {
 				guestLayer(
 					yield* program(`export default { model: { orders: { bodies: {
  notify: function* (_, ctx) {
-  if ('query' in ctx || 'act' in ctx || 'request' in ctx || 'after' in ctx.db)
+  if ('act' in ctx || 'request' in ctx || 'after' in ctx.query)
    throw new Error('unexpected notification capability');
-  const row = (yield* ctx.db.query({ orders: { where: { id: { eq: 'order' } } } })).orders.rows[0];
+  const row = (yield* ctx.query({ orders: { where: { id: { eq: 'order' } } } })).orders.rows[0];
   return [{ title: row.title, to: [{ user: 'member' }] }];
  }
 } } } };`),

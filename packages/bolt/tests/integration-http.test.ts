@@ -438,8 +438,6 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 					}
 				]),
 			write: () => Effect.succeed({ rows: [], affected: 0 }),
-			session: () =>
-				Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 			transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 		});
 	const absent: Drivers['Service'] = {

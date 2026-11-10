@@ -19,7 +19,7 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── a generator body yields its reads and returns its output ──
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const open = yield* ctx.query({ orders: {
@@ -30,7 +30,7 @@ automation('orders_renote', {
 	}
 });
 // two reads in one crossing: a concurrent `Effect.all`, or one read request of two roots
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const customers = yield* ctx.query({ customers: { fields: ['id'] } });
@@ -47,14 +47,14 @@ automation('orders_renote', {
 		return orders.orders.rows.length + both.orders.rows.length + both.customers.rows.length;
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	// @ts-expect-error E1 an unyielded effect returned as the output
 	run: function* (_, ctx) {
 		return ctx.query({ orders: { } });
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	// @ts-expect-error E2 a body failing with an untagged value (every failure is tagged)
 	run: function* () {
@@ -87,12 +87,12 @@ model('orders', {
 });
 
 // ── act fails with its tags, and catchTag narrows them away ──
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
 		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
+			return yield* ctx.refuse('Choose an existing orders record.');
 		const submit = ctx.act('orders.update', [{
 			target: target.id,
 			set: { status: 'submitted' }
@@ -105,12 +105,12 @@ automation('orders_submit', {
 		yield* kept;
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
 		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
+			return yield* ctx.refuse('Choose an existing orders record.');
 		yield* ctx.act('orders.update', [{ target: target.id, set: {} }]).pipe(
 			// @ts-expect-error E4 a tag act never fails with
 			Effect.catchTag('Refusal', () => Effect.void)
@@ -120,7 +120,7 @@ automation('orders_submit', {
 
 // ── facilities fail with FacilityFailure or Unavailable ──
 
-automation('sweep', {
+automation({
 	description: 'x',
 	policies: ['sales_rep'],
 	run: function* (_, ctx) {
@@ -142,7 +142,7 @@ model('orders', {
 declare const automationCtx: AutomationCtx;
 // @ts-expect-error E6 ctx members have no Promise facet
 const promiseRead: Promise<unknown> = automationCtx.query({ orders: { } });
-automation('sweep', {
+automation({
 	description: 'x',
 	policies: ['sales_rep'],
 	run: function* (_, ctx) {

@@ -28,16 +28,16 @@ const manifest: EngineManifest = {
 	},
 	relationships: {},
 	exposures: {
-		quota: { read: { quota: { fields: 'all' } } },
+		quota: { outputs: { default: { quota: { fields: 'all' } } } },
 		orders: {
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: { columns: { orders: ['title'] }, transform: true }
 		}
 	},
 	policies: {
 		operator: {
 			description: 'Synthetic operator',
-			automations: ['place', 'queryplace'],
+			capabilities: { automations: ['place', 'queryplace'] },
 			grants: {
 				quota: { read: true },
 				orders: { read: true, create: true }
@@ -61,7 +61,6 @@ const manifest: EngineManifest = {
 	teams: {},
 	customFields: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	agent: { skills: {} }
 };
@@ -73,7 +72,7 @@ export default {
  model:{orders:{bodies:{
   create:function*(inputs,ctx){
    if(inputs.every(input=>input.title==='querypriced'))return inputs.map(input=>({...input,derived:'priced'}));
-   const {quota:source}=yield* ctx.db.query({quota:{fields:['cap']}});
+   const {quota:source}=yield* ctx.query({quota:{fields:['cap']}});
    if(source.rows[0].cap===0)return yield* ctx.refuse('source changed');
    return inputs.map(input=>({...input,derived:String(source.rows[0].cap)}));
   }
@@ -124,7 +123,6 @@ const fixture = () =>
 				}),
 			write: db.write,
 			transaction: db.transaction,
-			session: db.session
 		});
 		const context = yield* Layer.build(
 			TestWorkspace.layer({

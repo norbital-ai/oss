@@ -46,7 +46,7 @@ model('orders', {
 });
 
 // Fresh automation metadata preserves the generated input and native run context without hoisting its fields.
-automation('orders_renote', {
+automation({
 	description: 'Set a note on many orders',
 	input: {
 		ids: { kind: 'list', of: { kind: 'id', of: 'orders' } },

@@ -291,22 +291,16 @@ export const CONVERSATIONS = 100;
 /**
  * Whether a `sys_conversation` image belongs to the member's own list (§5.9) — the same set the `conversations` read
  * returns, so a live patch never carries a row a re-read would not. An instance's thread has no owner (`conversations/index.ts`
- * inserts it without one), so it is admitted by the envoy being `public`: that arm is the one a row can answer alone.
- * A thread of a private envoy the member posted in is in the read but not here: the live view re-reads for it.
+ * inserts it without one), so channel visibility requires the read's runtime envoy or participant check.
  */
-export const listed = (
-	r: RowData | null,
-	member: string,
-	publicEnvoys: readonly string[] = [],
-	admin = false
-): boolean =>
+export const listed = (r: RowData | null, member: string, admin = false): boolean =>
 	r !== null &&
 	(r['parent'] ?? null) === null &&
 	((r['run'] ?? null) !== null
 		? admin
-		: (r['integration'] ?? null) === null
-			? r['owner'] === member
-			: publicEnvoys.includes(String(r['envoy'] ?? '')));
+		: (r['integration'] ?? null) === null && r['owner'] === member);
+/** SQL visibility of a public envoy's conversation, using the reader's `c` alias. */
+export const PUBLIC_ENVOY = `EXISTS (SELECT 1 FROM sys_envoy e WHERE e.id::text = c.envoy AND e.active AND e.audience = 'public')`;
 /**
  * Which conversations other than a member's own a reader may see (`c` the `sys_conversation` row; each value a SQL
  * placeholder): an automation's transcript for an administrator, an envoy's channel thread for staff when the envoy is
@@ -316,9 +310,8 @@ export const sharedConversations = (p: {
 	readonly member: string;
 	readonly admin: string;
 	readonly staff: string;
-	readonly envoys: string;
 }) => `(c.run IS NOT NULL AND ${p.admin}) OR
-   (c.integration IS NOT NULL AND ${p.member} IS NOT NULL AND ((${p.staff} AND c.envoy IN (SELECT jsonb_array_elements_text(${p.envoys}::jsonb))) OR
+   (c.integration IS NOT NULL AND ${p.member} IS NOT NULL AND ((${p.staff} AND ${PUBLIC_ENVOY}) OR
     EXISTS (SELECT 1 FROM sys_message m WHERE m.conversation = c.id AND ${p.member} IN (m.author, m."as"->>'member', m."as"->'envoy'->>'member'))))`;
 /** A `sys_conversation` image as the list shows it, so a live patch matches a re-read. */
 export const conversationRow = (r: RowData): { [k: string]: Json } => ({

@@ -1,6 +1,6 @@
 // std/date (§3.7, rule 68, X-11): a `date` is a zone-free calendar day, an `instant` is UTC, and a date period is
 // inclusive `{ from, to | null }` (null = open). Values are branded strings, so they are their own wire form.
-import { Result } from 'effect';
+import { Duration as EffectDuration, Result } from 'effect';
 import { DAY_MS, utcOf } from './zone.ts';
 
 export type PlainDate = string & { readonly __date: unique symbol };
@@ -11,6 +11,20 @@ export type DatePeriod = { readonly from: PlainDate; readonly to: PlainDate | nu
 /** `Intl.DateTimeFormat` options plus the `locale` to format in. */
 export type DateFormatOptions = Intl.DateTimeFormatOptions & { locale?: string };
 type DateIn = PlainDate | string;
+
+const UNITS = { s: 1, min: 60, h: 3_600, d: 86_400 };
+const secondsByUnit = new Map(Object.entries(UNITS));
+/** A whole duration in seconds, minutes, hours or days. */
+export type Duration = `${bigint}${keyof typeof UNITS}`;
+/** A signed duration from a clock instant. An empty offset is zero. */
+export type Offset = `${'+' | '-'}${Duration}` | '';
+/** Parses a nonnegative duration literal into seconds. */
+export function duration_seconds(value: string, fractional = false): number | undefined {
+	const match = /^(\d+(\.\d+)?)([a-z]+)$/.exec(value);
+	if (match === null || (!fractional && match[2] !== undefined)) return undefined;
+	const unit = secondsByUnit.get(match[3] ?? '');
+	return unit === undefined ? undefined : Number(match[1]) * unit;
+}
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/i;
@@ -45,6 +59,13 @@ export function Instant(v: string | Date): Instant {
 	if (Number.isNaN(ms)) throw new RangeError(`'${String(v)}' is not an ISO instant with a zone`);
 	return new Date(ms).toISOString() as Instant;
 }
+/** Moves a UTC instant by a signed duration. */
+export const add_instant = (at: Instant, offset: EffectDuration.Input): Instant =>
+	Instant(new Date(Date.parse(at) + EffectDuration.toMillis(offset)));
+/** The signed duration from one instant to another. */
+export const diff_instants = (from: Instant, to: Instant): EffectDuration.Duration =>
+	EffectDuration.millis(Date.parse(to) - Date.parse(from));
+
 /** An IANA zone id the runtime knows. */
 export function Zone(v: string): Zone {
 	const result = Result.try(() => new Intl.DateTimeFormat('en-US', { timeZone: v }));

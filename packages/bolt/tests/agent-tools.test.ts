@@ -104,7 +104,7 @@ const manifest: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	exposures: {
-		tasks: { read: { tasks: { fields: 'all' } }, create: { columns: { tasks: ['title'] } } }
+		tasks: { outputs: { default: { tasks: { fields: 'all' } } }, create: { columns: { tasks: ['title'] } } }
 	},
 	models: {
 		tasks: {
@@ -120,13 +120,12 @@ const manifest: EngineManifest = {
 	policies: {
 		staff: {
 			description: '',
-			grants: { tasks: { create: { check: true } } }
+			grants: { tasks: { create: { verdict: true } } }
 		}
 	},
 	teams: { Leads: [] },
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {}
@@ -471,10 +470,10 @@ describe('fewer calls for the common paths', () => {
 					},
 					exposures: {
 						tasks: {
-							read: { tasks: { fields: 'all' }, 'tasks.lines': { fields: 'all' } },
+							outputs: { default: { tasks: { fields: 'all' }, 'tasks.lines': { fields: 'all' } } },
 							create: { columns: { tasks: ['title'], 'tasks.lines': ['value', 'member'] } }
 						},
-						task_lines: { read: { task_lines: { fields: 'all' } } }
+						task_lines: { outputs: { default: { task_lines: { fields: 'all' } } } }
 					}
 				};
 				const task = '01950000-0000-7000-8000-000000000001',
@@ -689,8 +688,7 @@ describe('fewer calls for the common paths', () => {
 		},
 		exposures: {
 			tasks: {
-				read: { tasks: { fields: 'all' } },
-				outputs: { brief: { tasks: { fields: ['title'] } } }
+				outputs: { default: { tasks: { fields: 'all' } }, brief: { tasks: { fields: ['title'] } } }
 			}
 		},
 		policies: {
@@ -762,7 +760,7 @@ describe('fewer calls for the common paths', () => {
 				},
 				exposures: {
 					tasks: {
-						read: { tasks: { fields: 'all' } },
+						outputs: { default: { tasks: { fields: 'all' } } },
 						create: { columns: { tasks: ['title', 'status'] } }
 					}
 				},
@@ -794,7 +792,7 @@ describe('fewer calls for the common paths', () => {
 						clerk: {
 							description: '',
 							grants: {
-								tasks: { read: true, create: { columns: { tasks: ['title'] }, check: true } }
+								tasks: { read: true, create: { columns: { tasks: ['title'] }, verdict: true } }
 							}
 						}
 					}
@@ -853,7 +851,7 @@ describe('fewer calls for the common paths', () => {
 							}
 						}
 					},
-					exposures: { tasks: { read: { tasks: { fields: ['title'] } } } },
+					exposures: { tasks: { outputs: { default: { tasks: { fields: ['title'] } } } } },
 					customFields: {
 						lab: {
 							description: 'L*a*b*',
@@ -939,6 +937,43 @@ describe('fewer calls for the common paths', () => {
 				expect(writes).toEqual([{ key: 'agent:t1:call', input: create.input }]);
 			})
 	);
+	it.effect(
+		'reports read-back and queue lookup failures without losing the committed write receipt',
+		() =>
+			Effect.gen(function* () {
+				const records = [
+					{ model: 'tasks', id: '0199a000-0000-7000-8000-000000000001', revision: 1 }
+				];
+				const act: AgentEngine['act'] = () =>
+					Effect.succeed({
+						captured: [],
+						v: 0,
+						outcome: { kind: 'committed', output: null, records }
+					});
+				const x = yield* ctx(
+					{ inApp: false },
+					{
+						act,
+						read: () => Effect.fail(BoltError.make('internal', 'decode', 'read-back unavailable')),
+						db: { read: () => Effect.fail(DbError.make('XX000', 'queue unavailable')) }
+					}
+				);
+				const answer = yield* result(x, 'act', {
+					callable: 'tasks.create',
+					input: [{ title: 'A' }]
+				});
+				expect(answer).toMatchObject({
+					result: {
+						kind: 'committed',
+						records,
+						read_back_error: expect.stringContaining('read-back unavailable'),
+						runs_lookup_error: expect.stringContaining('queue unavailable')
+					}
+				});
+				expect(answer).not.toHaveProperty('result.stored');
+			})
+	);
+
 	it.effect('an act that wrote nothing says so: the record already holds the supplied values', () =>
 		Effect.gen(function* () {
 			const act: AgentEngine['act'] = () =>
@@ -1359,20 +1394,19 @@ describe('describe_workspace', () => {
 		relationships: { 'trial_line.trial': { to: 'trial', inverse: 'lines', owned: true } },
 		exposures: {
 			trial: {
-				read: { trial: { fields: 'all' }, 'trial.lines': { fields: 'all' } },
+				outputs: { default: { trial: { fields: 'all' }, 'trial.lines': { fields: 'all' } } },
 				create: { columns: { trial: ['code'] } },
 				effect: { created: true },
 				notify: true,
 				syncs: { import_csv: { with: 'file', parser: ['csv'] } }
 			},
-			secret: { read: { secret: { fields: 'all' } }, delete: {} }
+			secret: { outputs: { default: { secret: { fields: 'all' } } }, delete: {} }
 		},
 		policies: {
 			matcher: {
 				description: '',
 				grants: { trial: { read: true, create: true } },
-				automations: ['close_month'],
-				capabilities: { apps: ['lab/trials'] }
+				capabilities: { apps: ['lab/trials'] , automations: ['close_month'] }
 			}
 		},
 		automations: {
@@ -1380,12 +1414,12 @@ describe('describe_workspace', () => {
 				description: 'closes the month',
 				policies: ['matcher'],
 				input: { month: { kind: 'date' } },
-				on: { cron: '0 2 1 * *' },
+				on: [{ cron: '0 2 1 * *' }],
 				agent: 'confirm'
 			},
 			purge: { description: 'deletes everything', policies: ['matcher'] }
 		},
-		groups: { lab: { label: 'nav.lab', icon: 'lucide:flask', defaultChild: 'trials' } },
+		groups: { lab: { title: 'nav.lab', icon: 'lucide:flask', default_child: 'trials' } },
 		apps: {
 			'lab/trials': {
 				title: 'app.trials.title',
@@ -1474,7 +1508,7 @@ describe('describe_workspace', () => {
 			exposures: {
 				...lab.exposures,
 				...Object.fromEntries(
-					Object.keys(many).map((n) => [n, { read: { [n]: { fields: 'all' as const } } }])
+					Object.keys(many).map((n) => [n, { outputs: { default: { [n]: { fields: 'all' as const } } } }])
 				)
 			}
 		};
@@ -1945,7 +1979,11 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 			Effect.gen(function* () {
 				const bytes = new TextEncoder().encode(`%PDF shared ${randomUUID()}`);
 				let calls = 0;
-				const port = { ingest: () => Effect.sync(() => (calls++, tender)) };
+				const scanned = {
+					...tender,
+					html: tender.html + '\n<section data-page="2">\n<p>No text on this page.</p>\n</section>'
+				};
+				const port = { ingest: () => Effect.sync(() => (calls++, scanned)) };
 				const first = yield* holding(
 					`c-${randomUUID()}`,
 					{ name: 'a.pdf', mime: 'application/pdf', bytes },
@@ -1966,7 +2004,11 @@ describe('read_file parses a file: filed in the outputs, read in windows', () =>
 						.map((r) => r.attributes)
 				).toEqual([expect.objectContaining({ cached: true })]);
 				expect(answer).toMatchObject({
-					result: { id: 'o1', lines: ['1: <h1>Cover</h1>', '2: <p>Tender for site works</p>'] }
+					result: {
+						id: 'o1',
+						lines: ['1: <h1>Cover</h1>', '2: <p>Tender for site works</p>'],
+						about: expect.arrayContaining([expect.stringContaining('no text on pages 2')])
+					}
 				});
 			})
 	);
@@ -2223,7 +2265,7 @@ describe('act starts automations', () => {
 				policies: {},
 				exposures: {
 					tasks: {
-						read: { tasks: { fields: 'all' } },
+						outputs: { default: { tasks: { fields: 'all' } } },
 						syncs: { sheet: { with: 'file', parser: ['json'], schema: { a: { kind: 'int' } } } }
 					}
 				},
@@ -2336,7 +2378,7 @@ describe('act starts automations', () => {
 						exposures: {
 							tasks: {
 								...m.exposures['tasks'],
-								read: { tasks: { fields: 'all' } },
+								outputs: { default: { tasks: { fields: 'all' } } },
 								syncs: { erp: { with: 'erp', read: true, every: '1min' } }
 							}
 						},

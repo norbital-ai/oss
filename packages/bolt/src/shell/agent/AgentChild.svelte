@@ -29,7 +29,7 @@
 		onState,
 		control
 	}: {
-		bolt: Pick<ShellBolt, 'observe' | 'fileUrl'>;
+		bolt: Pick<ShellBolt, 'observe' | 'file_url'>;
 		t: (key: string) => string;
 		id: string;
 		/** One line that opens the sub-agent (`onOpen`), instead of its whole view. */
@@ -255,7 +255,7 @@
 			<!-- the files it made -->
 			{#if made.length > 0}<MadeFiles
 					files={made}
-					fileHref={(id) => bolt.fileUrl({ id })}
+					fileHref={(id) => bolt.file_url({ id })}
 					{t}
 				/>{/if}
 			<!-- its exchange with the delegating agent: a question it stopped on, the answer it got, then its own answer -->

@@ -50,6 +50,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import CodeEditor from '../editors/code-editor.svelte';
 	import MarkdownEditor from '../editors/markdown-editor.svelte';
 	import { useEnumText } from '../model/context.js';
+	import { usePageContext } from '../client/context.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Textarea from '../primitives/textarea/textarea.svelte';
@@ -86,6 +87,7 @@ The editor of one value by its field kind: every kind's input in one component (
 		onAddress,
 		relation
 	}: EditorProps = $props();
+	const pageContext = usePageContext();
 	const host = useKinds();
 	// an explicit mode here reaches every control of a structured value too
 	const controls = provideControls(() => ({ readonly, disabled: ownDisabled }));
@@ -185,6 +187,7 @@ The editor of one value by its field kind: every kind's input in one component (
 {:else if field?.entry.renderer}
 	{@const Renderer = field.entry.renderer}
 	<Renderer
+		ctx={pageContext?.()}
 		view={{
 			mode: 'edit',
 			name,

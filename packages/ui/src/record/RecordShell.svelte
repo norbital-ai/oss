@@ -100,7 +100,7 @@
 	import { openRecord } from './navigation.js';
 	import { provideModel } from '../model/context.js';
 	import { provideRecordView, representations } from './context.js';
-	import { useBolt } from '../client/context.js';
+	import { useBolt, usePageContext } from '../client/context.js';
 	import { type RestorePreview } from './types.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import Value from '../cell/Value.svelte';
@@ -160,6 +160,7 @@
 	const readOf = $derived(of),
 		readId = $derived(id);
 	const bolt = useBolt();
+	const pageContext = usePageContext();
 	const kinds = useKinds();
 	const formText = uiText();
 	provideModel(() => of);
@@ -546,7 +547,7 @@
 			current.spec = spec;
 			if (live !== null) current.refresh(live);
 		}
-		if (mode === 'create' || id === undefined || bolt.recordCapabilities === undefined) return;
+		if (mode === 'create' || id === undefined || bolt.record_capabilities === undefined) return;
 		const target = localController;
 		if (target === null) return;
 		const request = ++capabilityRequest;
@@ -554,7 +555,7 @@
 		target.expectCapabilities();
 		permissionError = null;
 		fork(
-			bolt.recordCapabilities(of, id).pipe(
+			bolt.record_capabilities(of, id).pipe(
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (request !== capabilityRequest || target !== localController) return;
@@ -1172,7 +1173,7 @@
 		{@render approval()}
 	{:else if mode !== 'create' && live === null && requests.loading}
 		{@render skeleton()}
-	{:else if shownPast === null && controller?.capabilities === null && bolt.recordCapabilities !== undefined}
+	{:else if shownPast === null && controller?.capabilities === null && bolt.record_capabilities !== undefined}
 		<EmptyState
 			icon="lock"
 			read="notFound"
@@ -1184,6 +1185,7 @@
 		<!-- a representation chunk that fails to load says which model's view and why (final-ui §7.2, L-BOLT-515) -->
 		{#await Representation}{@render skeleton()}{:then R}{#key shownPast}<R
 					{view}
+					ctx={pageContext?.() ?? bolt}
 				/>{/key}{:catch e}{@render failure(
 				msg(bolt, 'record.viewFailed', 'The {model} view could not be loaded: {cause}', {
 					model: of,

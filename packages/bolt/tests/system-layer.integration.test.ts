@@ -1,3 +1,4 @@
+import { seedEnvoys } from './support/envoys.ts';
 // The built-in layer's integration instances on PGlite: `sys_integration` written through ordinary acts and its
 // engine-side transform (FINAL §3), and the instance credential store's epoch fence (§4.5).
 import { randomBytes } from 'node:crypto';
@@ -48,17 +49,20 @@ const m: EngineManifest = {
 			configuration: { region: { kind: 'text' }, lag: { kind: 'int', default: 15 } }
 		}
 	},
-	connections: { mail: { integration: 'email' }, desk: { integration: 'whatsapp' } },
-	envoys: {
-		desk: {
-			name: 'Desk',
-			audience: 'private',
-			policies: ['p'],
-			delegation: 'disabled',
-			task: 'Answer.'
-		}
-	}
+	connections: { mail: { integration: 'email' }, desk: { integration: 'whatsapp' } }
 };
+const deskEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: deskEnvoy,
+		name: 'Desk',
+		audience: 'private',
+		policies: ['p'],
+		delegation: 'disabled',
+		task: 'Answer.'
+	}
+] as const;
+
 const ada = member.kind === 'member' ? member.id : '';
 const Id = Schema.Struct({ id: Schema.String });
 const Count = Schema.Struct({ n: Schema.Number });
@@ -102,6 +106,7 @@ const fixture = Effect.gen(function* () {
 		}
 	};
 	const db = PgliteDb.make(client);
+	yield* seedEnvoys(db, runtimeEnvoys);
 	yield* db.write({
 		text: `insert into sys_user (id, name) values ($1, 'Ada'), ('u2', 'Bob')`,
 		params: [ada]
@@ -275,14 +280,14 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					owner: ada
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: erp, set: { envoy: 'desk' } }] })
+					yield* run({ verb: 'update', input: [{ target: erp, set: { envoy: deskEnvoy } }] })
 				).toMatchObject({
 					kind: 'refused',
 					field: 'envoy',
 					message: expect.stringMatching(/conversation/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: personal, set: { envoy: 'desk' } }] })
+					yield* run({ verb: 'update', input: [{ target: personal, set: { envoy: deskEnvoy } }] })
 				).toMatchObject({
 					kind: 'refused',
 					field: 'envoy',
@@ -292,14 +297,14 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: 'nope' } }] })
 				).toMatchObject({ kind: 'refused', field: 'envoy' });
 				expect(
-					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: 'desk' } }] })
+					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: deskEnvoy } }] })
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* read(
 						Schema.Struct({ envoy: Schema.NullOr(Schema.String) }),
 						`select envoy from sys_integration where id = 'desk'`
 					)
-				).toEqual([{ envoy: 'desk' }]);
+				).toEqual([{ envoy: deskEnvoy }]);
 
 				expect(
 					yield* run({

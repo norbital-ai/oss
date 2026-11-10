@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // Native agent turns over scoped PGlite workspaces, provider streams and a local MCP ABI fixture.
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -61,8 +62,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		quotes: {
-			read: { quotes: { fields: 'all' } },
-			outputs: { titles: { quotes: { fields: ['title'] } } },
+			outputs: { default: { quotes: { fields: 'all' } }, titles: { quotes: { fields: ['title'] } } },
 			create: { columns: { quotes: ['title', 'region'] } },
 			update: { columns: { quotes: ['title', 'region'] } },
 			delete: {}
@@ -76,31 +76,11 @@ const manifest: EngineManifest = {
 		rep: {
 			description: 'Rep',
 			grants: { quotes: { read: true, create: true, update: true } },
-			automations: ['quotes_mark'],
-			capabilities: { mcp: ['hq'] }
+			capabilities: { mcp: ['hq'] , automations: ['quotes_mark'] }
 		},
 		reader: { description: 'Reads quotes', grants: { quotes: { read: true } } }
 	},
-	envoys: {
-		sales_desk: {
-			audience: 'public',
-			name: 'Norbius',
-			policies: ['reader'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'enabled',
-			task: 'Answer questions about quotes.'
-		},
-		field: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['reader'],
-			triage: false,
-			groupMessages: 'mention_or_reply',
-			delegation: 'disabled',
-			task: 'Keep quotes up to date.'
-		}
-	},
+
 	mcp: {
 		hq: { description: 'HQ tools', url: 'HQ_URL', auth: { bearer: 'HQ_TOKEN' } },
 		down: { description: 'Gone', url: 'DOWN_URL' }
@@ -134,12 +114,39 @@ const manifest: EngineManifest = {
 		}
 	},
 	connections: {
-		desk: { integration: 'whatsapp', envoy: 'sales_desk' },
-		field: { integration: 'whatsapp', envoy: 'field' }
+		desk: { integration: 'whatsapp' },
+		field: { integration: 'whatsapp' }
 	},
 	apps: {},
 	customFields: {}
 };
+const salesDeskEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const fieldEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const runtimeEnvoys = [
+	{
+		id: salesDeskEnvoy,
+		connections: ['desk'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['reader'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'enabled',
+		task: 'Answer questions about quotes.'
+	},
+	{
+		id: fieldEnvoy,
+		connections: ['field'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['reader'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Keep quotes up to date.'
+	}
+] as const;
+
 const guest = program(`export default { automation: { quotes_mark: { body: function* (input, ctx) {
 	return (yield* ctx.act('quotes.create', [{ title: input.title }])).records[0].id;
 } }, quotes_tally: { body: function* (input) {
@@ -363,21 +370,24 @@ const build = (
 			DOWN_URL: 'http://127.0.0.1:1/mcp'
 		};
 		const context = yield* Layer.build(
-			TestWorkspace.layer({
-				manifest: { ...manifest, agent: { ...manifest.agent, tools } },
-				guest: yield* guest,
-				ports: Layer.merge(
-					ai.layer,
-					// the host's ingest port (Norbital Convert): every document here is the tender
-					Convert.fromAbi(off, async () => {
-						await ingestGate;
-						return TENDER;
-					})
-				),
-				// the host clock starts at the wall clock, as a turn drained from a live test reads it
-				now: new Date().toISOString(),
-				host: { agent: { ...host, mcp: { secret: (name) => Effect.succeed(values[name]) } } }
-			})
+			withEnvoys(
+				TestWorkspace.layer({
+					manifest: { ...manifest, agent: { ...manifest.agent, tools } },
+					guest: yield* guest,
+					ports: Layer.merge(
+						ai.layer,
+						// the host's ingest port (Norbital Convert): every document here is the tender
+						Convert.fromAbi(off, async () => {
+							await ingestGate;
+							return TENDER;
+						})
+					),
+					// the host clock starts at the wall clock, as a turn drained from a live test reads it
+					now: new Date().toISOString(),
+					host: { agent: { ...host, mcp: { secret: (name) => Effect.succeed(values[name]) } } }
+				}),
+				runtimeEnvoys
+			)
 		);
 		const t = Context.get(context, TestWorkspace),
 			agent = Context.get(context, Agents),
@@ -618,7 +628,10 @@ describe('in-app turns', () => {
 				ai.arm([
 					use('read', { request: { quotes: { fields: ['title', 'nope', 'nada'] } } }),
 					use('read', {
-						request: { quotes: { search: 'a', aggregate: { count: true } }, sys_user: { fields: ['nope'] } }
+						request: {
+							quotes: { search: 'a', aggregate: { count: true } },
+							sys_user: { fields: ['nope'] }
+						}
 					}),
 					say('Done.')
 				]);
@@ -719,7 +732,11 @@ describe('in-app turns', () => {
 				expect(last?.meta).toMatchObject({ tag: 'reply', asked: true });
 				expect(last?.text).toContain('Which pages should this workspace have?');
 				expect(last?.text).toContain('1. Dashboard + Reports');
-				expect(rows.some((row) => row.role === 'tool' && JSON.stringify(row.content).includes('"name":"ask"'))).toBe(true);
+				expect(
+					rows.some(
+						(row) => row.role === 'tool' && JSON.stringify(row.content).includes('"name":"ask"')
+					)
+				).toBe(true);
 			})
 		)
 	);
@@ -995,36 +1012,38 @@ describe('in-app turns', () => {
 			)
 	);
 
-	it.live('every step opens with the step before it, whole: the provider\'s cached prefix holds', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const fixture = yield* setup([
-					use('history', { query: 'x' }, 'd1', 10),
-					use('history', { query: 'y' }, 'd2', 20),
-					use('history', { query: 'z' }, 'd3', 30),
-					say('Done.')
-				]);
-				return yield* Effect.gen(function* () {
-					const { ai, agent, user } = fixture;
-					const root = yield* user('root', { admin: true });
-					const c = yield* agent.start({ owner: root });
-					yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
-					yield* agent.drain(c);
-					expect(ai.requests).toHaveLength(4);
-					// the state note closes each step's context; all before it never changes once sent
-					const sent = ai.requests.map((request) =>
-						request.messages
-							.filter((m) => !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE)))
-							.map((m) => JSON.stringify(m))
-					);
-					sent.slice(1).forEach((later, i) => {
-						const before = sent[i]!;
-						expect(later.length).toBeGreaterThan(before.length);
-						expect(later.slice(0, before.length)).toEqual(before);
-					});
-				}).pipe(Effect.provide(fixture.context));
-			})
-		)
+	it.live(
+		"every step opens with the step before it, whole: the provider's cached prefix holds",
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fixture = yield* setup([
+						use('history', { query: 'x' }, 'd1', 10),
+						use('history', { query: 'y' }, 'd2', 20),
+						use('history', { query: 'z' }, 'd3', 30),
+						say('Done.')
+					]);
+					return yield* Effect.gen(function* () {
+						const { ai, agent, user } = fixture;
+						const root = yield* user('root', { admin: true });
+						const c = yield* agent.start({ owner: root });
+						yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
+						yield* agent.drain(c);
+						expect(ai.requests).toHaveLength(4);
+						// the state note closes each step's context; all before it never changes once sent
+						const sent = ai.requests.map((request) =>
+							request.messages
+								.filter((m) => !(typeof m.content === 'string' && m.content.startsWith(STATE_NOTE)))
+								.map((m) => JSON.stringify(m))
+						);
+						sent.slice(1).forEach((later, i) => {
+							const before = sent[i]!;
+							expect(later.length).toBeGreaterThan(before.length);
+							expect(later.slice(0, before.length)).toEqual(before);
+						});
+					}).pipe(Effect.provide(fixture.context));
+				})
+			)
 	);
 
 	it.live('a large model window is used as the model provides it, without a smaller host cap', () =>
@@ -1079,7 +1098,7 @@ describe('in-app turns', () => {
 
 /** An envoy sender's `as` (P32): the envoy, the instance it arrived on, the linked member if any, and whether it is a DM. */
 const envoyAs = (name: string, sender: string, member: string | null, dm: boolean) => ({
-	envoy: { name, instance: name === 'field' ? 'field' : 'desk', sender, member, dm }
+	envoy: { name, instance: name === fieldEnvoy ? 'field' : 'desk', sender, member, dm }
 });
 
 describe('envoy conversations', () => {
@@ -1100,10 +1119,10 @@ describe('envoy conversations', () => {
 					]);
 					return yield* Effect.gen(function* () {
 						const { t, agent } = fixture;
-						const c = yield* agent.start({ envoy: 'sales_desk', integration: 'desk' });
+						const c = yield* agent.start({ envoy: salesDeskEnvoy, integration: 'desk' });
 						yield* agent.post({
 							conversation: c,
-							as: envoyAs('sales_desk', 'x', null, true),
+							as: envoyAs(salesDeskEnvoy, 'x', null, true),
 							text: 'hi'
 						});
 						const { reply } = yield* agent.drain(c);
@@ -1358,7 +1377,7 @@ describe('durable turns (rule 48)', () => {
 						});
 					}).pipe(Effect.provide(fixture.context));
 				})
-		)
+			)
 	);
 	it.live('a resumed step does not repeat a call the dead generation left running', () =>
 		Effect.scoped(
@@ -1550,9 +1569,7 @@ describe('an agent-started automation run is a job', () => {
 					Stream.unwrap(
 						Effect.promise(() => gate).pipe(
 							Effect.as(
-								use('read', { request: { quotes: { where: { title: { eq: 'Lamp' } } } } })(
-									request
-								)
+								use('read', { request: { quotes: { where: { title: { eq: 'Lamp' } } } } })(request)
 							)
 						)
 					);

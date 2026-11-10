@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // End to end through the engine entry and the test kit (§4.2–§4.4, P22, rules 57–61, §3.8): inbound messages reach the
 // engine's conversations by instance, its envoys run the agent's real turn loop over a scripted model, a model sync
 // sends through `integrations.deliver`, and notification callbacks reach the approvers' inbox and conversation links.
@@ -45,23 +46,23 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		jobs: {
-			read: { jobs: { fields: 'all' } },
+			outputs: { default: { jobs: { fields: 'all' } } },
 			create: { columns: { jobs: ['title', 'status'] } },
 			update: { columns: { jobs: ['status'] } }
 		},
 		sent_emails: {
-			read: { sent_emails: { fields: 'all' } },
+			outputs: { default: { sent_emails: { fields: 'all' } } },
 			create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
 			update: { columns: { sent_emails: ['sent_at', 'delivered_at', 'failed_reason'] } },
 			syncs: { mail: { with: 'customer_notices', read: true, write: true } }
 		},
 		orders: {
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: { columns: { orders: ['title'] } },
 			notify: true
 		},
 		tickets: {
-			read: { tickets: { fields: 'all' } },
+			outputs: { default: { tickets: { fields: 'all' } } },
 			create: { columns: { tickets: ['title'] } },
 			notify: true
 		}
@@ -81,7 +82,7 @@ const manifest = {
 		},
 		sales: {
 			description: 'Sales',
-			grants: { orders: { read: true, create: { check: true } } }
+			grants: { orders: { read: true, create: { verdict: true } } }
 		},
 		finance: { description: 'Finance', grants: { orders: { read: true } } }
 	},
@@ -92,36 +93,43 @@ const manifest = {
 	},
 	automations: {},
 	connections: {
-		field_wa: { integration: 'whatsapp', envoy: 'field_ops' },
-		sales_tg: { integration: 'telegram', envoy: 'sales_desk' },
+		field_wa: { integration: 'whatsapp' },
+		sales_tg: { integration: 'telegram' },
 		customer_mail: { integration: 'customer_notices' }
 	},
-	envoys: {
-		field_ops: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			groupMessages: 'mention_or_reply',
-			delegation: 'disabled',
-			task: 'Keep jobs up to date.'
-		},
-		sales_desk: {
-			audience: 'public',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'disabled',
-			task: 'Answer about jobs.'
-		}
-	},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const salesDeskEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const runtimeEnvoys = [
+	{
+		id: fieldOpsEnvoy,
+		connections: ['field_wa'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Keep jobs up to date.'
+	},
+	{
+		id: salesDeskEnvoy,
+		connections: ['sales_tg'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		task: 'Answer about jobs.'
+	}
+] as const;
 
 const guest = program(`export default {
 	model: {
@@ -150,7 +158,7 @@ const guest = program(`export default {
 			];
 		} } }
 	},
-	policy: { sales: { grants: { orders: { create: { check: function*(_rows,ctx){return ctx.approve((flow)=>flow.step('Finance',{teams:['t-fin']}));} } } } } }
+	policy: { sales: { grants: { orders: { create: { verdict: function*(_rows,ctx){return ctx.approve({ steps: [{ name: 'Finance', teams: ['t-fin'] }] });} } } } } }
 };`);
 
 /** "close <id>" asks for `act jobs.update`; a tool result is answered with the result; anything else is echoed. */
@@ -222,12 +230,15 @@ const setup = Effect.runSync(
 		Effect.gen(function* () {
 			const ai = scriptedAi();
 			const context = yield* Layer.build(
-				TestWorkspace.layer({
-					manifest,
-					guest: yield* guest,
-					ports: ai.layer,
-					host: { envoys: { workspace: 'Acme Field' } }
-				})
+				withEnvoys(
+					TestWorkspace.layer({
+						manifest,
+						guest: yield* guest,
+						ports: ai.layer,
+						host: { envoys: { workspace: 'Acme Field' } }
+					}),
+					runtimeEnvoys
+				)
 			);
 			const t = Context.get(context, TestWorkspace),
 				conversations = Context.get(context, Conversations),

@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { dial } from '../../src/chat/dial/index.ts';
-import { host } from '../kit.ts';
+import { fakeFetch, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { apiKey: 'key', fromNumberId: 'n1', webhookSecret: 'hook' },
@@ -53,6 +53,50 @@ const direct = () =>
 	);
 
 describe('Dial', () => {
+	it.live('routes every API request through the host fetch', () =>
+		Effect.gen(function* () {
+			const globalApi = yield* platformApi(() => json({}, 503));
+			const guarded = fakeFetch([
+				(call) =>
+					call.url.includes('/api/v1/messages?')
+						? json({ messages: [] })
+						: answer({
+								...call,
+								headers: new Headers(call.headers)
+							})
+			]);
+			const connection = yield* Effect.tryPromise({
+				try: () =>
+					dial.connect(settings, {
+						fetch: guarded,
+						webhookUrl: 'https://hook.test/',
+						receive: () => Promise.resolve()
+					}),
+				catch: (error) => error
+			});
+			yield* Effect.promise(() => connection.send(person, 'Hello', 'r1', []));
+			yield* Effect.promise(async () => connection.typing?.(person, true));
+			yield* Effect.promise(async () => connection.history?.(person, '2026-01-01T00:00:00.000Z'));
+			expect(guarded.calls.map((call) => new URL(call.url).pathname)).toEqual([
+				'/api/v1/numbers',
+				'/api/v1/messages',
+				'/api/v1/typing',
+				'/api/v1/messages'
+			]);
+			expect(globalApi.calls).toEqual([]);
+		})
+	);
+	it.live('refuses a malformed signed message without attempting to store it', () =>
+		Effect.gen(function* () {
+			yield* platformApi(answer);
+			const h = yield* connected(dial, settings);
+			const body = event({ media: null });
+			const deliver = h.link.webhook;
+			if (deliver === undefined) throw new Error('Missing Dial webhook');
+			expect((yield* deliver(webhook(body, signature(body)))).status).toBe(400);
+			expect(h.events).toEqual([]);
+		})
+	);
 	it.live('stores a signed message before acknowledging it', () =>
 		Effect.gen(function* () {
 			yield* platformApi(answer);

@@ -28,7 +28,6 @@ const manifest = Result.getOrThrow(
 		teams: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		customFields: {}
 	})
@@ -117,7 +116,7 @@ describe('the session cookie', () => {
 							},
 							exposures: {
 								photos: {
-									read: { photos: { fields: 'all' } },
+									outputs: { default: { photos: { fields: 'all' } } },
 									create: { columns: { photos: ['title', 'visible', 'image'] } }
 								}
 							},
@@ -126,9 +125,9 @@ describe('the session cookie', () => {
 									description: 'Visible photos',
 									grants: {
 										photos: {
-											read: {
+											outputs: { default: {
 												photos: { where: { visible: { eq: true } }, fields: ['title', 'image'] }
-											}
+											} }
 										}
 									}
 								}
@@ -146,22 +145,21 @@ describe('the session cookie', () => {
 									description: 'Private app',
 									icon: 'x',
 									pages: { home: { title: 'Home' } }
-								}
-							},
-							kiosks: {
+								},
 								lobby: {
 									title: 'Lobby',
 									description: 'Public photos',
 									icon: 'x',
-									auth: 'none',
-									policies: ['viewer'],
+									shell: 'kiosk',
+									audience: { public: ['viewer'] },
 									pages: { home: { title: 'Home' } }
 								},
 								private: {
 									title: 'Private',
 									description: 'Members kiosk',
 									icon: 'x',
-									auth: 'members',
+									shell: 'kiosk',
+									audience: 'members',
 									policies: ['viewer'],
 									pages: { home: { title: 'Home' } }
 								}

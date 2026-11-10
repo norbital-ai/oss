@@ -1,6 +1,6 @@
 import { app } from '../../../../../../src/index.ts';
 
-export default app('sales', {
+export default app({
 	title: 'Sales',
 	description: 'Orders',
 	icon: 'cart',

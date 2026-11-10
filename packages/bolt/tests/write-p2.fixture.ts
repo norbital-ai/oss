@@ -60,17 +60,17 @@ export const manifest = Result.getOrThrow(
 				}
 			},
 			tags: {
-				read: { tags: { fields: 'all' } },
+				outputs: { default: { tags: { fields: 'all' } } },
 				create: { columns: { tags: ['name'] } },
 				delete: {}
 			},
 			receipts: {
-				read: { receipts: { fields: 'all' } },
+				outputs: { default: { receipts: { fields: 'all' } } },
 				create: { columns: { receipts: ['memo', 'order'] } },
 				update: { columns: { receipts: ['memo', 'order'] } }
 			},
 			people: {
-				read: { people: { fields: 'all' } },
+				outputs: { default: { people: { fields: 'all' } } },
 				create: { columns: { people: ['code', 'name', 'email'] } },
 				update: { columns: { people: ['name', 'email', 'status'] } },
 				delete: {}

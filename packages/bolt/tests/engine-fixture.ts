@@ -35,7 +35,10 @@ export const manifest = {
 				},
 				total: { kind: 'sum', of: 'lines.amount' }
 			},
-			locked: { archived: { eq: true } }
+			locks: {
+				archived: { where: { archived: { eq: true } } },
+				won: { where: { stage: { eq: 'won' } }, except: ['archived', 'note'] }
+			}
 		},
 		lines: {
 			description: 'A line',
@@ -49,16 +52,16 @@ export const manifest = {
 	},
 	exposures: {
 		customers: {
-			read: { customers: { fields: 'all' } },
+			outputs: { default: { customers: { fields: 'all' } } },
 			create: { columns: { customers: ['name', 'blocked'] } }
 		},
 		orders: {
-			read: {
-				orders: { fields: 'all' },
-				'orders.customer': { fields: 'all' },
-				'orders.lines': { fields: 'all' }
-			},
 			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.customer': { fields: 'all' },
+					'orders.lines': { fields: 'all' }
+				},
 				audit: { orders: { fields: ['title', 'region', 'number', 'status', 'total', 'customer'] } }
 			},
 			create: {
@@ -75,7 +78,10 @@ export const manifest = {
 			},
 			delete: {}
 		},
-		lines: { read: { lines: { fields: 'all' } }, update: { columns: { lines: lineCols } } }
+		lines: {
+			outputs: { default: { lines: { fields: 'all' } } },
+			update: { columns: { lines: lineCols } }
+		}
 	},
 	integrations: {},
 	policies: {
@@ -85,16 +91,16 @@ export const manifest = {
 				customers: { read: true },
 				orders: {
 					read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
-					create: { check: true },
-					update: { check: true },
-					delete: { check: true },
+					create: { verdict: true },
+					update: { verdict: true },
+					delete: { verdict: true },
 					moves: { status: ['draft->submitted'] }
 				},
 				lines: {
 					read: {
 						lines: { where: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
 					},
-					update: { check: true }
+					update: { verdict: true }
 				}
 			}
 		},
@@ -109,7 +115,6 @@ export const manifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -138,7 +143,7 @@ export const callbacks = {
 export const guest = {
 	source: `function* checkCustomers(rows, ctx) {
 	const ids = [...new Set(rows.flatMap((row) => row.customer == null ? [] : [row.customer]))];
-	const customers = ids.length === 0 ? [] : (yield* ctx.db.query({ customers: { where: { id: { in: ids } } } })).customers.rows;
+	const customers = ids.length === 0 ? [] : (yield* ctx.query({ customers: { where: { id: { in: ids } } } })).customers.rows;
 	for (const customer of customers) if (customer.blocked) yield* ctx.refuse(customer.name + ' is blocked', { field: 'customer' });
 }
 const trim = (rows) => rows.map((row) => row.title === undefined ? row : { ...row, title: row.title.trim() });
@@ -156,22 +161,22 @@ export default { model: { orders: { bodies: {
 } } },
 policy: { rep: { grants: {
 	orders: {
-		create: { check: function* (rows, ctx) {
+		create: { verdict: function* (rows, ctx) {
 			const row = rows.findIndex((r) => r.region !== 'north');
-			return row >= 0 ? ctx.deny('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
+			return row >= 0 ? yield* ctx.refuse('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
 		} },
-		update: { check: function* (changes, ctx) {
+		update: { verdict: function* (changes, ctx) {
 			const row = changes.findIndex(({ before, set }) => before.region !== 'north' || (set.region ?? before.region) !== 'north');
-			return row >= 0 ? ctx.deny('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
+			return row >= 0 ? yield* ctx.refuse('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
 		} },
-		delete: { check: function* (rows, ctx) {
-			return rows.every((r) => r.created_by === ctx.actor.id) ? ctx.allow() : ctx.deny('Reps delete their own orders.');
+		delete: { verdict: function* (rows, ctx) {
+			return rows.every((r) => r.created_by === ctx.actor.id) ? ctx.allow() : yield* ctx.refuse('Reps delete their own orders.');
 		} }
 	},
 	lines: {
-		update: { check: function* (changes, ctx) {
-			const { orders } = yield* ctx.db.query({ orders: { where: { id: { in: changes.map((c) => c.before.order) } }, fields: ['region'] } });
-			return orders.rows.every((o) => o.region === 'north') ? ctx.allow() : ctx.deny('Reps change lines of northern orders.');
+		update: { verdict: function* (changes, ctx) {
+			const { orders } = yield* ctx.query({ orders: { where: { id: { in: changes.map((c) => c.before.order) } }, fields: ['region'] } });
+			return orders.rows.every((o) => o.region === 'north') ? ctx.allow() : yield* ctx.refuse('Reps change lines of northern orders.');
 		} }
 	}
 } } }

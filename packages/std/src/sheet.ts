@@ -1,5 +1,5 @@
 // std/sheet (§3.7, §5.4, D15): the one `Cell[][]` ⇄ rows codec. The host reads file references through
-// `ctx.files.table` (a string-cell table) or `ctx.files.sheet` (worksheets with typed cells); this module
+// Native spreadsheet readers provide the worksheet cells; this module
 // only maps cells to typed rows and back. The first row is the header; a header matches a column name, a date
 // period is two columns `<name>.from` / `<name>.to` (inclusive, blank `to` = open), and an unknown header is an error.
 import { Decimal } from './decimal.ts';

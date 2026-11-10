@@ -23,7 +23,6 @@ import type {
 	GeoHit,
 	RunCause,
 	IngestOptions,
-	SpeechFormat,
 	WebPage
 } from '../decl/runtime/facilities.ts';
 import type { Json, Point } from '../decl/values.ts';
@@ -45,7 +44,7 @@ export const LIMITS = {
 	guestMemoryMiB: 256,
 	/**
 	 * Per I/O response, never per invocation (X-28). Streaming model responses reset their idle deadline on progress;
-	 * a multi-step inference keeps its separate whole-call ceiling. Speech's current ABI returns one response.
+	 * a multi-step inference keeps its separate whole-call ceiling.
 	 */
 	callMs: {
 		database: 20_000,
@@ -55,7 +54,6 @@ export const LIMITS = {
 		web: 20_000,
 		image: 20_000,
 		other: 20_000,
-		speech: 20_000,
 		/** One Convert job (`ctx.convert.ingest`): a long recording's transcription takes minutes. */
 		ingest: 600_000,
 		attachment: 20_000
@@ -72,6 +70,9 @@ export const LIMITS = {
 	crossingBytes: 8 * MiB,
 	argsBytes: 4 * MiB,
 	changeSetBytes: 16 * MiB,
+	/** A direct act holds its root inputs through the atomic commit. */
+	act: { rows: 4_000, inputBytes: 8 * MiB },
+	seedChunkBytes: MiB,
 	changesPerAct: 10_000,
 	expandedRowsPerStatement: 100_000,
 	writeDepth: 8,
@@ -82,6 +83,9 @@ export const LIMITS = {
 	/** An outbound conversation message's attachments together, read for its provider; more refuses the message (permanent). */
 	messageAttachmentBytes: 20 * MiB
 } as const;
+
+/** Size of wire text in UTF-8, including non-ASCII characters. */
+export const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
 // ── the tenant database (C11 per activation) ──
 /** One statement with positional parameters (`$1…`); values are JSON (numeric, timestamps and dates as strings). */
@@ -284,7 +288,7 @@ export type Authority = {
 	automations: readonly string[];
 	capabilities: {
 		apps: readonly string[];
-		kiosks?: readonly string[];
+
 		tools: readonly string[];
 		mcp: readonly string[];
 	};
@@ -435,18 +439,6 @@ export interface ConvertPort {
 		signal: AbortSignal
 	): Promise<Uint8Array>;
 }
-/**
- * Text to speech behind `ctx.ai.speak` (optional; absent → `unavailable`): the audio in `format`. A throw carrying a
- * FacilityError `kind` (`rateLimited`, `tooLarge`, `invalid`, `unsupported`, `timeout`) is answered as that kind; any
- * other throw is `upstream`.
- */
-export interface SpeechPort {
-	speak?(
-		text: string,
-		options: { voice?: string; format: SpeechFormat; language?: string },
-		signal: AbortSignal
-	): Promise<{ bytes: Uint8Array; mime: string }>;
-}
 /** An ingest's model calls as Convert reports them (audio): their call ids (the metering keys), model, tokens and charge. */
 export type IngestUsage = {
 	readonly calls: readonly string[];
@@ -523,7 +515,7 @@ export type AiRequest = {
 	messages: readonly AiMessage[];
 	tools?: readonly { name: string; description: string; input: Json }[];
 	output?: Json;
-	/** The call's reasoning effort: an agent step gathers at `none` and decides at `medium`, a utility call may ask `low`. */
+	/** The model call's reasoning effort. */
 	effort?: 'none' | 'low' | 'medium';
 	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
 	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
@@ -1101,7 +1093,6 @@ export type HostPorts = {
 	secrets?: SecretsPort;
 	convert?: ConvertPort;
 	ai?: AiPort;
-	speech?: SpeechPort;
 	geocoder?: GeocoderPort;
 	web?: WebReadPort;
 	browser?: BrowserPort;

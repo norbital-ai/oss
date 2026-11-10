@@ -190,9 +190,10 @@ export function inline(s: Sql): string {
 	if (s.params.length === 0) return s.text;
 	let out = '';
 	for (let i = 0; i < s.text.length; i++) {
-		const c = s.text[i] as string;
+		const c = s.text.charAt(i);
 		if (c === "'" || c === '"') {
 			const end = s.text.indexOf(c, i + 1);
+			if (end < 0) throw DbError.make('42601', 'unterminated quoted SQL');
 			out += s.text.slice(i, end + 1);
 			i = end;
 			continue;
@@ -203,9 +204,10 @@ export function inline(s: Sql): string {
 			continue;
 		}
 		const n = Number(m[1]);
-		if (n < 1 || n > s.params.length) throw DbError.make('08P01', `parameter $${n} has no value`);
-		out += literal(s.params[n - 1] as Json);
-		i += (m[0] as string).length - 1;
+		const value = s.params[n - 1];
+		if (value === undefined) throw DbError.make('08P01', `parameter $${n} has no value`);
+		out += literal(value);
+		i += m[0].length - 1;
 	}
 	return out;
 }

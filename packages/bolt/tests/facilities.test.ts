@@ -15,7 +15,7 @@ import {
 } from '../src/engine/decisions/index.ts';
 import { Facilities, Manifest, Decisions } from '../src/engine/services.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { Ai, Browser, Convert, Files, Geo, Images, Logs, Speech, WebRead } from '../src/engine/ports.ts';
+import { Ai, Browser, Convert, Files, Geo, Images, Logs, WebRead } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
 import { imagesPort } from '../src/node/images.ts';
 import { refusedFiles } from './support/refused.ts';
@@ -40,7 +40,7 @@ it.effect(
 		const db = TenantDb.typed({
 			read: () => Effect.succeed([{ rows: [stored], affected: 1 }]),
 			write: () => Effect.fail(DbError.make('XX000', 'embedding writes no database rows')),
-			session: () => Effect.fail(DbError.make('0A000', 'embedding opens no session')),
+
 			transaction: () => Effect.fail(DbError.make('XX000', 'embedding opens no transaction'))
 		});
 		const received: (readonly EmbedInput[])[] = [];
@@ -67,7 +67,7 @@ it.effect(
 			Images.fromAbi(imagesPort),
 			Convert.fromAbi(off),
 			Browser.fromAbi(off),
-			Speech.fromAbi(off),
+
 			Geo.fromAbi(off),
 			WebRead.fromAbi(off)
 		);
@@ -104,8 +104,7 @@ it.effect('web.read keeps raw options across the facility dispatch boundary', ()
 	const db = TenantDb.typed({
 		read: () => Effect.succeed([]),
 		write: () => Effect.succeed({ rows: [], affected: 0 }),
-		session: () =>
-			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 		transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 	});
 	const ports = Layer.mergeAll(
@@ -116,7 +115,7 @@ it.effect('web.read keeps raw options across the facility dispatch boundary', ()
 		Images.fromAbi(imagesPort),
 		Convert.fromAbi(off),
 		Browser.fromAbi(off),
-		Speech.fromAbi(off),
+
 		Ai.fromAbi({ system1: off, system2: off, embed: off }),
 		Geo.fromAbi(off),
 		Layer.succeed(WebRead, {
@@ -232,8 +231,7 @@ it.effect(
 				TenantDb.typed({
 					read: () => Effect.fail(DbError.make('XX000', 'Decisions read no database rows')),
 					write: () => Effect.fail(DbError.make('XX000', 'Decisions write no database rows')),
-					session: () =>
-						Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 					transaction: () => Effect.fail(DbError.make('XX000', 'Decisions open no transaction'))
 				})
 			),
@@ -243,7 +241,7 @@ it.effect(
 			Images.fromAbi(imagesPort),
 			Convert.fromAbi(off),
 			Browser.fromAbi(off),
-			Speech.fromAbi(off),
+
 			Geo.fromAbi(off),
 			WebRead.fromAbi(off)
 		);

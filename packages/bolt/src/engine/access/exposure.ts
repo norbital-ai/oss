@@ -223,8 +223,7 @@ export function exposure(
 			model = m.models[c];
 		const output = viewOutput(m, a, c);
 		const reads = output !== undefined;
-		const read =
-			(output === undefined || output === 'default' ? spec.read : spec.outputs?.[output]) ?? {};
+		const read = spec.outputs[output ?? 'default'] ?? {};
 		const writes = (['create', 'update'] as const).filter(
 			(v) => spec[v] !== undefined && (a.admin || (ca?.[v].length ?? 0) > 0)
 		);
@@ -307,6 +306,10 @@ export function exposure(
 				.filter((field) => readable(field) || relations.some(([fk]) => fk === field))
 				.map((field) => [field, 'ownedParent'] as const)
 		]);
+		const fullLocks = Object.values(model.locks ?? {})
+			.filter(({ except }) => (except?.length ?? 0) === 0)
+			.map(({ where }) => where);
+		const locked = fullLocks.length > 1 ? { or: fullLocks } : fullLocks[0];
 		out[c] = {
 			...labelMetadata(model, readable),
 			...(output === undefined || output === 'default' ? {} : { output }),
@@ -343,7 +346,7 @@ export function exposure(
 				})
 			),
 			...(Object.keys(readonlyFields).length === 0 ? {} : { readonlyFields }),
-			...(model.locked === undefined ? {} : { locked: model.locked }),
+			...(locked === undefined ? {} : { locked }),
 			description: model.description,
 			...(spec.delete !== undefined && (a.admin || (ca?.delete.length ?? 0) > 0)
 				? { delete: true }
@@ -358,7 +361,7 @@ export function exposure(
 		if (output === undefined) continue;
 		const model = SYSTEM.models[c]!,
 			spec = SYSTEM.exposures[c]!,
-			read = (output === 'default' ? spec.read : spec.outputs?.[output])?.[c]?.fields ?? [];
+			read = spec.outputs[output]?.[c]?.fields ?? [];
 		const shown = (f: string) => read === 'all' || read.includes(f);
 		const readable = Object.entries(model.fields).filter(([f]) => shown(f));
 		const relations = Object.entries(SYSTEM.relationships).flatMap(([key, relation]) => {

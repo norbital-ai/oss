@@ -66,13 +66,13 @@ const reference = function* (input, ctx) {
 };
 `;
 const edgeAutomation = (body: 'gen' | 'reference') => `${EDGE_BODIES}
-export default automation('edge_${body}', {
+export default automation({
 	description: 'The guest edge', policies: ['edge'], input: { case: { kind: 'text' } }, run: ${body}
 });
 `;
 const AUTOMATION = `import { automation } from '@norbital-ai/bolt';
 import { Effect } from ${EFFECT};
-export default automation('facility', { description: 'Facilities', policies: ['edge'], input: { case: { kind: 'text' } }, run: function* (input, ctx) {
+export default automation({ description: 'Facilities', policies: ['edge'], input: { case: { kind: 'text' } }, run: function* (input, ctx) {
 	switch (input.case) {
 		case 'uncaught': return yield* ctx.web.read('https://a.test');
 		case 'caught': return yield* ctx.web.read('https://a.test').pipe(Effect.catchTag('FacilityFailure', (failure) => Effect.succeed(failure.kind)));
@@ -83,7 +83,7 @@ export default automation('facility', { description: 'Facilities', policies: ['e
 
 const model = (name: string) => ({
 	[`src/data/model/${name}/+model.ts`]: `import { model } from '@norbital-ai/bolt';
-export default model('${name}', { description: 'A ${name}', label: 'title', fields: { title: { kind: 'text' } }, read: 'all' });
+export default model('${name}', { description: 'A ${name}', label: 'title', fields: { title: { kind: 'text' } }, outputs: { default: { fields: 'all' } } });
 `
 });
 

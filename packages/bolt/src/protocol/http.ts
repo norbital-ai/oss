@@ -42,7 +42,7 @@ import { AgentBackground, agentCallables, conversationFor } from '../engine/agen
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
-import { convertDocument, previewPdf } from '../engine/facilities.ts';
+import { previewPdf } from '../engine/facilities.ts';
 import { lowerRead } from '../engine/query/engine.ts';
 import { readsAny, viewOutput } from '../engine/access/authority.ts';
 import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
@@ -319,7 +319,7 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			const named = chargesFor(
 				authority,
 				[
-					body.callable === 'convert.document' || body.callable === 'convert.previewPdf'
+					body.callable === 'convert.previewPdf'
 						? 'convert'
 						: body.callable
 				],
@@ -463,7 +463,6 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 		[
 			'start',
 			'approvals.decide',
-			'convert.document',
 			'filter.describe',
 			'filter.options',
 			'sys_notification.markRead',
@@ -496,7 +495,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 					};
 			if (outcome.kind === 'refused' && outcome.code === 'rateLimited')
 				return yield* limited(
-					resetAfter([startCharge(m, decoded.input.automation, authority)], Date.parse(b.now))
+					resetAfter([startCharge(decoded.input.automation, authority)], Date.parse(b.now))
 				);
 		} else if (decoded.callable === 'approvals.decide') {
 			const decision = yield* (yield* Approvals).decide({
@@ -508,26 +507,6 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				decision.kind === 'decided'
 					? committed({ requestId: decision.requestId, status: decision.status })
 					: decision;
-		} else if (decoded.callable === 'convert.document') {
-			if (authority.actor.kind !== 'member')
-				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'Only members may convert documents.')
-				);
-			const file = yield* convertDocument(decoded.input.source, {
-				...decoded.input.request,
-				for: 'bolt.$export',
-				by: authority.actor.id
-			}).pipe(
-				Effect.mapError((error) =>
-					BoltError.make(
-						error._tag === 'Unavailable' ? 'unavailable' : 'invalid',
-						'facility',
-						error.message,
-						error
-					)
-				)
-			);
-			outcome = committed(file);
 		} else if (decoded.callable === 'sys_notification.markRead') {
 			if (authority.actor.kind !== 'member' || authority.actor.external)
 				return yield* Effect.fail(

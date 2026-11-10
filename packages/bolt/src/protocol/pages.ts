@@ -27,7 +27,7 @@ import {
 	responseError,
 	RateLimits
 } from './http.ts';
-import { PublicBoot, PublicHydration, toPublicBoot } from './public-page.ts';
+import { PublicBoot, PublicHydration, PublicReads, toPublicBoot } from './public-page.ts';
 
 type PageMode = PublicPageRoute & { readonly key: string };
 
@@ -38,7 +38,7 @@ export function renderMode(manifest: ShellManifest, path: string): PageMode | nu
 		return { kind: 'app', app: selected.app, key: `app/${selected.app}/${selected.page}` };
 	if (
 		selected.kind === 'kiosk' &&
-		(manifest.kiosks?.[selected.kiosk]?.auth ?? 'members') !== 'members'
+		(manifest.apps[selected.kiosk]?.audience ?? 'members') !== 'members'
 	)
 		return {
 			kind: 'kiosk',
@@ -51,7 +51,7 @@ export function renderMode(manifest: ShellManifest, path: string): PageMode | nu
 const PageOutput = Schema.Struct({
 	body: Schema.String,
 	head: Schema.String,
-	data: Schema.Json,
+	reads: PublicReads,
 	messages: Schema.Record(Schema.String, Schema.String)
 });
 const json = (value: unknown) =>
@@ -146,6 +146,7 @@ export const publicPages = (artifact: Artifact) =>
 				if (!rate.ok) return Option.some(rateLimitedResponse(rate.retryAfter));
 				const boot = yield* toPublicBoot(caller.boot, {
 					base: caller.base,
+					location: { pathname: url.pathname, search: url.search },
 					kiosk: selected.kind === 'kiosk' ? selected.kiosk : null,
 					messages: {}
 				});
@@ -158,7 +159,7 @@ export const publicPages = (artifact: Artifact) =>
 						id,
 						kind: 'page',
 						target: selected.key,
-						input: { request: { pathname: url.pathname, search: url.search }, boot: encodedBoot },
+						input: { boot: encodedBoot },
 						ctx: {
 							actor: caller.authority.actor,
 							now: bound.now,
@@ -177,7 +178,7 @@ export const publicPages = (artifact: Artifact) =>
 						cross: (calls) =>
 							Effect.forEach(calls, (call): Effect.Effect<CrossAnswer> => {
 								if (call._tag !== 'read')
-									return Effect.succeed(denied('Public page loaders may only read.'));
+									return Effect.succeed(denied('Public pages may only read while rendering.'));
 								if (!readAdmitted(caller.authority, call.read))
 									return Effect.succeed(denied('Visitors may not do this.'));
 								return reads
@@ -217,7 +218,7 @@ export const publicPages = (artifact: Artifact) =>
 					release: activation.release,
 					locale: boot.workspace.locale,
 					boot: { ...boot, messages: output.messages },
-					data: output.data
+					reads: output.reads
 				});
 				const html = document
 					.replace(

@@ -101,9 +101,6 @@ const Facilities = [
 	'files.meta',
 	'files.get',
 	'files.url',
-	'files.text',
-	'files.table',
-	'files.sheet',
 	'files.image',
 	'files.put',
 	'convert.document',
@@ -111,7 +108,6 @@ const Facilities = [
 	'ai.sys_1.decide',
 	'ai.sys_2.infer',
 	'ai.embed',
-	'ai.speak',
 	'geo.search',
 	'geo.reverse'
 ] as const;
@@ -135,46 +131,6 @@ const lower = (
 				})
 			};
 		switch (member) {
-			case 'transaction.begin':
-				return { _tag: 'transactionBegin' };
-			case 'transaction.abort':
-				return { _tag: 'transactionAbort' };
-			case 'transaction.finish': {
-				const result = yield* decode(
-					Schema.Struct({ output: Schema.Json, omitted: Schema.Boolean }),
-					args[0]
-				);
-				return { _tag: 'transactionFinish', ...result };
-			}
-			case 'transaction.act': {
-				const name = yield* callable(yield* decode(Schema.String, args[0]), manifest);
-				if (!isBatchCallable(name))
-					return yield* Effect.fail(
-						BoltError.make(
-							'invalidInput',
-							'guest',
-							'A transaction takes generated create, update, upsert or delete.'
-						)
-					);
-				const options = yield* Schema.decodeUnknownEffect(
-					Schema.Struct({ onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep'])) }),
-					{ onExcessProperty: 'error' }
-				)(args[2] ?? {}).pipe(
-					Effect.mapError((error) => BoltError.make('invalidInput', 'guest', error.message))
-				);
-				if ((name.verb === 'upsert') !== (options.onConflict !== undefined))
-					return yield* Effect.fail(
-						BoltError.make('invalidInput', 'guest', 'Only upsert requires an onConflict mode.')
-					);
-				return { _tag: 'transactionAct', callable: name, input: args[1] ?? null, ...options };
-			}
-			case 'transaction.query': {
-				const query = yield* Effect.try({
-					try: () => read('query', args),
-					catch: (error) => BoltError.make('invalidInput', 'guest', messageOf(error))
-				});
-				return { _tag: 'transactionRead', reads: [query] };
-			}
 			case 'act': {
 				const name = yield* decode(Schema.String, args[0]);
 				const options = yield* decode(Options, args[2] ?? {});
@@ -307,7 +263,7 @@ export function bodyPath(kind: InvocationKind, target: string): string[] {
 		case 'parse':
 			return ['model', model, 'bodies', 'syncs', member, 'parse', rest.join('.')];
 		case 'policy':
-			return ['policy', model, 'grants', member, ...rest, 'check'];
+			return ['policy', model, 'grants', member, ...rest, 'verdict'];
 		case 'automation':
 			return ['automation', target, 'body'];
 		// `<model>.effect.<verb>`
@@ -509,7 +465,7 @@ const run = (
 							if (forbidden !== undefined)
 								return failed('forbidden', `page rendering cannot call '${forbidden[0]}'`);
 						}
-						// a policy check reads through `ctx.db.query` only (rule 35)
+						// a policy check reads through `ctx.query` only (rule 35)
 						if (invocation.kind === 'policy') {
 							const forbidden = calls.find(([member]) => member !== 'db.query');
 							if (forbidden !== undefined)
@@ -538,10 +494,7 @@ const run = (
 							}).pipe(
 								Effect.catch((error) =>
 									Effect.succeed(
-										member === 'act' ||
-											member === 'acts' ||
-											member === 'approvals.withdraw' ||
-											member.startsWith('transaction.')
+										member === 'act' || member === 'acts'
 											? ({
 													ok: false,
 													error: { kind: 'refused', code: error.code, message: error.message }
@@ -567,9 +520,7 @@ const run = (
 									? undefined
 									: only !== undefined && isCall(only) && only._tag === 'convert.ingest'
 										? LIMITS.callMs.ingest
-										: only !== undefined && isCall(only) && only._tag === 'ai.speak'
-											? LIMITS.callMs.speech
-											: wallMs;
+										: wallMs;
 							pending++;
 							const hostAnswers = (
 								sending.length === 0 ? Effect.succeed([]) : bridge.cross(sending)

@@ -65,8 +65,8 @@ Each word names one thing:
 | Environment | An operating environment: local, staging or production, and a tenant environment inside one.                               | The operator CLI that resets and operates environments; never a workspace setting. |
 | Secrets     | Encrypted values stored in the tenant database, read by server code.                                                       | `src/+secrets.ts` with `secrets({ NAME: { label } })`.                             |
 | Server code | Transforms, policy checks, automations, syncs, integrations and page loaders.                                              | The `ctx` each receives; declarations from `@norbital-ai/bolt`.                    |
-| Page SDK    | What browser-side page code calls.                                                                                         | `@norbital-ai/bolt/page`, imported in pages as `$bolt`.                            |
-| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links.       | `bolt.device` in pages; a shell installs `window.boltDevice`.                      |
+| Page SDK    | What browser-side page code calls.                                                                                         | `ctx` prop, typed by `@norbital-ai/bolt/page`.                            |
+| Device      | What the shell running the page provides: location, notifications, push, background notices, opening external links.       | `ctx.device` in pages; a shell installs `window.boltDevice`.                      |
 | Shell       | The container a workspace runs in, which implements Device.                                                                | The web shell built into Bolt; native apps from `@norbital-ai/app-shell`.          |
 | Host        | The server that runs a bundle and supplies its facilities: Colony (tethered, the default) or an untethered host.           | `@norbital-ai/bolt/facilities`; the Host API. See [hosts](./hosts.md).             |
 | Output      | A model's named read shape, a fixed layer map: `read` is `default`, `outputs` names the others. Every read names one.      | `+model.ts` `read` and `outputs`; a read root's `output` option.                   |
@@ -84,14 +84,13 @@ Each word names one thing:
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `@norbital-ai/bolt`                   | The declaration functions and their types.                                            |
 | `@norbital-ai/bolt/errors`            | The canonical tagged errors shared by guest bodies, pages and tests.                  |
-| `@norbital-ai/bolt/page`              | The Page SDK (`$bolt` in pages), the ui edge and Device.                              |
+| `@norbital-ai/bolt/page`              | Page context types and device helpers.                              |
 | `@norbital-ai/bolt/page/integrations` | An integration instance's browser client and setup view.                              |
 | `@norbital-ai/bolt/engine`            | Native engine services, Layers and host ports.                                        |
 | `@norbital-ai/bolt/artifact`          | A host's reader of built artifacts.                                                   |
-| `@norbital-ai/bolt/protocol`          | Wire and artifact types and their Schemas; `/protocol/cursor` decodes page cursors.   |
+| `@norbital-ai/bolt/protocol`          | Wire and artifact types and schemas, including the page cursor decoder.   |
 | `@norbital-ai/bolt/host-api`          | The Host API between a host and a pinned release.                                     |
 | `@norbital-ai/bolt/docs`              | The API reference as data.                                                            |
-| `@norbital-ai/bolt/isolate-globals`   | The guest's global surface beyond ECMAScript.                                         |
 | `@norbital-ai/bolt/guest-hooks`       | The prelude's host hooks every guest runner serves.                                   |
 | `@norbital-ai/bolt-cli/test`          | `TestWorkspace` and the Effect Vitest helpers; `/test/browser` mounts shell controls. |
 
@@ -138,7 +137,7 @@ start (up to 3 times), asking its AI, infer and HTTP calls again. Only chat sess
 
 `ctx.ai.embed` resolves each FileRef against the workspace's stored file record and sends its
 metadata to the host. The provider reads the media through the host's scoped file facility after
-forming each batch; image bytes stay outside the Cell. Hosts serving these releases use Host API 16.
+forming each batch; image bytes stay outside the Cell. Hosts serving these releases use Host API 17.
 
 A structured `output` is built on a draft (`initial`, else empty) with draft tools: `edit` (`{ ops: [{ path, set | remove: true | append }] }`,
 each op applied and checked on its own), `read` (`{ path, fields? }`), `find` (`{ text, path? }`), `diff` (`{ path? }`:
@@ -146,8 +145,7 @@ changes since the start) and `submit`. Paths are JSON Pointers, except that an i
 (`{ kind: 'list', of, key: 'code' }`) is addressed by its key (`/leave/ANNUAL/days`), so a removal never shifts another
 item's path; keys are distinct and non-empty. Request `rules` (CEL over the output's top-level fields) must hold at
 `submit` and when the budget is spent, so a review whose items start `pending` fails `invalid` unless the model finishes
-it (`coverage.all(c, c.status != 'pending')`). `jsonDiff(before, after, output?)` from `@norbital-ai/bolt` is the same
-pure comparison, for verifying changed rows and composing a change summary.
+it (`coverage.all(c, c.status != 'pending')`).
 
 In an automation, `tools` may name `'read'` beside host tools: the model reads workspace records
 as the run's policies (granted outputs and row scopes as for `ctx.query`), one read request per
@@ -171,31 +169,29 @@ Read open purchase_orders and goods_receipts for this supplier; match quantities
 	});
 ```
 
-Pages import the typed `bolt` from `$bolt`. `bolt.query(request)` takes a read request (a layer
+Pages receive the typed `ctx` as a prop. `ctx.query(request)` takes a read request (a layer
 map) and returns a `Query<T>`:
 reactive reads of `.current`, `.loading` or `.error` subscribe; awaiting it in an event handler reads
 once; `yield*` composes it as an Effect. Identical reads share a subscription, released after its
 last reactive reader leaves. `aggregate` and `history` use the same live/once contract. Capture
-reactive inputs in `$derived`; use `bolt.clock('day' | 'minute' | 'hour')` for explicit time.
+reactive inputs in `$derived`; use `ctx.clock('day' | 'minute' | 'hour')` for explicit time.
 The generated module also exposes `run`, `fork` and `attach` for mutations and mounted resources.
 An act succeeds with `committed` or `pendingApproval`; refusals, conflicts and unknown write
 outcomes remain typed failures. See [the workspace contract](./workspace-contract.md) and
 [APIs and execution](./apis.md).
 
 Members-only pages use the workspace SPA; its opening cover remains until all emitted main-thread
-modules initialize and stylesheets load. Public and external apps, and kiosks whose auth is not
-`members`, render HTML on the server and hydrate only the requested page's browser graph. Each
-needs a `+<page>.page.server.ts` read-only loader and shared `<page>.page.data.ts` codec. See
+modules initialize and stylesheets load. Public, external and shared apps render HTML on the server and hydrate only the requested page's browser graph. Both use
+`ctx.query` for the initial rows and live browser updates. See
 [Client bundles and public rendering](./client-bundling.md) for authoring, artifact and host boundaries.
 
-Portals carry their policies. A kiosk's `policies` are the whole authority on its pages: with
-`auth: 'none'` a signed-out visitor holds exactly them, as its anonymous user (below); with
-`auth: 'external'` every external who signs in (invitation or the workspace's `signup`) opens it and
-holds exactly them there, as themselves (`requestor.id`, `requestor.party`), and nothing of them
-elsewhere. Staff open a kiosk only by a held `capabilities.kiosks`. The build checks the named
-policies exist and refuses `capabilities` on an external portal's policies.
+Set `shell: 'kiosk'` on an app to serve its pages at `/kiosk/<app>/<page>` under fixed policies.
+A public kiosk uses `audience.public`. A signed-in kiosk uses `policies` as the caller's entire
+authority on its pages. External members can open kiosks that admit them. Staff open kiosks through
+`capabilities.apps`, and administrators may open them directly. The build checks the named policies
+and refuses capabilities on a kiosk policy for the `external` audience.
 
-Anonymous users (Firebase-style). Opening a public app or an `auth: 'none'` kiosk without one mints a
+Opening a public app, including a public kiosk, mints a visitor when needed. The visitor is a
 `sys_user` of kind `anonymous` (no address, never a member, absent from People) and a 30-day sliding
 session whose token the visitor cookie holds. It is the visitor's `requestor.id`: a `sys_user` ref
 defaulting to `{ var: 'requestor.id' }` makes it own what it creates, and a read `where` on that ref
@@ -251,14 +247,13 @@ cell taking a tenant reloads the open ones. Every refusal is `429` with `Retry-A
 window resets) and `{ code: 'rateLimited' }`, whose one message the shell translates.
 
 Automations are limited only when started manually (the `start` callable, Run now, the agent): each
-counts against the automation's own `limit` (`automation('x', { …, limit: '10/min' })`, per starter,
-default `30/min`). Cron, webhook and model effect runs, and the acts any run's body performs, are never rate
+counts against the quota of 30 starts per automation and starter per minute. Cron, webhook and model effect runs, and the acts any run's body performs, are never rate
 limited; run budgets bound them.
 
 ## Record history and restore
 
 Every committed write appends to `bolt_history`: one revision per record, with who, when, its
-cause and the fields it changed. `bolt.history(c, id)` lists them; `bolt.history(c, id, { at: { revision } })` lists through that revision, and a root's `asOf` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
+cause and the fields it changed. `ctx.history(c, id)` lists them; `ctx.history(c, id, { at: { revision } })` lists through that revision, and a root's `asOf` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
 folds the rest into a full-row anchor, so every kept revision still rebuilds.
 
 Schema migrations register immutable definitions in `bolt_history_schema`, with an active pointer in
@@ -267,7 +262,7 @@ hints preserve their identities through renames; removing and later reintroducin
 new identity. Original revision payloads retain their old field names. The first update under a new
 definition records a full post-image, so migrated values cannot inherit a stale value from the prior schema.
 
-`bolt.history(c, id, { at: { revision }, view: true })` returns the original field definitions and values,
+`ctx.history(c, id, { at: { revision }, view: true })` returns the original field definitions and values,
 the compatible projection into the current schema, and `uncompatible` field names. Built-in record
 history uses that exact revision and displays its original labels and kinds. Removed fields, invalid
 values and unsupported conversions have an **uncompatible** indicator; compatible scalar conversions
@@ -275,7 +270,7 @@ and declared renames restore automatically. Reference retargeting and changed cu
 require manual resolution. Current outputs, the record's current read scope and field visibility still apply. A
 reader who loses access to the row loses its history. A
 revision with no incompatible field is valid and projects into the record's own representation; an
-invalid one shows only its captured data. `bolt.history(c, id)` marks each revision `valid` for its
+invalid one shows only its captured data. `ctx.history(c, id)` marks each revision `valid` for its
 timeline. Removed fields are visible only to administrators reading the default all-fields output.
 
 History captured before this feature has no saved historical definitions. Its earliest known schema
@@ -389,7 +384,7 @@ create: {
 }
 ```
 
-A check reads with `ctx.db.query(readRequest)` as the workspace, at most 10 crossings per call, and does
+A check reads with `ctx.query(readRequest)` as the workspace, at most 10 crossings per call, and does
 no I/O or writes. Its arguments are the create trees, `{ before, set }` per update (`before` the
 stored tree of the layers the update declares) or the stored rows a delete removes.
 
@@ -399,12 +394,10 @@ steps restart at the first step. A new release does not rewrite an open request'
 
 A routed write commits provisionally with history and a checkpoint of every held record.
 The shared approval panel shows the request and each named step as a timeline; its request
-selector preserves all earlier requests. `bolt.approvals.decide(id, { decision, reason? })`
-accepts `approve`, `reject`, `requestChanges` or `withdraw`. Reject and request-changes require a
-reason; approval and withdrawal may include one. A superseder uses Approve with a reason. Comments
-exist only as decision reasons. Only the requester withdraws, while the request is open: the member
-who asked, or any run of the automation that did (`ctx.approvals.withdraw(requestId, reason?)`).
-An approver who is not the requester rejects instead.
+selector preserves all earlier requests. `ctx.approvals.decide(id, { decision, reason? })`
+accepts `approve`, `reject` or `requestChanges`. Reject and request-changes require a reason;
+approval may include one. A superseder uses Approve with a reason. Comments exist only as
+decision reasons. A requester cannot withdraw a request.
 
 | State             | Decision                                   | Result                                        |
 | ----------------- | ------------------------------------------ | --------------------------------------------- |

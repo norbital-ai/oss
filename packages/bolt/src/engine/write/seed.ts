@@ -3,11 +3,11 @@ import { inputSchema } from '@norbital-ai/std/kind';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { Schema } from 'effect';
 // Seed mode (rule 70, X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
-// `seq` values, sealed rows) in relationship order, one statement per model per ≤ 4 MiB chunk, each chunk a step
+// `seq` values, sealed rows) in relationship order, one statement per model per ≤ 1 MiB chunk, each chunk a step
 // of its own (`restorer`); the database's constraints apply; roll-ups are derived and compared with any given value (`SeedDrift`); each `seq`
 // counter is raised to the highest seeded value. No transform, trigger, run, outbox row, approval route or rate limit.
 import type { Json } from '../../decl/values.ts';
-import type { RowData, Sql } from '../contracts.ts';
+import { LIMITS, utf8Bytes, type RowData, type Sql } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
@@ -23,8 +23,6 @@ import { captureFinish, captureStart } from './capture.ts';
 export type SeedPack = {
 	readonly [model: string]: readonly RowData[];
 };
-/** One pack statement's rows: a chunk must stay inside a single call's database wall (20 s), not its byte cap alone. */
-const CHUNK = 1024 * 1024;
 /** Seed decode (rule 70): throws `seedDecode` on the first bad row. hook:callables — `bolt check` runs it at build. */
 export function decodeSeed(m: EngineManifest, pack: SeedPack): void {
 	const cat = catalogOf(m);
@@ -189,8 +187,8 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 							.filter(([f]) => !derived.includes(f))
 							.flatMap(([f, v]) => cells(f, v, fields.get(f)))
 					);
-					const n = JSON.stringify(cell).length;
-					if (size + n > CHUNK && chunk.length > 0) {
+					const n = utf8Bytes(JSON.stringify(cell));
+					if (size + n > LIMITS.seedChunkBytes && chunk.length > 0) {
 						full = true;
 						return false;
 					}

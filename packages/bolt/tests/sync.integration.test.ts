@@ -28,7 +28,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		contacts: {
-			read: { contacts: { fields: 'all' } },
+			outputs: { default: { contacts: { fields: 'all' } } },
 			create: { columns: { contacts: ['name', 'note'] } },
 			update: { columns: { contacts: ['name', 'note'] } },
 			delete: {},
@@ -48,7 +48,7 @@ const manifest: EngineManifest = {
 	automations: {
 		annotate: {
 			description: 'Writes from a guarded contact read',
-			on: { cron: '* * * * *' },
+			on: [{ cron: '* * * * *' }],
 			policies: ['annotator']
 		}
 	}

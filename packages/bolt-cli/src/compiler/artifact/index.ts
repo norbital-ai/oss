@@ -173,7 +173,6 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 			meta.name,
 			c.manifest.workspace,
 			c.manifest.apps,
-			c.manifest.kiosks ?? {},
 			c.manifest.groups ?? {},
 			c.manifest.customFields,
 			files.map((f) => f.path)

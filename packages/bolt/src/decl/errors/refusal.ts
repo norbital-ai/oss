@@ -7,5 +7,6 @@ import * as Schema from 'effect/Schema';
 export class Refusal extends Schema.TaggedError<Refusal>()('Refusal', {
 	message: Schema.String,
 	field: Schema.optional(Schema.String),
-	row: Schema.optional(Schema.Number)
+	row: Schema.optional(Schema.Number),
+	path: Schema.optional(Schema.String)
 }) {}

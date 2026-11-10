@@ -1,5 +1,4 @@
 import { Clock, Effect, Layer, Option, Schema } from 'effect';
-import { csvRows } from '@norbital-ai/std/csv';
 import { FacilityFailure } from '../decl/errors.ts';
 import type { Json } from '../decl/values.ts';
 import type { ConvertSource, PreviewPdfOptions } from '../decl/runtime/facilities.ts';
@@ -12,12 +11,11 @@ import {
 } from './contracts.ts';
 import type { EngineManifest } from './manifest.ts';
 import { TenantDb, type TenantDbShape } from './db/tenant-db.ts';
-import { Ai, Browser, Convert, Files, Geo, Images, Speech, Transport, WebRead } from './ports.ts';
+import { Ai, Browser, Convert, Files, Geo, Images, Transport, WebRead } from './ports.ts';
 import { Port, type PortFailure } from './port.ts';
 import { Decisions, Facilities, Manifest, type FacilityCall } from './services.ts';
 import { imageFacts, imageJpeg } from './files/image.ts';
 import { sizeBytes } from './callables/upload.ts';
-import { xlsxCells, xlsxSheets } from './files/xlsx.ts';
 import { sha256Hex } from '@norbital-ai/store';
 import { DecisionRequestSchema } from './decisions/index.ts';
 import { inferFacility } from './agent/ai.ts';
@@ -65,10 +63,10 @@ type FileRow = typeof FileRow.Type;
 const PutOptions = Schema.Struct({ name: Schema.String, mime: Schema.String, for: Schema.String });
 /** A FileRef as a facility takes it: its `id` names the stored file. */
 export const Reference = Schema.Struct({ id: Schema.String });
-/** `files.image` options: with `jpeg`, a JPEG copy no larger than `maxEdge` is stored; without, the image's facts. */
+/** `files.image` options: with `jpeg`, a JPEG copy no larger than `max_edge` is stored; without, the image's facts. */
 export const ImageOptions = Schema.Struct({
 	jpeg: Schema.optionalKey(
-		Schema.Struct({ maxEdge: Schema.Int.check(Schema.isBetween({ minimum: 16, maximum: 8192 })) })
+		Schema.Struct({ max_edge: Schema.Int.check(Schema.isBetween({ minimum: 16, maximum: 8192 })) })
 	)
 });
 /** `ai.embed` inputs: text, or stored files by FileRef. */
@@ -254,7 +252,7 @@ const convertWith =
 		});
 /**
  * H5, the one converter: `source` to `request.to`, stored for `request.for` within the convert wall. `ctx.convert.document`,
- * a page's `bolt.convert` (`for: 'bolt.$export'`, `by` the viewer), a notice attachment at delivery and a file sync's
+ * a notice attachment at delivery and a file sync's
  * document export all convert here.
  */
 export const convertDocument = Effect.fn('convertDocument')(function* (
@@ -308,7 +306,6 @@ export type FacilityPorts = {
 	readonly files: Files['Service'];
 	readonly images: Images['Service'];
 	readonly convert: Convert['Service'];
-	readonly speech: Speech['Service'];
 	readonly web: WebRead['Service'];
 	readonly ai: Ai['Service'];
 	readonly geo: Geo['Service'];
@@ -363,7 +360,7 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 				const { jpeg } = yield* decode(
 					ImageOptions,
 					options ?? {},
-					'files.image takes { jpeg: { maxEdge: 16..8192 } }'
+					'files.image takes { jpeg: { max_edge: 16..8192 } }'
 				);
 				if (jpeg === undefined)
 					return answered({
@@ -371,45 +368,11 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 						sha256: sha256Hex(bytes)
 					});
 				return yield* store(
-					yield* imageJpeg(bytes, jpeg.maxEdge),
+					yield* imageJpeg(bytes, jpeg.max_edge),
 					`${row.name.replace(/\.[^./]*$/, '')}.jpg`,
 					'image/jpeg',
 					row.field,
 					'files.image'
-				);
-			}
-			if (
-				call._tag === 'files.text' ||
-				call._tag === 'files.table' ||
-				call._tag === 'files.sheet'
-			) {
-				if (
-					call._tag !== 'files.text' &&
-					(row.mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-						row.name.endsWith('.xlsx'))
-				) {
-					if (call._tag === 'files.table')
-						return answered(
-							xlsxCells(bytes).map((cells) =>
-								cells.map((cell) => (cell === null ? '' : String(cell)))
-							)
-						);
-					const names = xlsxSheets(bytes);
-					return answered(names.map((name, index) => ({ name, rows: xlsxCells(bytes, index) })));
-				}
-				if (!/^(text\/|application\/(json|xml|csv)\b)/.test(row.mime))
-					return yield* Effect.fail(invalid(`files.text reads text; ${row.name} is ${row.mime}`));
-				const text = yield* Effect.try({
-					try: () => new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-					catch: () => invalid(`${row.name} is not UTF-8 text`)
-				});
-				const rows = csvRows(text);
-				return answered(
-					call._tag === 'files.text'
-						? text
-						: call._tag === 'files.sheet'
-							? [{ name: row.name, rows }]
-							: rows
 				);
 			}
 			const { max: asked } = yield* decode(
@@ -519,9 +482,6 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 				case 'files.meta':
 				case 'files.get':
 				case 'files.url':
-				case 'files.text':
-				case 'files.table':
-				case 'files.sheet':
 				case 'files.image':
 				case 'files.put':
 					return yield* file(call);
@@ -574,32 +534,6 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 					}
 					return answered(
 						yield* ports.ai.embed(resolved, embedding.model ?? 'default', embedding.dimensions)
-					);
-				}
-				case 'ai.speak': {
-					const text = yield* decode(Schema.String, first, 'speak takes text');
-					const spec = yield* decode(
-						Schema.Struct({
-							for: Schema.String,
-							name: Schema.optionalKey(Schema.String),
-							voice: Schema.optionalKey(Schema.String),
-							format: Schema.optionalKey(Schema.Literals(['mp3', 'wav', 'ogg'])),
-							language: Schema.optionalKey(Schema.String)
-						}),
-						given,
-						'speak takes { for, name?, voice?, format?, language? }'
-					);
-					const audio = yield* ports.speech.speak(text, {
-						format: spec.format ?? 'mp3',
-						...(spec.voice === undefined ? {} : { voice: spec.voice }),
-						...(spec.language === undefined ? {} : { language: spec.language })
-					});
-					return yield* store(
-						audio.bytes,
-						spec.name ?? `speech.${spec.format ?? 'mp3'}`,
-						audio.mime,
-						spec.for,
-						'ai.speak'
 					);
 				}
 				case 'convert.document': {
@@ -672,15 +606,13 @@ export function facilityDispatch(ports: FacilityPorts): Facilities['Service']['d
 							call._tag,
 							call._tag === 'convert.ingest'
 								? LIMITS.callMs.ingest
-								: call._tag === 'ai.speak'
-									? LIMITS.callMs.speech
-									: call._tag === 'files.image'
-										? LIMITS.callMs.image
-										: call._tag.startsWith('ai.')
-											? LIMITS.callMs.ai
-											: call._tag === 'convert.document'
-												? LIMITS.callMs.database
-												: LIMITS.callMs.other
+								: call._tag === 'files.image'
+									? LIMITS.callMs.image
+									: call._tag.startsWith('ai.')
+										? LIMITS.callMs.ai
+										: call._tag === 'convert.document'
+											? LIMITS.callMs.database
+											: LIMITS.callMs.other
 						)(self),
 			Effect.mapError((error): PortFailure =>
 				error._tag === 'FacilityFailure' || error._tag === 'Unavailable'
@@ -699,7 +631,6 @@ export const FacilitiesLive = Layer.effect(
 			files = yield* Files,
 			images = yield* Images,
 			convert = yield* Convert,
-			speech = yield* Speech,
 			web = yield* WebRead,
 			ai = yield* Ai,
 			geo = yield* Geo,
@@ -712,7 +643,6 @@ export const FacilitiesLive = Layer.effect(
 				files,
 				images,
 				convert,
-				speech,
 				web,
 				ai,
 				geo,

@@ -29,7 +29,7 @@ import type {
 /**
  * The field kinds: built-in stored kinds (`text`, `int`, `decimal`, `money`, `bool`, `date`, `instant`, `enum`,
  * `state`, `ref`, `file`, `point`, `json`) and the input kinds. Use a built-in kind first; a reusable structured
- * value is a `customField`; a parent-owned value is typed `json` with a `shape`; a separate model is only for
+ * value is a `custom_field`; a parent-owned value is typed `json` with a `shape`; a separate model is only for
  * independent identity, lifecycle, permissions, history or relational queries. Every kind renders and edits itself in
  * cells, forms and history, so a page never maps labels or builds an editor by hand.
  */

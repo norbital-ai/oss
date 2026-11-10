@@ -184,7 +184,7 @@ export type RowApproval = {
 	readonly requestedBy: string;
 };
 /**
- * The client a view reads and acts through (the page's `$bolt`, as bolt's `PageBolt`), as `provideBolt` hands it to the
+ * The client a view reads and acts through (the page context), as `provideBolt` hands it to the
  * views. Reads are `query`, `aggregate` and `history`, each a `Query<T>` of the answer the caller types (a view types
  * `Page<RowOf<C>>` by the model it names).
  */
@@ -204,7 +204,7 @@ export type ViewBolt = {
 	): Query<T>;
 	/** With a unit, reactive (it changes at each minute, hour or day in the workspace zone); without, the page's open. */
 	clock(unit?: 'minute' | 'hour' | 'day'): Clock;
-	recordCapabilities?(
+	record_capabilities?(
 		model: string,
 		id: string,
 		parent?: RecordParentContext
@@ -230,7 +230,7 @@ export type ViewBolt = {
 	start(automation: string, input: Value | readonly Value[]): RunHandle;
 	/** §3.5 `runs(automation, { where?, limit })`; absent until the client serves it (views then say so). */
 	runs?(automation: string, options: { where?: Json; limit: number }): Live<Page<RunRow>>;
-	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
+	file_url(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** §3.5 rule 11a in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
 	decode?(
 		model: string,

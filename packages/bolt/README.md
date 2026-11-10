@@ -16,7 +16,7 @@ bunx bolt test
 Entries:
 
 - `@norbital-ai/bolt` — declaration functions and types
-- `@norbital-ai/bolt/page` — the Page SDK (`$bolt` in pages) and Device
+- `@norbital-ai/bolt/page` — page context types and device helpers
 - `@norbital-ai/bolt/engine`, `/artifact`, `/host-api`, `/protocol`, `/facilities`, `/node`, `/guest-hooks` —
   host-side runtime contracts and Node adapters
 - `@norbital-ai/bolt/docs` — the API reference and authoring skills as data (the agent's `docs` tool reads it)

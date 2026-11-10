@@ -72,15 +72,15 @@ alert carries `{ aps: { alert: { title, body }, sound: 'default' }, path }`.
 
 ## Reading device in a page
 
-A page reads the same device from `$bolt`: `bolt.device?.geolocation?.api` watches or reads a position
-(native first, then the browser); `bolt.device?.notifications` is present only under a shell. Declare
+A page reads the same device through its `ctx` prop. `ctx.device.geolocation?.api` watches or reads a position
+(native first, then the browser); `ctx.device?.notifications` is present only under a shell. Declare
 `requires` on the app (`location`, `location:background`, `notifications`, `camera`) to hold its pages behind the
 device wall until the member grants them.
 
 ## App sessions
 
 `src/app/<app>/+session.svelte` runs for signed-in callers whose boot navigation grants that app, including workspace
-home and other shell screens. It shares `$bolt` and its ui edge, remains mounted across SPA navigation, and is
+home and other shell screens. It receives the page context through `ctx`, remains mounted across SPA navigation, and is
 disposed with the signed-in client/shell. Visitors and callers without that app do not mount it. Run its device work
 (a position watch, a visibility-driven refresh) on the edge with `{@attach attach((node) => effect)}`, so disposing
 the session interrupts it; presentation-only listeners keep Svelte cleanup. This client lifecycle grants no server

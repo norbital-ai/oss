@@ -11,7 +11,7 @@ export default model('sys_outbox', {
 		seq: { kind: 'int' },
 		/** `'<model>.sync.<sync>'`. */
 		sync: { kind: 'text' },
-		instance: { kind: 'ref', to: 'sys_integration', onDelete: 'cascade' },
+		instance: { kind: 'ref', to: 'sys_integration', on_delete: 'cascade' },
 		/** The record's model and id. */
 		model: { kind: 'text' },
 		record: { kind: 'text' },
@@ -20,7 +20,7 @@ export default model('sys_outbox', {
 		record_revision: { kind: 'int' },
 		/** The image retained for delete delivery after the record is gone. */
 		image: { kind: 'json', optional: true },
-		writer: { kind: 'ref', to: 'sys_user', optional: true, onDelete: 'setNull' },
+		writer: { kind: 'ref', to: 'sys_user', optional: true, on_delete: 'set_null' },
 		/** The fields changed since the last acknowledged write. */
 		changed: { kind: 'json', default: [], shape: { kind: 'list', of: { kind: 'text' } } },
 		/** The Idempotency-Key the remote dedupes a retried write by. */
@@ -40,13 +40,12 @@ export default model('sys_outbox', {
 		result: { kind: 'json', optional: true },
 		at: { kind: 'instant' }
 	},
-	unique: [
-		{
-			fields: ['sync', 'instance', 'record'],
-			where: { status: { eq: 'queued' }, attempts: { eq: 0 } },
-			name: 'coalesce'
+	constraints: {
+		coalesce: {
+			unique: ['sync', 'instance', 'record'],
+			where: { status: { eq: 'queued' }, attempts: { eq: 0 } }
 		}
-	],
+	},
 	table: {
 		primary: 'uuid',
 		identity: 'seq',

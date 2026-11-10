@@ -27,17 +27,17 @@ const manifest = {
 		'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
 	},
 	exposures: {
-		quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } },
+		quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } },
 		products: {
-			read: { products: { fields: 'all' } },
+			outputs: { default: { products: { fields: 'all' } } },
 			syncs: { erp: { with: 'erp', read: true, every: '30min' } }
 		},
 		chats: {
-			read: { chats: { fields: 'all' } },
+			outputs: { default: { chats: { fields: 'all' } } },
 			syncs: { desk: { with: 'desk', read: true } }
 		},
 		entries: {
-			read: { entries: { fields: 'all' } },
+			outputs: { default: { entries: { fields: 'all' } } },
 			syncs: { cal: { with: 'cal', read: true } }
 		}
 	},
@@ -56,22 +56,21 @@ const manifest = {
 		ops: { description: 'Ops', grants: { quotes: { read: true, create: true } } }
 	},
 	automations: {
-		tidy: { description: 'Files a quote', on: { cron: '*/15 * * * *' }, policies: ['ops'] },
-		nothing: { description: 'Has nothing to read', on: { cron: '*/5 * * * *' }, policies: ['ops'] },
+		tidy: { description: 'Files a quote', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
+		nothing: { description: 'Has nothing to read', on: [{ cron: '*/5 * * * *' }], policies: ['ops'] },
 		watch: {
 			description: 'A safety net over the quotes',
-			on: { cron: '* * * * *', rest: '1d' },
+			on: [{ cron: '* * * * *', rest: '1d' }],
 			policies: ['ops']
 		},
 		peek: {
 			description: 'Counts the quotes',
-			on: { cron: '@daily', tz: 'Asia/Singapore' },
+			on: [{ cron: '@daily', tz: 'Asia/Singapore' }],
 			policies: ['ops']
 		}
 	},
 	teams: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

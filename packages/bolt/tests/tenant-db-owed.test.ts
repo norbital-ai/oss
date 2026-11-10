@@ -1,6 +1,6 @@
 // What a generation owes its database: a cold start makes no trip, and the work runs once before the first statement.
 import { describe, expect, it } from '@effect/vitest';
-import { Deferred, Effect } from 'effect';
+import { Effect } from 'effect';
 import { TenantDb, type RawDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 
@@ -17,8 +17,7 @@ const world = () => {
 				trips.push('write');
 				return { rows: [], affected: 0 };
 			}),
-		transaction: () => Effect.sync(() => [] as const),
-		session: () => Effect.die('no session here')
+		transaction: () => Effect.sync(() => [] as const)
 	};
 	return { trips, db: TenantDb.typed(raw) };
 };
@@ -71,34 +70,6 @@ describe('what a generation owes its database', () => {
 			yield* db.transaction({ statements: [{ text: 'DELETE FROM sys_session', params: [] }] });
 			expect(db.identityWrites()).toBe(2);
 		})
-	);
-	it.effect('a transaction counts when it commits, not before', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const commit = yield* Deferred.make<void>();
-				const raw: RawDb = {
-					read: () => Effect.succeed([]),
-					write: () => Effect.succeed({ rows: [], affected: 0 }),
-					transaction: () => Effect.succeed([]),
-					session: () =>
-						Effect.succeed({
-							db: {
-								read: () => Effect.succeed([]),
-								write: () => Effect.succeed({ rows: [], affected: 0 }),
-								transaction: () => Effect.succeed([])
-							},
-							commit: Deferred.await(commit),
-							rollback: Effect.void
-						})
-				};
-				const db = TenantDb.typed(raw);
-				const session = yield* db.session();
-				expect(db.identityWrites()).toBe(0);
-				yield* Deferred.succeed(commit, undefined);
-				yield* session.commit;
-				expect(db.identityWrites()).toBe(1);
-			})
-		)
 	);
 	it.effect('quiet work counts as the database in use only if it writes', () =>
 		Effect.gen(function* () {

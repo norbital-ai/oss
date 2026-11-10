@@ -5,7 +5,6 @@ export { LAYOUT_HELP, NAME, ROLES, fileRe, matchDir, type Role } from '../decl/l
 export { layerModels, nullableOfExpr, splitModel } from '../decl/model.ts';
 export { type Is } from '../decl/names.ts';
 export { DRIVERS } from '../decl/runtime/integration.ts';
-export { pageServerMetadata } from '../decl/runtime/page.ts';
 export { scopeObject, type Holder } from '../engine/access/authority.ts';
 export { parseRate } from '../engine/access/rate.ts';
 export { withBrowser } from '../engine/agent/browser.ts';
@@ -14,6 +13,7 @@ export { dbError } from '../engine/db/wire.ts';
 export { PRELUDE } from '../engine/guest/prelude.ts';
 export { memberColumn, memberValue, parseAddress } from '../engine/identity/address.ts';
 export { type LoadedManifest } from '../engine/manifest.ts';
+export { parseCron } from '../engine/runs/cron.ts';
 export { auditTriggers } from '../engine/schema/audit.ts';
 export {
 	historySchemaObjects,

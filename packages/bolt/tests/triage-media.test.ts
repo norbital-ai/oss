@@ -13,7 +13,6 @@ const fixture = (name: string, mime: string, bytes: Uint8Array) => {
 	const db = TenantDb.typed({
 		read: (queries) => Effect.succeed(queries.map(() => ({ rows: [row], affected: 0 }))),
 		write: () => Effect.die('triage writes nothing'),
-		session: () => Effect.fail(DbError.make('0A000', 'No leased sessions in this file fixture')),
 		transaction: () => Effect.die('unused transaction')
 	});
 	const files = Files.of({

@@ -34,7 +34,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import { catalogOf } from '../access/pred.ts';
 import { exposed, grantedArms, outputsOf } from '../access/authority.ts';
 import { q } from '@norbital-ai/store';
-import { clip } from '../agent/schema.ts';
+import { clip, PUBLIC_ENVOY } from '../agent/schema.ts';
 import { provideHttp, type HttpOptions, type OpenAiChat } from '../agent/openai-chat.ts';
 import { Port } from '../port.ts';
 import { RunOutputRow, readsRunResult } from '../runs/index.ts';
@@ -915,9 +915,9 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 		});
 		if (a.kind !== 'member') return yield* filed();
 		const r = yield* o.db.one(Schema.Struct({ found: Schema.Boolean }), {
-			text: `SELECT true AS found FROM sys_file WHERE id = $1 AND field = $7 AND created_by = $2
-			UNION ALL SELECT true AS found FROM sys_conversation c WHERE (c.inputs @> $3::jsonb OR c.outputs @> $3::jsonb OR c.outputs @> $8::jsonb)
-				AND (c.owner = $2 OR ($6 AND c.integration IS NULL) OR ($4 AND c.integration IS NOT NULL AND c.envoy IN (SELECT jsonb_array_elements_text($5::jsonb))) OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id
+			text: `SELECT true AS found FROM sys_file WHERE id = $1 AND field = $6 AND created_by = $2
+			UNION ALL SELECT true AS found FROM sys_conversation c WHERE (c.inputs @> $3::jsonb OR c.outputs @> $3::jsonb OR c.outputs @> $7::jsonb)
+				AND (c.owner = $2 OR ($5 AND c.integration IS NULL) OR ($4 AND c.integration IS NOT NULL AND ${PUBLIC_ENVOY}) OR EXISTS (SELECT 1 FROM sys_message p WHERE p.conversation = c.id
 					AND ($2 IN (p."as"->>'member', p."as"->'envoy'->>'member'))))
 			LIMIT 1`,
 			params: [
@@ -925,12 +925,6 @@ export const readableFile = Effect.fn('Decisions.readableFile')(function* (
 				a.id,
 				JSON.stringify([{ id }]),
 				!a.external,
-				// an instance's thread files: participants (below) and staff on a `public` envoy only (own, participant, public)
-				JSON.stringify(
-					Object.entries(o.manifest.envoys)
-						.filter(([, e]) => e.audience === 'public')
-						.map(([name]) => name)
-				),
 				// admins read in-app files; an envoy thread's only through the rule above (owner 2026-09-26)
 				o.authority.admin,
 				owner,

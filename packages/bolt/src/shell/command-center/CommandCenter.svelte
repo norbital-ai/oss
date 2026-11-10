@@ -240,7 +240,7 @@
 		]}
 	>
 		{#if active === 'audit'}
-			<Audit {api} {t} locale={bolt.locale} {admin} />
+			<Audit {api} {t} locale={bolt.locale} catalog={bolt.catalog} {admin} />
 		{:else if active === 'automations'}
 			<Runs
 				{api}

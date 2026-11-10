@@ -1,7 +1,22 @@
 import { describe, expect, it } from '@effect/vitest';
+import { Effect } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
-import { approvable, ownedEdges } from '../src/engine/approvals/lock.ts';
+import { approvable, heldModels, ownedEdges } from '../src/engine/approvals/lock.ts';
+import { DbError } from '../src/engine/errors.ts';
+
+it.effect('reports a database failure while loading held approval models', () =>
+	Effect.gen(function* () {
+		const outage = DbError.make('08006', 'database unavailable');
+		expect(yield* Effect.result(heldModels({ rows: () => Effect.fail(outage) }))).toMatchObject({
+			_tag: 'Failure',
+			failure: outage
+		});
+		expect(
+			yield* heldModels({ rows: () => Effect.fail(DbError.make('42P01', 'not yet planned')) })
+		).toEqual(new Set());
+	})
+);
 
 const model = (description: string): EngineManifest['models'][string] => ({
 	description,
@@ -20,7 +35,7 @@ const manifest = (
 	exposures: Object.fromEntries(
 		Object.keys(models).map((name): [string, EngineManifest['exposures'][string]] => [
 			name,
-			{ read: { [name]: { fields: 'all' } }, delete: {} }
+			{ outputs: { default: { [name]: { fields: 'all' } } }, delete: {} }
 		])
 	),
 	policies,
@@ -28,7 +43,7 @@ const manifest = (
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -89,7 +104,7 @@ describe('approval relationship traversal', () => {
 			{
 				requester: {
 					description: 'Requests root deletion: its delete check may approve',
-					grants: { root: { read: true, delete: { check: true } } }
+					grants: { root: { read: true, delete: { verdict: true } } }
 				}
 			}
 		);

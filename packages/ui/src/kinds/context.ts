@@ -4,7 +4,7 @@
 import { Effect, Result, Schema } from 'effect';
 import { FetchHttpClient, HttpClient, HttpClientResponse, type HttpClientError } from 'effect/http';
 import { getContext, setContext, type Component } from 'svelte';
-import type { ActFailure, ReadError } from '../client/contract.js';
+import type { ActFailure, ReadError, ViewBolt } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
 import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
 
@@ -119,7 +119,7 @@ export type KindView<V = Value> =
 export type CustomFieldEntry = {
 	shape: Kind;
 	label?: string;
-	renderer?: Component<{ view: KindView }>;
+	renderer?: Component<{ view: KindView; ctx: ViewBolt | undefined }>;
 };
 /** The host's address search (and reverse lookup) a `PointInput` uses when present. */
 export type Geocoder = {
@@ -145,7 +145,7 @@ export type KindsHost = {
 		FileRef,
 		Extract<ActFailure, { _tag: 'ActRefused' }> | Extract<ReadError, { _tag: 'TransportFailed' }>
 	>;
-	fileUrl?(ref: FileRef, options?: FileUrlOptions): string;
+	file_url?(ref: FileRef, options?: FileUrlOptions): string;
 	/** The host's geocoder (P19); without one, address search uses the keyless `photonGeocoder`. */
 	geocoder?: Geocoder;
 	/** A keyless tile template; the host may override the OpenStreetMap default. */

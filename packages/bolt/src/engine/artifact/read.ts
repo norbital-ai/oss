@@ -67,20 +67,19 @@ export type Artifact = {
 	>;
 };
 
-/** The route namespace keeps a nested app named kiosk/* distinct from a kiosk. Portal chrome does not decide SSR. */
+/** The artifact key for a page in an app, including apps with the kiosk shell. */
+export const pageRouteKey = (m: EngineManifest, name: string) =>
+	`${m.apps[name.slice(0, name.lastIndexOf('/'))]?.shell === 'kiosk' ? 'kiosk' : 'app'}/${name}`;
+
+/** Portal chrome does not decide SSR. Only apps for audiences other than members have public bundles. */
 export function publicPageKeys(m: EngineManifest): readonly string[] {
-	return [
-		...Object.entries(m.apps).flatMap(([name, app]) =>
+	return Object.entries(m.apps)
+		.flatMap(([name, app]) =>
 			(app.audience ?? 'members') === 'members'
 				? []
-				: Object.keys(app.pages).map((page) => `app/${name}/${page}`)
-		),
-		...Object.entries(m.kiosks ?? {}).flatMap(([name, kiosk]) =>
-			(kiosk.auth ?? 'members') === 'members'
-				? []
-				: Object.keys(kiosk.pages).map((page) => `kiosk/${name}/${page}`)
+				: Object.keys(app.pages).map((page) => pageRouteKey(m, `${name}/${page}`))
 		)
-	].sort();
+		.sort();
 }
 
 const Release = Schema.Struct({ name: Schema.String, version: Schema.String });

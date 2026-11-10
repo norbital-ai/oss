@@ -7,7 +7,7 @@ export default model('sys_session', {
 	fields: {
 		token_hash: { kind: 'text', unique: true },
 		/** The member signed in; the session is deleted with them. */
-		user: { kind: 'ref', to: 'sys_user', onDelete: 'cascade' },
+		user: { kind: 'ref', to: 'sys_user', on_delete: 'cascade' },
 		/** The administrator previewing as `user`. */
 		impersonated_by: { kind: 'ref', to: 'sys_user', optional: true },
 		/** How it began; `anonymous`: a visitor's anonymous user, held by the visitor cookie (30 days unused). */

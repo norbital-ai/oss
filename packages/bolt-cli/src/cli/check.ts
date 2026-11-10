@@ -91,14 +91,11 @@ const svelteWarnings = Effect.fn('bolt.svelteWarnings')(function* (
 	});
 	const decode = Schema.decodeUnknownOption(SvelteWarnings);
 	const warned = yield* Effect.forEach(components, ([rel, source]) =>
-		// a template page compiles in Svelte's async mode; a public page (beside its server loader) renders synchronously
 		Effect.try(() =>
 			compiler.compile(source, {
 				filename: rel,
 				generate: false,
-				experimental: {
-					async: !files.has(rel.replace(/\.page\.svelte$/, '.page.server.ts'))
-				}
+				experimental: { async: true }
 			})
 		).pipe(
 			Effect.option,

@@ -14,7 +14,6 @@ import {
 	decodeProjectedManifest,
 	layered,
 	projectManifest,
-	publicEnvoys,
 	relations,
 	stateField,
 	teams,
@@ -36,7 +35,7 @@ const base: EngineManifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -97,7 +96,7 @@ describe('decodeManifest', () => {
 				models: {
 					orders: { description: 'Orders', label: 'number', fields: { number: { kind: 'text' } } }
 				},
-				exposures: { orders: { read: { orders: { fields: 'all' } } } },
+				exposures: { orders: { outputs: { default: { orders: { fields: 'all' } } } } },
 				automations: {
 					orders_submit: {
 						description: 'Submit an order through its native update.',
@@ -112,7 +111,7 @@ describe('decodeManifest', () => {
 			policies: ['clerk'],
 			input: { target: { kind: 'id', of: 'orders' } }
 		});
-		expect(m.exposures.orders).toEqual({ read: { orders: { fields: 'all' } } });
+		expect(m.exposures.orders).toEqual({ outputs: { default: { orders: { fields: 'all' } } } });
 	});
 
 	it('decodes each grant once: read layers, the columns and check marker of a write arm and moves arrive typed', () => {
@@ -129,8 +128,8 @@ describe('decodeManifest', () => {
 									'orders.lines': { where: { qty: { gt: 0 } } }
 								},
 								create: { columns: { orders: ['region'], 'orders.lines': ['qty'] } },
-								update: { check: true },
-								delete: { check: true },
+								update: { verdict: true },
+								delete: { verdict: true },
 								moves: { status: ['draft->sent'] }
 							},
 							lines: { read: true }
@@ -145,8 +144,8 @@ describe('decodeManifest', () => {
 			'orders.lines': { where: { qty: { gt: 0 } } }
 		});
 		expect(grant?.create).toEqual({ columns: { orders: ['region'], 'orders.lines': ['qty'] } });
-		expect(grant?.update).toEqual({ check: true });
-		expect(grant?.delete).toEqual({ check: true });
+		expect(grant?.update).toEqual({ verdict: true });
+		expect(grant?.delete).toEqual({ verdict: true });
 		expect(m.policies.rep?.grants.lines?.read).toBe(true);
 	});
 
@@ -159,10 +158,10 @@ describe('decodeManifest', () => {
 				const { manifest } = yield* load(root, files);
 				const m = Result.getOrThrow(decodeProjectedManifest(projectManifest(manifest)));
 				expect(m.workspace).not.toHaveProperty('connections');
-				expect(m.connections.support).toEqual({ integration: 'mail', envoy: 'desk' });
+				expect(m.connections.support).toEqual({ integration: 'mail' });
 				expect(m.teams).toEqual({ Sales: ['sales_rep'] });
 				expect(m.apps.sales?.title).toBe('Sales');
-				expect(m.kiosks?.clock?.policies).toEqual(['kiosk_reader']);
+				expect(m.apps.clock?.policies).toEqual(['kiosk_reader']);
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
 });
@@ -181,24 +180,19 @@ describe('projectManifest', () => {
 		team: {},
 		agent: {},
 		agent_external: {},
-		envoy: {},
 		skill: {},
 		tool: {},
 		mcp: {},
 		automation: {},
 		app: {},
-		kiosk: {},
-		kiosk_page: {},
-		kiosk_page_server: {},
 		session: {},
 		page: {},
-		page_server: {},
 		messages: {},
 		locale: {},
 		group: {},
 		...over
 	});
-	it('splits each model into its storage, its refs and, with `read`, its exposure; a model without `read` is not exposed', () => {
+	it('splits each model into its storage, its refs and the exposure declared by its outputs', () => {
 		const m = Result.getOrThrow(
 			decodeProjectedManifest(
 				projectManifest(
@@ -215,7 +209,12 @@ describe('projectManifest', () => {
 										number: { kind: 'text' },
 										customer: { kind: 'ref', to: 'customers', inverse: 'orders' }
 									},
-									read: 'all',
+									constraints: {
+										one_number: { unique: ['number'] },
+										numbered: { check: { number: { ne: '' } } },
+										unassigned: { locked: { customer: { isNull: true } }, except: ['customer'] }
+									},
+									outputs: { default: { fields: 'all' } },
 									create: { columns: { orders: ['number', 'customer'] }, transform: true },
 									update: { columns: { orders: ['number'] }, transform: () => [] },
 									delete: {}
@@ -234,9 +233,14 @@ describe('projectManifest', () => {
 		);
 		expect(m.models.orders?.fields).toEqual({ number: { kind: 'text' } });
 		expect(m.models.orders?.was).toBe('prior_orders');
+		expect(m.models.orders).toMatchObject({
+			unique: [{ fields: ['number'], name: 'one_number' }],
+			check: { numbered: { number: { ne: '' } } },
+			locks: { unassigned: { where: { customer: { isNull: true } }, except: ['customer'] } }
+		});
 		expect(m.relationships).toEqual({ 'orders.customer': { to: 'customers', inverse: 'orders' } });
 		expect(m.exposures.orders).toEqual({
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: { columns: { orders: ['number', 'customer'] }, transform: true },
 			update: { columns: { orders: ['number'] }, transform: true },
 			delete: {}
@@ -245,7 +249,7 @@ describe('projectManifest', () => {
 		expect(m.models).toHaveProperty('customers');
 	});
 
-	it("marks bodies the engine must know of and keeps no function: a write arm's check, a custom field's validate, an integration's test", () => {
+	it("marks a write arm's verdict, a custom field's validate and an integration's test", () => {
 		const m = Result.getOrThrow(
 			decodeProjectedManifest(
 				projectManifest(
@@ -255,8 +259,8 @@ describe('projectManifest', () => {
 								description: '',
 								grants: {
 									orders: {
-										update: { columns: { orders: ['number'] }, check: function* () {} },
-										delete: { check: function* () {} },
+										update: { columns: { orders: ['number'] }, verdict: function* () {} },
+										delete: { verdict: function* () {} },
 										read: true
 									}
 								}
@@ -286,9 +290,9 @@ describe('projectManifest', () => {
 		);
 		expect(m.policies.rep?.grants.orders?.update).toEqual({
 			columns: { orders: ['number'] },
-			check: true
+			verdict: true
 		});
-		expect(m.policies.rep?.grants.orders?.delete).toEqual({ check: true });
+		expect(m.policies.rep?.grants.orders?.delete).toEqual({ verdict: true });
 		expect(m.customFields.sku).toEqual({
 			description: 'A SKU.',
 			shape: { kind: 'text' },
@@ -322,22 +326,6 @@ describe('manifest accessors', () => {
 		},
 		relationships: { 'lines.order': { to: 'orders', inverse: 'lines' } },
 		teams: { sales: ['rep'], leads: { name: 'Leads', parent: 'sales', policies: ['lead'] } },
-		envoys: {
-			desk: {
-				name: 'Desk',
-				audience: 'public',
-				policies: ['rep'],
-				delegation: 'disabled',
-				task: 'Answer.'
-			},
-			staff: {
-				name: 'Staff',
-				audience: 'private',
-				policies: ['rep'],
-				delegation: 'disabled',
-				task: 'Answer.'
-			}
-		},
 		apps: {
 			shop: {
 				title: 'Shop',
@@ -356,15 +344,13 @@ describe('manifest accessors', () => {
 		}
 	};
 
-	it('derive the public envoys, the secrets, the challenged apps and the normalised teams', () => {
-		expect(publicEnvoys(m)).toEqual(['desk']);
+	it('derive the secrets, challenged apps and normalised teams', () => {
 		expect(declaredSecrets(m)).toEqual(['API_URL', 'API_KEY']);
 		expect(challengedApps(m)).toEqual(['shop']);
 		expect(teams(m)).toEqual({
 			sales: { name: 'sales', parent: null, policies: ['rep'] },
 			leads: { name: 'Leads', parent: 'sales', policies: ['lead'] }
 		});
-		expect(publicEnvoys(m)).toBe(publicEnvoys(m));
 	});
 
 	it('stateField, the relation index and the built-in layer', () => {

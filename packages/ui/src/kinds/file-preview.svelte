@@ -22,8 +22,8 @@ when the host reads), Download, and Remove when `onRemove` is given.
 	let { file, onRemove }: { file: FileRef; onRemove?(): void } = $props();
 	const host = useKinds();
 	const t = uiText();
-	const url = $derived(host.fileUrl?.(file));
-	const imageUrl = $derived(host.fileUrl?.(file, { preview: 512 }));
+	const url = $derived(host.file_url?.(file));
+	const imageUrl = $derived(host.file_url?.(file, { preview: 512 }));
 	const text = $derived(/^text\/|^application\/(json|xml|csv)/.test(file.mime));
 	const one = (
 		model: string,

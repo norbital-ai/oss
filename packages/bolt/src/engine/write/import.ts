@@ -1,5 +1,5 @@
 import { Array as EffectArray, Effect, Result } from 'effect';
-// Import: one atomic act of at most 10,000 rows through the ordinary per-verb callbacks. This file owns its options,
+// Import: one atomic act through the ordinary per-verb callbacks. This file owns its options,
 // references given by the target's key values and the `prune` read.
 import { Predicate } from 'effect';
 import type { Json } from '../../decl/values.ts';
@@ -56,11 +56,11 @@ export function importPlan(
 	const { rows, onConflict, onMissing, prune, dryRun, ...rest } = input;
 	const extra = Object.keys(rest)[0];
 	if (extra !== undefined) return bad(`'${extra}' is not an import option`, extra);
-	if (rows.length > LIMITS.changesPerAct)
+	if (rows.length > LIMITS.act.rows)
 		return {
 			kind: 'refused',
 			code: 'overflow',
-			message: `An import writes at most ${LIMITS.changesPerAct} rows.`
+			message: `An import writes at most ${LIMITS.act.rows} rows.`
 		};
 	if (
 		key.length === 0 &&

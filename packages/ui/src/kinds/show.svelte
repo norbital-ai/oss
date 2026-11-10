@@ -24,6 +24,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	import { Schema } from 'effect';
 	import { inputSchema } from '@norbital-ai/std/kind';
 	import { useEnumText } from '../model/context.js';
+	import { usePageContext } from '../client/context.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
@@ -51,6 +52,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		address,
 		id
 	}: ShowProps = $props();
+	const pageContext = usePageContext();
 	const host = useKinds();
 	const t = uiText();
 	const words = useEnumText();
@@ -142,6 +144,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	{@const where = address === undefined ? null : (row[address] ?? null)}
 	<span {id} class={cn('min-w-0', readonly && 'text-sm', className)}
 		><Renderer
+			ctx={pageContext?.()}
 			view={{
 				mode: 'show',
 				...(readonly ? {} : { dense: true as const }),

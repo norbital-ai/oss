@@ -8,7 +8,13 @@ import type { AiRequest, AiResponse } from '../src/engine/contracts.ts';
 import { Port, type PortFailure } from '../src/engine/port.ts';
 import type { Ai, AiEvent } from '../src/engine/ports.ts';
 import type { FacilityCall } from '../src/engine/services.ts';
-import { applyEdit, inferFacility, MODEL_FILES, modelCall, STALL_MS } from '../src/engine/agent/ai.ts';
+import {
+	applyEdit,
+	inferFacility,
+	MODEL_FILES,
+	modelCall,
+	STALL_MS
+} from '../src/engine/agent/ai.ts';
 import { jsonDiff } from '../src/engine/agent/draft.ts';
 import {
 	bound,
@@ -54,7 +60,9 @@ const row = (
 type Step = Ai['Service']['infer'];
 describe('the tools a conversation is told of', () => {
 	const none = toolsListing({}),
-		one = toolsListing({ plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text' } } } }),
+		one = toolsListing({
+			plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text' } } }
+		}),
 		two = toolsListing({
 			plans: { description: 'Reads a plan.' },
 			pcn: { description: 'Reads a notice.' }
@@ -101,7 +109,9 @@ describe('a page step', () => {
 		expect(pageWaiting([row(1), step(asked)])).toBe(true);
 		const shown = step({ ...asked, pageResult: { ok: true, screen: 'Orders · New' } });
 		expect(pageWaiting([row(1), shown])).toBe(false);
-		expect(pageNote([row(1), shown])).toBe('Your last page step ran. Their page shows: Orders · New');
+		expect(pageNote([row(1), shown])).toBe(
+			'Your last page step ran. Their page shows: Orders · New'
+		);
 		expect(pageNote([row(1), step({ page: { click: 'x' }, requested: true })])).toBeUndefined();
 	});
 	it('stays the message it was sent, whatever the tab answers', () => {
@@ -1613,9 +1623,9 @@ describe('the panel conversation list', () => {
 		expect(listed(own, 'ann')).toBe(true);
 		expect(listed(child, 'ann')).toBe(false); // a sub-agent is never a root
 		expect(listed(other, 'ann')).toBe(false);
-		expect(listed(publicThread, 'ann', ['field_ops'])).toBe(true);
-		expect(listed(privateThread, 'ann', ['field_ops'])).toBe(false); // never a row the read would not return
-		expect(listed(null, 'ann', ['field_ops'])).toBe(false);
+		expect(listed(publicThread, 'ann')).toBe(false);
+		expect(listed(privateThread, 'ann')).toBe(false); // never a row the read would not return
+		expect(listed(null, 'ann')).toBe(false);
 	});
 });
 

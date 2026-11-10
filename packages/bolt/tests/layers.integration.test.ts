@@ -60,18 +60,14 @@ const manifest: EngineManifest = {
 	},
 	exposures: {
 		orders: {
-			read: {
+			outputs: { default: {
 				orders: { fields: 'all' },
 				'orders.party': { fields: ['name', 'code', 'credit_limit'] },
 				'orders.lines': { fields: 'all' }
-			},
-			// a narrower output: a party shows its name and code, never its credit limit
-			outputs: {
-				brief: {
+			}, brief: {
 					orders: { fields: ['number', 'region', 'party'] },
 					'orders.party': { fields: ['name', 'code'] }
-				}
-			},
+				} },
 			create: {
 				columns: {
 					orders: ['number', 'region', 'status', 'party'],
@@ -82,7 +78,7 @@ const manifest: EngineManifest = {
 			delete: {}
 		},
 		// a root of its own that `rep` holds no grant on
-		order_lines: { read: { order_lines: { fields: 'all' } } }
+		order_lines: { outputs: { default: { order_lines: { fields: 'all' } } } }
 	},
 	integrations: {},
 	policies: {
@@ -99,10 +95,10 @@ const manifest: EngineManifest = {
 							orders: ['number', 'region', 'status', 'party'],
 							'orders.lines': ['product', 'quantity']
 						},
-						check: true
+						verdict: true
 					},
-					update: { check: true },
-					delete: { check: true }
+					update: { verdict: true },
+					delete: { verdict: true }
 				}
 			}
 		},
@@ -115,7 +111,6 @@ const manifest: EngineManifest = {
 	teams: { finance: ['reviewer'], sales: ['rep'] },
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -124,19 +119,19 @@ const manifest: EngineManifest = {
 /** `rep`'s checks: `COUNT` answers the batch it judged (rows, nested lines), a non-positive quantity is denied at its
  * path, a `BIG` order is approved by finance; an update needs a draft with lines; a delete is always denied. */
 const source = `export default { policy: { rep: { grants: { orders: {
-	create: { check: function* (rows, ctx) {
+	create: { verdict: function* (rows, ctx) {
 		const lines = rows.flatMap((r) => r.lines ?? []);
-		if (rows.some((r) => r.number === 'COUNT')) return ctx.deny('rows:' + rows.length + ';lines:' + lines.length);
+		if (rows.some((r) => r.number === 'COUNT')) return yield* ctx.refuse('rows:' + rows.length + ';lines:' + lines.length);
 		const row = rows.findIndex((r) => (r.lines ?? []).some((l) => typeof l !== 'string' && l.quantity <= 0));
-		if (row >= 0) return ctx.deny('Quantities must be positive.', { row, path: 'orders.lines', field: 'quantity' });
-		if (rows.some((r) => r.number.startsWith('BIG'))) return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] }));
+		if (row >= 0) return yield* ctx.refuse('Quantities must be positive.', { row, path: 'orders.lines', field: 'quantity' });
+		if (rows.some((r) => r.number.startsWith('BIG'))) return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
 		return ctx.allow();
 	} },
-	update: { check: function* (changes, ctx) {
+	update: { verdict: function* (changes, ctx) {
 		const row = changes.findIndex((c) => c.before.status !== 'draft' || c.before.lines.length === 0);
-		return row >= 0 ? ctx.deny('Only a draft with lines changes.', { row }) : ctx.allow();
+		return row >= 0 ? yield* ctx.refuse('Only a draft with lines changes.', { row }) : ctx.allow();
 	} },
-	delete: { check: function* (rows, ctx) { return ctx.deny('Reps never delete.'); } }
+	delete: { verdict: function* (rows, ctx) { return yield* ctx.refuse('Reps never delete.'); } }
 } } } } };`;
 const seed = {
 	parties: [{ id: ACME, name: 'Acme', code: 'AC', credit_limit: '1000.00' }],

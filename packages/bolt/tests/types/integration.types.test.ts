@@ -2,10 +2,9 @@
 import { Effect } from 'effect';
 import { expectTypeOf } from '@effect/vitest';
 import {
-	envoy,
 	integration,
-	instanceId,
-	isInstance,
+	instance_id,
+	is_instance,
 	model,
 	policy,
 	workspace
@@ -13,12 +12,10 @@ import {
 import type {
 	AutomationCtx,
 	CalendarEvent,
-	Check,
 	ConfigurationOf,
 	ConnectionName,
 	ConversationOf,
 	DriverOf,
-	EnvoyName,
 	Id,
 	InputOf,
 	InstanceId,
@@ -33,7 +30,6 @@ import type {
 } from '../../src/index.ts';
 import type { StartableName } from '../../src/decl/access/policy.ts';
 import type { IntegrationSpecOf, StoredRow } from '../../src/decl/names.ts';
-import type { ConnectionErrors } from '../../src/decl/verify.ts';
 import type { DatabaseResult } from '../../src/engine/integrations/database.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
@@ -53,7 +49,6 @@ expectTypeOf<IntegrationName>().toEqualTypeOf<
 	| 'wechat'
 >();
 expectTypeOf<ConnectionName>().toEqualTypeOf<'erp' | 'ledger_main' | 'support' | 'whatsapp'>();
-expectTypeOf<EnvoyName>().toEqualTypeOf<'desk'>();
 expectTypeOf<IntegrationOf<'ledger_main'>>().toEqualTypeOf<'kingdee'>();
 expectTypeOf<IntegrationOf<InstanceId<'calendar'>>>().toEqualTypeOf<'calendar'>();
 expectTypeOf<DriverOf<'kingdee'>>().toEqualTypeOf<'sqlserver'>();
@@ -78,9 +73,6 @@ expectTypeOf<
 expectTypeOf<StartInput<'products.sync.ledger'>>().toEqualTypeOf<{
 	readonly [key: string]: never;
 }>();
-expectTypeOf<
-	Check<ConnectionErrors<{ w: { integration: 'whatsapp'; envoy: 'desk' } }>>
->().toEqualTypeOf<true>();
 expectTypeOf<ConfigurationOf<'kingdee'>>().toEqualTypeOf<{
 	readonly maxLagMinutes: number;
 	readonly databases: readonly string[];
@@ -140,7 +132,7 @@ model('orders', {
 	description: m.orders.spec.description,
 	label: m.orders.spec.label,
 	fields: m.orders.spec.fields,
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	syncs: {
 		ledger: {
 			with: 'kingdee',
@@ -162,15 +154,15 @@ integration('kingdee', {
 
 declare const ctx: AutomationCtx;
 declare const instance: StoredRow<'sys_integration'>;
-if (isInstance('whatsapp', instance))
+if (is_instance('whatsapp', instance))
 	expectTypeOf(instance.id).toEqualTypeOf<InstanceId<'whatsapp'>>();
-expectTypeOf(instanceId('kingdee', instance)).toEqualTypeOf<InstanceId<'kingdee'>>();
+expectTypeOf(instance_id('kingdee', instance)).toEqualTypeOf<InstanceId<'kingdee'>>();
 Effect.gen(function* () {
 	expectTypeOf(yield* ctx.send('whatsapp', { to: '+6590000000', text: 'x' })).toEqualTypeOf<
 		Id<'sys_message'>
 	>();
 	yield* ctx.send('support', { to: ['a@b.co'], subject: 'x', text: 'y' });
-	yield* ctx.send(instanceId('whatsapp', instance), { to: '+6590000000', text: 'x' });
+	yield* ctx.send(instance_id('whatsapp', instance), { to: '+6590000000', text: 'x' });
 	expectTypeOf(
 		yield* ctx.request('erp', { method: 'GET', path: 'n', output: { kind: 'int' } })
 	).toEqualTypeOf<number>();
@@ -187,20 +179,8 @@ Effect.gen(function* () {
 	yield* ctx.request('whatsapp', { method: 'GET', path: 'x', output: { kind: 'json' } });
 });
 
-// @ts-expect-error an envoy requires a conversation connection
-const noConversation: Check<ConnectionErrors<{ desk: { integration: 'erp'; envoy: 'desk' } }>> =
-	true;
-void noConversation;
 // @ts-expect-error no declaration has this integration name
 workspace({ tz: 'UTC', locale: 'en', connections: { mail: { integration: 'emial' } } });
-workspace({
-	tz: 'UTC',
-	locale: 'en',
-	connections: {
-		// @ts-expect-error the envoy name is checked
-		wa: { integration: 'whatsapp', envoy: 'dsk' }
-	}
-});
 integration('support_mail', {
 	description: 'x',
 	driver: 'email',
@@ -279,41 +259,5 @@ policy({
 	// @ts-expect-error a customer reference is not an integration reference
 	grants: { orders: { read: { customer: { eq: { var: 'requestor.instance' } } } } }
 });
-envoy({
-	name: 'x',
-	audience: 'private',
-	// @ts-expect-error policies are declared names
-	policies: ['sales_rap'],
-	delegation: 'disabled',
-	task: 'x'
-});
-// @ts-expect-error an envoy must hold a policy
-envoy({ name: 'x', audience: 'private', policies: [], delegation: 'disabled', task: 'x' });
-envoy({
-	name: 'x',
-	audience: 'public',
-	policies: ['sales_rep'],
-	delegation: 'enabled',
-	// @ts-expect-error direct-message authority is the sender or envoy
-	dm: 'member',
-	task: 'x'
-});
-envoy({
-	name: 'x',
-	// @ts-expect-error envoy audiences are private/public
-	audience: 'members',
-	policies: ['sales_rep'],
-	delegation: 'disabled',
-	task: 'x'
-});
-envoy({
-	name: 'x',
-	audience: 'public',
-	policies: ['sales_rep'],
-	delegation: 'enabled',
-	dm: 'envoy',
-	triage: { scope: 'group' },
-	task: 'x'
-});
 // @ts-expect-error only declared sync reads are startable
-policy({ description: 'x', grants: {}, automations: ['products.sync.stock'] });
+policy({ description: 'x', grants: {}, capabilities: { automations: ['products.sync.stock'] } });

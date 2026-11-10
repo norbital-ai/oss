@@ -42,7 +42,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			photos: {
-				read: { photos: { fields: 'all' } },
+				outputs: { default: { photos: { fields: 'all' } } },
 				create: { columns: { photos: ['title', 'file'] } }
 			}
 		},
@@ -52,7 +52,6 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {}

@@ -234,7 +234,7 @@ describe('source:connections: a connection is its named instance', () => {
 					...slice(),
 					connections: {
 						mail: { integration: 'email', configuration: c },
-						desk: { integration: 'whatsapp', envoy: 'desk', configuration: c },
+						desk: { integration: 'whatsapp', configuration: c },
 						ops: { integration: 'telegram', configuration: { lag: 15 } }
 					}
 				});
@@ -244,7 +244,7 @@ describe('source:connections: a connection is its named instance', () => {
 						integration: 'whatsapp',
 						name: 'desk',
 						named: true,
-						envoy: 'desk',
+						envoy: null,
 						active: true,
 						configuration: {}
 					},
@@ -267,7 +267,7 @@ describe('source:connections: a connection is its named instance', () => {
 						configuration: { lag: 15 }
 					}
 				]);
-				// run time: an instance created in the UI, and the default envoy, name and configuration of a named one changed
+				// run time: an instance created in the UI, and the name and configuration of a named one changed
 				yield* exec(
 					`insert into sys_integration (id, integration, name) values ($1, 'whatsapp', 'Sales line')`,
 					[run]
@@ -278,7 +278,7 @@ describe('source:connections: a connection is its named instance', () => {
 				const p = yield* migrate({
 					...slice(),
 					connections: {
-						mail: { integration: 'email', envoy: 'desk', configuration: { folder: 'all' } },
+						mail: { integration: 'email', configuration: { folder: 'all' } },
 						ops: { integration: 'slack', configuration: c },
 						alerts: { integration: 'telegram', configuration: c }
 					}

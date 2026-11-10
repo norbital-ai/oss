@@ -28,7 +28,7 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	exposures: { documents: { read: { documents: { fields: 'all' } } } },
+	exposures: { documents: { outputs: { default: { documents: { fields: 'all' } } } } },
 	policies: {
 		north: {
 			description: 'Only northern documents',
@@ -47,7 +47,6 @@ const manifest: EngineManifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

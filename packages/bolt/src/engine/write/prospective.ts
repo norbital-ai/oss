@@ -1,4 +1,4 @@
-// `ctx.db.after` in a write callback: stored rows overlaid with the act's own rows (what the model will hold once the
+// `ctx.query.after` in a write callback: stored rows overlaid with the act's own rows (what the model will hold once the
 // act commits), answered inside the act's one planning scope; every other read goes to the act's workspace bridge.
 import { Effect, Predicate } from 'effect';
 import type { Bindings, CrossAnswer, EngineActor, RowData, Sql } from '../contracts.ts';
@@ -22,7 +22,7 @@ import { withDefaults, type Item } from './flatten.ts';
 import { databaseValue } from '@norbital-ai/store';
 import { k, type WriteEngine } from './act.ts';
 
-/** A write callback's bridge: `db.after` overlays `staged` (the act's rows when the callback runs) on stored rows. */
+/** A write callback's bridge: `query.after` overlays `staged` (the act's rows when the callback runs) on stored rows. */
 export function prospectiveBridge(
 	e: WriteEngine,
 	cat: Catalog,

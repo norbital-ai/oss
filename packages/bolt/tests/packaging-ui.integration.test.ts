@@ -23,14 +23,13 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		exposures: { jobs: { read: { jobs: { fields: 'all' } } } },
+		exposures: { jobs: { outputs: { default: { jobs: { fields: 'all' } } } } },
 		integrations: {},
 		policies: {},
 		apps: {},
 		teams: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		customFields: {},
 		agent: { skills: {} }

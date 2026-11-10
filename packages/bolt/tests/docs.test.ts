@@ -34,20 +34,16 @@ it('the declaration functions are documented, and spec parameters list their fie
 	expect(fns).toEqual([
 		'app',
 		'automation',
-		'browserStart',
-		'customField',
-		'envoy',
+		'browser_start',
+		'custom_field',
 		'group',
-		'idOf',
-		'instanceId',
+		'id_of',
+		'instance_id',
 		'integration',
-		'isInstance',
-		'jsonDiff',
-		'kiosk',
+		'is_instance',
 		'mcp',
 		'messages',
 		'model',
-		'pageServer',
 		'policy',
 		'secrets',
 		'seeder',
@@ -59,10 +55,7 @@ it('the declaration functions are documented, and spec parameters list their fie
 	expect(model.signature).toContain('function model');
 	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
 	expect(model.params?.[1]?.fields?.map((f) => f.name)).toContain('fields');
-	expect(docs.symbol('bolt', 'pageServer')?.params?.[0]?.fields?.map((f) => f.name)).toEqual([
-		'data',
-		'load'
-	]);
+
 });
 
 it('keeps implementation guidance and parameter documentation on the core public contracts', () => {

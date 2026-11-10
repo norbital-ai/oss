@@ -7,22 +7,22 @@
 // Runtime imports stay off `contracts.ts`: it re-exports this module.
 import { Predicate, Result, Schema } from 'effect';
 import type { TeamData, TeamEntries, SourceTeam } from '../decl/access/team.ts';
-import type { customField } from '../decl/custom-field.ts';
+import type { InputFields, OutputKind } from '../decl/fields.ts';
+import type { custom_field } from '../decl/custom-field.ts';
 import type { FieldKind } from '../decl/fields.ts';
 import {
 	layerModels,
 	splitModel,
-	type ExposureSpec,
 	type ModelLiteral,
-	type ModelSpec
+	type ModelSpec,
+	type SyncEntry
 } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { Role } from '../decl/layout.ts';
-import type { EnvoySpec, mcp, ToolSpec } from '../decl/runtime/agent.ts';
-import type { AppSpec, GroupSpec } from '../decl/runtime/app.ts';
-import type { AutomationSpec } from '../decl/runtime/automation.ts';
+import type { mcp, ToolSpec } from '../decl/runtime/agent.ts';
+import { AppData, type GroupSpec } from '../decl/runtime/app.ts';
+import { DeclaredDuration, TriggerSpec } from '../decl/runtime/automation.ts';
 import type { IntegrationSpec } from '../decl/runtime/integration.ts';
-import type { KioskSpec } from '../decl/runtime/kiosk.ts';
 import { SYSTEM } from '../system/index.ts';
 import { ManifestInvalid } from './errors.ts';
 import { NEEDS, needsOf } from '../facilities/needs.ts';
@@ -56,13 +56,13 @@ const WriteGrantData = Schema.Union([
 	Schema.Literal(true),
 	Schema.Struct({
 		columns: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-		check: Schema.optionalKey(Schema.Literal(true))
+		verdict: Schema.optionalKey(Schema.Literal(true))
 	})
 ]);
 export type WriteGrantData = typeof WriteGrantData.Type;
 const DeleteGrantData = Schema.Union([
 	Schema.Literal(true),
-	Schema.Struct({ check: Schema.optionalKey(Schema.Literal(true)) })
+	Schema.Struct({ verdict: Schema.optionalKey(Schema.Literal(true)) })
 ]);
 export type DeleteGrantData = typeof DeleteGrantData.Type;
 /** A policy's grant on one model, workspace-agnostic (the decl side is `Grant<C>`): `read` grants `default`, `outputs` named ones. */
@@ -88,8 +88,14 @@ export type LimitData = typeof LimitData.Type;
 const PolicyData = Schema.Struct({
 	description: Schema.String,
 	grants: Schema.Record(Schema.String, GrantData),
-	automations: Schema.optionalKey(Schema.Array(Schema.String)),
-	capabilities: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+	capabilities: Schema.optionalKey(
+		Schema.Struct({
+			apps: Schema.optionalKey(Schema.Array(Schema.String)),
+			automations: Schema.optionalKey(Schema.Array(Schema.String)),
+			mcp: Schema.optionalKey(Schema.Array(Schema.String)),
+			tools: Schema.optionalKey(Schema.Array(Schema.String))
+		})
+	),
 	limits: Schema.optionalKey(
 		Schema.Record(Schema.String, Schema.Union([LimitData, Schema.Array(LimitData)]))
 	)
@@ -97,7 +103,7 @@ const PolicyData = Schema.Struct({
 /** A definition's optional test body is marked in the engine projection. */
 type IntegrationData = IntegrationSpec & { readonly test?: true };
 /** A custom field's literal; `check` marks its `validate`. */
-type CustomFieldData = Omit<ReturnType<typeof customField>['spec'], 'validate'> & { check?: true };
+type CustomFieldData = Omit<ReturnType<typeof custom_field>['spec'], 'validate'> & { check?: true };
 
 /** A part the compiler proved against `T`: an object here. */
 const part = <T extends object>(identifier: string) =>
@@ -111,6 +117,26 @@ const ModelData = part<ModelSpec>('model').check(
 			: 'was must be a previous model name'
 	)
 );
+const ReadLayers = Schema.Record(
+	Schema.String,
+	Schema.Struct({ fields: Schema.Union([Schema.Literal('all'), Schema.Array(Schema.String)]) })
+);
+const Columns = Schema.Record(Schema.String, Schema.Array(Schema.String));
+const Marker = Schema.optionalKey(Schema.Literal(true));
+const ExposureData = Schema.Struct({
+	outputs: Schema.StructWithRest(Schema.Struct({ default: ReadLayers }), [Schema.Record(Schema.String, ReadLayers)]),
+	create: Schema.optionalKey(Schema.Struct({
+		columns: Columns,
+		filled: Schema.optionalKey(Columns),
+		transform: Marker,
+		attaches: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ model: Schema.String, field: Schema.String })))
+	})),
+	update: Schema.optionalKey(Schema.Struct({ columns: Columns, transform: Marker })),
+	delete: Schema.optionalKey(Schema.Struct({ check: Marker })),
+	notify: Marker,
+	effect: Schema.optionalKey(Schema.Struct({ created: Marker, updated: Marker, deleted: Marker })),
+	syncs: Schema.optionalKey(parts<SyncEntry>('sync'))
+});
 
 // ── the parts decoded exactly ──
 const SecretDecl = Schema.Struct({
@@ -168,10 +194,9 @@ const Teams = Schema.Record(
 		})
 	])
 );
-/** A `+workspace.ts` connection: the named instance `<slot>` of `integration`, with its default envoy. */
+/** A `+workspace.ts` connection: the named instance `<slot>` of `integration`. */
 const Connection = Schema.Struct({
-	integration: Schema.String,
-	envoy: Schema.optionalKey(Schema.String)
+	integration: Schema.String
 });
 /**
  * A skill (compute model §3, "Running a file"): a folder of `SKILL.md`, its scripts and the pure-JavaScript packages it
@@ -196,24 +221,37 @@ const Agent = Schema.Struct({
 	tools: Schema.optionalKey(parts<ToolSpec>('agent tool'))
 });
 
+const AutomationData = Schema.Struct({
+	description: Schema.String,
+	input: Schema.optionalKey(part<InputFields>('automation input')),
+	output: Schema.optionalKey(part<OutputKind>('automation output')),
+	on: Schema.optionalKey(Schema.Array(TriggerSpec)),
+	policies: Schema.NonEmptyArray(Schema.String),
+	retry: Schema.optionalKey(
+		Schema.Struct({
+			attempts: Schema.Literals([2, 3, 4, 5, 6, 7, 8]),
+			backoff: Schema.optionalKey(DeclaredDuration)
+		})
+	),
+	concurrency: Schema.optionalKey(
+		Schema.Struct({ max: Schema.Literals([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]) })
+	),
+	agent: Schema.optionalKey(Schema.Literals(['direct', 'confirm', 'never']))
+});
 const manifestFields = {
 	workspace: Workspace,
 	models: Schema.Record(Schema.String, ModelData),
 	relationships: parts<RelationshipSpec>('relationship'),
-	exposures: parts<ExposureSpec>('model'),
+	exposures: Schema.Record(Schema.String, ExposureData),
 	/** The workspace's integration definitions by name (bolt's conversation definitions are `SYSTEM.integrations`). */
 	integrations: parts<IntegrationData>('integration definition'),
 	policies: Schema.Record(Schema.String, PolicyData),
 	teams: Teams,
-	automations: parts<AutomationSpec>('automation'),
+	automations: Schema.Record(Schema.String, AutomationData),
 	/** The named instances, by slot (the `sys_integration` id). */
 	connections: Schema.Record(Schema.String, Connection),
-	/** The envoy roles by id (`src/agent/envoy/+<id>.envoy.ts`). */
-	envoys: parts<EnvoySpec>('envoy'),
 	mcp: parts<ReturnType<typeof mcp>>('mcp server'),
-	apps: parts<AppSpec>('app'),
-	/** `+kiosk.ts` literals: standalone kiosks with their assigned policies and the origins that may frame them (`embed`). */
-	kiosks: Schema.optionalKey(parts<KioskSpec>('kiosk')),
+	apps: Schema.Record(Schema.String, AppData),
 	/** `+group.ts` literals: nav groups of apps. */ // hook:shell
 	groups: Schema.optionalKey(parts<GroupSpec>('group')),
 	customFields: parts<CustomFieldData>('custom field'),
@@ -252,7 +290,7 @@ const specs = (role: Record<string, unknown>) =>
 const defined = (o: Record<string, unknown>) =>
 	Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
 /**
- * A role whose literal carries a body (`integration`'s `test`, `customField`'s `validate`, `automation`'s `run`): the data
+ * A role whose literal carries a body (`integration`'s `test`, `custom_field`'s `validate`, `automation`'s `run`): the data
  * without it, and `<as>: true` where the engine needs to know it exists. A body is a function, or the check serializer's `true`.
  */
 const marked = (role: Record<string, unknown>, body: string, as?: string) =>
@@ -262,7 +300,7 @@ const marked = (role: Record<string, unknown>, body: string, as?: string) =>
 			return [name, as === undefined || fn === undefined ? data : { ...data, [as]: true }];
 		})
 	);
-/** A write grant's `check` callback (`policy.<p>.grants.<model>.<op>.check`, run in the guest) marked `true`. */
+/** Mark each write grant's guest verdict callback as present. */
 const policyData = (p: unknown): unknown =>
 	Predicate.isObject(p) && 'grants' in p && Predicate.isObject(p.grants)
 		? {
@@ -274,8 +312,8 @@ const policyData = (p: unknown): unknown =>
 							? Object.fromEntries(
 									Object.entries(object(grant)).map(([op, arm]) => [
 										op,
-										Predicate.isObject(arm) && 'check' in arm && typeof arm.check === 'function'
-											? { ...arm, check: true }
+										Predicate.isObject(arm) && 'verdict' in arm && typeof arm.verdict === 'function'
+											? { ...arm, verdict: true }
 											: arm
 									])
 								)
@@ -287,7 +325,7 @@ const policyData = (p: unknown): unknown =>
 /** A `model()` literal (the compiler proved it against its type); anything else is left to `decodeManifest` to refuse. */
 const isModelLiteral = (u: unknown): u is ModelLiteral =>
 	Predicate.isObject(u) && 'fields' in u && Predicate.isObject(u.fields);
-/** Each model literal split into the engine's three parts (`splitModel`): storage, its refs, and its exposure when it has `read`. */
+/** Split each model into its storage, its refs and the exposure defined by its outputs. */
 function modelParts(role: Record<string, unknown>) {
 	const models: { [name: string]: unknown } = {},
 		relationships: { [key: string]: unknown } = {},
@@ -298,6 +336,7 @@ function modelParts(role: Record<string, unknown>) {
 			models[name] = lit;
 			continue;
 		}
+		if (Object.hasOwn(lit, 'read')) throw new Error(`model '${name}': declare outputs.default`);
 		const parts = splitModel(name, lit);
 		models[name] = parts.model;
 		Object.assign(relationships, parts.relationships);
@@ -325,11 +364,9 @@ export function projectManifest(m: LoadedManifest): unknown {
 		teams: m.team[''] ?? {},
 		automations: marked(m.automation, 'run'),
 		connections,
-		envoys: specs(m.envoy),
 		mcp: specs(m.mcp),
-		apps: specs(m.app),
-		kiosks: specs(m.kiosk),
-		groups: specs(m.group),
+		apps: m.app,
+		groups: m.group,
 		customFields: marked(m.custom_field, 'validate', 'check'),
 		agent: {
 			...defined({ internal: m.agent[''], external: m.agent_external[''] }),
@@ -354,12 +391,6 @@ const memo = <A>(derive: (m: EngineManifest) => A) => {
 	};
 };
 
-/** The envoys anyone may reach (`audience: 'public'`): their threads are in every member's list (rule 61). */
-export const publicEnvoys = memo((m): readonly string[] =>
-	Object.entries(m.envoys)
-		.filter(([, e]) => e.audience === 'public')
-		.map(([name]) => name)
-);
 /** The secret names `+secrets.ts` declares, their values sealed in the tenant store. */
 export const declaredSecrets = memo((m): readonly string[] =>
 	Object.keys(m.workspace.secrets ?? {})

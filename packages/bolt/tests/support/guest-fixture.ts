@@ -23,26 +23,24 @@ export const fixtureManifest = Result.getOrThrow(
 		models: {},
 		relationships: {},
 		exposures: {
-			a: { read: { a: { fields: 'all' } }, create: { columns: { a: [] } } },
-			b: { read: { b: { fields: 'all' } }, update: { columns: { b: [] } } },
+			a: { outputs: { default: { a: { fields: 'all' } } }, create: { columns: { a: [] } } },
+			b: { outputs: { default: { b: { fields: 'all' } } }, update: { columns: { b: [] } } },
 			t: {
-				read: { t: { fields: 'all' } },
+				outputs: { default: { t: { fields: 'all' } } },
 				create: { columns: { t: [] } }
 			},
-			jobs: { read: { jobs: { fields: 'all' } }, update: { columns: { jobs: [] } } }
+			jobs: { outputs: { default: { jobs: { fields: 'all' } } }, update: { columns: { jobs: [] } } }
 		},
-		policies: {},
+		policies: { fixture: { description: 'Guest fixture authority', grants: {} } },
 		automations: {
-			a: { description: 'a', policies: [] },
-			b: { description: 'b', policies: [] }
+			a: { description: 'a', policies: ['fixture'] },
+			b: { description: 'b', policies: ['fixture'] }
 		},
 		integrations: {},
 		teams: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		kiosks: {},
 		groups: {},
 		customFields: {},
 		agent: { skills: {} }

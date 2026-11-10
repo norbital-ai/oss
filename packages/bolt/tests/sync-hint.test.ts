@@ -14,7 +14,7 @@ const manifest = (syncs: ExposureSpec['syncs']) =>
 				contacts: { description: 'A contact', label: 'name', fields: { name: { kind: 'text' } } }
 			},
 			relationships: {},
-			exposures: { contacts: { read: { contacts: { fields: 'all' } }, syncs } },
+			exposures: { contacts: { outputs: { default: { contacts: { fields: 'all' } } }, syncs } },
 			integrations: {
 				crm: { description: 'CRM', driver: 'http', http: { baseUrl: 'https://crm.test' } },
 				other: { description: 'Other', driver: 'http', http: { baseUrl: 'https://other.test' } }
@@ -23,7 +23,6 @@ const manifest = (syncs: ExposureSpec['syncs']) =>
 			policies: {},
 			teams: {},
 			automations: {},
-			envoys: {},
 			mcp: {},
 			apps: {},
 			customFields: {},

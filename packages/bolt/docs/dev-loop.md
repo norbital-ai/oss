@@ -71,7 +71,7 @@ bolt test [dir] [vitest args…]       # e.g. bolt test . tests/payroll.test.ts
 ```
 
 The workspace's own Vitest, in process, with the kit preconfigured: Svelte compiled, `@norbital-ai/bolt-cli/test` and
-`$bolt` resolved, forks without per-file isolation, a one-minute hang guard and the test lint. It needs no prior `bolt build`.
+forks without per-file isolation, a one-minute hang guard and the test lint. It needs no prior `bolt build`.
 The kit runs guest code on its own `node:vm` runner. `TestWorkspace.layer({ root })` seeds from the template's `test` pack: synthetic rows authored under `seed/test/`,
 built once per source hash. It never loads `base` or bank rows. The suite proves the template's own
 mechanisms; see the `authoring-test-suites` skill.

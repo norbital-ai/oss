@@ -1,7 +1,8 @@
 // `policy()` (§3.3.7): per model, the read outputs holders may read and the rows of each (decision 3: a model's policy
-// alone guards its access points and every layer under them), one typed `check` per write verb returning a `Verdict` (an
+// alone guards its access points and every layer under them), one typed `verdict` per write verb returning a `Verdict` (an
 // approval flow among them, spec §8), capabilities, manual starts and limits. A grant never changes an output's shape.
 // Everything a grant says is typed from the model's own declaration; nothing else type-checks.
+import { Schema } from 'effect';
 import type { CreateCheck, DeleteCheck, UpdateCheck } from '../ctx.ts';
 import type { Checked, Exact } from '../fields.ts';
 import type {
@@ -11,7 +12,6 @@ import type {
 	ExposureSpecOf,
 	Columns,
 	HostToolName,
-	KioskName,
 	LayerColumn,
 	McpName,
 	OutputName,
@@ -22,7 +22,7 @@ import type {
 	TeamName,
 	WritePath
 } from '../names.ts';
-import type { Id, Rate } from '../values.ts';
+import type { NonEmpty, Rate } from '../values.ts';
 import type { GroupName } from '../runtime/names.ts'; // hook:access
 import type { ModelWhere } from '../where.ts';
 
@@ -48,119 +48,42 @@ type EdgeStates<S, Keys extends keyof S & string = keyof S & string> = {
 /** The columns a write grant's layer `P` may admit: the columns the model's `create` or `update` declares there. */
 export type WriteField<C, O extends 'create' | 'update', P = C> = LayerColumn<C, O, P>;
 
-// ── approval flows (spec §8) ──
-/**
- * The approval flow a check's `ctx.approve(build)` holds the write for, built fluently from the `flow` it is given.
- * Steps run in order and anyone listed on a step may decide it; `if` adds steps only when its condition holds (`else`
- * otherwise); `supersededBy` names teams that may decide in any step's place; `allow()` writes directly and
- * `deny(message)` refuses the write. The requester cannot approve or supersede their own request, even if listed or
- * an administrator. After `allow()` or `deny()` nothing more may be added.
- * @example
- * return ctx.approve((flow) =>
- * 	flow
- * 		.step('Controller review', { teams: ['field_ops_controllers'] })
- * 		.if(total.gte(5000), (f) => f.step('Commercial sign-off', { teams: ['commercial'] }))
- * 		.supersededBy(['field_ops_controllers'])
- * );
- */
-export interface Flow {
-	/** Adds a step: decided by any member of `teams` or any of `users` (at least one approver). */
-	step(
-		name: string,
-		approvers: { teams?: readonly TeamName[]; users?: readonly Id<'sys_user'>[] }
-	): Flow;
-	/** `then(flow)` when `cond` holds; follow with `.else(…)` for the other case. */
-	if(cond: boolean, then: (flow: Flow) => Flow): Flow & { else(then: (flow: Flow) => Flow): Flow };
-	/** Teams that may approve or reject in place of any step's approvers (an approval by them supersedes, with a reason). */
-	supersededBy(teams: readonly TeamName[]): Flow;
-	/** No approval: the write executes directly. */
-	allow(): Flow;
-	/** The write is refused with `message`. */
-	deny(message: string): Flow;
-}
+// ── approval flows ──
+/** The named teams that decide a write, in step order. Superseders may decide any step with a reason. */
+export type ApprovalFlow = {
+	readonly steps: NonEmpty<{ readonly name: string; readonly teams: NonEmpty<TeamName> }>;
+	readonly superseded_by?: readonly TeamName[];
+};
+const FlowData = Schema.Struct({
+	steps: Schema.NonEmptyArray(
+		Schema.Struct({
+			name: Schema.String.check(
+				Schema.makeFilter((name) => name.trim() !== '' || 'A step needs a name.')
+			),
+			teams: Schema.NonEmptyArray(Schema.String)
+		})
+	),
+	superseded_by: Schema.optionalKey(Schema.Array(Schema.String))
+});
+const decodeFlow = Schema.decodeUnknownSync(FlowData, { onExcessProperty: 'error' });
+
 /** One step of a stored flow: its name and approvers (team handles, `sys_user` ids). */
 export type ApprovalStep = {
 	readonly name: string;
 	readonly teams: readonly string[];
 	readonly users: readonly string[];
 };
-/**
- * A flow as stored on its request (`bolt_approvals.route`) when the request opens or is resubmitted: a release that
- * changes the code does not move an open request. `allow` and `deny` never open one.
- */
-export type ApprovalSnapshot =
-	| {
-			readonly kind: 'steps';
-			readonly steps: readonly ApprovalStep[];
-			readonly superseded_by: readonly string[];
-	  }
-	| { readonly kind: 'allow' }
-	| { readonly kind: 'deny'; readonly message: string };
-
-type FlowState =
-	| {
-			readonly kind: 'open';
-			readonly steps: readonly ApprovalStep[];
-			readonly superseded: readonly string[];
-	  }
-	| { readonly kind: 'allow' }
-	| { readonly kind: 'deny'; readonly message: string };
-const flows = new WeakMap<Flow, FlowState>();
-const flowOf = (state: FlowState): Flow => {
-	const open = (what: string) => {
-		if (state.kind !== 'open') throw new Error(`approval flow: ${what} after ${state.kind}()`);
-		return state;
-	};
-	const flow: Flow = {
-		step(name, { teams = [], users = [] }) {
-			const s = open('step');
-			if (name.trim() === '') throw new Error('approval flow: a step needs a name');
-			if (teams.length + users.length === 0)
-				throw new Error(`approval flow: step '${name}' names no approver`);
-			return flowOf({ ...s, steps: [...s.steps, { name, teams: [...teams], users: [...users] }] });
-		},
-		if(cond, then) {
-			const taken = cond ? then(flow) : flow;
-			return Object.assign(flowOf(stateOf(taken)), {
-				else: (other: (f: Flow) => Flow) => (cond ? taken : other(flow))
-			});
-		},
-		supersededBy(teams) {
-			const s = open('supersededBy');
-			return flowOf({ ...s, superseded: [...new Set([...s.superseded, ...teams])] });
-		},
-		allow() {
-			open('allow');
-			return flowOf({ kind: 'allow' });
-		},
-		deny(message) {
-			open('deny');
-			return flowOf({ kind: 'deny', message });
-		}
-	};
-	flows.set(flow, state);
-	return flow;
-};
-const stateOf = (flow: Flow): FlowState => {
-	const state = flows.get(flow);
-	if (state === undefined) throw new Error('approval: return the flow the callback was given');
-	return state;
-};
-/** The empty flow `ctx.approve`'s builder receives. */
-export const approvalFlow = (): Flow => flowOf({ kind: 'open', steps: [], superseded: [] });
-/** The snapshot a returned flow stores; a flow with no step that neither allows nor denies is an authoring error. */
-export const snapshotOf = (flow: Flow): ApprovalSnapshot => {
-	const state = stateOf(flow);
-	if (state.kind !== 'open') return state;
-	if (state.steps.length === 0)
-		throw new Error('approval flow: add a step, or end with allow() or deny()');
-	return { kind: 'steps', steps: state.steps, superseded_by: state.superseded };
+/** The immutable flow stored when a request opens or is resubmitted. */
+export type ApprovalSnapshot = {
+	readonly kind: 'steps';
+	readonly steps: readonly ApprovalStep[];
+	readonly superseded_by: readonly string[];
 };
 
 // ── verdicts: what a write `check` returns ──
 /**
  * A verdict as it crosses the guest edge (JSON): execute, refuse the batch (`at`: its row, write path and column), or
- * hold it for the approval flow snapshot (`approve(f => f.allow())` is `allow`, `… f.deny(m)` is `deny`).
+ * hold it for the approval flow snapshot.
  */
 export type VerdictData =
 	| { readonly kind: 'allow' }
@@ -169,8 +92,8 @@ export type VerdictData =
 			readonly message: string;
 			readonly at?: { readonly row?: number; readonly path?: string; readonly field?: string };
 	  }
-	| { readonly kind: 'approve'; readonly flow: Extract<ApprovalSnapshot, { kind: 'steps' }> };
-/** A check's answer: only `ctx.allow()`, `ctx.deny(…)` and `ctx.approve(…)` make one; a plain object is never one. */
+	| { readonly kind: 'approve'; readonly flow: ApprovalSnapshot };
+/** A check's answer: only `ctx.allow()` and `ctx.approve(…)` make one; a plain object is never one. */
 export class Verdict {
 	readonly #verdict = true;
 	readonly data: VerdictData;
@@ -179,18 +102,23 @@ export class Verdict {
 	}
 	/** The verdict members of a check's ctx (the guest edge installs them on `PolicyCtx`). */
 	static readonly allow = (): Verdict => new Verdict({ kind: 'allow' });
-	static readonly deny = (
-		message: string,
-		at?: { readonly row?: number; readonly path?: string; readonly field?: string }
-	): Verdict => new Verdict({ kind: 'deny', message, ...(at === undefined ? {} : { at }) });
-	static readonly approve = (build: (flow: Flow) => Flow): Verdict => {
-		const snapshot = snapshotOf(build(approvalFlow()));
-		return new Verdict(snapshot.kind === 'steps' ? { kind: 'approve', flow: snapshot } : snapshot);
+	static readonly approve = (flow: ApprovalFlow): Verdict => {
+		const decoded = decodeFlow(flow);
+		return new Verdict({
+			kind: 'approve',
+			flow: {
+				kind: 'steps',
+				steps: decoded.steps.map(({ name, teams }) => ({ name, teams, users: [] })),
+				superseded_by: [...new Set(decoded.superseded_by)]
+			}
+		});
 	};
 	/** The data of what a check returned; anything no verdict member made is an authoring error. */
 	static dataOf(v: unknown): VerdictData {
 		if (!(v instanceof Verdict) || !v.#verdict)
-			throw new Error('policy check: return ctx.allow(), ctx.deny(…) or ctx.approve(…)');
+			throw new Error(
+				'policy verdict: return ctx.allow() or ctx.approve(…), or yield* ctx.refuse(…)'
+			);
 		return v.data;
 	}
 }
@@ -223,10 +151,10 @@ export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> =
 	| true
 	| ({
 			columns?: { [P in WritePath<C, O>]?: readonly LayerColumn<C, O, P>[] } & object;
-			check?: O extends 'create' ? CreateCheck<C> : UpdateCheck<C>;
+			verdict?: O extends 'create' ? CreateCheck<C> : UpdateCheck<C>;
 	  } & object);
-/** A delete grant: `true`, or `{ check }`. */
-export type DeleteGrant<C extends ModelName> = true | ({ check?: DeleteCheck<C> } & object);
+/** A delete grant: `true`, or `{ verdict }`. */
+export type DeleteGrant<C extends ModelName> = true | ({ verdict?: DeleteCheck<C> } & object);
 type Declares<C, V> = ExposureSpecOf<C> extends { [P in V & string]: unknown } ? true : false;
 /**
  * A model grant: its access points `read` (the `default` output) and `outputs` (named ones), `create`, `update`,
@@ -249,12 +177,12 @@ export type IdentityGrant<C extends ModelName> = {
 type Identity = 'sys_user' | 'sys_invitation';
 // Ledgers and API keys take no grant. Invitations are readable for provisioning automations.
 type Grantable = Exclude<ReadableName, 'sys_api_key'>;
-/** What types each write grant's `check` while the literal is inferred (the constraint, not the check). */
-type CheckSlots = {
+/** Contextual typing for each write grant's verdict callback. */
+type VerdictSlots = {
 	readonly [C in Grantable]?: {
-		readonly create?: true | (object & { readonly check?: CreateCheck<C> });
-		readonly update?: true | (object & { readonly check?: UpdateCheck<C> });
-		readonly delete?: true | (object & { readonly check?: DeleteCheck<C> });
+		readonly create?: true | (object & { readonly verdict?: CreateCheck<C> });
+		readonly update?: true | (object & { readonly verdict?: UpdateCheck<C> });
+		readonly delete?: true | (object & { readonly verdict?: DeleteCheck<C> });
 	} & { readonly [key: string]: unknown };
 };
 
@@ -269,23 +197,22 @@ export type EnvoyLimit =
 	| readonly { rate: Rate; per: 'sender' | 'subject' }[];
 type EnvoyKey = 'envoys.receive' | 'envoys.unrecognised';
 /**
- * What a `limits` entry throttles: acts, reads, agent turns, registration, uploads, page document conversions
- * (`convert`, `bolt.convert`; default `30/min`) or envoy traffic. Requests only: automation bodies are never limited,
- * and an automation's manual starts count against its own `limit`.
+ * What a `limits` entry throttles: acts, reads, agent turns, registration, uploads, page PDF previews
+ * (`convert`, `ctx.preview_pdf`; default `30/min`) or envoy traffic. Requests only: automation bodies are never limited,
+ * and manual starts have a separate fixed quota per automation and starter.
  */
 export type LimitKey = 'act' | 'read' | 'agent' | 'register' | 'upload' | 'convert' | EnvoyKey;
 
 // ── the policy ──
-/** What `policy.automations` may start: automations, and remote syncs with a `read` (`'<model>.sync.<sync>'`). */
+/** What `capabilities.automations` may start: automations, and remote syncs with a `read` (`'<model>.sync.<sync>'`). */
 export type StartableName = AutomationName | SyncCallable;
 type Grants<P> = P extends { grants: infer G } ? G : {};
 interface PolicyFor<C extends Grantable> {
 	description: string;
 	grants: { [K in C]?: K extends Identity ? IdentityGrant<K> : Grant<K> };
-	automations?: readonly StartableName[];
 	capabilities?: {
+		automations?: readonly StartableName[];
 		apps?: readonly (AppName | GroupName)[];
-		/* hook:access — a group covers its apps */ kiosks?: readonly KioskName[];
 		tools?: readonly HostToolName[];
 		mcp?: readonly McpName[];
 	};
@@ -295,10 +222,8 @@ type PolicyBase = {
 	/** What holding the policy is for, for people and the agent. */
 	description: string;
 	/** Per model: `read`/`outputs` (row filters of the outputs holders read), `history`, `create`/`update` (`columns` per layer and a `check`), `delete` (`check`), state `moves`. */
-	grants: { readonly [model: string]: object } & CheckSlots;
-	/** The automations (and `'<model>.sync.<sync>'` reads) holders may start by hand (a person or the agent); code needs none. */
-	automations?: readonly string[];
-	/** The apps (or groups), host tools and MCP servers holders may use; every agent skill is open to all. */
+	grants: { readonly [model: string]: object } & VerdictSlots;
+	/** The apps, manual starts, host tools and MCP servers holders may use; every agent skill is open to all. */
 	capabilities?: { readonly [k: string]: readonly string[] };
 	/** Rate limits per limit key. */
 	limits?: { readonly [key: string]: unknown };
@@ -323,13 +248,13 @@ type PolicyBase = {
  * 			create: {
  * 				columns: { variation_requests: ['job_assignment_id', 'title', 'amount'] },
  * 				check: function* (rows, ctx) {
- * 					const { job_assignments } = yield* ctx.db.query({
+ * 					const { job_assignments } = yield* ctx.query({
  * 						job_assignments: { where: { id: { in: rows.map((r) => r.job_assignment_id) } }, fields: ['assignee_user_id'] }
  * 					});
  * 					const mine = job_assignments.rows.every((j) => j.assignee_user_id === ctx.actor.id);
  * 					return mine
- * 						? ctx.approve((flow) => flow.step('Controller review', { teams: ['field_ops_controllers'] }))
- * 						: ctx.deny('Raise variations on your own jobs.', { path: 'variation_requests', field: 'job_assignment_id' });
+ * 						? ctx.approve({ steps: [{ name: 'Controller review', teams: ['field_ops_controllers'] }] })
+ * 						: yield* ctx.refuse('Raise variations on your own jobs.', { path: 'variation_requests', field: 'job_assignment_id' });
  * 				}
  * 			}
  * 		}

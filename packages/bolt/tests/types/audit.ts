@@ -42,7 +42,7 @@ void environment;
 void order;
 void status;
 
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error tenant code cannot append native administrative audit facts

@@ -27,7 +27,7 @@ Read before writing a page. When a page seems to need one of these, configure th
 ## Record sheet and forms
 
 - `RecordShell` renders the representation with the state pill, lock banner, approval panel (approve, reject, request changes, Resubmit), history with restore, and runs.
-- Grants, state edges, `transitions`, `locked`, `check` and `noOverlap` are enforced and shown: never re-check them in a form.
+- Grants, state edges, `transitions` and named model `constraints` are enforced and shown. Forms use the engine's verdict.
 - A field without a grant is readonly. A representation edits the record's own facts: identity it cannot change goes in the header or is left out.
 
 ## Kinds render themselves

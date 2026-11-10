@@ -10,7 +10,7 @@
 	import Form from '../src/form/form.svelte';
 	let { bolt, catalog }: { bolt: ViewBolt; catalog: Record<string, ModelExposure> } = $props();
 	// svelte-ignore state_referenced_locally
-	provideBolt(bolt);
+	provideBolt(() => bolt);
 	provideKinds({
 		get catalog() {
 			return catalog;

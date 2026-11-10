@@ -8,12 +8,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Plugin, PluginOption, UserConfig } from 'vite';
 import type {} from 'vitest/config';
 import { EDITOR_SINGLETONS } from '../compiler/editor-dependencies.ts';
-import { BOLT, EXT } from '../compiler/bolt.ts';
+import { EXT } from '../compiler/bolt.ts';
 import { lintTests } from '../test/lint.ts';
 import { writeTypeSetup } from '../compiler/names.ts';
 import { AuthorErrors, ToolFailure } from './build.ts';
 
-/** This copy of the kit (src or build), so `/test` and `/test/browser` share one shell and one page SDK with `$bolt`. */
+/** This copy of the kit (src or build), so `/test` and `/test/browser` share one shell. */
 const own = (path: string) => join(dirname(fileURLToPath(import.meta.url)), '..', `${path}${EXT}`);
 /** One worker per core but one: the realm runner passes its share with `--maxWorkers`. */
 export const workers = Math.max(1, availableParallelism() - 1);
@@ -117,8 +117,7 @@ const plugins = (svelte: Svelte): Plugin[] => {
 							find: /^@norbital-ai\/bolt-cli\/test\/browser$/,
 							replacement: own('test/browser')
 						},
-						{ find: /^@norbital-ai\/bolt-cli\/test$/, replacement: own('test/index') },
-						{ find: /^\$bolt$/, replacement: join(BOLT, 'page', `index${EXT}`) }
+						{ find: /^@norbital-ai\/bolt-cli\/test$/, replacement: own('test/index') }
 					],
 					conditions: ['svelte', 'browser']
 				}
@@ -129,7 +128,7 @@ const plugins = (svelte: Svelte): Plugin[] => {
 };
 /**
  * `bolt test`: the workspace's vitest, in process, with the kit preconfigured: the type setup written, svelte compiled,
- * `@norbital-ai/bolt-cli/test(/browser)` on the kit's copy and `$bolt` on its Bolt's, DOM environments resolving the browser builds, and
+ * `@norbital-ai/bolt-cli/test(/browser)` on the kit's copy, DOM environments resolving the browser builds, and
  * the realm's pool, hang guard and test lint. The workspace's own vitest config still loads, and wins
  * elsewhere. No real browser: those tests live only in Bolt's own suite.
  */

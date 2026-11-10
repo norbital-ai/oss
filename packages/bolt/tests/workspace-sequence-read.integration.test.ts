@@ -14,8 +14,8 @@ it.effect(
 					source: `export default { model: { orders: { bodies: { update: function* (changes, ctx) {
 		const ids = changes.map(({ before }) => before.id);
 		// one model is one root per request: the labelled read and the ordinary one are two requests
-		const { orders: labels } = yield* ctx.db.query({ orders: { where: { id: { in: ids } }, fields: ['number'] } });
-		const { orders: ordinary } = yield* ctx.db.query({ orders: { where: { id: { in: ids } } } });
+		const { orders: labels } = yield* ctx.query({ orders: { where: { id: { in: ids } }, fields: ['number'] } });
+		const { orders: ordinary } = yield* ctx.query({ orders: { where: { id: { in: ids } } } });
 		if (ordinary.rows.some((row) => Object.hasOwn(row, 'number') || Object.hasOwn(row, 'total'))) yield* ctx.refuse('ordinary rows exposed derived fields');
 		if (labels.rows.some((row) => Object.keys(row).sort().join(',') !== 'id,number')) yield* ctx.refuse('sequence projection read other fields');
 		return changes.map(({ before, set }) => set.status === 'submitted' ? { ...set, note: labels.rows.find((label) => label.id === before.id).number } : set);

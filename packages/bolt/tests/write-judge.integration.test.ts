@@ -37,13 +37,13 @@ const m = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			orders: {
-				read: { orders: { fields: 'all' } },
+				outputs: { default: { orders: { fields: 'all' } } },
 				create: { columns: { orders: ['region', 'amount', 'note'] } },
 				update: { columns: { orders: ['region', 'amount', 'note'] } },
 				delete: {}
 			},
 			employees: {
-				read: { employees: { fields: 'all' } },
+				outputs: { default: { employees: { fields: 'all' } } },
 				create: { columns: { employees: ['face'] } },
 				update: { columns: { employees: ['face', 'checked_at'] } }
 			}
@@ -63,24 +63,24 @@ const m = Result.getOrThrow(
 				grants: {
 					orders: {
 						read: { orders: { where: { region: { eq: 'north' } } } },
-						update: { columns: { orders: ['note'] }, check: true }
+						update: { columns: { orders: ['note'] }, verdict: true }
 					}
 				}
 			},
 			mover: {
 				description: '',
-				grants: { orders: { read: true, update: { check: true } } }
+				grants: { orders: { read: true, update: { verdict: true } } }
 			},
 			kiosk: {
 				description: '',
 				grants: {
-					employees: { read: true, update: { columns: { employees: ['face'] }, check: true } }
+					employees: { read: true, update: { columns: { employees: ['face'] }, verdict: true } }
 				}
 			},
 			stamp: {
 				description: '',
 				grants: {
-					employees: { read: true, update: { check: true } }
+					employees: { read: true, update: { verdict: true } }
 				}
 			}
 		},
@@ -88,7 +88,6 @@ const m = Result.getOrThrow(
 		integrations: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

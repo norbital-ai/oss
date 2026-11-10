@@ -1,6 +1,5 @@
 /// <reference types="node" />
-// Public pages execute their loader and synchronous Svelte renderer inside one ordinary bounded guest invocation.
-// The emitted programs stay outside client/**; neither a loader nor its imports enter a browser bundle.
+// Public pages render and resolve their initial reads inside one bounded guest invocation.
 import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
@@ -24,7 +23,7 @@ const GENERATOR = /\bfunction\s*\*|[{,]\s*\*\s*[\w$]+\s*\(/;
 const key = JSON.stringify;
 const edge = join(BOLT, 'decl', 'runtime', `guest${EXT}`);
 
-/** Compiles each public route in isolation, retaining only that component and its server loader's dependencies. */
+/** Compiles each public route in isolation, retaining only that component and its dependencies. */
 export const buildServerPages = Effect.fn('bolt.buildServerPages')(function* (
 	directory: string,
 	files: readonly Discovered[],
@@ -41,48 +40,34 @@ export const buildServerPages = Effect.fn('bolt.buildServerPages')(function* (
 	const base = files.find((file) => file.role === 'messages');
 	const locales = files.filter((file) => file.role === 'locale');
 	for (const route of routes) {
-		const kiosk = route.startsWith('kiosk/');
-		const name = route.slice(kiosk ? 'kiosk/'.length : 'app/'.length);
-		const component = files.find(
-			(file) => file.role === (kiosk ? 'kiosk_page' : 'page') && file.name === name
-		);
-		const server = files.find(
-			(file) => file.role === (kiosk ? 'kiosk_page_server' : 'page_server') && file.name === name
-		);
-		if (component === undefined || server === undefined)
+		const name = route.slice(route.indexOf('/') + 1);
+		const component = files.find((file) => file.role === 'page' && file.name === name);
+		if (component === undefined)
 			return yield* new BuildError({
-				cause: new Error(`Public page ${route} requires its component and +page.server.ts loader`)
+				cause: new Error(`Public page ${route} requires its component`)
 			});
-		const codec = join(
-			root,
-			dirname(component.path),
-			`${name.slice(name.lastIndexOf('/') + 1)}.page.data.ts`
-		);
-		if (!(yield* fs.exists(codec)))
-			return yield* new BuildError({ cause: new Error(`Public page ${route} requires ${codec}`) });
-		const wrapper = yield* publicWrapper(root, component);
+		const wrapper = yield* publicWrapper(root, component, route);
 		const entry = `import { install } from ${key(edge)};
 import { attached } from ${key(join(BOLT, 'decl', `body${EXT}`))};
-import { Schema } from 'effect';
 import { render } from 'svelte/server';
 import { frameworkText } from ${key(join(SHELL, `i18n${EXT}`))};
+import { renderPublicPage } from ${key(join(SHELL, 'public', `server${EXT}`))};
 import Page from ${key(wrapper)};
-import definition from ${key(join(root, server.path))};
-import dataCodec from ${key(codec)};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
 ${locales.map((file, index) => `import L${index} from ${key(join(root, file.path))};`).join('\n')}
 const locales = { ${locales.map((file, index) => `${key(file.name.toLowerCase())}: L${index}`).join(', ')} };
 install();
-if (definition.data !== dataCodec) throw new Error('Public page ${route} must use its shared page.data.ts codec');
-const load = definition.load[Symbol.for('norbital.bolt.generator')] ?? definition.load;
-if (Object.prototype.toString.call(load) !== '[object GeneratorFunction]') throw new Error('Public page loader must be a generator');
 export default { page: { ${key(route)}: { body: attached(function* (input, ctx) {
-	const data = yield* load(input.request, ctx);
-	const encoded = yield* Schema.encodeEffect(dataCodec)(data);
 	const locale = input.boot.workspace.locale.toLowerCase();
 	const messages = { ...frameworkText(locale), ...base, ...(locales[locale] ?? locales[locale.split('-')[0]] ?? {}) };
-	const rendered = render(Page, { props: { data, boot: { ...input.boot, messages } } });
-	return { body: rendered.body, head: rendered.head, data: encoded, messages };
+	const boot = { ...input.boot, messages };
+	const rendered = yield* renderPublicPage(
+		boot,
+		ctx.now,
+		(read) => ctx[read.m](...read.a),
+		(context) => render(Page, { props: { boot, ctx: context } })
+	);
+	return { ...rendered, messages };
 }, 1) } } };`;
 		const assets: Record<string, Uint8Array> = {};
 		let foreignAsyncHooks = false;
@@ -118,17 +103,9 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 							// repository-health:allow EFF3 -- Vite owns this asynchronous resolver boundary.
 							async resolveId(id, importer) {
 								if (id === ENTRY) return `\0${ENTRY}`;
-								if (
-									id === '$bolt' ||
-									id === '@norbital-ai/bolt/page' ||
-									id === join(SHELL, 'public', `client${EXT}`) ||
-									(importer?.split('?')[0] === join(SHELL, 'public', 'PublicPage.svelte') &&
-										/^\.\/client\.[jt]s$/.test(id))
-								)
-									return join(SHELL, 'public', `server${EXT}`);
 								if (id === 'svelte/internal/flags/async')
 									throw new Error(
-										'Public page SSR requires synchronous Svelte components; load data in pageServer'
+										'Public page SSR requires synchronous Svelte components. Read query state in markup.'
 									);
 								if (NODE.has(id)) {
 									const from =

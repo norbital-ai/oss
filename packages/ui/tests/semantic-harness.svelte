@@ -27,7 +27,7 @@
 	} = $props();
 	let open = $state(true);
 	// svelte-ignore state_referenced_locally
-	provideBolt(bolt);
+	provideBolt(() => bolt);
 	provideKinds({
 		get catalog() {
 			return catalog;

@@ -28,7 +28,7 @@ export function tableOf(model: ModelSpec): TableSpec {
 		record_label: _rl,
 		table,
 		key,
-		locked: _lock,
+		locks: _locks,
 		...storage
 	} = model;
 	// application-only metadata is not schema: enum transitions and the record lock never generate DDL
@@ -170,7 +170,7 @@ export function browserCatalog(b: BrowserCatalog): Catalog {
 			...Object.fromEntries(
 				exposed.map(([c, x]): [string, CatalogExposure] => [
 					c,
-					{ read: { [c]: { fields: 'all' } } }
+					{ outputs: { default: { [c]: { fields: 'all' } } } }
 				])
 			)
 		}

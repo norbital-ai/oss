@@ -1,3 +1,4 @@
+import { activeEnvoys } from '../engine/envoys/spec.ts';
 // The shell's host half (§5.10, §5.11.2, §3.9, rules 38a, 38d, 39): the session routes (`/__bolt/session/*`), the
 // caller's Authority for every data route (session cookie, API key, visitor, preview-as), the visitor gates in front
 // of `/q`, `/act`, `/files` and `/live`, the shell's boot, inbox, runs and settings reads, and the PWA manifest.
@@ -52,7 +53,7 @@ import {
 import { QBody, ActBody, SessionCode } from '../protocol/schema.ts';
 import { sseResponse } from '../protocol/sse.ts';
 import type { Handler } from '../protocol/host.ts';
-import { requestKiosk, kioskAuthority, kioskBoot } from './public/kiosk.ts';
+import { requestKiosk, kioskAuthority, kioskBoot, KIOSK_PATH } from './public/kiosk.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import type { Authority, LogQuery } from '../engine/contracts.ts';
 import { type EngineError } from '../engine/errors.ts';
@@ -92,6 +93,7 @@ import {
 	audienceOf,
 	canOpen,
 	challengeOf,
+	kioskOf,
 	holdsPublic,
 	isOpenRoute,
 	kioskNav,
@@ -386,7 +388,9 @@ const makeShell = Effect.gen(function* () {
 	const cookie = (name: string, value: string, maxAge: number | null) =>
 		`${name}=${encodeURIComponent(value)}; Path=${basePath(c.publicUrl) || '/'}; HttpOnly; ${cookieSite(secure)}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
 	const publicApp = (name: string | null): string | null =>
-		name !== null && audienceOf(m.apps[name]) === 'public' ? name : null;
+		name !== null && m.apps[name]?.shell !== 'kiosk' && audienceOf(m.apps[name]) === 'public'
+			? name
+			: null;
 	const queryScopedRequest = Effect.fn('shell.queryScopedRequest')(function* (
 		request: HttpServerRequest.HttpServerRequest
 	) {
@@ -422,12 +426,8 @@ const makeShell = Effect.gen(function* () {
 			return request.modify({ headers: Headers.set(request.headers, VISITOR_APP, app) });
 		}
 		if (kiosk !== undefined) {
-			const spec = m.kiosks?.[kiosk];
-			if (
-				!/^[a-z][a-z0-9_]*$/.test(kiosk) ||
-				spec === undefined ||
-				(file && (spec.auth ?? 'members') === 'members')
-			)
+			const spec = kioskOf(m, kiosk);
+			if (!KIOSK_PATH.test(kiosk) || spec === undefined || (file && audienceOf(spec) === 'members'))
 				return yield* Effect.fail(
 					BoltError.make('forbidden', 'admission', 'This public kiosk is not declared.')
 				);
@@ -676,7 +676,7 @@ const makeShell = Effect.gen(function* () {
 			...(c.live === undefined ? {} : { live: c.live }),
 			...(c.organization === undefined ? {} : { organization: true as const })
 		};
-		// a kiosk boot names its kiosk: signed-out callers boot only `auth: 'none'` kiosks (no sign-in, the
+		// a kiosk boot names its kiosk: signed-out callers boot only public kiosks (no sign-in, the
 		// requests run as the assigned policies); members boot any kiosk they may open, with the boot catalog
 		// cut to what the kiosk may read. Anything else is unauthenticated (signed-out) or forbidden.
 		const kioskName = Option.getOrNull(requestKiosk(request, true));
@@ -723,7 +723,10 @@ const makeShell = Effect.gen(function* () {
 				return ready(b, kioskAuth);
 			}
 			const auth = opened.authority;
-			const siteKey = m.workspace.signup?.challenge === undefined ? undefined : turnstile?.siteKey;
+			const siteKey =
+				(challengeOf(m, kioskName) ?? m.workspace.signup?.challenge) === undefined
+					? undefined
+					: turnstile?.siteKey;
 			const b = {
 				...bootFor(m, ws, auth),
 				nav: [],
@@ -770,9 +773,7 @@ const makeShell = Effect.gen(function* () {
 			x.preview === null && workspacePort !== undefined
 				? yield* hostCall(() => workspacePort(auth))
 				: [];
-		const [runtimeEnvoys] = yield* h.db.read([
-			{ text: 'SELECT id, name FROM sys_envoy WHERE active ORDER BY name, id', params: [] }
-		]);
+		const runtimeEnvoys = yield* activeEnvoys(h.db);
 		const bundlePort = c.studio?.bundle?.bind(c.studio);
 		const studioBundle =
 			s.studio && bundlePort !== undefined ? yield* hostCall(() => bundlePort()) : null;
@@ -788,14 +789,7 @@ const makeShell = Effect.gen(function* () {
 			...(c.client === undefined ? {} : { client: c.client }),
 			...(studioBundle === null ? {} : { studioBundle }),
 			...(workspaces.length === 0 ? {} : { workspaces }),
-			envoys: Object.fromEntries([
-				...Object.entries(m.envoys).map(([key, envoy]) => [key, envoy.name] as const),
-				...(runtimeEnvoys?.rows ?? []).flatMap((row) =>
-					typeof row['id'] === 'string' && typeof row['name'] === 'string'
-						? [[row['id'], row['name']] as const]
-						: []
-				)
-			])
+			envoys: Object.fromEntries(runtimeEnvoys.map(({ id, name }) => [id, name]))
 		};
 		// the session slides in the database (a day at most between refreshes); every boot carries it to the cookie too, so a
 		// member who keeps coming back is never signed out by a cookie that kept its first seven days

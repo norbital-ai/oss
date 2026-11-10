@@ -43,7 +43,6 @@ export const SchemaSliceSchema = Schema.Struct({
 			Schema.String,
 			Schema.Struct({
 				integration: Schema.String,
-				envoy: Schema.optionalKey(Schema.String),
 				configuration: Schema.Json
 			})
 		)
@@ -86,7 +85,7 @@ const q = (id: string): string => `"${id.replaceAll('"', '""')}"`;
 const lit = (v: string): string => `'${v.replaceAll("'", "''")}'`;
 const block = (body: string): Sql => ({ text: `do ${lit(body)}`, params: [] });
 /**
- * A connection is its named instance: inserted once with its default envoy and configuration (runtime edits stay), as
+ * A connection is its named instance: inserted once with its default configuration (runtime edits stay), as
  * an instance made at run time starts; deleted with its slot or when its slot names another definition (a new
  * instance); an instance created at run time (not named) is never touched.
  */
@@ -97,7 +96,6 @@ function connectionsObject(s: SchemaSlice): readonly SchemaObject[] {
 			Object.entries(s.connections ?? {}).map(([id, c]) => ({
 				id,
 				integration: c.integration,
-				envoy: c.envoy ?? null,
 				configuration: c.configuration
 			}))
 		)
@@ -107,12 +105,12 @@ function connectionsObject(s: SchemaSlice): readonly SchemaObject[] {
 			id: 'source:connections',
 			rank: 'backfill',
 			table: 'sys_integration',
-			deps: ['id', 'integration', 'name', 'named', 'envoy', 'configuration'],
+			deps: ['id', 'integration', 'name', 'named', 'configuration'],
 			drop: null,
 			create: [
 				`delete from ${q('sys_integration')} where named and (id, integration) not in (select id, integration from jsonb_to_recordset(${slots}::jsonb) as s(id text, integration text))`,
-				`insert into ${q('sys_integration')} (id, integration, name, named, envoy, configuration) select id, integration, id, true, envoy, configuration
-					from jsonb_to_recordset(${slots}::jsonb) as s(id text, integration text, envoy text, configuration jsonb) on conflict (id) do nothing`
+				`insert into ${q('sys_integration')} (id, integration, name, named, configuration) select id, integration, id, true, configuration
+					from jsonb_to_recordset(${slots}::jsonb) as s(id text, integration text, configuration jsonb) on conflict (id) do nothing`
 			]
 		}
 	];

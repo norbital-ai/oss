@@ -54,13 +54,13 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		tickets: {
-			read: { tickets: { fields: 'all' } },
+			outputs: { default: { tickets: { fields: 'all' } } },
 			create: { columns: { tickets: ['subject', 'photo', 'ref_id'] } },
 			update: { columns: { tickets: ['queue', 'urgent', 'level', 'note'] } },
 			effect: { created: true }
 		},
 		secret_docs: {
-			read: { secret_docs: { fields: 'all' } },
+			outputs: { default: { secret_docs: { fields: 'all' } } },
 			create: { columns: { secret_docs: ['title', 'doc'] } }
 		}
 	},
@@ -71,7 +71,6 @@ const manifest = {
 	integrations: {},
 	teams: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

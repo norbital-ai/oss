@@ -170,4 +170,4 @@ A new driver is rarer: add it to `DRIVERS` with `conversation: { kind, handle }`
 
 A workspace cannot supply a provider. A provider holds stored credentials, raw network access and direct `emit`, and it runs in the host outside the compute boundary, so tenant code there would escape the guest wall. An `http` connection cannot host an envoy either.
 
-For a platform nobody supports, a webhook-triggered automation can still answer: `on: { webhook, verify }` receives the delivery, `ctx.ai` writes the reply, and `ctx.request` sends it. That is a one-way automation, not a channel: no conversation or transcript, no sender identity or limits, no typing or attachments, and it runs under fixed policies. `verify` covers the schemes in `WebhookScheme` only.
+For a platform nobody supports, a webhook-triggered automation can still answer: `on: [{ webhook, verify }]` receives the delivery, `ctx.ai` writes the reply, and `ctx.request` sends it. That is a one-way automation, not a channel: no conversation or transcript, no sender identity or limits, no typing or attachments, and it runs under fixed policies. `verify` covers the schemes in `WebhookScheme` only.

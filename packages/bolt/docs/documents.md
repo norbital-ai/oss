@@ -7,10 +7,11 @@ warning and an `Unavailable` failure when used.
 
 | Caller     | Form                                                                                         | When                                                   |
 | ---------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Page       | `await bolt.convert({ html }, { to: 'pdf', name: 'Quote.pdf' })`                             | immediately, returning a viewer-owned short-lived file |
 | Notice     | `attachments: [{ document: { html }, to: 'pdf', name: 'Invoice.pdf' }]`                      | after commit, retried with delivery                    |
 | File sync  | `write` returns `{ document: { html }, name: 'Quote.pdf' }`                                  | when a member exports                                  |
 | Automation | `yield* ctx.convert.document({ html }, { to: 'pdf', name: 'Quote.pdf', for: 'make_quote' })` | inside the run                                         |
+
+Pages can use `ctx.preview_pdf(source, options)` for PDF bytes. To create a stored file, start an automation that uses `ctx.convert.document`.
 
 ```ts
 syncs: {
@@ -29,7 +30,7 @@ target; an empty parser list makes this export-only. A file callback's reads ret
 exporter's authority and outputs. Context is input, never authority; a supplied
 record id does not bypass its read scope. Remote syncs remain trusted workspace reads.
 Page conversion only converts content the caller already has and is rate limited by the
-policy's `convert` limit (default `30/min`). Download the returned reference with `bolt.fileUrl(ref)`.
+policy's `convert` limit (default `30/min`). Download the returned reference with `bolt.file_url(ref)`.
 
 ## Agent ingest
 

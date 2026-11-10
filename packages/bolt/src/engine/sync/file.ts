@@ -250,7 +250,7 @@ const facilityError = (error: PortFailure) =>
 
 /**
  * One sync body in the guest (`model.<model>.bodies.syncs.<sync>.read|write|parse.<type>`), one fresh isolate: its
- * `ctx.db` reads under the member's authority. Parsers read uploaded bytes/text; export writers read bytes and images.
+ * `ctx.query` reads under the member's authority. Parsers read uploaded bytes/text; export writers read bytes and images.
  */
 const body = Effect.fn('FileSyncs.body')(function* (
 	kind: Extract<InvocationKind, 'syncRead' | 'syncWrite' | 'parse'>,
@@ -301,7 +301,7 @@ const body = Effect.fn('FileSyncs.body')(function* (
 										answered.failure.message
 									)
 						)
-					: (kind === 'parse' && (x._tag === 'files.get' || x._tag === 'files.text')) ||
+					: (kind === 'parse' && x._tag === 'files.get') ||
 						  (kind === 'syncWrite' && (x._tag === 'files.get' || x._tag === 'files.image'))
 						? facilities.dispatch(x)
 						: Effect.succeed(refused('unsupported', `a sync body cannot ${x._tag}`))
@@ -635,11 +635,12 @@ const exportFile = Effect.fn('FileSyncs.export')(function* (
 				? []
 				: written;
 	const writable = parsersOf(s.entry).flatMap((p) => FORMATS.filter((x) => x === p));
+	const requested = input.format ?? input.to;
 	const format =
-		input.format ?? FORMATS.find((format) => format === input.to) ?? writable[0] ?? 'xlsx';
-	if ((input.format !== undefined || input.to !== undefined) && !writable.includes(format))
+		requested === undefined ? (writable[0] ?? 'xlsx') : writable.find((f) => f === requested);
+	if (format === undefined)
 		return yield* Effect.fail(
-			BoltError.make('invalidInput', 'decode', `${target} does not write ${input.format}.`)
+			BoltError.make('invalidInput', 'decode', `${target} does not write ${requested}.`)
 		);
 	const name = `${s.model}-${s.sync}-${input.mode === 'template' ? 'template' : caller.bindings.today}${BUILTIN[format].extension}`;
 	const file = yield* storeFile({ db, manifest: m, files })(

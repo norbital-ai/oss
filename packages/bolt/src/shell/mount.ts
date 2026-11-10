@@ -92,9 +92,9 @@ export type ShellMountConfig = {
 	/** Server-rendered routes use a document navigation to admit and load the new public page. */
 	publicRoutes?: readonly string[];
 	/** `'<app>/<page>'` (apps) and `'kiosk/<kiosk>/<page>'` (kiosks) → the page chunk. */
-	pages: { readonly [page: string]: () => Promise<{ default: Component }> };
+	pages: { readonly [page: string]: () => Promise<{ default: Component<{ ctx: ShellBolt }> }> };
 	/** App session components stay mounted across navigation for signed-in callers with access to that app. */
-	sessions?: { readonly [app: string]: Component };
+	sessions?: { readonly [app: string]: Component<{ ctx: ShellBolt }> };
 	messages?: { readonly [key: string]: string };
 	agent?: Component<{ bolt: ShellBolt; request: AgentRequest; onClose: () => void }>;
 	/** Each model's `+representation.svelte`, loaded on first use; every `RecordShell` (sheet or page) reads it. */

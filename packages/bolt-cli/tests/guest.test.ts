@@ -249,11 +249,11 @@ describe('next guest runner', () => {
 						'actor',
 						'aggregate',
 						'history',
-						'invocationId',
+						'invocation_id',
 						'now',
 						'query',
 						'today',
-						'todayIn',
+						'today_in',
 						'tz'
 					]
 				});
@@ -263,7 +263,7 @@ describe('next guest runner', () => {
 				};
 				expect(ok(yield* guest.invokeProgram(raw, inv, recorder().bridge))).toEqual([
 					'actor',
-					'invocationId',
+					'invocation_id',
 					'now',
 					'today',
 					'tz'
@@ -315,7 +315,7 @@ describe('next guest runner', () => {
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
-					'function* (input, ctx) { return ({ twice: input.n * 2, today: ctx.today, inv: ctx.invocationId, tokyo: ctx.todayIn("Asia/Tokyo") }); }'
+					'function* (input, ctx) { return ({ twice: input.n * 2, today: ctx.today, inv: ctx.invocation_id, tokyo: ctx.today_in("Asia/Tokyo") }); }'
 				),
 				invocation({ n: 21 })
 			);
@@ -339,7 +339,7 @@ describe('next guest runner', () => {
 				} }
 			} } },
 			custom_field: { iban: { check: (input) => 'custom_field.iban.check:' + input } },
-			policy: { review: { grants: { orders: { create: { check: function* (_, ctx) { return ctx.approve((flow) => flow.step('Review', { teams: ['finance'] })); } } } } } }
+			policy: { review: { grants: { orders: { create: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'Review', teams: ['finance'] }] }); } } } } } }
 		};`;
 			for (const [kind, target, input, expected] of [
 				['create', 'orders', [], ['model', 'orders', 'bodies', 'create']],
@@ -381,8 +381,8 @@ describe('next guest runner', () => {
 		() =>
 			Effect.gen(function* () {
 				const source = `export default { policy: { rep: { grants: { orders: {
-					create: { check: function* (rows, ctx) {
-						return rows.length === 0 ? ctx.allow() : ctx.deny('Keys: ' + Object.keys(ctx).sort().join(',') + '; db: ' + Object.keys(ctx.db).sort().join(','), { row: 0, path: 'orders.lines', field: 'qty' });
+					create: { verdict: function* (rows, ctx) {
+						return rows.length === 0 ? ctx.allow() : yield* ctx.refuse('Keys: ' + Object.keys(ctx).sort().join(','), { row: 0, path: 'orders.lines', field: 'qty' });
 					} }
 				} } } } };`;
 				const target = 'rep.orders.create';
@@ -392,7 +392,7 @@ describe('next guest runner', () => {
 				expect(ok(yield* runIn(source, invocation([{}], {}, 'policy', target)))).toEqual({
 					kind: 'deny',
 					message:
-						'Keys: actor,allow,approve,db,deny,invocationId,now,policies,today,todayIn,tz; db: query',
+						'Keys: actor,allow,approve,invocation_id,now,policies,query,refuse,today,today_in,tz',
 					at: { row: 0, path: 'orders.lines', field: 'qty' }
 				});
 			})
@@ -405,7 +405,7 @@ describe('next guest runner', () => {
 				write: function* (_, ctx) {
 					if (ctx.files === undefined) return { files: 'undefined' };
 					const bytes = yield* ctx.files.get({ id: 'signature' });
-					const image = yield* ctx.files.image({ id: 'signature' }, { jpeg: { maxEdge: 512 } });
+					const image = yield* ctx.files.image({ id: 'signature' }, { jpeg: { max_edge: 512 } });
 					return { methods: Object.keys(ctx.files), bytes: Array.from(bytes), image };
 				}
 			} } } } } };`;
@@ -438,11 +438,11 @@ describe('next guest runner', () => {
 			Effect.gen(function* () {
 				const source = `export default { model: { orders: { bodies: {
 				create: function* (rows, ctx) {
-					for (let i = 0; i < ${LIMITS.crossings.write + 1}; i++) yield* ctx.db.query({ orders: { where: { id: { eq: 'x' } } } });
+					for (let i = 0; i < ${LIMITS.crossings.write + 1}; i++) yield* ctx.query({ orders: { where: { id: { eq: 'x' } } } });
 					return rows;
 				},
 				update: function* (changes, ctx) {
-					return { rows: changes.map(({ before, set }) => ({ ...set, previous: before.title })), keys: Object.keys(ctx).sort(), db: Object.keys(ctx.db).sort() };
+					return { rows: changes.map(({ before, set }) => ({ ...set, previous: before.title })), keys: Object.keys(ctx).sort(), query: Object.keys(ctx.query).sort() };
 				}
 			} } } };`;
 				const { crossings, bridge } = recorder();
@@ -473,18 +473,19 @@ describe('next guest runner', () => {
 					keys: [
 						'actor',
 						'admin',
+						'aggregate',
 						'approving',
-						'carriedBy',
-						'db',
-						'invocationId',
+						'carried_by',
+						'invocation_id',
 						'now',
 						'policies',
+						'query',
 						'refuse',
 						'today',
-						'todayIn',
+						'today_in',
 						'tz'
 					],
-					db: ['after', 'aggregate', 'query']
+					query: ['after']
 				});
 			})
 	);
@@ -1056,13 +1057,11 @@ describe('next guest runner', () => {
 		() =>
 			Effect.gen(function* () {
 				const { crossings, bridge, started } = yield* slow(60, (c) =>
-					c._tag === 'convert.ingest' ? 'ingest' : c._tag === 'ai.speak' ? 'speak' : null
+					c._tag === 'convert.ingest' ? 'ingest' : null
 				);
 				const o = yield* answeredLate(
 					runIn(
-						automation(
-							'function* (_, ctx) { return [yield* ctx.convert.ingest({ id: "f" }), yield* ctx.ai.speak("hi", { for: "a" })]; }'
-						),
+						automation('function* (_, ctx) { return yield* ctx.convert.ingest({ id: "f" }); }'),
 						invocation(),
 						bridge,
 						{ callWallMs: 20 },
@@ -1070,11 +1069,11 @@ describe('next guest runner', () => {
 						hostIsolates({ cpuMs: 100 })
 					),
 					started,
-					2,
+					1,
 					60
 				);
-				expect(ok(o)).toEqual(['ingest', 'speak']);
-				expect(crossings.flat()).toMatchObject([{ _tag: 'convert.ingest' }, { _tag: 'ai.speak' }]);
+				expect(ok(o)).toBe('ingest');
+				expect(crossings.flat()).toMatchObject([{ _tag: 'convert.ingest' }]);
 			})
 	);
 
@@ -1361,12 +1360,10 @@ function* sourceBody(input) {
  if (input.fail) throw new Error('mapped source failure');
  return { value: input.value, bodyName: sourceBody.name, className: SourceMarker.name };
 }
-export default automation('a', { description, on: { cron: '0 0 * * *' }, policies: ['runner'], run: sourceBody });`
+export default automation({ description, on: [{ cron: '0 0 * * *' }], policies: ['runner'], run: sourceBody });`
 					);
 					const compile = () =>
-						compilerCheck(root, { timing: false }).pipe(
-							Effect.provide(NodeServices.layer)
-						);
+						compilerCheck(root, { timing: false }).pipe(Effect.provide(NodeServices.layer));
 					const built = yield* compile();
 					expect((yield* compile()).guest?.source).toBe(built.guest?.source);
 					expect(built.errors).toEqual([]);

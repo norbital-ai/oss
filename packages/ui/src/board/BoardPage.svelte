@@ -2,6 +2,7 @@
 	import type { ModelKey, Row, RowOf } from '../model/types.js';
 	import type { Json, QueryAnswer } from '../client/contract.js';
 	import { watch as watchSource } from 'runed';
+	import { Equal } from 'effect';
 	import { untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import { useKinds } from '../kinds/context.js';
@@ -114,7 +115,7 @@
 				previous?.query === current.query &&
 				previous.value !== undefined &&
 				current.value !== undefined &&
-				previous.value !== current.value
+				!Equal.equals(previous.value, current.value)
 			)
 				onChange?.();
 		}

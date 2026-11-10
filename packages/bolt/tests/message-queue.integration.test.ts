@@ -35,7 +35,6 @@ const manifest = Result.getOrThrow(
 		teams: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {}

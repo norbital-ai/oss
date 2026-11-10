@@ -13,8 +13,7 @@
 // - `BOLT_<F>_PROVIDER` / `_ENDPOINT` / `_CREDENTIAL` for `AI_SYS_1` (`openai`, `decisions`), `AI_SYS_2`, `AI_EMBED`
 //   (`openai`), `GEO` (`nominatim`), `CONVERT` (`norbital`), `WEB` (`public`) and `SEARCH` (`deepseek`, the agent's
 //   and `ctx.ai.sys_2.infer`'s `web_search`), with `BOLT_AI_SYS_1_MODEL`,
-//   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps); text to speech is
-//   `BOLT_AI_SPEECH_ENDPOINT` + `_CREDENTIAL` with `BOLT_AI_SPEAK_MODEL`, `BOLT_AI_SPEAK_VOICE` (off without the model).
+//   `BOLT_AI_SYS_2_MODELS` and `BOLT_AI_EMBED_MODELS` (JSON maps).
 //   Transcription is Norbital Convert's (`CONVERT`).
 // - Optional pairs: `BOLT_GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`, `BOLT_VAPID_PUBLIC_KEY`/`_PRIVATE_KEY`,
 //   `BOLT_TURNSTILE_SITE_KEY`/`_SECRET`; `BOLT_APNS_KEYS` (JSON by team id); `BOLT_ENVIRONMENT` (the shell's badge).
@@ -121,8 +120,6 @@ const transactional: HostSettings['transactional'] = {
 						})()
 };
 
-const speechKey = both('BOLT_AI_SPEECH_ENDPOINT', 'BOLT_AI_SPEECH_CREDENTIAL'),
-	speakModel = env('BOLT_AI_SPEAK_MODEL');
 const google = both('BOLT_GOOGLE_OAUTH_CLIENT_ID', 'BOLT_GOOGLE_OAUTH_CLIENT_SECRET');
 const vapid = both('BOLT_VAPID_PUBLIC_KEY', 'BOLT_VAPID_PRIVATE_KEY');
 const turnstile = both('BOLT_TURNSTILE_SITE_KEY', 'BOLT_TURNSTILE_SECRET');
@@ -153,15 +150,6 @@ const settings: HostSettings = {
 			'{}'
 		)
 	},
-	speech:
-		speechKey === null || speakModel === undefined
-			? null
-			: {
-					endpoint: speechKey[0],
-					credential: speechKey[1],
-					speak: speakModel,
-					voice: env('BOLT_AI_SPEAK_VOICE') ?? null
-				},
 	vapid: vapid === null ? null : { publicKey: vapid[0], privateKey: vapid[1] },
 	apns: json(
 		'BOLT_APNS_KEYS',

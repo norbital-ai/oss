@@ -1,6 +1,6 @@
 // Type corpus for the built-in layer (`src/system/**`): workspace code names the system models as it names its
 // own, typed by their declarations; the engine's private models (sessions, challenges, config) are no model.
-import type { Insert, Patch } from '../../src/decl/ctx.ts';
+import type { CreateInput, UpdateInput } from '../../src/decl/ctx.ts';
 import type { ModelName, ColumnValue, ReadField, SystemName } from '../../src/decl/names.ts';
 import type { Id, Json } from '../../src/decl/values.ts';
 import type { Where } from '../../src/decl/where.ts';
@@ -32,7 +32,7 @@ void notTeam;
 // fence is no column of it
 is<
 	Eq<
-		Flat<Insert<'sys_integration'>>,
+		Flat<CreateInput<'sys_integration'>>,
 		{
 			readonly integration: string;
 			readonly name: string;
@@ -45,7 +45,7 @@ is<
 is<Eq<ColumnValue<'sys_message', 'integration'>, Id<'sys_integration'> | null>>();
 is<
 	Eq<
-		Flat<Patch<'sys_integration'>>,
+		Flat<UpdateInput<'sys_integration'>>,
 		{
 			readonly name?: string;
 			readonly envoy?: string | null;
@@ -56,7 +56,7 @@ is<
 	>
 >();
 // @ts-expect-error S2 an instance's definition never changes
-const moved: Patch<'sys_integration'> = { integration: 'email' };
+const moved: UpdateInput<'sys_integration'> = { integration: 'email' };
 // @ts-expect-error S3 the host's fence is never readable
 const fence: ReadField<'sys_integration'> = 'epoch';
 void moved;

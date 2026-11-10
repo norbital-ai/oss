@@ -22,11 +22,11 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			quotes: {
-				read: { quotes: { fields: 'all' } },
+				outputs: { default: { quotes: { fields: 'all' } } },
 				create: { columns: { quotes: ['title'] } },
 				effect: { created: true }
 			},
-			logs: { read: { logs: { fields: 'all' } }, create: { columns: { logs: ['line'] } } }
+			logs: { outputs: { default: { logs: { fields: 'all' } } }, create: { columns: { logs: ['line'] } } }
 		},
 		policies: {
 			rep: {
@@ -35,7 +35,7 @@ const manifest = Result.getOrThrow(
 					quotes: { read: true, create: true },
 					logs: { read: true, create: true }
 				},
-				automations: ['quotes_mark']
+				capabilities: { automations: ['quotes_mark'] }
 			}
 		},
 		automations: {
@@ -47,7 +47,6 @@ const manifest = Result.getOrThrow(
 				agent: 'confirm'
 			}
 		},
-		envoys: {},
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
 		teams: { rep: ['rep'] },

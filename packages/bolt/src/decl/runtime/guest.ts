@@ -9,7 +9,6 @@ import * as Exit from 'effect/Exit';
 import * as Option from 'effect/Option';
 import * as Predicate from 'effect/Predicate';
 import * as Scheduler from 'effect/Scheduler';
-import * as Schema from 'effect/Schema';
 // Wire decimals must revive even when a body only uses methods on its typed input.
 import '@norbital-ai/std/decimal';
 import { attached, type Body } from '../body.ts';
@@ -17,7 +16,6 @@ import type { BodyError } from '../ctx.ts';
 import { Refusal } from '../errors/refusal.ts';
 import { Verdict } from '../access/policy.ts';
 import { actFailureTag } from '../errors/act-failure-tag.ts';
-import { txInstruction, type TxInstruction, type TxStep } from '../transaction.ts';
 
 /** The prelude's raw crossing: member, args and the author's captured call site. */
 type Call = (member: string, args: readonly unknown[], site: string) => Promise<unknown>;
@@ -109,134 +107,25 @@ const lifted = (call: Call, member: string, family: Family) => {
 };
 const refuse = (
 	message: unknown,
-	at?: { readonly field?: string | undefined; readonly row?: number | undefined }
+	at?: {
+		readonly field?: string | undefined;
+		readonly row?: number | undefined;
+		readonly path?: string | undefined;
+	}
 ): Effect.Effect<never, Refusal> => {
-	const failure = { message: String(message), field: at?.field, row: at?.row };
+	const failure = { message: String(message), field: at?.field, row: at?.row, path: at?.path };
 	return Effect.fail(new Refusal(failure));
 };
 /** Builds only the members that this invocation kind admits; the prelude carries no ctx functions. */
 const lift = (call: Call, raw: unknown): unknown => {
 	if (!Predicate.isObject(raw)) return raw;
 	const kind = (raw as { readonly [CTX]?: string })[CTX];
-	let transactionOwner: { poisoned: boolean } | undefined;
-	const denied = () => ({
-		kind: 'refused',
-		code: 'invalidInput',
-		message: 'Only tx.query and tx.act may run inside a transaction.'
-	});
-	const guardedCall: Call = (member, args, site) => {
-		if (transactionOwner !== undefined) {
-			transactionOwner.poisoned = true;
-			return Promise.reject(denied());
-		}
-		return call(member, args, site);
-	};
-	const cross = (member: string, family: Family = 'engine') => lifted(guardedCall, member, family);
-	const txCross = (member: string) => lifted(call, `transaction.${member}`, 'act');
-	const unpackTransaction = (value: unknown): unknown => {
-		if (!Predicate.isObject(value) || value['kind'] !== 'committed') return value;
-		const output = value['output'];
-		if (!Predicate.isObject(output) || typeof output['omitted'] !== 'boolean')
-			throw new Error('The native transaction receipt is invalid.');
-		return { ...value, output: output['omitted'] ? undefined : output['value'] };
-	};
-	const transaction = (body: (tx: unknown) => Generator<TxInstruction, unknown, unknown>) =>
-		Effect.suspend(() => {
-			if (transactionOwner !== undefined) {
-				transactionOwner.poisoned = true;
-				return FAILED.act(denied());
-			}
-			const owner = { poisoned: false };
-			transactionOwner = owner;
-			let admitted = false;
-			const instructions = new WeakSet<object>();
-			const step = (member: 'query' | 'act', args: readonly unknown[]): TxStep<unknown> => ({
-				*[Symbol.iterator]() {
-					const instruction: TxInstruction = { [txInstruction]: true, member, args };
-					instructions.add(instruction);
-					return yield instruction;
-				}
-			});
-			return Effect.gen(function* () {
-				if (Object.prototype.toString.call(body) !== '[object GeneratorFunction]')
-					return yield* FAILED.act(denied());
-				const begin = yield* txCross('begin')();
-				if (!Predicate.isObject(begin) || typeof begin['cached'] !== 'boolean')
-					return yield* Effect.die(new Error('The native transaction admission is invalid.'));
-				if (begin['cached']) {
-					const outcome = begin['outcome'];
-					if (actFailureTag(outcome) !== undefined) return yield* FAILED.act(outcome);
-					return unpackTransaction(outcome);
-				}
-				admitted = true;
-				const iterator = body({
-					query: (...args: readonly unknown[]) => step('query', args),
-					act: (...args: readonly unknown[]) => step('act', args)
-				});
-				let answer: unknown;
-				while (true) {
-					if (owner.poisoned) return yield* FAILED.act(denied());
-					const next = yield* Effect.try({
-						try: () => iterator.next(answer),
-						catch: (error) => error
-					}).pipe(
-						Effect.catch((error) =>
-							error instanceof Refusal
-								? FAILED.act({
-										kind: 'refused',
-										code: 'refused',
-										message: error.message,
-										field: error.field,
-										row: error.row
-									})
-								: Effect.die(error)
-						)
-					);
-					if (owner.poisoned) return yield* FAILED.act(denied());
-					if (next.done) {
-						const output = next.value;
-						if (Predicate.hasProperty(output, 'then') && typeof output.then === 'function')
-							return yield* FAILED.act(denied());
-						const wire = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
-							JSON.stringify(output === undefined ? null : output)
-						);
-						const result = yield* txCross('finish')({
-							output: wire,
-							omitted: output === undefined
-						});
-						admitted = false;
-						return unpackTransaction(result);
-					}
-					const instruction = next.value;
-					if (
-						!Predicate.isObject(instruction) ||
-						!instructions.has(instruction) ||
-						instruction[txInstruction] !== true
-					)
-						return yield* FAILED.act(denied());
-					const result = yield* txCross(instruction.member)(...instruction.args);
-					if (instruction.member === 'query') {
-						if (!Predicate.hasProperty(result, 'value'))
-							return yield* Effect.die(
-								new Error('The native transaction read receipt is invalid.')
-							);
-						answer = result.value;
-					} else answer = result;
-				}
-			}).pipe(
-				Effect.ensuring(
-					Effect.gen(function* () {
-						if (admitted) yield* txCross('abort')().pipe(Effect.catchCause(() => Effect.void));
-						transactionOwner = undefined;
-					})
-				)
-			);
-		});
+	const cross = (member: string, family: Family = 'engine') => lifted(call, member, family);
 	const clock = {
 		now: raw['now'],
 		today: raw['today'],
 		tz: raw['tz'],
-		todayIn: (zone: string) =>
+		today_in: (zone: string) =>
 			new Intl.DateTimeFormat('en-CA', {
 				timeZone: zone,
 				year: 'numeric',
@@ -257,7 +146,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 		schedule: cross('schedule'),
 		notify: cross('notify')
 	};
-	const actor = { actor: raw['actor'], invocationId: raw['invocationId'] };
+	const actor = { actor: raw['actor'], invocation_id: raw['invocation_id'] };
 	const policies = isArray(raw['policies'])
 		? Object.freeze([...raw['policies']])
 		: Object.freeze([]);
@@ -277,20 +166,22 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...actor,
 				policies,
 				admin: raw['admin'] === true,
-				carriedBy: typeof raw['carriedBy'] === 'string' ? raw['carriedBy'] : null,
+				carried_by: typeof raw['carriedBy'] === 'string' ? raw['carriedBy'] : null,
 				approving: raw['approving'] === true,
 				refuse,
-				db: { ...workspace, after: cross('db.after') }
+				...workspace,
+				query: Object.assign(workspace.query, { after: cross('db.after') })
 			};
 		case 'notify':
-			return { ...clock, ...actor, db: workspace };
+			return { ...clock, ...actor, ...workspace };
 		case 'syncRead':
-			return { ...clock, ...actor, db: workspace, ...instance };
+			return { ...clock, ...actor, ...workspace, refuse, ...instance };
 		case 'syncWrite':
 			return {
 				...clock,
 				...actor,
-				db: workspace,
+				...workspace,
+				refuse,
 				...instance,
 				...(raw['fileExport'] === true
 					? {
@@ -305,9 +196,10 @@ const lift = (call: Call, raw: unknown): unknown => {
 			return {
 				...clock,
 				...actor,
-				db: workspace,
+				...workspace,
+				refuse,
 				...instance,
-				files: { get: cross('files.get', 'facility'), text: cross('files.text', 'facility') }
+				files: { get: cross('files.get', 'facility') }
 			};
 		// a write grant's check: workspace reads and the three verdicts (decl `PolicyCtx`)
 		case 'policy':
@@ -315,9 +207,9 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...clock,
 				...actor,
 				policies,
-				db: { query: cross('db.query') },
+				query: workspace.query,
 				allow: Verdict.allow,
-				deny: Verdict.deny,
+				refuse,
 				approve: Verdict.approve
 			};
 		case 'page':
@@ -340,7 +232,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				...actor,
 				...reads,
 				...writes,
-				transaction,
+				refuse,
 				cause: raw['cause'],
 				// an automation run's id and trigger; an effect has none
 				...(raw['run'] === undefined ? {} : { run: raw['run'] }),
@@ -370,8 +262,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				ai: {
 					sys_1: { decide: cross('ai.sys_1.decide', 'facility') },
 					sys_2: { infer: cross('ai.sys_2.infer', 'facility') },
-					embed: cross('ai.embed', 'facility'),
-					speak: cross('ai.speak', 'facility')
+					embed: cross('ai.embed', 'facility')
 				},
 				geo: { search: cross('geo.search', 'facility'), reverse: cross('geo.reverse', 'facility') }
 			};
@@ -414,11 +305,28 @@ const wrap = (body: Body, at: number): Body => {
 	const gen = body as (...args: readonly unknown[]) => Effect.fn.Return<unknown, BodyError>; // checked above
 	const wrapped = (...args: readonly unknown[]) => {
 		const call = (globalThis as { readonly [CALL]?: Call })[CALL] ?? outside;
-		const ran = runBody(() => gen(...args.map((arg, i) => (i === at ? lift(call, arg) : arg))));
-		// a check answers its verdict's data; anything else it returns is an authoring error
+		const invoke = () => gen(...args.map((arg, i) => (i === at ? lift(call, arg) : arg)));
 		const ctx = args[at];
-		const kind = Predicate.isObject(ctx) ? ctx[CTX] : undefined;
-		return kind === 'policy' ? ran.then(Verdict.dataOf) : ran;
+		if (!Predicate.isObject(ctx) || ctx[CTX] !== 'policy') return runBody(invoke);
+		// A policy refusal is one arm's denial. Other admitting arms still get their verdict.
+		return runBody(function* () {
+			return yield* Effect.gen(invoke).pipe(
+				Effect.map(Verdict.dataOf),
+				Effect.catchIf(
+					(error): error is Refusal => error instanceof Refusal,
+					({ message, field, row, path }) =>
+						Effect.succeed({
+							kind: 'deny' as const,
+							message,
+							at: {
+								...(field === undefined ? {} : { field }),
+								...(row === undefined ? {} : { row }),
+								...(path === undefined ? {} : { path })
+							}
+						})
+				)
+			);
+		});
 	};
 	Object.defineProperty(wrapped, 'name', { value: body.name });
 	return Object.defineProperty(wrapped, Symbol.for('norbital.bolt.generator'), { value: body });

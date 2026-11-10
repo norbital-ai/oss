@@ -1,10 +1,10 @@
 # Teams, policies and approvals
 
-Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').policy>[0]`, `Grant`, `Flow`.
+Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').policy>[0]`, `Grant`, `ApprovalFlow`.
 
 ## Source homes
 
-- A policy's filename supplies its name: `policy({ description, grants, automations?, capabilities?, limits? })`.
+- A policy's filename supplies its name: `policy({ description, grants, capabilities?, limits? })`.
 - `team(...)` maps exact handles to a policy list or `{ name?, parent?, policies }`. A list uses the handle as its label. The parent graph scopes `teamTree` without inheriting policies or approval rights.
 - Member identities select source handles. Never substitute a database ID or display label for a handle.
 - Changing teams, links or routes needs a release.
@@ -15,8 +15,8 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 - `read` grants the `default` output; `outputs: { <name>: … }` the named ones; each is `true` or `{ where }` per path. A root `where` scopes roots and may hop relations; a deeper `where` filters that layer, or nulls a ref, never the root. An unnamed layer is unfiltered.
 - A policy never changes an output's fields. A narrower audience gets a narrower output.
 - A `read` of a record admits its history under that same `where`; a reader who loses access to the row loses its history too. `history` is accepted for compatibility and adds nothing. `create` and `update` are `true` or `{ columns?, check? }`; `delete` is `true` or `{ check? }`. `moves` grants state transitions.
-- `automations` grants manual starts by a person or the agent; code needs none.
-- `capabilities` expose apps, kiosks, tools and MCP. Declaring a server does not grant it.
+- `capabilities.automations` grants manual starts by a person or the agent; code needs none.
+- `capabilities` expose apps, including kiosk apps, tools and MCP. Declaring a server does not grant it.
 - Authority is per access point. `read`, `create`, `update`, `delete` of a model are guarded by that model's policies alone, every layer included. A child's transform still validates; it is not authority.
 - An unreadable row does not exist to the caller. A field outside the output cannot be filtered, sorted or aggregated.
 - Every member reads `sys_user` output `directory`. A `sys_file` lister grants output `meta`.
@@ -25,7 +25,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 ## Admission
 
 1. `columns` per path are checked before guest code; outside them is `forbidden`.
-2. Each admitting policy's `check` judges the batch: create trees, `{ before, set }` per update, stored rows of a delete. It reads at most twice through `ctx.db.query` and does no writes or I/O.
+2. Each admitting policy's `check` judges the batch: create trees, `{ before, set }` per update, stored rows of a delete. It reads at most twice through `ctx.query` and does no writes or I/O.
 3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Else the first `ctx.deny(message, { row, path, field })` refuses.
 
 A provisional commit is an ordinary write: validation, ownership, locks, revisions and atomicity apply. Its `with` rows are held with it; its `onApproved` rows commit in the approving decision, or the decision is refused and the request stays pending.

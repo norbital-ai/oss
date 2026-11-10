@@ -40,7 +40,7 @@ const initial: EngineManifest = {
 	...manifest,
 	models: { entry: { description: 'An entry', label: 'name', fields: { name: { kind: 'text' } } } },
 	relationships: {},
-	exposures: { entry: { read: { entry: { fields: 'all' } } } },
+	exposures: { entry: { outputs: { default: { entry: { fields: 'all' } } } } },
 	policies: {}
 };
 const extended: EngineManifest = {
@@ -198,7 +198,7 @@ describe('committed workspace migrations', () => {
 								fields: { title: { kind: 'text', was: 'name', label: 'Renamed title' } }
 							}
 						},
-						exposures: { entry: { read: { entry: { fields: 'all' } } } }
+						exposures: { entry: { outputs: { default: { entry: { fields: 'all' } } } } }
 					};
 					yield* prepareMigrations(directory, next, 'generate');
 					expect(yield* fs.readFileString(join(source, original.name))).toBe(original.sql);

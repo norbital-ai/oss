@@ -117,10 +117,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			continue;
 		}
 		const name =
-			r.role === 'page' ||
-			r.role === 'page_server' ||
-			r.role === 'kiosk_page' ||
-			r.role === 'kiosk_page_server'
+			r.role === 'page'
 				? `${folder}/${fileName}`
 				: r.role === 'model' || r.role === 'representation'
 					? folder!.split('/').at(-1)!
@@ -168,26 +165,6 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			fail('session-without-app', f.path, 'a session sits in a folder with +app.ts');
 		if (f.role === 'page' && !has('app', f.name.slice(0, f.name.lastIndexOf('/'))))
 			fail('page-without-app', f.path, 'a page sits in a folder with +app.ts');
-		if (f.role === 'kiosk_page' && !has('kiosk', f.name.slice(0, f.name.lastIndexOf('/'))))
-			fail('kiosk-page-without-kiosk', f.path, 'a kiosk page sits in a folder with +kiosk.ts');
-		if (f.role === 'page_server' || f.role === 'kiosk_page_server') {
-			const pageRole = f.role === 'page_server' ? 'page' : 'kiosk_page';
-			if (!has(pageRole, f.name))
-				fail('server-without-page', f.path, 'a server loader sits beside its +<page>.page.svelte');
-			const data = f.path.replace(/\+([^/]+)\.page\.server\.ts$/, '$1.page.data.ts');
-			if (!paths.includes(data))
-				fail(
-					'page-data-missing',
-					f.path,
-					`share its default data codec through the ordinary helper ${data}`
-				);
-		}
-		if (f.role === 'kiosk' && f.name.includes('/'))
-			fail(
-				'kiosk-nesting',
-				f.path,
-				'a kiosk is top-level: src/kiosk/<name>/ holds +kiosk.ts, never a nested path'
-			);
 		if ((f.role === 'app' || f.role === 'group') && has(f.role === 'app' ? 'group' : 'app', f.name))
 			fail('app-and-group', f.path, 'a folder holds +app.ts or +group.ts, never both');
 		if (f.role === 'app' || f.role === 'group') {
@@ -273,11 +250,7 @@ export function sourcePath(role: Role, name: string, files: readonly Discovered[
 	if (found !== undefined) return found.path;
 	const entry = ROLES.find((entry) => entry.role === role);
 	if (entry === undefined) throw new Error(`unknown compiler role ${role}`);
-	const page =
-		role === 'page' ||
-		role === 'page_server' ||
-		role === 'kiosk_page' ||
-		role === 'kiosk_page_server';
+	const page = role === 'page';
 	const at = name.lastIndexOf('/');
 	const folder = page ? name.slice(0, at) : name;
 	const leaf = page ? name.slice(at + 1) : name;

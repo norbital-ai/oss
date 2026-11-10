@@ -44,13 +44,13 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title'] } } }
+			docs: { outputs: { default: { docs: { fields: 'all' } } }, create: { columns: { docs: ['title'] } } }
 		},
 		policies: {
 			p: {
 				description: 'P',
 				grants: { docs: { read: true, create: true } },
-				automations: ['hang', 'pair', 'relay']
+				capabilities: { automations: ['hang', 'pair', 'relay'] }
 			}
 		},
 		automations: {
@@ -61,7 +61,6 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

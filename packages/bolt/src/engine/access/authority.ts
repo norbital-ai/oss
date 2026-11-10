@@ -70,7 +70,9 @@ export function scopeObject(
 	if (typeof g !== 'object' || !isScope(g)) return undefined;
 	const keys = Object.keys(g);
 	const own = m.models[model]?.fields ?? {};
-	return keys.length > 0 && keys.every((k) => k === 'where' && own[k] === undefined) ? g : undefined;
+	return keys.length > 0 && keys.every((k) => k === 'where' && own[k] === undefined)
+		? g
+		: undefined;
 }
 /** A `history` (or identity output) grant as one arm: `true`, a scope object or a bare `Where`. */
 function scopeArm(
@@ -83,13 +85,14 @@ function scopeArm(
 	if (g === true) return { policy, where: TRUE };
 	const s = scopeObject(m, c, g);
 	if (s === undefined) return { policy, where: toPred(m, c, g) };
-	return { policy, where: s.where === undefined || s.where === true ? TRUE : toPred(m, c, s.where) };
+	return {
+		policy,
+		where: s.where === undefined || s.where === true ? TRUE : toPred(m, c, s.where)
+	};
 }
 /** The outputs `c` declares: `default` and each named one, in declaration order. */
-export const outputsOf = (m: EngineManifest, c: string): readonly string[] => [
-	DEFAULT_OUTPUT,
-	...Object.keys(layered(m).exposures[c]?.outputs ?? {})
-];
+export const outputsOf = (m: EngineManifest, c: string): readonly string[] =>
+	Object.keys(layered(m).exposures[c]?.outputs ?? {});
 /** The read paths output `output` of `c` declares (its root first), each with the model behind it. */
 const pathsOf = (
 	m: EngineManifest,
@@ -97,7 +100,7 @@ const pathsOf = (
 	output: string
 ): readonly (readonly [string, string])[] => {
 	const spec = layered(m).exposures[c];
-	const read = (output === DEFAULT_OUTPUT ? spec?.read : spec?.outputs?.[output]) ?? {};
+	const read = spec?.outputs[output] ?? {};
 	const declared = Object.entries(layers(m)[c] ?? {}).filter(([path]) => Object.hasOwn(read, path));
 	return declared.length === 0 ? [[c, c]] : declared;
 };
@@ -140,7 +143,7 @@ function writeArm(
 	return {
 		policy,
 		columns: g === true ? declared : (g.columns ?? declared),
-		check: g !== true && g.check === true
+		check: g !== true && g.verdict === true
 	};
 }
 
@@ -154,7 +157,7 @@ export function exposed(
 ): readonly string[] {
 	const all = layered(m);
 	const spec = all.exposures[root];
-	const f = (output === DEFAULT_OUTPUT ? spec?.read : spec?.outputs?.[output])?.[path]?.fields;
+	const f = spec?.outputs[output]?.[path]?.fields;
 	const fks = Object.keys(all.relationships)
 		.filter((k) => k.slice(0, k.indexOf('.')) === model)
 		.map((k) => k.slice(k.indexOf('.') + 1));
@@ -266,7 +269,7 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 					if (w) a[op].push(w);
 				}
 				if (g.delete !== undefined)
-					a.delete.push({ policy: p, check: g.delete !== true && g.delete.check === true });
+					a.delete.push({ policy: p, check: g.delete !== true && g.delete.verdict === true });
 				if (g.moves === 'all')
 					for (const [f, k] of Object.entries(m.models[c]?.fields ?? {})) {
 						if (k.kind === 'state') a.moves[f] = 'all';
@@ -292,7 +295,6 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 	}
 	const caps = {
 		apps: new Set<string>(),
-		kiosks: new Set<string>(),
 		tools: new Set<string>(),
 		mcp: new Set<string>()
 	};
@@ -300,9 +302,9 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 	const declared: LimitRule[] = [];
 	for (const p of policies) {
 		const spec = m.policies[p]!;
-		for (const k of ['apps', 'kiosks', 'tools', 'mcp'] as const)
+		for (const k of ['apps', 'tools', 'mcp'] as const)
 			for (const x of spec.capabilities?.[k] ?? []) caps[k].add(x);
-		for (const x of spec.automations ?? []) automations.add(x);
+		for (const x of spec.capabilities?.automations ?? []) automations.add(x);
 		for (const [k, v] of Object.entries(spec.limits ?? {})) declared.push(...limitRules(k, v));
 	}
 	const defaults = holder.actor.kind === 'visitor' ? VISITOR_DEFAULTS : DEFAULTS;
@@ -317,7 +319,6 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 		automations: bypass ? Object.keys(m.automations) : list(automations),
 		capabilities: {
 			apps: list(caps.apps),
-			kiosks: list(caps.kiosks),
 			tools: list(caps.tools),
 			mcp: list(caps.mcp)
 		},

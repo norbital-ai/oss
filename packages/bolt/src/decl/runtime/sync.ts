@@ -3,8 +3,8 @@
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
-import type { BodyReturn, CallerQuery, Clock, Eff, Loose, WorkspaceQuery } from '../ctx.ts';
-import type { FacilityFailure, Unavailable } from '../errors.ts';
+import type { BodyReturn, Clock, Eff, Loose, WorkspaceQuery } from '../ctx.ts';
+import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
 import type { InputFields, InputOf } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
 import type {
@@ -69,19 +69,26 @@ type SendOn<D> = [ConversationOf<D>] extends [never]
 			/** Sends a message through the instance this body runs for; `write` returns its id as `{ $id }`. */
 			send(message: SendInput<D>): Eff<Id<'sys_message'>, Failure>;
 		};
+interface SyncRefusal {
+	refuse(message: string, at?: { field?: string; row?: number }): Eff<never, Refusal>;
+}
+
 /**
- * What a remote sync body sees: the clock and `db` reads as the workspace (unscoped), the instance's
+ * What a remote sync body sees: the clock and `query` reads as the workspace (unscoped), the instance's
  * configuration, `request` (request drivers) and `send` (conversation drivers). A sync body writes nothing itself: what
  * it returns is written in one act.
  */
-export type SyncCtx<D = never> = Clock & { readonly db: WorkspaceQuery } & ([D] extends [never]
+export type SyncCtx<D = never> = Clock &
+	WorkspaceQuery &
+	SyncRefusal &
+	([D] extends [never]
 		? {}
 		: { readonly configuration: ConfigurationOf<D> } & RequestOn<D> & SendOn<D>);
 /**
- * What a file sync body sees: the clock and `db` reads as the member who started the import or export — each root's
+ * What a file sync body sees: the clock and `query` reads as the member who started the import or export — each root's
  * granting policies filter its output and layers, so a document shows only what that member may read.
  */
-export type FileSyncCtx = Clock & { readonly db: Pick<CallerQuery, 'query' | 'aggregate'> };
+export type FileSyncCtx = Clock & WorkspaceQuery & SyncRefusal;
 
 // ── files ──
 /** A built-in parser, run on the host: `xlsx` (row 1 headers match a field's name or `label`, any case; Excel date and
@@ -92,7 +99,7 @@ export type BuiltinParser = 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics' | 'txt';
 /** One parsed record and where it came from: `$at` is its sheet row or line, so findings and refusals point at it. */
 export type FileRecord<R = { readonly [field: string]: Json }> = R & { readonly $at: number };
 /** What a custom `parse` sees: a file sync's ctx and the uploaded file's bytes or text. */
-type ParseCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'text'> };
+type ParseCtx = FileSyncCtx & { readonly files: Pick<Files, 'get'> };
 /** A file export may embed a stored image or its bytes in the document it returns. */
 type FileWriteCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'image'> };
 /**

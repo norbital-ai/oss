@@ -47,7 +47,7 @@ export const ownPredSql: (
 	const child = (pred: Pred) => ownPredSql(pred, row, c, twoValued, fields);
 	const OPS = {
 		eq: '=',
-		ne: ddl ? 'is distinct from' : '<>',
+		ne: ddl ? 'is distinct from' : 'IS DISTINCT FROM',
 		lt: '<',
 		lte: '<=',
 		gt: '>',
@@ -65,7 +65,7 @@ export const ownPredSql: (
 			const body = yield* child(p.of);
 			return ddl
 				? `(not ${p.of.t === 'and' || p.of.t === 'or' || p.of.t === 'not' ? body : `(${body})`})`
-				: `(NOT ${body})`;
+				: `(NOT COALESCE(${body}, false))`;
 		}
 		case 'null':
 			return ddl
@@ -93,7 +93,7 @@ export const ownPredSql: (
 		}
 		case 'like':
 			return leaf(
-				`${col(p.field)} ${ddl ? 'like' : 'LIKE'} ${ddl ? `'${p.pattern.replaceAll("'", "''")}'` : c.p(p.pattern)}`
+				`${col(p.field)} ${ddl ? 'ilike' : 'ILIKE'} ${ddl ? `'${p.pattern.replaceAll("'", "''")}'` : c.p(p.pattern)}`
 			);
 		case 'text': {
 			const normalize = (value: string) =>

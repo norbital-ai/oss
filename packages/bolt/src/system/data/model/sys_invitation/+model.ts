@@ -20,7 +20,9 @@ export default model('sys_invitation', {
 		revoked_at: { kind: 'instant', optional: true },
 		revision: { kind: 'int', default: 1 }
 	},
-	check: { addressed: { or: [{ email: { isNull: false } }, { phone: { isNull: false } }] } },
+	constraints: {
+		addressed: { check: { or: [{ email: { isNull: false } }, { phone: { isNull: false } }] } }
+	},
 	table: { primary: 'text', indexes: [{ on: [{ lower: 'email' }] }, { on: ['phone'] }] },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

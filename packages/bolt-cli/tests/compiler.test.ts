@@ -43,7 +43,7 @@ describe('next compiler: discover', () => {
 						write(
 							`src/data/model/${folder}/+model.ts`,
 							`export default { name: '${folder.split('/').at(-1)}', spec: {
-							description: 'Nested model', label: 'name', fields: { name: { kind: 'text' } }, read: 'all'
+							description: 'Nested model', label: 'name', fields: { name: { kind: 'text' } }, outputs: { default: { fields: 'all' } }
 						} };`
 						);
 					const representation =
@@ -248,7 +248,10 @@ describe('next compiler: discover', () => {
 				expect(errors).toEqual([]);
 				const loaded = yield* load(root, files);
 				expect(engineManifest(loaded.manifest).agent.tools).toEqual({
-					plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text', optional: true } } }
+					plans: {
+						description: 'Reads a plan.',
+						input: { sheet: { kind: 'text', optional: true } }
+					}
 				});
 			} finally {
 				rmSync(root, { recursive: true, force: true });
@@ -261,22 +264,21 @@ describe('next compiler: discover', () => {
 			expect(errors).toEqual([]);
 			expect(files.map((f) => `${f.role} ${f.name}`).sort()).toEqual([
 				'agent ',
+				'app clock',
 				'app hr/kiosk',
 				'app sales',
 				'automation nightly',
 				'custom_field rating',
-				'envoy desk',
 				'group hr',
 				'integration_definition erp',
 				'integration_definition mail',
-				'kiosk clock',
-				'kiosk_page clock/clock',
 				'locale ms',
 				'mcp hq',
 				'messages ',
 				'model customers',
 				'model notices',
 				'model orders',
+				'page clock/clock',
 				'page hr/kiosk/clock',
 				'page sales/board',
 				'page sales/list',
@@ -412,7 +414,7 @@ describe('next compiler: load', () => {
 					`export default { name: 'entries', spec: {
 					description: 'Ledger entries', label: 'code', key: ['source', 'code'],
 					fields: { code: { kind: 'text' }, source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'books' } } } },
-					read: 'all', syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
+					outputs: { default: { fields: 'all' } }, syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
 				} };`
 				);
 				write(
@@ -480,7 +482,7 @@ describe('next compiler: load', () => {
 			expect(manifestErrors(manifest)).toEqual([]);
 			expect(Object.keys(manifest.model).sort()).toEqual(['customers', 'notices', 'orders']);
 			expect(manifest.model.orders).toHaveProperty(
-				['spec', 'read', 'orders.customer', 'fields'],
+				['spec', 'outputs', 'default', 'customer', 'fields'],
 				['name', 'rating']
 			);
 			expect(manifest.model.orders).not.toHaveProperty('bodies.queries');
@@ -493,7 +495,6 @@ describe('next compiler: load', () => {
 				'bodies.syncs.messages.read',
 				expect.any(Function)
 			);
-			expect(manifest.envoy.desk).toMatchObject({ name: 'Norbius', policies: ['sales_rep'] });
 			// a skill is its folder: `+skill.md` is its SKILL.md, beside its scripts
 			expect(manifest.skill.triage).toEqual({
 				text: expect.stringContaining('description: Triage a notice'),
@@ -562,7 +563,7 @@ describe('next compiler: seed packs', () => {
 		connections: {},
 		automations: {},
 		teams: {},
-		envoys: {},
+
 		mcp: {},
 		apps: {},
 		customFields: {},
@@ -660,7 +661,7 @@ describe('next compiler: datatypes named in a seeded JSON Schema', () => {
 				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
 				write(
 					'src/data/model/forms/+model.ts',
-					"export default { name: 'forms', spec: { description: 'Forms', label: 'name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, read: 'all' } };"
+					"export default { name: 'forms', spec: { description: 'Forms', label: 'name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, outputs: { default: { fields: 'all' } } } };"
 				);
 				write('seed/public/forms.json', JSON.stringify([{ id: 'f1', name: 'one', schema }]));
 				const found = yield* discover(root),

@@ -25,7 +25,7 @@ import {
 	type AppendOnlyLogSpec,
 	type MigrationFile
 } from '@norbital-ai/store';
-import { SqlReadCapture, SqlSessionDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
+import { SqlReadCapture, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { AuditMutation } from '../engine/audit-context.ts';
 import type { DbError } from '../engine/errors.ts';
 import { PgliteDb, Pristine } from './db/pglite.ts';
@@ -196,6 +196,5 @@ export const applyAuditMigrations = (db: TenantDbShape, migrations: AuditMigrati
 		}
 	}).pipe(
 		Effect.provideService(AuditMutation, undefined),
-		Effect.provideService(SqlSessionDb, undefined),
 		Effect.provideService(SqlReadCapture, undefined)
 	);

@@ -34,7 +34,7 @@
 	let fixture: PackagingHarnessProps = $props();
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(fixture.bolt);
+	provideBolt(() => fixture.bolt);
 	// svelte-ignore state_referenced_locally
 	provideKinds({
 		get catalog() {

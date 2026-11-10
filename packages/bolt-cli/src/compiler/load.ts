@@ -3,11 +3,7 @@
 import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
-import {
-	ROLES,
-	pageServerMetadata,
-	type LoadedManifest as Manifest
-} from '@norbital-ai/bolt/tooling';
+import { ROLES, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
 import { treeDigest } from '@norbital-ai/bolt/artifact';
 import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/bolt/engine';
@@ -100,32 +96,7 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 				: undefined;
 			if (declaration === undefined)
 				fail('load/no-default', f.path, `default-export the ${f.role} declaration`);
-			else if (f.role === 'page_server' || f.role === 'kiosk_page_server') {
-				const codec = yield* Effect.tryPromise({
-					try: (): Promise<unknown> =>
-						import(
-							pathToFileURL(
-								path.join(
-									path.dirname(abs),
-									`${f.name.slice(f.name.lastIndexOf('/') + 1)}.page.data.ts`
-								)
-							).href
-						),
-					catch: (cause) => new LoadError({ path: f.path, cause })
-				}).pipe(Effect.result);
-				if (codec._tag === 'Failure') {
-					fail('load/page-server-codec', f.path, String(codec.failure.cause));
-					continue;
-				}
-				const shared = Predicate.isObject(codec.success) ? codec.success['default'] : undefined;
-				const metadata = yield* Effect.try({
-					try: () => pageServerMetadata(declaration, shared),
-					catch: (cause) => new LoadError({ path: f.path, cause })
-				}).pipe(Effect.result);
-				if (metadata._tag === 'Failure')
-					fail('load/page-server-shape', f.path, String(metadata.failure.cause));
-				else manifest[f.role][f.name] = metadata.success;
-			} else manifest[f.role][f.name] = declaration;
+			else manifest[f.role][f.name] = declaration;
 		}
 	}
 	return { manifest, errors };
@@ -248,85 +219,54 @@ export function manifestErrors(
 				);
 		}
 	}
+	for (const [name, app] of Object.entries(manifest.app)) {
+		const path = sourcePath('app', name, files);
+		if (!Predicate.isObject(app) || !Predicate.isObject(app['pages'])) {
+			fail('app/shape', path, `app '${name}' declares a pages map`);
+			continue;
+		}
+		for (const page of Object.keys(app['pages']))
+			if (!Object.hasOwn(manifest.page, `${name}/${page}`))
+				fail('app/page-missing', path, `app '${name}' lists '${page}' without a page file`);
+	}
+	for (const [name, group] of Object.entries(manifest.group)) {
+		const child = Predicate.isObject(group) ? group['default_child'] : undefined;
+		if (
+			typeof child !== 'string' ||
+			child.includes('/') ||
+			(!Object.hasOwn(manifest.app, `${name}/${child}`) &&
+				!Object.hasOwn(manifest.group, `${name}/${child}`))
+		)
+			fail(
+				'app/group-child',
+				sourcePath('group', name, files),
+				`group '${name}' must name a direct default_child`
+			);
+	}
 	// `app/page-unlisted` (§3.3.1): every page file has an entry in its app's `pages`, whose key order is nav order.
 	for (const page of Object.keys(manifest.page ?? {})) {
 		const at = page.lastIndexOf('/');
 		const app = manifest.app[page.slice(0, at)];
-		if (app && !Object.hasOwn((spec(app)['pages'] ?? {}) as object, page.slice(at + 1)))
+		const pages = Predicate.isObject(app) ? app['pages'] : undefined;
+		if (Predicate.isObject(pages) && !Object.hasOwn(pages, page.slice(at + 1)))
 			fail(
 				'app/page-unlisted',
 				String(manifest.page[page]),
 				`app '${page.slice(0, at)}' lists no page '${page.slice(at + 1)}' in pages`
 			);
-		const audience = spec(app)['audience'];
-		if (
-			(audience === 'external' || audience === 'all' || Predicate.isObject(audience)) &&
-			manifest.page_server[page] === undefined
-		)
-			fail(
-				'app/page-server-required',
-				String(manifest.page[page]),
-				'a public or external page declares a read-only +<page>.page.server.ts loader and shared data codec'
-			);
 	}
-	// every kiosk page file has an entry in its kiosk's `pages`, whose key order is nav order.
-	for (const page of Object.keys(manifest.kiosk_page ?? {})) {
-		const at = page.lastIndexOf('/');
-		const kiosk = (manifest.kiosk ?? {})[page.slice(0, at)];
-		if (kiosk && !Object.hasOwn((spec(kiosk)['pages'] ?? {}) as object, page.slice(at + 1)))
-			fail(
-				'app/page-unlisted',
-				String(manifest.kiosk_page[page]),
-				`kiosk '${page.slice(0, at)}' lists no page '${page.slice(at + 1)}' in pages`
-			);
-		const auth = spec(kiosk)['auth'];
-		if (
-			(auth === 'none' || auth === 'external' || auth === 'all') &&
-			manifest.kiosk_page_server[page] === undefined
-		)
-			fail(
-				'app/page-server-required',
-				String(manifest.kiosk_page[page]),
-				'a public or external kiosk page declares a read-only +<page>.page.server.ts loader and shared data codec'
-			);
-	}
-	for (const role of ['page_server', 'kiosk_page_server'] as const)
-		for (const [page, declaration] of Object.entries(manifest[role]))
-			if (
-				!Predicate.isObject(declaration) ||
-				declaration['data'] !== true ||
-				declaration['load'] !== true
-			)
-				fail(
-					'load/page-server-shape',
-					sourcePath(role, page),
-					'a page server declares its shared data codec and generator load body'
-				);
 	return errors;
 }
 
-/** The literal of a `{ name, spec }` declaration (model, automation, custom field, integration, app, group, kiosk), else the export itself. */
+/** The literal of a body declaration, or the export itself. */
 export function spec(d: unknown): { readonly [key: string]: unknown } {
 	const o = (d ?? {}) as { spec?: object };
 	return (o.spec ?? o) as { readonly [key: string]: unknown };
 }
 
 /** The roles whose declaration takes its name first, and the call each is. */
-const NAMED = [
-	'model',
-	'custom_field',
-	'automation',
-	'integration_definition',
-	'app',
-	'group',
-	'kiosk'
-] as const;
+const NAMED = ['model', 'integration_definition'] as const;
 const CALLS: { readonly [R in (typeof NAMED)[number]]: string } = {
 	model: 'model',
-	custom_field: 'customField',
-	automation: 'automation',
-	integration_definition: 'integration',
-	app: 'app',
-	group: 'group',
-	kiosk: 'kiosk'
+	integration_definition: 'integration'
 };

@@ -15,12 +15,11 @@ const manifest: EngineManifest = {
 	integrations: {},
 	teams: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
-	policies: { operator: { description: 'Run reports', grants: {}, automations: ['report'] } },
+	policies: { operator: { description: 'Run reports', grants: {}, capabilities: { automations: ['report'] } } },
 	automations: {
 		report: { description: 'Generate a report', policies: ['operator'] },
 		private_pipeline: { description: 'Private process', policies: ['operator'] }

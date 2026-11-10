@@ -120,7 +120,7 @@ it.live(
 			const { parent, child } = yield* create();
 			const source: EngineManifest = {
 				...manifest,
-				exposures: { ...manifest.exposures, lines: { read: { lines: { fields: 'all' } } } }
+				exposures: { ...manifest.exposures, lines: { outputs: { default: { lines: { fields: 'all' } } } } }
 			};
 			const readOnly = grants('lines', { create: [], update: [], delete: [] });
 			const layer = { 'orders.lines': ['label', 'amount'] };
@@ -181,6 +181,21 @@ it.live(
 				lines: readOnly
 			});
 			expect(yield* capabilities('lines', child, hidden, { manifest: source }, context)).toBeNull();
+			const related = authority({
+				orders: grants('orders', {
+					read: {
+						default: {
+							orders: [arm()],
+							'orders.lines': [arm(toPred(source, 'lines', { order: { is: { title: { eq: 'Desk' } } } }))]
+						}
+					},
+					update: [writeArm(layer)]
+				}),
+				lines: readOnly
+			});
+			expect(
+				(yield* capabilities('lines', child, related, { manifest: source }, context))?.fields['amount']?.writable
+			).toBe(true);
 			const other = yield* write('orders', 'create', [{ title: 'Other' }]);
 			const otherParent = other.find((row) => row.model === 'orders');
 			if (otherParent === undefined) throw new Error('missing parent');
@@ -240,7 +255,7 @@ it.live('free links and declared unlinks gain only their nested foreign-key capa
 			...manifest,
 			exposures: {
 				...manifest.exposures,
-				tags: { read: { tags: { fields: 'all' } }, create: { columns: { tags: ['name'] } } }
+				tags: { outputs: { default: { tags: { fields: 'all' } } }, create: { columns: { tags: ['name'] } } }
 			}
 		};
 		const records = yield* write('tags', 'create', [{ name: 'Free' }], source);
@@ -279,7 +294,7 @@ it.live('publishes the fields of the output the caller reads; an output it lacks
 			...manifest,
 			exposures: {
 				...manifest.exposures,
-				orders: { ...orders, outputs: { brief: { orders: { fields: ['note', 'status'] } } } }
+				orders: { ...orders, outputs: { ...orders.outputs, brief: { orders: { fields: ['note', 'status'] } } } }
 			}
 		};
 		const auth = authority({
@@ -437,7 +452,7 @@ it.live(
 				exposures: {
 					...manifest.exposures,
 					tags: {
-						read: { tags: { fields: 'all' } },
+						outputs: { default: { tags: { fields: 'all' } } },
 						create: { columns: { tags: ['name'] } },
 						update: { columns: { tags: ['name'] } }
 					}

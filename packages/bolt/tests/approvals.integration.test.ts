@@ -7,6 +7,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { pruneHistory } from '../src/engine/query/history.ts';
 import { Approvals, RunHandlers, Writes } from '../src/engine/services.ts';
+import { Files } from '../src/engine/ports.ts';
+import { storeFile } from '../src/engine/facilities.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { manifest as base } from './write-fixture.ts';
@@ -29,8 +31,7 @@ const manifest: EngineManifest = {
 				amount: { kind: 'money' },
 				manager: { kind: 'text' },
 				manager_name: { kind: 'text', default: 'Manager' },
-				// declared for create, granted to nobody below: a stored row carries it empty
-				cost_centre: { kind: 'text', optional: true }
+				receipt: { kind: 'file', accept: ['text/plain'], max: '1MiB', optional: true }
 			},
 			computed: { display_name: { kind: 'text', expr: { upper: { field: 'name' } } } }
 		},
@@ -42,23 +43,20 @@ const manifest: EngineManifest = {
 	},
 	exposures: {
 		expenses: {
-			read: { expenses: { fields: 'all' } },
+			outputs: { default: { expenses: { fields: 'all' } } },
 			create: {
-				columns: {
-					expenses: ['name', 'amount', 'manager', 'cost_centre'],
-					'expenses.lines': ['name']
-				},
+				columns: { expenses: ['name', 'amount', 'manager', 'receipt'], 'expenses.lines': ['name'] },
 				transform: true
 			},
 			update: {
-				columns: { expenses: ['name', 'amount', 'manager'], 'expenses.lines': ['name'] },
+				columns: { expenses: ['name', 'amount', 'manager', 'receipt'], 'expenses.lines': ['name'] },
 				transform: true
 			},
 			delete: {},
 			notify: true
 		},
 		lines: {
-			read: { lines: { fields: 'all' } },
+			outputs: { default: { lines: { fields: 'all' } } },
 			create: { columns: { lines: ['name', 'expense'] } },
 			update: { columns: { lines: ['name'] } },
 			delete: {}
@@ -69,14 +67,7 @@ const manifest: EngineManifest = {
 			description: 'Requests',
 			grants: {
 				sys_user: { read: true },
-				expenses: {
-					read: true,
-					create: {
-						columns: { expenses: ['name', 'amount', 'manager'], 'expenses.lines': ['name'] },
-						check: true
-					},
-					update: { check: true }
-				}
+				expenses: { read: true, create: { verdict: true }, update: { verdict: true } }
 			}
 		},
 		reviewer: {
@@ -87,18 +78,37 @@ const manifest: EngineManifest = {
 	teams: { requesters: ['requester'], managers: ['reviewer'], finance: ['reviewer'] }
 };
 const source = `import { Decimal } from '@norbital-ai/std/decimal';
+const managerStep = (ids) => ({
+	name: 'Manager',
+	teams: [...new Set(ids.map((id) =>
+		id === '${managerId}' ? 'managers' : id === '${financeId}' ? 'finance' : 'requesters'
+	))]
+});
+const financeStep = { name: 'Finance', teams: ['finance'] };
 export default { model: { expenses: { bodies: {
 	create: function* (rows) { return rows.map((row) => ({...row,name:row.name.trim()})); },
 	update: function* (changes) { return changes.map(({before,set}) => ({...set,name:(set.name ?? before.name).trim()})); },
 	notify: function* (event) { return [{title:event.kind+':'+(event.move ?? event.action),to:[{user:'${managerId}'}]}]; }
 } } }, policy: { requester: { grants: { expenses: {
-	create: { check: function* (rows, ctx) {
-		return ctx.approve((flow) => flow.step('Manager',{users:[...new Set(rows.map((r) => r.manager))]}).if(rows.some((r) => Decimal.of(String(r.amount)).gte(Decimal.of(100))),(f) => f.step('Finance',{teams:['finance']})));
+	create: { verdict: function* (rows, ctx) {
+		return ctx.approve({
+			steps: [
+				managerStep(rows.map((row) => row.manager)),
+				...(rows.some((row) => Decimal.of(String(row.amount)).gte(Decimal.of(100))) ? [financeStep] : [])
+			],
+			...(rows.some((row) => row.name === 'Override by team') ? { superseded_by: ['finance'] } : {})
+		});
 	} },
-	update: { check: function* (changes, ctx) {
+	update: { verdict: function* (changes, ctx) {
 		if (!changes.every(({ before }) => before.amount instanceof Decimal)) throw new Error('The stored amount must be a Decimal');
-		const material = changes.filter(({ set }) => set.amount !== undefined || set.lines !== undefined);
-		return material.length === 0 ? ctx.allow() : ctx.approve((flow) => flow.step('Manager',{users:[...new Set(material.map(({ before, set }) => set.manager ?? before.manager))]}).if(material.some(({ before, set }) => Decimal.of(String(set.amount ?? before.amount)).gte(Decimal.of(100))),(f) => f.step('Finance',{teams:['finance']})));
+		const material = changes.filter(({ set }) => set.amount !== undefined || set.lines !== undefined || set.receipt !== undefined);
+		return material.length === 0 ? ctx.allow() : ctx.approve({
+			steps: [
+				managerStep(material.map(({ before, set }) => set.manager ?? before.manager)),
+				...(material.some(({ before, set }) => Decimal.of(String(set.amount ?? before.amount)).gte(Decimal.of(100)))
+					? [financeStep] : [])
+			]
+		});
 	} }
 } } } } };`;
 const WITHDRAW = { decision: 'withdraw', reason: 'optional' };
@@ -210,6 +220,115 @@ const fixture = Effect.gen(function* () {
 });
 
 layer(workspace, { excludeTestServices: true })('approval snapshots and saves', (it) => {
+	it.effect('rejecting a file replacement restores the previous reference and its bytes', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const files = yield* Files;
+			const save = storeFile({ db: f.t.db, files, manifest });
+			const prior = new TextEncoder().encode('original receipt');
+			const meta = { mime: 'text/plain', for: 'expenses.receipt', by: requesterId };
+			const oldFile = yield* save(prior, { ...meta, name: 'original.txt' }, 'test');
+			const nextFile = yield* save(
+				new TextEncoder().encode('replacement'),
+				{ ...meta, name: 'new.txt' },
+				'test'
+			);
+			const created = (yield* f.act('create', [
+				{ name: 'Replace receipt', amount: 50, manager: managerId, receipt: oldFile }
+			])).outcome;
+			if (created.kind !== 'pendingApproval') throw new Error(JSON.stringify(created));
+			const id = created.records[0]?.id;
+			if (id === undefined) throw new Error('Missing expense');
+			expect(yield* f.decide(created.requestId, 'approve')).toMatchObject({ status: 'Approved' });
+			const proposed = (yield* f.act('update', [{ target: id, set: { receipt: nextFile } }]))
+				.outcome;
+			if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
+			const stored = () =>
+				f.t.db.one(Schema.Struct({ id: Schema.String, key: Schema.String }), {
+					text: "SELECT f.id,f.key FROM expenses e JOIN sys_file f ON f.id=e.receipt->>'id' WHERE e.id=$1",
+					params: [id]
+				});
+			expect(Option.getOrThrow(yield* stored()).id).toBe(nextFile.id);
+			expect(
+				yield* f.decide(proposed.requestId, 'reject', f.manager, 'Restore original receipt')
+			).toMatchObject({ status: 'Rejected' });
+			const restored = Option.getOrThrow(yield* stored());
+			expect(restored.id).toBe(oldFile.id);
+			expect(yield* files.get(restored.key, 1024)).toEqual(prior);
+		})
+	);
+
+	it.effect('a removed reviewer cannot decide a request that still names their team', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const id = randomUUID();
+			yield* f.t.db.write({
+				text: "INSERT INTO sys_user (id, name, kind, team) VALUES ($1, 'Former reviewer', 'staff', 'finance')",
+				params: [id]
+			});
+			const previous = compileAuthority(
+				manifest,
+				{ actor: member(id, 'finance'), policies: ['reviewer'], admin: false },
+				id
+			);
+			const submitted = (yield* f.act('create', [
+				{ name: 'Team snapshot', amount: 150, manager: managerId }
+			])).outcome;
+			if (submitted.kind !== 'pendingApproval') throw new Error('Missing approval');
+			yield* f.decide(submitted.requestId, 'approve');
+			const waiting = yield* f.request(submitted.requestId);
+			yield* f.t.db.write({
+				text: "UPDATE sys_user SET team = 'managers' WHERE id = $1",
+				params: [id]
+			});
+			expect(yield* f.decide(submitted.requestId, 'approve', previous)).toMatchObject({
+				kind: 'refused',
+				code: 'forbidden'
+			});
+			expect(yield* f.request(submitted.requestId)).toEqual(waiting);
+		})
+	);
+	it.effect('rejecting requested changes immediately restores the checkpoint', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const original = (yield* f.act(
+				'create',
+				[{ name: 'Original', amount: 25, manager: managerId }],
+				f.t.as(f.t.admin).authority
+			)).outcome;
+			const id = original.kind === 'committed' ? original.records[0]?.id : undefined;
+			if (id === undefined) throw new Error('Missing original row');
+			const submitted = (yield* f.act('update', [{ target: id, set: { amount: 50 } }])).outcome;
+			if (submitted.kind !== 'pendingApproval') throw new Error('Missing approval');
+			expect(
+				yield* f.decide(submitted.requestId, 'requestChanges', f.manager, 'Please review')
+			).toMatchObject({ kind: 'decided', status: 'ChangesRequested' });
+			expect(
+				yield* f.decide(submitted.requestId, 'reject', f.manager, 'Restore original')
+			).toMatchObject({ kind: 'decided', status: 'Rejected' });
+			expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(25);
+		})
+	);
+	it.effect('administrators and named superseder teams can close a request with a reason', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			for (const [name, actor] of [
+				['Override by admin', f.t.as(f.t.admin).authority],
+				['Override by team', f.finance]
+			] as const) {
+				const submitted = (yield* f.act('create', [{ name, amount: 50, manager: managerId }]))
+					.outcome;
+				if (submitted.kind !== 'pendingApproval') throw new Error('Missing approval');
+				expect(yield* f.decide(submitted.requestId, 'approve', actor)).toMatchObject({
+					kind: 'refused'
+				});
+				expect(
+					yield* f.decide(submitted.requestId, 'approve', actor, 'Override authorised')
+				).toMatchObject({ kind: 'decided', status: 'Superseded' });
+				expect(yield* f.request(submitted.requestId)).toMatchObject({ state: 'Superseded' });
+			}
+		})
+	);
 	it.effect(
 		'prevents self-review through a named user, administrator override, or member preview',
 		() =>
@@ -579,7 +698,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						step: 0,
 						route: {
 							steps: [
-								{ name: 'Manager', users: [managerId], teams: [] },
+								{ name: 'Manager', users: [], teams: ['managers'] },
 								{ name: 'Finance', teams: ['finance'], users: [] }
 							]
 						}
@@ -636,7 +755,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					expect(yield* f.request(requestId)).toMatchObject({
 						state: 'Pending',
 						step: 0,
-						route: { steps: [{ name: 'Manager', users: [managerId], teams: [] }] }
+						route: { steps: [{ name: 'Manager', users: [], teams: ['managers'] }] }
 					});
 					expect((yield* f.notices()).map((n) => n.title)).toContain('approval:resubmit');
 				})

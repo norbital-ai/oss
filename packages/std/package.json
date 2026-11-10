@@ -70,6 +70,10 @@
 			"types": "./build/label.d.ts",
 			"default": "./build/label.js"
 		},
+		"./rows": {
+			"types": "./build/rows.d.ts",
+			"default": "./build/rows.js"
+		},
 		"./pricing": {
 			"types": "./build/pricing.d.ts",
 			"default": "./build/pricing.js"

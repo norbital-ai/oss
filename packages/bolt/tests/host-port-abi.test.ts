@@ -22,7 +22,6 @@ import {
 	Drivers,
 	Files,
 	Geo,
-	Speech,
 	Transport,
 	WebRead
 } from '../src/engine/ports.ts';
@@ -93,28 +92,6 @@ describe('fromAbi', () => {
 			);
 			expect(absent).toBeInstanceOf(Unavailable);
 			expect(absent).toMatchObject({ facility: 'convert' });
-		})
-	);
-
-	it.effect('Speech: a provider refusal keeps its kind; an `off` group is unavailable', () =>
-		Effect.gen(function* () {
-			const speech = Speech.fromAbi({
-				speak: async () =>
-					Promise.reject({ kind: 'tooLarge', message: 'the text is over 5,000 characters' })
-			});
-			const refused = yield* Effect.flip(
-				using(Speech, speech, (s) => s.speak('hi', { format: 'mp3' }))
-			);
-			expect(refused).toBeInstanceOf(FacilityFailure);
-			expect(refused).toMatchObject({
-				kind: 'tooLarge',
-				message: 'the text is over 5,000 characters'
-			});
-			expect(
-				yield* Effect.flip(
-					using(Speech, Speech.fromAbi(off), (s) => s.speak('hi', { format: 'mp3' }))
-				)
-			).toBeInstanceOf(Unavailable);
 		})
 	);
 

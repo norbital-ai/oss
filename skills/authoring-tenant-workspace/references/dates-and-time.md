@@ -17,7 +17,7 @@ Classify the value before choosing a kind. Value types come from the std date mo
 ## Workspace zone
 
 - `+workspace.ts` `tz` decides today, a `seq`'s `{yyyy}`, and cron triggers without their own `tz`. Declare it once.
-- Backend code uses `ctx.tz`, `ctx.today`, `ctx.now`, and `ctx.todayIn(zone)` for another place. UI gets the zone from `useKinds().zone`.
+- Backend code uses `ctx.tz`, `ctx.today`, `ctx.now`, and `ctx.today_in(zone)` for another place. Pages get the zone from `ctx.tz`.
 - Another place's zone belongs to its record or runtime configuration.
 - Never derive today from `toISOString()`: that is the UTC day.
 
@@ -33,7 +33,7 @@ Classify the value before choosing a kind. Value types come from the std date mo
 
 - Use the std date and calendar modules. No local regexes or permissive parsing: reject unzoned instants and daylight-saving-gap wall times at the boundary.
 - Prefer native field controls. A `date` never shifts; an `instant` is edited in the configured zone and sent as UTC.
-- A custom timestamp display captures `useKinds()` during component initialization and passes its zone to the formatter. Locale alone does not choose a zone.
+- A custom timestamp display receives the zone through `ctx.tz` or a narrower prop and passes it to the formatter. Locale alone does not choose a zone.
 - Use one zone for grouping, defaults, labels and messages. Label an explicitly selected event zone.
 
 ## Review

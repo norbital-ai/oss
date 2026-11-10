@@ -9,7 +9,7 @@ export default model('sys_sync_row', {
 	fields: {
 		/** `'<model>.sync.<sync>'`. */
 		sync: { kind: 'text' },
-		instance: { kind: 'ref', to: 'sys_integration', onDelete: 'cascade' },
+		instance: { kind: 'ref', to: 'sys_integration', on_delete: 'cascade' },
 		partition: { kind: 'text', default: '' },
 		remote_id: { kind: 'text' },
 		/** The record's id in the sync's model. */
@@ -18,10 +18,10 @@ export default model('sys_sync_row', {
 		cycle: { kind: 'int' },
 		acked_revision: { kind: 'int', optional: true }
 	},
-	unique: [
-		{ fields: ['sync', 'instance', 'remote_id'] },
-		{ fields: ['sync', 'instance', 'record'] }
-	],
+	constraints: {
+		one_remote_id: { unique: ['sync', 'instance', 'remote_id'] },
+		one_record: { unique: ['sync', 'instance', 'record'] }
+	},
 	index: [['sync', 'instance', 'partition', 'cycle']],
 	table: { primary: 'uuid' }
 });

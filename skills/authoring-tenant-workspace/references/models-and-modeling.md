@@ -33,15 +33,15 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Relations and layers
 
-- A foreign key is a field: `{ kind: 'ref', to, inverse }`, with `optional`, `owned`, `onDelete`, `where`, `default`. `to: [...]` is a polymorphic arc. Many-to-many is a model with two refs.
-- `onDelete`: `restrict` (default), `cascade`, `setNull` on an optional ref; owned refs cascade. There is no `onUpdate`. Never emulate these in callbacks.
-- `key` (natural key, what imports match), `unique` and `check` enforce static invariants; `noOverlap` guards periods; `computed` holds typed expressions over own fields. A value needing I/O or hashing is a stored field set by a callback or automation.
-- `read`, `create.columns`, `update.columns` are layer maps keyed by path, at most five levels, each parent declared.
-- A model without `read` is no read root but can be another's layer. A write layer is a many-relation and never lists the FK to its parent. `create.filled` names columns the transform fills. Omitted write exposure removes that verb.
+- A foreign key is a field with `{ kind: 'ref', to, inverse }` and optional `optional`, `owned`, `on_delete`, `where` and `default` settings. A list in `to` declares a polymorphic ref. A model with two refs represents a many-to-many relation.
+- `on_delete` accepts `restrict` by default, `cascade`, or `set_null` for optional refs. Owned refs cascade.
+- `key` is the natural key imports match. Named `constraints` enforce uniqueness and checks, guard periods with `no_overlap` and declare locks with `locked`. A lock can list editable fields in `except`. `computed` holds typed expressions over own fields. A value needing I/O or hashing is a stored field set by a callback or automation.
+- Each output is a tree with `fields` and one nested key per relation. Declaring `outputs.default` exposes the model as a read root.
+- `create.columns` and `update.columns` are layer maps keyed by path, up to five levels. Each write layer is a many-relation. The engine fills its parent FK. `create.filled` names columns the transform fills.
 - Nothing is deleted by omission: an update names child changes per layer as `{ create, update, delete, link, unlink }`.
-- `read` is the `default` output; `outputs` are named others, never `default`. A narrower audience reads a narrower output. Each new layer of an output is visible to every reader of it unless the root's policy filters its rows.
+- Use named outputs for narrower audiences. Each layer of an output is visible to its readers under the root's policy.
 - A layer is read or written under the root model's policy alone.
-- A described filter reaches a related record, and finds it by name, only through a declared layer of the caller's output. A ref with no layer filters by its id and `me` alone. Declare `'<model>.<ref>': { fields: ['name'] }` for each ref people filter by, in every output that exposes it, and only where every holder of that output already reads the target: a layer shows its fields to all of them. Where one does not, grant it the target or leave the ref without a layer.
+- A described filter reaches a related record by name through a layer of the caller's output. Declare `<ref>: { fields: ['name'] }` in an output when its holders can read the related name. A bare ref can be filtered by id or by `me`.
 
 ## Locks and moves
 
@@ -53,19 +53,19 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 ## Write callbacks
 
 - A create transform gets all rows, each with the `id` it will have; an update transform gets `{ before, set }` per row and returns sets; a delete check gets stored rows and only refuses.
-- To write other models in the same transaction, return `{ rows, with, onApproved }` (a delete check `{ with, onApproved }`), each `{ [model]: { create?, update?: [{ target, set, observed? }] } }`. Carried rows run their own callbacks (`ctx.carriedBy`); a stale `observed` is a conflict.
+- To write other models in the same transaction, return `{ rows, with, onApproved }` (a delete check `{ with, onApproved }`), each `{ [model]: { create?, update?: [{ target, set, observed? }] } }`. Carried rows run their own callbacks (`ctx.carried_by`); a stale `observed` is a conflict.
 - `with` rows are part of the write: held, locked and rolled back with it. `onApproved` rows (ledger and balance postings) commit once it is approved, in the approving decision's statement, all or nothing.
 - Under an approval the decision calls the callback again with `ctx.approving` on the stored rows; return only `onApproved`, and never count those rows twice.
 - They run on every business write path: pages, agent, automations, syncs, imports, upserts, bulk edits, resubmits, restore, nested owned children. Children run after the parent. Seed restores and roll-ups bypass them.
 - Keep semantic validators in browser-safe `src/lib` modules returning `{ field, message }`; forms and the server share them. Client validation never writes.
-- Prefetch the batch through `ctx.db.query` as the workspace, at most two reads, never per row. The engine prefetches `before`, delete rows and upsert matches.
+- Prefetch the batch through `ctx.query` as the workspace, at most two reads, never per row. The engine prefetches `before`, delete rows and upsert matches.
 - Each 1000-row chunk has 3 s CPU and one callback per verb and model; all chunks share one transaction.
 
 ## Operations
 
 - A model has only `create`, `update`, `delete` and keyed `upsert`, no named actions or queries. A computed read is one read request plus a pure helper.
 - A business operation is an automation, `+<model>_<operation>.automation.ts`, with explicit IDs and typed input; a run has no implicit target. See [automations-and-effects.md](automations-and-effects.md).
-- Every generated write takes an array. Independent writes that must commit together use `ctx.act.many`; dependent parent and child use write layers; dependent reads and writes use `ctx.transaction`.
+- Every generated write takes an array. Independent writes that must commit together use `ctx.act.many`; dependent parent and child use write layers. A transform can carry related rows into the same commit.
 
 ## Search
 
@@ -90,6 +90,6 @@ Place exchange under `syncs.<name>`. Discover: `import('@norbital-ai/bolt').Remo
 
 ## Custom fields
 
-- `customField(name, { description, shape, validate? })`; validation is inline and pure.
+- `custom_field(name, { description, shape, validate? })`; validation is inline and pure.
 - The optional renderer gets `{ view }` (`CustomFieldView`) in show or edit mode; keep typed values through `onChange`.
 - Renderers apply everywhere the kind shows and bundle statically: keep them light. Without one the shape supplies display and editing.

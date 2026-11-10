@@ -75,7 +75,7 @@ import { attachmentsFor, fileAttachments, triageAttachments } from './attachment
 import { route } from './ingest.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
-import { envoySpec } from '../envoys/spec.ts';
+import { activeEnvoys, envoySpec } from '../envoys/spec.ts';
 import {
 	post as postMessage,
 	settle as settleMessage,
@@ -407,7 +407,7 @@ export const NUDGE = {
 	replayed:
 		'Not run: this call was made before the turn resumed and may have taken effect. Read its outcome above instead of repeating it; change the arguments to do something new.',
 	cutTool:
-		'Your last reply was cut off at 60 seconds while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.',
+		'Your last reply was cut off while you were still writing a tool call. Make smaller calls: write or edit a large file in several parts.',
 	more: (lines: readonly string[]) =>
 		`Some answers stopped short; the rest is not above:\n${lines.map((l) => `- ${l}`).join('\n')}`,
 	truncated: (calls: readonly string[]) =>
@@ -458,6 +458,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		mcpPort = yield* Mcp,
 		logs = yield* Logs;
 	const manifestHash = sha256Hex(JSON.stringify(m));
+	const reports = yield* PubSub.unbounded<string>();
 	const authorities = new Authorities(m, 'agent', { remember: true });
 	// the workspace's skills, their files read from the release where the host binds them
 	const skillFiles = config.skillFiles;
@@ -775,7 +776,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const outward = Effect.fn('Agents.outward')(function* (conv: ConversationRow, a: Authority) {
 		const envoy = conv.envoy ?? (a.actor.kind === 'envoy' ? a.actor.envoy : null);
 		return envoy !== null
-			? (yield* envoySpec(m, db, envoy))?.audience === 'public'
+			? (yield* envoySpec(db, envoy))?.audience === 'public'
 			: a.actor.kind === 'member' && a.actor.external;
 	});
 	const verify = Effect.fn('Agents.verify')(function* (
@@ -1313,8 +1314,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			// answers; its input was already consumed, so only a turn that had replied or was waiting on a card settles
 			if (admitted === 'takeover') {
 				for (const row of yield* unfinished(id))
-					if (row.role === 'tool')
-						replayed.add(stepKey(row.content.name, row.content.args));
+					if (row.role === 'tool') replayed.add(stepKey(row.content.name, row.content.args));
 				const rows = yield* transcript(id),
 					last = rows.at(-1);
 				force ||=
@@ -1433,7 +1433,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const concrete = catalog?.models.some((x) => x.id === conv.model)
 					? conv.model
 					: catalog?.default;
-				// the model's own window, never a smaller host budget: compaction starts at 90% of what the model provides
+				// the model's own window, never a smaller host budget: compaction starts at 80% of what the model provides
 				const window =
 					configuredWindow ??
 					catalog?.models.find((x) => x.id === concrete)?.context ??
@@ -1450,7 +1450,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					mcpTools = yield* mcp.tools(authority);
 					mcpFor = authority.key;
 				}
-				const envoy = conv.envoy === null ? undefined : yield* envoySpec(m, db, conv.envoy);
+				const envoy = conv.envoy === null ? undefined : yield* envoySpec(db, conv.envoy);
 				const staff = authority.actor.kind === 'member' && !authority.actor.external;
 				const hostSide = inApp(conv) && staff;
 				// once a turn for an actor: a tool's own call reads the state it depends on
@@ -1536,7 +1536,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							: undefined,
 					geocoder: config.geocoder,
 					skills,
-					agents: ['workspace', ...Object.keys(m.envoys)],
+					agents: ['workspace', ...(yield* activeEnvoys(db)).map(({ id }) => id)],
 					receipts,
 					read,
 					files,
@@ -1606,7 +1606,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								a.kind === 'member' ? a.id : a.kind === 'envoy' ? (a.linked?.id ?? null) : null; // a group turn searches no one's own
 						// `dm: 'envoy'`: the member's own is their conversations on this instance alone, never their app or another envoy's
 						const bound =
-							a.kind === 'envoy' && (yield* envoySpec(m, db, a.envoy))?.dm === 'envoy'
+							a.kind === 'envoy' && (yield* envoySpec(db, a.envoy))?.dm === 'envoy'
 								? a.instance
 								: null;
 						const [r] = yield* db.read([
@@ -1740,29 +1740,25 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							return Number(r?.rows[0]?.['n'] ?? 0);
 						}),
 						// a report waiting in this conversation (it is claimed at the next step), or none at the bound
-						report: Effect.fn('Agents.subagentReport')(function* (ms: number) {
-							const arrived = db
-								.read([
-									q(
-										`SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'queued' AND meta->>'tag' = 'report' LIMIT 1`,
-										id
-									)
-								])
-								.pipe(Effect.map(([r]) => (r?.rows.length ?? 0) > 0));
-							return Option.isSome(
-								yield* arrived.pipe(
-									// each ask is a trip to the database: quick at first, then seldom
-									Effect.repeat({
-										schedule: Schedule.min([
-											Schedule.exponential('2 seconds'),
-											Schedule.spaced('15 seconds')
-										]),
-										until: (yes) => yes
-									}),
-									Effect.timeoutOption(ms)
-								)
-							);
-						})
+						report: (ms: number) =>
+							Effect.scoped(
+								Effect.gen(function* () {
+									const subscription = yield* PubSub.subscribe(reports);
+									const [pending] = yield* db.read([
+										q(
+											`SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'queued' AND meta->>'tag' = 'report' LIMIT 1`,
+											id
+										)
+									]);
+									if ((pending?.rows.length ?? 0) > 0) return true;
+									return Option.isSome(
+										yield* PubSub.take(subscription).pipe(
+											Effect.repeat({ until: (parent) => parent === id }),
+											Effect.timeoutOption(ms)
+										)
+									);
+								})
+							)
 					}
 				};
 				const toolset = yield* catalogue(ctx),
@@ -2383,6 +2379,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			author: 'sub-agent',
 			meta: { tag: 'report', conversation: child, ...(asked ? { asked: true as const } : {}) }
 		});
+		yield* PubSub.publish(reports, conv.parent);
 		yield* FiberSet.run(detached, kick(conv.parent));
 	});
 	const ownChild = Effect.fn('Agents.work29')(function* (parent: string, child: string) {
@@ -2550,7 +2547,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			yield* setConv(id, 'plan = NULL');
 		}),
 		setAgent: Effect.fn('Agents.setAgent')(function* (id: string, agent: string) {
-			if (agent !== 'workspace' && m.envoys[agent] === undefined)
+			if (agent !== 'workspace' && (yield* envoySpec(db, agent)) === undefined)
 				return yield* Effect.fail(new AgentRefusal({ message: `there is no agent '${agent}'` }));
 			yield* setConv(id, 'envoy = $2', agent === 'workspace' ? null : agent);
 		}),

@@ -350,8 +350,6 @@ describe('next schema: fingerprint and plan', () => {
 			const untouched = TenantDb.typed({
 				read: () => Effect.die('touched'),
 				write: () => Effect.die('touched'),
-				session: () =>
-					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 				transaction: () => Effect.die('touched')
 			});
 			const untouchable = new Proxy(untouched, {

@@ -32,9 +32,9 @@ for (const c of Object.values(value.model ?? {})) {
 		for (const [type, body] of Object.entries(sync.parse ?? {})) sync.parse[type] = gen(body,1);
 	}
 }
-// a policy's write checks, as the compiler's \`__checks\` attaches them (\`policy.<p>.grants.<model>.<op>.check\`)
+// a policy's write checks, as the compiler's \`__verdicts\` attaches them (\`policy.<p>.grants.<model>.<op>.verdict\`)
 for (const p of Object.values(value.policy ?? {})) for (const grant of Object.values(p.grants ?? {}))
-	for (const op of ['create','update','delete']) if (grant?.[op]?.check) grant[op].check = gen(grant[op].check, 1);
+	for (const op of ['create','update','delete']) if (grant?.[op]?.verdict) grant[op].verdict = gen(grant[op].verdict, 1);
 for (const a of Object.values(value.automation ?? {})) a.body = gen(a.body,1);
 for (const page of Object.values(value.page ?? {})) page.body = gen(page.body,1);
 for (const i of Object.values(value.integration_definition ?? {})) if(i?.bodies) i.bodies.test = gen(i.bodies.test,0);

@@ -8,7 +8,14 @@ import { teams, type EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { Clock, Effect, Schema } from 'effect';
-import { identityHistory, IMAGES, jsonb, partyRow, signupOf, IdentityStatement } from './session.ts';
+import {
+	identityHistory,
+	IMAGES,
+	jsonb,
+	partyRow,
+	signupOf,
+	IdentityStatement
+} from './session.ts';
 import { envoySpec } from '../envoys/spec.ts';
 const UserSchema = Schema.Struct({
 	id: Schema.String,
@@ -268,7 +275,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 	) {
 		return Effect.gen(
 			function* (this: Authorities) {
-				const spec = yield* envoySpec(this.m, db, o.envoy);
+				const spec = yield* envoySpec(db, o.envoy);
 				if (spec === undefined)
 					return yield* Effect.fail(
 						BoltError.make('unknownEnvoy', 'admission', `no envoy '${o.envoy}'`)

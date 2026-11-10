@@ -40,11 +40,10 @@ const manifest = Result.getOrThrow(
 		exposures: {
 			// what a visitor or kiosk reads of a role: its title
 			openings: {
-				read: { openings: { fields: 'all' } },
-				outputs: { public: { openings: { fields: ['title'] } } }
+				outputs: { default: { openings: { fields: 'all' } }, public: { openings: { fields: ['title'] } } }
 			},
 			applications: {
-				read: { applications: { fields: 'all' } },
+				outputs: { default: { applications: { fields: 'all' } } },
 				create: { columns: { applications: ['opening', 'name'] } }
 			}
 		},
@@ -54,7 +53,7 @@ const manifest = Result.getOrThrow(
 				description: 'Apply',
 				grants: {
 					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
-					applications: { create: { check: true } }
+					applications: { create: { verdict: true } }
 				}
 			},
 			lobby: {
@@ -62,20 +61,20 @@ const manifest = Result.getOrThrow(
 				grants: {
 					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
 					applications: {
-						create: { columns: { applications: ['opening', 'name'] }, check: true }
+						create: { columns: { applications: ['opening', 'name'] }, verdict: true }
 					}
 				}
 			},
 			rep: {
 				description: 'Rep',
-				capabilities: { apps: ['sales'], kiosks: ['desk'] },
+				capabilities: { apps: ['sales', 'desk'] },
 				grants: { openings: { read: true } }
 			},
 			proposer: {
 				description: 'Propose an application',
 				grants: {
 					openings: { read: true },
-					applications: { create: { check: true } }
+					applications: { create: { verdict: true } }
 				}
 			}
 		},
@@ -87,22 +86,21 @@ const manifest = Result.getOrThrow(
 				icon: 'i',
 				audience: { public: ['applicant'], challenge: 'turnstile' },
 				pages: { apply: { title: 'Apply' } }
-			}
-		},
-		kiosks: {
+			},
 			lobby: {
 				title: 'Lobby',
 				description: 'd',
 				icon: 'i',
-				auth: 'none',
-				policies: ['lobby'],
+				shell: 'kiosk',
+				audience: { public: ['lobby'] },
 				pages: { welcome: { title: 'Welcome' } }
 			},
 			desk: {
 				title: 'Desk',
 				description: 'd',
 				icon: 'i',
-				auth: 'members',
+				shell: 'kiosk',
+				audience: 'members',
 				policies: ['lobby'],
 				pages: { home: { title: 'Home' } }
 			},
@@ -110,7 +108,8 @@ const manifest = Result.getOrThrow(
 				title: 'Vault',
 				description: 'd',
 				icon: 'i',
-				auth: 'members',
+				shell: 'kiosk',
+				audience: 'members',
 				policies: ['lobby'],
 				pages: { home: { title: 'Home' } }
 			}
@@ -118,7 +117,6 @@ const manifest = Result.getOrThrow(
 		teams: { Sales: ['rep'], Finance: [], Proposer: ['proposer'] },
 		automations: {},
 		connections: { mail: { integration: 'email' } },
-		envoys: {},
 		mcp: {},
 		customFields: {},
 		agent: { internal: 'You help.', skills: {} }
@@ -135,9 +133,9 @@ const sources = [
 	'src/access_control/policy/+rep.policy.ts',
 	'src/app/sales/+app.ts',
 	'src/app/careers/+app.ts',
-	'src/kiosk/lobby/+kiosk.ts',
-	'src/kiosk/desk/+kiosk.ts',
-	'src/kiosk/vault/+kiosk.ts'
+	'src/app/lobby/+app.ts',
+	'src/app/desk/+app.ts',
+	'src/app/vault/+app.ts'
 ];
 const studioState: StudioState = {
 	commit: 'c2',
@@ -333,19 +331,19 @@ const workspace = Layer.effectContext(
 				manifest,
 				// applicant and lobby apply to open roles only (one read over the batch); a proposer's application waits for review
 				guest: yield* program(`function* toOpen(rows, ctx) {
-					const { openings } = yield* ctx.db.query({ openings: { where: { id: { in: rows.map((r) => r.opening) } }, fields: ['status'] } });
+					const { openings } = yield* ctx.query({ openings: { where: { id: { in: rows.map((r) => r.opening) } }, fields: ['status'] } });
 					const open = new Set(openings.rows.filter((o) => o.status === 'open').map((o) => o.id));
 					const row = rows.findIndex((r) => !open.has(r.opening));
-					return row >= 0 ? ctx.deny('That role is closed.', { row, field: 'opening' }) : ctx.allow();
+					return row >= 0 ? yield* ctx.refuse('That role is closed.', { row, field: 'opening' }) : ctx.allow();
 				}
 				export default { policy: {
-					applicant: { grants: { applications: { create: { check: toOpen } } } },
-					lobby: { grants: { applications: { create: { check: toOpen } } } },
+					applicant: { grants: { applications: { create: { verdict: toOpen } } } },
+					lobby: { grants: { applications: { create: { verdict: toOpen } } } },
 					proposer: { grants: { applications: {
-						create: { check: function* (rows, ctx) {
-							return ctx.approve((flow) => rows.some((r) => r.name === 'Sales proposal')
-								? flow.step('Sales review', {teams:['Sales']})
-								: flow.step('Finance review', {teams:['Finance']}));
+						create: { verdict: function* (rows, ctx) {
+							return ctx.approve({ steps: [rows.some((r) => r.name === 'Sales proposal')
+								? { name: 'Sales review', teams: ['Sales'] }
+								: { name: 'Finance review', teams: ['Finance'] }] });
 						} }
 					} } }
 				} };`),
@@ -596,9 +594,9 @@ layer(workspace)('shell routes', (it) => {
 			() =>
 				Effect.gen(function* () {
 					const logo = 'data:image/png;base64,iVBORw0KGgo=';
-					expect(
-						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo })).status
-					).toBe(200);
+					expect((yield* call(admin, 'POST', '/__bolt/shell/organization', { logo })).status).toBe(
+						200
+					);
 					expect(
 						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo: null })).status
 					).toBe(200);

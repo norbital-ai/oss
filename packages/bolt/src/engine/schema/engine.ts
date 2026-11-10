@@ -223,12 +223,6 @@ const REGISTRY = (): readonly Private[] => [
 			`create index if not exists bolt_approvals__open on bolt_approvals (state) where state in ('Pending', 'ChangesRequested')`
 		]
 	},
-	{
-		name: 'bolt_run_admitted',
-		rank: 'table',
-		why: 'retired first-admission marker: a pack load queues its `start` runs; kept so existing databases plan unchanged',
-		sql: ['create table if not exists bolt_run_admitted (at timestamptz not null)']
-	},
 	noticeTrigger('bolt_notice_deliver', NOTIFY, '<>', ' and f.member is null'),
 	noticeTrigger(
 		'bolt_notice_push',

@@ -52,11 +52,7 @@ explicit bypasses. A callback handles up to 1,000 rows per invocation and batche
 all chunks of an import remain in its one transaction. See [Models](./models.md).
 
 Separate acts are separate commits. Group independent writes in one batch when they must commit
-together. Dependent reads and writes can use a native transaction generator: one session,
-read-your-writes, one settlement and a fixed five-second deadline. PostgreSQL 17+ is required;
-PGlite explicitly refuses it. Only transaction reads and guarded writes are admitted; no captured
-outer Effects, I/O, async callbacks or nesting. Inner answers are provisional. The outer answer
-alone is committed or held, with no callback output for a held transaction. See [APIs](./apis.md).
+together. Transforms read the workspace and may carry related writes into that commit. See [APIs](./apis.md).
 
 ## Approval and history
 
@@ -87,7 +83,7 @@ its required non-empty `policies`. Cron and verified webhook declarations schedu
 means started only. Model row events belong in effects. `ctx.run.trigger` records a person and
 optional Norbius conversation, or a system cause (cron, webhook, effect, schedule). Trigger
 provenance grants no permission. Code acting for the starter must explicitly check the trigger;
-`requestor.*` in a system run does not identify that person. `policy.automations` grants manual
+`requestor.*` in a system run does not identify that person. `capabilities.automations` grants manual
 starts only; scheduling from code does not require it. See [APIs](./apis.md).
 
 A run can contain several commits and external calls. Process-lost automations rerun from the
@@ -108,7 +104,7 @@ handling and retries belong to the sync engine. See [Syncs](./syncs.md).
 
 Integration declarations own configuration and request shapes; host facilities own providers,
 sealed credentials, OAuth and network I/O. Named workspace connections and paired runtime
-instances are distinct from source defaults. Credential data never becomes a readable model
+instances carry runtime configuration. Credential data never becomes a readable model
 field. See [Integration providers](./integration-providers.md).
 
 Model notices are queued after commit and delivered independently. Inbox and optional external

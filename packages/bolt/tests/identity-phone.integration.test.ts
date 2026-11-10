@@ -49,7 +49,6 @@ const m: EngineManifest = {
 	teams: { Staff: ['staff'] },
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

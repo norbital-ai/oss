@@ -21,7 +21,7 @@ const left = '0199a000-0000-7000-8000-000000000011',
 	right = '0199a000-0000-7000-8000-000000000012';
 const grant: GrantData = {
 	read: true,
-	update: { columns: { orders: ['note'] }, check: true }
+	update: { columns: { orders: ['note'] }, verdict: true }
 };
 const manifest: EngineManifest = {
 	needs: [],
@@ -36,7 +36,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		orders: {
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			update: { columns: { orders: ['note'] } },
 			notify: true,
 			effect: { updated: true }
@@ -50,7 +50,6 @@ const manifest: EngineManifest = {
 	automations: {},
 	integrations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -63,7 +62,7 @@ const guest = program(`export default {
   return [{to:[{user:'${salesId}'}],title:'Bundle committed'}];
  }, effect: { updated: function*(){return null;} } } } },
  policy: { seller: { grants: { orders: { update: {
-  check: function*(_changes,ctx){ return ctx.approve((flow)=>flow.step('Finance',{teams:['Finance']})); }
+  verdict: function*(_changes,ctx){ return ctx.approve({ steps: [{ name: 'Finance', teams: ['Finance'] }] }); }
  } } } } }
 };`);
 let pg: PGlite, db: TenantDb, e: Engine, sales: Authority, finance: Authority;

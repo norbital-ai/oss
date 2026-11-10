@@ -20,7 +20,6 @@ export interface DeadlineTimer<Subject> {
 	readonly announce: (key: string, subject: Subject, at: number) => Effect.Effect<boolean>;
 	readonly settle: (key: string, subject: Subject, at: number | null) => Effect.Effect<void>;
 	readonly retire: (key: string) => Effect.Effect<boolean>;
-	readonly restore: (entries: Iterable<DeadlineEntry<Subject>>) => Effect.Effect<void>;
 	readonly takeDue: Effect.Effect<DeadlineEntry<Subject> | undefined>;
 	readonly complete: (
 		key: string,
@@ -104,11 +103,6 @@ export const DeadlineTimer = {
 						running.retired = true;
 						return false;
 					}),
-				restore: (entries) =>
-					armed(() => {
-						for (const entry of entries)
-							if (!held.has(entry.key) && !active.has(entry.key)) held.set(entry.key, entry);
-					}),
 				takeDue: Effect.gen(function* () {
 					const now = yield* clock.currentTimeMillis;
 					return yield* armed(() => {
@@ -167,16 +161,17 @@ export const inProcessDeadlines = <E, R>(wake: (scope: string) => Effect.Effect<
 				if (entry === undefined) return;
 				waking.add(entry.key);
 				answers.delete(entry.key);
-				const result = yield* Effect.result(
+				const result = yield* Effect.exit(
 					wake(entry.subject).pipe(Effect.tapCause(Effect.logWarning))
 				);
 				waking.delete(entry.key);
-				const now = yield* Clock.currentTimeMillis;
-				yield* timer.complete(entry.key, {
-					callbackAtEpochMs: result._tag === 'Success' ? answers.get(entry.key) : now + 60_000,
-					mergeAnnouncements: result._tag === 'Success'
-				});
+				const settled = result._tag === 'Success' || answers.has(entry.key);
+				const callbackAtEpochMs = settled ? answers.get(entry.key) : (yield* Clock.currentTimeMillis) + 60_000;
 				answers.delete(entry.key);
+				yield* timer.complete(entry.key, {
+					callbackAtEpochMs,
+					mergeAnnouncements: settled
+				});
 			});
 			timer = yield* DeadlineTimer.make<string, R>(onDue);
 			return {

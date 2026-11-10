@@ -42,7 +42,6 @@ import {
 	Keys,
 	Logs,
 	Mcp,
-	Speech,
 	Transport,
 	WebRead
 } from './ports.ts';
@@ -108,7 +107,6 @@ export type EngineHost =
 	| Activation
 	| Files
 	| Convert
-	| Speech
 	| WebRead
 	| Browser
 	| Geo

@@ -12,16 +12,16 @@ A `+` file is a compiler role, default-exporting its declaration; its path is it
 - `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, AI, connections
 - `+secrets.ts` `secrets(spec)`: secret names
 - `data/model/<name>/+model.ts` `model(name, spec)`: fields, reads, writes, state, search, syncs, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view
-- `data/custom_field/<name>/+definition.ts` `customField(name, spec)`, `+renderer.svelte`: value type
+- `data/custom_field/<name>/+definition.ts` `custom_field(spec)`, `+renderer.svelte`: value type
 - `access_control/policy/+<name>.policy.ts` `policy(spec)`: what holders may do
 - `access_control/team/+team.ts` `team(spec)`: team handles to policies
-- `automation/+<name>.automation.ts` `automation(name, spec)`: job with its own policies
+- `automation/+<name>.automation.ts` `automation(spec)`: job with its own policies
 - `integration/<name>/+integration.ts` `integration(name, spec)`, `+integration.svelte`: connection, setup
-- `app/<app>/+app.ts` `app(name, spec)`: label and `pages`; `+group.ts` `group(name, spec)`
-- `app/<app>/+<page>.page.svelte`: page, `import { bolt } from '$bolt'`; `+<page>.page.server.ts` `pageServer(spec)`: loader
-- `kiosk/<k>/+kiosk.ts` `kiosk(name, spec)`: standalone surface, its own pages
+- `app/<app>/+app.ts` `app(spec)`: label and `pages`; `+group.ts` `group(spec)`
+- `app/<app>/+<page>.page.svelte`: page with a `ctx` prop
+- `app/<k>/+app.ts` with `shell: 'kiosk'`: shared-device surface with fixed policies
 - `agent/+agent.md`, `agent/skill/<s>/+skill.md`: brief, skill
-- `agent/envoy/+<id>.envoy.ts` `envoy(spec)`; `agent/mcp/+<n>.mcp.ts` `mcp(spec)`
+- `agent/mcp/+<n>.mcp.ts` `mcp(spec)`; envoys are runtime `sys_envoy` rows
 - `agent/tool/<t>/+tool.ts` `tool(spec)` with `run.ts`: a tool `run_tool` runs
 - `i18n/+messages.ts` `messages(spec)`, `+<locale>.messages.ts`
 
@@ -56,7 +56,7 @@ A body that takes `ctx` is a generator, `function* (…)`, never an arrow: a wri
 - An automation runs with its declared `policies`, never its starter's; `requestor.*` there matches nothing.
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
 - Decimals in policy and model code use `dec` values from the decimal module, never plain numbers.
-- Model key options (`key`, `unique` fields, `noOverlap` key) take arrays.
+- Model `key` and the `unique` and `per` fields of named constraints take arrays.
 - `seed/test/assets.json` and `seed/public/assets.json` are the reserved asset list: never name seed rows that, even for a model called assets.
 - Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.
 - Credentials never enter source, seeds or model fields.

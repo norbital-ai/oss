@@ -1,5 +1,5 @@
 <!--
-	The record sheet the shell opens for `?record=<model>/<id|new>`: ui's `RecordShell` over `$bolt`. The shell
+	The record sheet the shell opens for `?record=<model>/<id|new>`: ui's `RecordShell` over the page client. The shell
 	provides the representation registry (lazy, one chunk each) above it and above every page; the opener's contexts
 	(`openRecord`'s third argument) are set above it, so a create keeps the scope of the page that opened it.
 -->

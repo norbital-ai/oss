@@ -8,7 +8,7 @@ export default model('sys_inbox', {
 	label: 'delivery',
 	fields: {
 		sync: { kind: 'text' },
-		instance: { kind: 'ref', to: 'sys_integration', onDelete: 'cascade' },
+		instance: { kind: 'ref', to: 'sys_integration', on_delete: 'cascade' },
 		/** The provider's delivery id (`webhook-id`, `svix-id`, …). */
 		delivery: { kind: 'text' },
 		received_at: { kind: 'instant' },
@@ -16,7 +16,7 @@ export default model('sys_inbox', {
 		body: { kind: 'json', optional: true },
 		consumed_at: { kind: 'instant', optional: true }
 	},
-	unique: [{ fields: ['sync', 'instance', 'delivery'] }],
+	constraints: { one_inbound_delivery: { unique: ['sync', 'instance', 'delivery'] } },
 	table: {
 		primary: 'uuid',
 		indexes: [{ on: ['sync', 'instance', 'received_at'], where: { consumed_at: { isNull: true } } }]

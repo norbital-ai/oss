@@ -251,7 +251,10 @@ export const StudioOp = Schema.Union([
 	Schema.Struct({ op: Schema.Literal('test') }),
 	/** The next migration for the working tree's schema, written into that working tree. */
 	Schema.Struct({ op: Schema.Literal('generate') }),
-	Schema.Struct({ op: Schema.Literal('migrate'), checks: Schema.optionalKey(Schema.Array(nonempty)) }),
+	Schema.Struct({
+		op: Schema.Literal('migrate'),
+		checks: Schema.optionalKey(Schema.Array(nonempty))
+	}),
 	Schema.Struct({
 		op: Schema.Literal('preview'),
 		/** The explicit change; absent uses the viewer's selected change. */
@@ -392,12 +395,7 @@ type StudioEntry = { name: string; path: string; href?: string };
  * whole projection closed, so the pane never links into files that are gone.
  */
 export type StudioView = Omit<StudioState, 'manifest'> & {
-	sections:
-		| ({ readonly [s in Section]: readonly StudioEntry[] } & {
-				/** Empty compatibility section required by already released shell decoders. */
-				readonly remotes?: readonly StudioEntry[];
-		  })
-		| null;
+	sections: { readonly [s in Section]: readonly StudioEntry[] } | null;
 	stale?: true;
 };
 
@@ -408,15 +406,13 @@ export function studioView({ manifest: m, ...rest }: StudioState): StudioView {
 			.sort()
 			.map((name) => ({ name, path: path(name) }));
 	const sections = {
-		// A workspace retains its bundled shell after an engine upgrade. Older shells require
-		// this key even though integrations no longer appear as Studio declarations.
-		remotes: [],
 		models: at(m.models, (n) => `src/data/model/${n}/+model.ts`),
-		apps: at(m.apps, (n) => `src/app/${n}/+app.ts`).map((e) => ({ ...e, href: href(e.name) })),
-		kiosks: at(m.kiosks, (n) => `src/kiosk/${n}/+kiosk.ts`).map((e) => ({
-			...e,
-			href: kioskHref(e.name)
-		})),
+		apps: at(m.apps, (n) => `src/app/${n}/+app.ts`)
+			.filter(({ name }) => m.apps[name]?.shell !== 'kiosk')
+			.map((e) => ({ ...e, href: href(e.name) })),
+		kiosks: at(m.apps, (n) => `src/app/${n}/+app.ts`)
+			.filter(({ name }) => m.apps[name]?.shell === 'kiosk')
+			.map((e) => ({ ...e, href: kioskHref(e.name) })),
 		policies: at(m.policies, (n) => `src/access_control/policy/+${n}.policy.ts`),
 		automations: at(m.automations, (n) => `src/automation/+${n}.automation.ts`),
 		secrets: at(m.workspace.secrets, () => 'src/+secrets.ts')

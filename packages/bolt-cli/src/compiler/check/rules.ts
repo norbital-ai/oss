@@ -11,6 +11,7 @@ import {
 	FieldsSchema,
 	layerModels,
 	scopeObject,
+	parseCron,
 	parseRate,
 	DRIVERS,
 	SYSTEM
@@ -39,33 +40,6 @@ const PRECISION: Readonly<Record<string, readonly string[]>> = {
 	instant: [...DATE_UNITS, 'hour', 'minute'],
 	time: ['hour', 'minute']
 };
-const MACROS = ['@yearly', '@annually', '@monthly', '@weekly', '@daily', '@hourly'];
-const RANGES = [
-	[0, 59],
-	[0, 23],
-	[1, 31],
-	[1, 12],
-	[0, 7]
-] as const;
-/** Five fields (minute hour day month weekday) of `*`, numbers, ranges, lists and steps, or a macro. ponytail: no month or day names. */
-export function cronValid(s: string): boolean {
-	if (MACROS.includes(s)) return true;
-	const fields = s.trim().split(/\s+/);
-	return (
-		fields.length === 5 &&
-		fields.every((field, i) =>
-			field.split(',').every((part) => {
-				const [range = '', step] = part.split('/');
-				if (step !== undefined && !/^[1-9]\d*$/.test(step)) return false;
-				if (range === '*') return true;
-				const [lo, hi] = RANGES[i]!,
-					[a = '', b] = range.split('-');
-				const n = (x: string) => /^\d+$/.test(x) && Number(x) >= lo && Number(x) <= hi;
-				return n(a) && (b === undefined || (n(b) && Number(a) <= Number(b)));
-			})
-		)
-	);
-}
 
 /** The read grants a model grant holds, by output: `read` is `default`'s, `outputs` the named ones'. */
 const grantedOutputs = (
@@ -77,7 +51,7 @@ const grantedOutputs = (
 /** The layer map output `output` of `c` declares (`undefined`: no such output). */
 const outputLayers = (m: EngineManifest, c: string, output: string) => {
 	const spec = m.exposures[c] ?? SYSTEM.exposures[c];
-	return output === 'default' ? spec?.read : spec?.outputs?.[output];
+	return spec?.outputs[output];
 };
 /** The root fields output `output` of `c` lists; `undefined`: every field (`'all'`) or no such output. */
 const outputFields = (
@@ -335,7 +309,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 		}
 		// the search reads each linked row's own search text, and through its links theirs: every link on the way is a
 		// layer the model's read declares, read under its policies
-		const read = m.exposures[model]?.read;
+		const read = m.exposures[model]?.outputs.default;
 		const undeclared = (at: string, of: string, seen: readonly string[]): string[] =>
 			(m.models[of]?.search?.text ?? []).flatMap((f) => {
 				const rel = m.relationships[`${of}.${f}`];
@@ -390,7 +364,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 /**
  * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layerModels`); a layer names
  * fields its model has, a write layer only writable columns and never the FK that ties its rows to the layer above
- * (the engine sets it); `filled` stays within `create.columns`. An output is never named `default`. A policy grants
+ * (the engine sets it); `filled` stays within `create.columns`. A policy grants
  * outputs its model declares and filters only their paths, and it grants a write verb only beside the model's own.
  */
 function layerRules({ m, at }: RuleContext): void {
@@ -445,20 +419,13 @@ function layerRules({ m, at }: RuleContext): void {
 						'model/layer',
 						'model',
 						model,
-						`${where}: '${f}' is no ${where === 'read' ? 'field' : 'writable column'} of ${path} (${models[path]})`
+						`${where}: '${f}' is no ${where.startsWith('outputs.') ? 'field' : 'writable column'} of ${path} (${models[path]})`
 					);
 		};
-		for (const read of [c.read, ...Object.values(c.outputs ?? {})])
+		for (const [output, read] of Object.entries(c.outputs))
 			for (const [path, layer] of Object.entries(read))
 				if (models[path] !== undefined && layer.fields !== 'all')
-					unknown('read', path, layer.fields, fieldsOf(models[path]));
-		if (Object.hasOwn(c.outputs ?? {}, 'default'))
-			at(
-				'model/layer',
-				'model',
-				model,
-				"outputs: 'default' is the model's read; name another output"
-			);
+					unknown(`outputs.${output}`, path, layer.fields, fieldsOf(models[path]));
 		for (const [verb, map] of [
 			['create', c.create?.columns],
 			['update', c.update?.columns]
@@ -551,13 +518,6 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 		const input = Schema.decodeUnknownResult(FieldsSchema)(a.input ?? {});
 		if (Result.isFailure(input))
 			at('automation/input', 'automation', name, `input: ${input.failure.message}`);
-		if (a.limit !== undefined && !validRate(a.limit))
-			at(
-				'automation/limit',
-				'automation',
-				name,
-				`limit: '${a.limit}' is not a positive count per window`
-			);
 		// a run holds exactly its declared policies: at least one, each declared
 		const policies: readonly unknown[] = Array.isArray(a.policies) ? a.policies : [];
 		if (policies.length === 0)
@@ -575,38 +535,18 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 					name,
 					`policies: there is no policy '${String(p)}'`
 				);
-		const delegated = new Set<string>();
-		for (const declaration of a.delegations ?? []) {
-			const dot = declaration.verb.lastIndexOf('.'),
-				model = declaration.verb.slice(0, dot),
-				verb = declaration.verb.slice(dot + 1);
-			const grant = m.policies[declaration.policy]?.grants[model];
-			const key = declaration.verb + '\0' + declaration.policy;
-			if (
-				!isOp(verb) ||
-				m.exposures[model] === undefined ||
-				grant === undefined ||
-				grant[verb] === undefined ||
-				delegated.has(key)
-			)
-				at(
-					'automation/delegation',
-					'automation',
-					name,
-					'Delegation requires one unique existing policy and its exact native target verb grant.'
-				);
-			delegated.add(key);
-		}
 		if (!bodies.automations.includes(name))
 			at(
 				'automation/no-body',
 				'automation',
 				name,
-				`declare its run body inline: automation('${name}', { …, run: function* (input, ctx) { … } })`
+				'declare its run body inline: automation({ …, run: function* (input, ctx) { … } })'
 			);
-		for (const on of list(a.on)) {
-			if ('cron' in on && typeof on.cron === 'string' && !cronValid(on.cron))
-				at('automation/cron', 'automation', name, `'${on.cron}' is not 5 cron fields or a macro`);
+		for (const on of a.on ?? []) {
+			if (!('cron' in on)) continue;
+			const parsed = parseCron(on.cron, on.tz ?? m.workspace.tz);
+			if (Result.isFailure(parsed))
+				at('automation/cron', 'automation', name, `'${on.cron}': ${parsed.failure.message}`);
 		}
 	}
 }
@@ -617,13 +557,6 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 		const aud = spec.audience;
 		if (Predicate.isObject(aud) && Array.isArray(aud.public))
 			for (const p of aud.public) publicOf.set(p, [...(publicOf.get(p) ?? []), app]);
-	}
-	// a kiosk open with no authentication runs its requests as its assigned policies, so those count as
-	// public for per-ip limits just like an app's visitor policies.
-	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {})) {
-		if (spec.auth !== 'none') continue;
-		for (const p of spec.policies ?? [])
-			publicOf.set(p, [...(publicOf.get(p) ?? []), `kiosk:${kiosk}`]);
 	}
 	for (const [p, spec] of Object.entries(m.policies)) {
 		for (const [key, v] of Object.entries(spec.limits ?? {})) {
@@ -651,6 +584,7 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 
 function visitorRules({ m, at }: RuleContext): void {
 	for (const [app, spec] of Object.entries(m.apps)) {
+		if (spec.shell === 'kiosk') continue;
 		const aud = spec.audience;
 		const publicPolicies: unknown = typeof aud === 'object' ? aud.public : undefined;
 		if (!strings(publicPolicies)) continue;
@@ -674,22 +608,18 @@ function visitorRules({ m, at }: RuleContext): void {
 }
 
 function kioskRules({ m, bodies, at }: RuleContext): void {
-	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {})) {
-		const s = spec;
-		const policies = strings(spec.policies) ? spec.policies : [];
+	for (const [kiosk, s] of Object.entries(m.apps)) {
+		if (s.shell !== 'kiosk') continue;
+		const isPublic = typeof s.audience === 'object';
+		const declared = isPublic ? s.audience.public : s.policies;
+		const policies = strings(declared) ? declared : [];
+		if (policies.length === 0)
+			at('kiosk/policy', 'app', kiosk, 'a kiosk declares the policies it runs under');
 		for (const p of policies)
 			if (m.policies[p] === undefined)
-				at('kiosk/policy', 'kiosk', kiosk, `policies: there is no policy '${p}'`);
-		if (
-			s.auth !== undefined &&
-			s.auth !== 'members' &&
-			s.auth !== 'external' &&
-			s.auth !== 'all' &&
-			s.auth !== 'none'
-		)
-			at('kiosk/auth', 'kiosk', kiosk, `auth is 'members', 'external', 'all' or 'none'`);
+				at('kiosk/policy', 'app', kiosk, `policies: there is no policy '${p}'`);
 		if (Object.keys(s.pages ?? {}).length === 0)
-			at('kiosk/pages', 'kiosk', kiosk, 'a kiosk has at least one page');
+			at('kiosk/pages', 'app', kiosk, 'a kiosk has at least one page');
 		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every output it reads
 		// lists its fields (a narrow named output; its history shows the same), every create and update lists its
 		// columns, and nothing deletes.
@@ -711,26 +641,26 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes`);
 			}
 		}
-		// auth 'external': every signed-in external opens it, so its policies are their portal authority and never
+		// audience 'external': every signed-in external opens it, so its policies are their portal authority and never
 		// open apps, kiosks or agent tools beyond it
-		if (s.auth === 'external')
+		if (s.audience === 'external')
 			for (const p of policies)
 				if (m.policies[p]?.capabilities !== undefined)
 					at(
 						'access/kiosk-grant',
 						'policy',
 						p,
-						`kiosk '${kiosk}' (auth 'external'): a portal policy holds no capabilities`
+						`kiosk '${kiosk}' (audience 'external'): a portal policy holds no capabilities`
 					);
-		// auth 'none': the kiosk is open with no requestor policy, so its assigned policies run
+		// A public kiosk is open with no requestor policy, so its assigned policies run
 		// envoy-style inside — they hold the same visitor shape as a public app's policies.
-		if (s.auth === 'none') {
+		if (isPublic) {
 			const held = policies.flatMap((p: string) =>
 				m.policies[p] === undefined ? [] : [[p, m.policies[p]] as const]
 			);
 			visitorShape(m, held, {
 				bad: (p, message) =>
-					at('access/kiosk-grant', 'policy', p, `kiosk '${kiosk}' (auth 'none'): ${message}`),
+					at('access/kiosk-grant', 'policy', p, `kiosk '${kiosk}' (public audience): ${message}`),
 				ref: (p, message) => at('access/kiosk-ref', 'policy', p, message),
 				title: 'public kiosk',
 				forbidden: 'public kiosk policy',
@@ -822,34 +752,15 @@ function syncRules({ m, at }: RuleContext): void {
 
 const ORIGIN = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*(:\d{1,5})?$/i;
 function embedRules({ m, at }: RuleContext): void {
-	const origins = (
-		code: string,
-		role: string,
-		name: string,
-		list: readonly string[] | undefined
-	) => {
-		for (const o of list ?? [])
-			if (!ORIGIN.test(o))
-				at(
-					code,
-					role,
-					name,
-					`embed: '${o}' is an origin, https://host[:port] (no path, no wildcard)`
-				);
-	};
-	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {}))
-		origins('kiosk/embed', 'kiosk', kiosk, spec.embed);
 	for (const [app, spec] of Object.entries(m.apps))
-		for (const [page, p] of Object.entries(spec.pages ?? {})) {
-			origins('app/embed', 'app', app, p.embed);
-			if (p.embed !== undefined && p.portal !== true)
+		for (const origin of spec.embed ?? [])
+			if (!ORIGIN.test(origin))
 				at(
 					'app/embed',
 					'app',
 					app,
-					`page '${page}': only a portal page (portal: true) may be embedded`
+					`embed: '${origin}' is an origin, https://host[:port] (no path, no wildcard)`
 				);
-		}
 }
 
 const RULES = [
@@ -905,8 +816,7 @@ function visitorShape(
 	);
 	for (const [p, s] of policies) {
 		const bad = (message: string) => options.bad(p, message);
-		for (const k of ['automations', 'capabilities'] as const)
-			if (s[k] !== undefined) bad(`a ${options.forbidden} holds no ${k}`);
+		if (s.capabilities !== undefined) bad(`a ${options.forbidden} holds no capabilities`);
 		for (const [c, g] of Object.entries(s.grants)) {
 			if (c.startsWith('sys_')) {
 				bad(`no grant on ${c}`);

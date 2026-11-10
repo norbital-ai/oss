@@ -1,6 +1,7 @@
 import { Effect, Schema } from 'effect';
 import type { Kind, OutputKind } from '@norbital-ai/std/kind';
 import type { Json } from '../decl/values.ts';
+import type { WireRead } from './wire.ts';
 import type { ShellBoot } from '../shell/nav.ts';
 
 const optionalString = Schema.optionalKey(Schema.String);
@@ -272,6 +273,7 @@ export const PublicBoot = Schema.Struct({
 		currency: optionalString
 	}),
 	actor: Schema.Json,
+	location: Schema.Struct({ pathname: Schema.String, search: Schema.String }),
 	base: Schema.String,
 	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, siteKey: optionalString })),
 	kiosk: Schema.NullOr(Schema.String),
@@ -283,13 +285,18 @@ export const PublicBoot = Schema.Struct({
 });
 export interface PublicBoot extends Schema.Schema.Type<typeof PublicBoot> {}
 
-/** The same validated envelope is written by SSR and read before browser hydration. */
+/** A page query and its first streamed registration use the same request key. */
+export const publicReadKey = (read: WireRead) => JSON.stringify(read);
+export const PublicReads = Schema.Record(Schema.String, Schema.Json);
+export type PublicReads = typeof PublicReads.Type;
+
+/** The request-scoped boot and initial reads shared by SSR and browser hydration. */
 export const PublicHydration = Schema.Struct({
 	route: Schema.String,
 	release: Schema.String,
 	locale: Schema.String,
 	boot: PublicBoot,
-	data: Schema.Json
+	reads: PublicReads
 });
 export interface PublicHydration extends Schema.Schema.Type<typeof PublicHydration> {}
 
@@ -300,6 +307,7 @@ export const toPublicBoot = (
 	boot: ShellBoot,
 	options: {
 		readonly base: string;
+		readonly location: PublicBoot['location'];
 		readonly kiosk: string | null;
 		readonly messages?: Readonly<Record<string, string>>;
 		readonly describe?: boolean;
@@ -316,6 +324,7 @@ export const toPublicBoot = (
 			...(options.currency === undefined ? {} : { currency: options.currency })
 		},
 		actor: boot.actor,
+		location: options.location,
 		base: options.base,
 		visitor: boot.visitor,
 		kiosk: options.kiosk,
@@ -333,10 +342,9 @@ export class PublicHydrationFailure extends Schema.TaggedError<PublicHydrationFa
 	}
 ) {}
 
-/** Route, release and locale must agree before any data or tenant component reaches hydration. */
-export const decodePublicHydration = <D>(
+/** Route, release and locale must agree before hydration. */
+export const decodePublicHydration = (
 	text: string,
-	codec: Schema.Codec<D, Json>,
 	expected: { readonly route: string; readonly release: string }
 ) =>
 	Effect.gen(function* () {
@@ -351,6 +359,5 @@ export const decodePublicHydration = <D>(
 			return yield* new PublicHydrationFailure({
 				reason: 'Public page route, release or locale changed before hydration.'
 			});
-		const data = yield* Schema.decodeUnknownEffect(codec)(envelope.data);
-		return { data, boot: envelope.boot };
+		return { reads: envelope.reads, boot: envelope.boot };
 	});

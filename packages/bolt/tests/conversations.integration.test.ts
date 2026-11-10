@@ -59,7 +59,7 @@ const manifest = Result.getOrThrow(
 		},
 		exposures: {
 			sent_emails: {
-				read: { sent_emails: { fields: 'all' } },
+				outputs: { default: { sent_emails: { fields: 'all' } } },
 				create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
 				syncs: { mail: { with: 'customer_notices', read: true, write: true } },
 				update: {
@@ -76,7 +76,7 @@ const manifest = Result.getOrThrow(
 				}
 			},
 			supplier_mail: {
-				read: { supplier_mail: { fields: 'all' } },
+				outputs: { default: { supplier_mail: { fields: 'all' } } },
 				syncs: { inbox: { with: 'mail_import', read: true } }
 			}
 		},
@@ -111,7 +111,6 @@ const manifest = Result.getOrThrow(
 			direct: ['staff']
 		},
 		automations: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

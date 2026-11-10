@@ -1,4 +1,4 @@
-// The one wire (§5.7, rules 32, 64–67): paths, headers, bodies and live frames shared by the host handler and `$bolt`.
+// The one wire (§5.7, rules 32, 64–67): paths, headers, bodies and live frames shared by the host handler and the page client.
 // Pure data and pure functions; the bodies' types are their Schemas' (`schema.ts`).
 import type { ActOutcome, EngineActor } from '../engine/contracts.ts';
 import { BoltError, CODE } from './errors.ts';

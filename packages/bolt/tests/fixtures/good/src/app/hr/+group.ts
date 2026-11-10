@@ -1,3 +1,3 @@
 import { group } from '../../../../../../src/index.ts';
 
-export default group('hr', { label: 'HR', icon: 'people', defaultChild: 'kiosk' });
+export default group({ title: 'HR', icon: 'people', default_child: 'kiosk' });

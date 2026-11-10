@@ -18,7 +18,7 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['title'] } } }
+			notes: { outputs: { default: { notes: { fields: 'all' } } }, create: { columns: { notes: ['title'] } } }
 		},
 		integrations: {},
 		policies: {
@@ -44,7 +44,6 @@ const manifest = Result.getOrThrow(
 		},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {
 			site: {
@@ -55,7 +54,6 @@ const manifest = Result.getOrThrow(
 				pages: { home: { title: 'Home' } }
 			}
 		},
-		kiosks: {},
 		customFields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
@@ -293,7 +291,7 @@ describe('RateWindows (rule 72)', () => {
 	});
 });
 
-// Automations (rule 38): only a manual start counts, against the automation's own `limit` per starter. Cron and
+// Automations (rule 38): only a manual start counts, against the per-automation quota for the starter. Cron and
 // model effect runs, and the acts any run's body performs, are never limited.
 const runs = Result.getOrThrow(
 	decodeProjectedManifest({
@@ -305,36 +303,33 @@ const runs = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			notes: {
-				read: { notes: { fields: 'all' } },
+				outputs: { default: { notes: { fields: 'all' } } },
 				create: { columns: { notes: ['title'] } },
 				effect: { created: true }
 			},
-			logs: { read: { logs: { fields: 'all' } }, create: { columns: { logs: ['title'] } } }
+			logs: { outputs: { default: { logs: { fields: 'all' } } }, create: { columns: { logs: ['title'] } } }
 		},
 		integrations: {},
 		policies: {
 			worker: {
 				description: 'Writes notes and logs, starts the manual automation',
 				grants: { notes: { read: true, create: true }, logs: { read: true, create: true } },
-				automations: ['manual'],
+				capabilities: { automations: ['manual'] },
 				limits: { act: '1000/min' }
 			}
 		},
 		teams: { Workers: { name: 'Workers', policies: ['worker'] } },
 		automations: {
-			manual: { description: 'Logs three lines', policies: ['worker'], limit: '2/min' },
+			manual: { description: 'Logs three lines', policies: ['worker'] },
 			tick: {
 				description: 'Logs three lines',
-				on: { cron: '* * * * *' },
-				policies: ['worker'],
-				limit: '1/h'
+				on: [{ cron: '* * * * *' }],
+				policies: ['worker']
 			}
 		},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		kiosks: {},
 		customFields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
@@ -354,7 +349,7 @@ const automations = Effect.gen(function* () {
 
 layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 	it.effect(
-		'a manual start beyond its limit is a 429 with Retry-After; cron and effect runs and run bodies are unaffected',
+		'a manual start beyond the quota is a 429 with Retry-After; cron and effect runs and run bodies are unaffected',
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
@@ -365,13 +360,9 @@ layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 						id: uuidv7(Date.parse(t.clock.now())),
 						input: {}
 					});
-				const answers = [yield* start(), yield* start(), yield* start()];
-				expect(
-					statuses(answers)
-						.slice(0, 2)
-						.every((s) => s < 400)
-				).toBe(true);
-				expect(answers[2]).toEqual({
+				const answers = yield* Effect.forEach(Array.from({ length: 30 }), start);
+				expect(statuses(answers).every((status) => status < 400)).toBe(true);
+				expect(yield* start()).toEqual({
 					status: 429,
 					body: {
 						outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
@@ -379,7 +370,7 @@ layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 					},
 					retryAfter: '30'
 				});
-				// two notes run the created effect; the cron fires `tick` (`limit: 1/h`, never applied to it) each minute
+				// Two notes run the created effect. The cron fires tick each minute.
 				expect((yield* act(cookie, 'notes.create', [{ title: 'a' }, { title: 'b' }])).status).toBe(
 					200
 				);
@@ -393,8 +384,8 @@ layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 						text: `SELECT count(*)::int FROM logs WHERE title LIKE $1`,
 						params: [`${prefix}%`]
 					});
-				// every body act committed: two manual runs, at least two cron ticks, the effect run
-				expect(yield* count('m')).toBe(6);
+				// Every body act committed, including the cron ticks and the effect.
+				expect(yield* count('m')).toBe(90);
 				expect(yield* count('t')).toBeGreaterThanOrEqual(6);
 				expect(yield* count('r')).toBeGreaterThanOrEqual(3);
 			})

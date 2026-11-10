@@ -302,8 +302,7 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 				delegation: Schema.Literals(['enabled', 'disabled']),
 				triage: Schema.Boolean,
 				dm: Schema.Literals(['union', 'envoy']),
-				active: Schema.Boolean,
-				created: Schema.Boolean
+				active: Schema.Boolean
 			})
 		)
 	),
@@ -504,7 +503,6 @@ export const StudioViewAnswer: Schema.Decoder<StudioView> = Schema.Struct({
 			kiosks: StudioEntryAnswer,
 			policies: StudioEntryAnswer,
 			automations: StudioEntryAnswer,
-			remotes: Schema.optionalKey(StudioEntryAnswer),
 			secrets: StudioEntryAnswer
 		})
 	),

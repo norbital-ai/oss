@@ -240,7 +240,7 @@ export const PgliteDb = {
 		let named = runners.get(pg.parsers);
 		if (named === undefined)
 			runners.set(pg.parsers, (named = namedRunner(pg.execProtocol.bind(pg), pg.parsers)));
-		const exclusive = (batch: DbBatch): Effect.Effect<readonly Rows[], DbError> =>
+		const exclusive = (batch: DbBatch, readOnly = false): Effect.Effect<readonly Rows[], DbError> =>
 			Effect.try({
 				try: () => {
 					const prepared = copiedBatch(batch);
@@ -266,6 +266,11 @@ export const PgliteDb = {
 								.then(() =>
 									pg.transaction(async (tx) => {
 										check();
+										if (readOnly)
+											await run(tx, {
+												text: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY',
+												params: []
+											});
 										if (prepared.setup !== '') await run(tx, { text: prepared.setup, params: [] });
 										const results: NativeRows[] = [];
 										for (const statement of prepared.statements) {
@@ -323,19 +328,12 @@ export const PgliteDb = {
 				)
 			);
 		return TenantDb.typed({
-			read: (statements) => exclusive({ statements }),
+			read: (statements) => exclusive({ statements }, true),
 			write: (statement, lock) =>
 				exclusive({ statements: [statement], ...(lock === undefined ? {} : { lock }) }).pipe(
 					Effect.map((rows) => rows[0] ?? { rows: [], affected: 0 })
 				),
-			transaction: exclusive,
-			session: () =>
-				Effect.fail(
-					DbError.make(
-						'0A000',
-						'interactive transactions require a PostgreSQL 17+ host; in-process PGlite cannot enforce the hard transaction deadline'
-					)
-				)
+			transaction: exclusive
 		});
 	},
 	/** The open database as a dump to load (`PgliteSource`), checkpointed first so loading it replays no WAL. */

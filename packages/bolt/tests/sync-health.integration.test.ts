@@ -25,7 +25,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		contacts: {
-			read: { contacts: { fields: 'all' } },
+			outputs: { default: { contacts: { fields: 'all' } } },
 			syncs: { crm: { with: 'crm', read: true, write: true } }
 		}
 	},
@@ -36,7 +36,7 @@ const manifest: EngineManifest = {
 		self: {
 			description: 'Manages their own integration instances',
 			grants: {
-				sys_integration: { read: true, update: { check: true } }
+				sys_integration: { read: true, update: { verdict: true } }
 			}
 		}
 	},
@@ -44,7 +44,7 @@ const manifest: EngineManifest = {
 };
 /** `self` may update an instance it owns: the update `check`, dry-run on the instance before health or replay. */
 const guest = program(`export default { policy: { self: { grants: { sys_integration: { update: {
-	check: function* (changes, ctx) { return changes.every(({ before }) => before.owner === ctx.actor.id) ? ctx.allow() : ctx.deny('Only your own instances.'); }
+	verdict: function* (changes, ctx) { return changes.every(({ before }) => before.owner === ctx.actor.id) ? ctx.allow() : yield* ctx.refuse('Only your own instances.'); }
 } } } } } };`);
 
 const setup = Effect.gen(function* () {

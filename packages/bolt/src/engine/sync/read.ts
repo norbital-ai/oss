@@ -759,17 +759,17 @@ export function makeRead(e: SyncEngine) {
 					.filter((row) => row.sync === s.name)
 					.map((row): [string, StoredRow] => [row.partition, row])
 			);
-			const work = session(
-				s,
-				inst,
-				runId,
-				yield* e.authority(
-					{ actor: syncActor(s, inst.id, runId), policies: [], admin: true },
-					`sync:${s.name}:${inst.id}`
-				)
-			);
-			let partition = '';
+			let partition: string | undefined;
 			yield* Effect.gen(function* () {
+				const work = session(
+					s,
+					inst,
+					runId,
+					yield* e.authority(
+						{ actor: syncActor(s, inst.id, runId), policies: [], admin: true },
+						`sync:${s.name}:${inst.id}`
+					)
+				);
 				const partitions = partitionsOf(s, inst);
 				// a partition the configuration dropped releases its cursor and id map; its rows stay as they are
 				const dropped = [...states.keys()].filter((p) => !partitions.includes(p));
@@ -802,7 +802,7 @@ export function makeRead(e: SyncEngine) {
 				Effect.catch((error) =>
 					Effect.gen(function* () {
 						failures.push(error);
-						const prior = states.get(partition),
+						const prior = partition === undefined ? undefined : states.get(partition),
 							slots = Math.max(1, (prior?.health?.failures ?? 0) + (start.attempts === 1 ? 1 : 0));
 						const now = yield* Clock.currentTimeMillis;
 						const failed: Health = {
@@ -816,7 +816,9 @@ export function makeRead(e: SyncEngine) {
 									: restEnd(slots, now)
 							)
 						};
-						healths.set(`${s.name}\u0000${partition}`, failed);
+						healths.set(`${s.name}\u0000${partition ?? ''}`, failed);
+						// A failure before reading a partition belongs to the connection health.
+						if (partition === undefined) return;
 						yield* db
 							.write({
 								text: `INSERT INTO sys_sync (id, sync, instance, partition, health, digest, cycle, version) VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, $5, $6, 1)

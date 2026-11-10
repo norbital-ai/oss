@@ -3,6 +3,7 @@
 import type { Decimal } from '@norbital-ai/std/decimal';
 import type { Instant, PlainDate } from '@norbital-ai/std/date';
 export type { Json } from '@norbital-ai/std/wire';
+export type { Duration, Offset } from '@norbital-ai/std/date';
 export type { Decimal, Instant, PlainDate };
 export declare const brand: unique symbol;
 
@@ -30,10 +31,6 @@ export type FileRef = {
 	readonly size?: number;
 };
 
-/** A duration literal: whole seconds, minutes, hours or days (`'30s'`, `'15min'`, `'2h'`, `'7d'`). */
-export type Duration = `${bigint}${'s' | 'min' | 'h' | 'd'}`;
-/** A signed duration from now or today (`'-7d'`, `'+1h'`); `''` is none. */
-export type Offset = `${'+' | '-'}${Duration}` | '';
 /** A `point` field's value: latitude and longitude in degrees. */
 export type Point = { readonly lat: number; readonly lng: number };
 /** A geographic area a `point` filter tests: a polygon, or a bounding box of two corners. */

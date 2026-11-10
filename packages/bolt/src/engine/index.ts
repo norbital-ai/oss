@@ -10,13 +10,7 @@ export * from './ports.ts';
 export { Port, type PortFailure } from './port.ts';
 export * from './host.ts';
 export { Secrets, type SecretsCodec, type SecretsShape } from './secrets.ts';
-export {
-	TenantDb,
-	type DbBatch,
-	type DbSession,
-	type TenantDbShape,
-	type RawDb
-} from './db/tenant-db.ts';
+export { TenantDb, type DbBatch, type TenantDbShape, type RawDb } from './db/tenant-db.ts';
 export * from './manifest.ts';
 export type { Json } from '../decl/values.ts';
 // ── exports: query ──
@@ -117,7 +111,6 @@ export {
 	migrationObjects,
 	migrationSchema,
 	readMigrations,
-	statusMigrations,
 	type MigrationBundle
 } from './schema/migrations.ts';
 export { MigrationImpact, impactLines, impactText } from '../protocol/migration-impact.ts';
@@ -337,7 +330,6 @@ export type {
 	GeoHit,
 	IngestIndex,
 	IngestOptions,
-	SpeechFormat,
 	Transcript,
 	TranscriptSegment
 } from '../decl/runtime/facilities.ts';

@@ -43,7 +43,6 @@ import {
 	Keys,
 	Logs,
 	Mcp,
-	Speech,
 	Transport,
 	WebRead,
 	Browser,
@@ -358,7 +357,7 @@ export const readLogRows = (rows: readonly LogRow[], x: LogQuery): readonly LogR
 		? kept.toReversed().slice(0, limit)
 		: kept.slice(0, limit).toReversed();
 };
-/** Host port service keys a test may replace with native Layers, including file storage, conversion, speech, web, geography, transport, AI, outbound HTTP, images and MCP. */
+/** Host port service keys a test may replace with native Layers, including file storage, conversion, web, geography, transport, AI, outbound HTTP, images and MCP. */
 export type TestPorts =
 	| Logs
 	| Files
@@ -366,7 +365,6 @@ export type TestPorts =
 	| Images
 	| Mcp
 	| Convert
-	| Speech
 	| WebRead
 	| Browser
 	| Geo
@@ -420,7 +418,7 @@ export type Kit = {
 	/** The verified artifact hash, or the explicit in-memory test release. */
 	readonly release: string;
 	readonly db: TenantDbShape;
-	/** A write callback's native stored reader (`ctx.db.query`), unscoped, in this workspace. */
+	/** A write callback's native stored reader (`ctx.query`), unscoped, in this workspace. */
 	readonly storedQuery: WorkspaceQuery['query'];
 	/** An automation's native batch writer, under this caller's authority. */
 	bodyActs(who: Holder | Authority): Pick<Act, 'many' | 'checked'>;
@@ -469,7 +467,6 @@ export type WorkspaceServices =
 	| BoltHost
 	| Files
 	| Convert
-	| Speech
 	| WebRead
 	| Browser
 	| Geo
@@ -1293,8 +1290,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						Effect.andThen(flush, crashBoundary(batch.statements)).pipe(
 							Effect.andThen(Effect.sync(() => count.writes++)),
 							Effect.andThen(inner.transaction(batch))
-						),
-					session: () => Effect.andThen(flush, inner.session())
+						)
 				});
 				let now = options.now ?? '2026-09-25T10:00:00.000Z';
 				// the host's cron clock, stepped by `runDue`: a slot at or before this instant has had its turn
@@ -1498,8 +1494,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							models: [],
 							infer: () => scripted('ai')
 						},
-						embed: { embed: () => scripted('ai.embed') },
-						speech: off
+						embed: { embed: () => scripted('ai.embed') }
 					},
 					ports: {
 						webhooks: { publicUrl },

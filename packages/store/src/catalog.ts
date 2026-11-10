@@ -189,10 +189,9 @@ export type CatalogTable = {
 export type CatalogSchema = { readonly tables: { readonly [table: string]: CatalogTable } };
 /** What the catalog reads of a model: its read layers by path (the root's key is its name). */
 type LayerFields = { readonly [path: string]: { readonly fields: 'all' | readonly string[] } };
-/** A model's read outputs: `read` is its `default` output, `outputs` its named ones, each a layer map. */
+/** A model's read outputs, each a layer map with the model name at its root. */
 export type CatalogExposure = {
-	readonly read: LayerFields;
-	readonly outputs?: { readonly [output: string]: LayerFields };
+	readonly outputs: { readonly default: LayerFields; readonly [output: string]: LayerFields };
 };
 /** The output a read names when it names none. */
 export const DEFAULT_OUTPUT = 'default';
@@ -402,11 +401,12 @@ export function catalogOf(
 	}
 	for (const [root, spec] of Object.entries(exposures)) {
 		if (!byName.has(root)) continue;
-		const declared = levels(byName, root, spec.read);
+		const { default: defaultOutput, ...named } = spec.outputs;
+		const declared = levels(byName, root, defaultOutput);
 		if (declared === undefined) continue;
 		exposed.set(root, declared.root);
 		for (const [path, info] of declared.layers) layers.set(path, info);
-		for (const [name, read] of Object.entries(spec.outputs ?? {})) {
+		for (const [name, read] of Object.entries(named)) {
 			const output = levels(byName, root, read);
 			if (output !== undefined)
 				outputs.set(root, (outputs.get(root) ?? new Map()).set(name, output));

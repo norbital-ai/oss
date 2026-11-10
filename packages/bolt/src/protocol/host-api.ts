@@ -81,7 +81,7 @@ import type {
 import type { Facilities } from '../facilities/index.ts';
 import { isOff, off, type Off } from '../facilities/off.ts';
 import { unmet } from '../facilities/needs.ts';
-import { TenantDb, type DbBatch, type RawDb, type TenantDbShape } from '../engine/db/tenant-db.ts';
+import { TenantDb, type DbBatch, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { auditFromAbi } from '../engine/audit.ts';
 import type { AuditPort } from './audit.ts';
 import { copiedBatch, dbError } from '../engine/db/wire.ts';
@@ -105,7 +105,6 @@ import {
 	Keys,
 	Logs,
 	Mcp,
-	Speech,
 	Transport,
 	WebRead,
 	Browser,
@@ -164,7 +163,9 @@ export { MigrationImpact, impactLines } from './migration-impact.ts';
 import { IntegrationManager, integrationRoutes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
-export const HOST_API_VERSION = 16;
+export const HOST_API_VERSION = 17;
+export { CELL_ABI_VERSION } from './membrane.ts';
+export type { CellEnd, Kernel } from './cell.ts';
 
 // ── failures (D10a) ──
 /** A `BoltError` this release raised: an engine answer. `code` stays a string on the wire (the copies' code sets may differ). */
@@ -209,17 +210,10 @@ export type Release = {
  * The host owns the driver and its lifetime; rows are the adapters' JSON (`engine/db/wire.ts`).
  */
 export type { DbBatch } from '../engine/db/tenant-db.ts';
-/** The host retains this SQL-only lease until settlement; no application callback crosses HOST_API. */
-export type HostDbSession = {
-	readonly db: Omit<HostTenantDb, 'session'>;
-	commit(signal?: AbortSignal): Promise<void>;
-	rollback(signal?: AbortSignal): Promise<void>;
-};
 export type HostTenantDb = {
 	read(statements: readonly Sql[], signal?: AbortSignal): Promise<readonly Rows[]>;
 	write(statement: Sql, lock?: Lock, signal?: AbortSignal): Promise<Rows>;
 	transaction(batch: DbBatch, signal?: AbortSignal): Promise<readonly Rows[]>;
-	session(signal?: AbortSignal): Promise<HostDbSession>;
 };
 export type HostCredentials = {
 	readonly open: (instance: string) => Promise<{
@@ -542,10 +536,10 @@ const hosted = <A>(work: () => Promise<A>) =>
 					: BoltError.make('upstream', 'facility', String(error))
 	});
 /** The host executes SQL requests; application callbacks remain inside the engine's bounded guest controller. */
-const databaseMethods = (port: Omit<HostTenantDb, 'session'>): Omit<RawDb, 'session'> => {
+const database = (port: HostTenantDb): TenantDbShape => {
 	const attempt = <A>(work: (signal: AbortSignal) => Promise<A>) =>
 		Effect.tryPromise({ try: work, catch: dbError });
-	return {
+	return TenantDb.typed({
 		read: (statements) =>
 			Effect.try({ try: () => copiedBatch({ statements }).statements, catch: dbError }).pipe(
 				Effect.flatMap((prepared) => attempt((signal) => port.read(prepared, signal)))
@@ -564,27 +558,8 @@ const databaseMethods = (port: Omit<HostTenantDb, 'session'>): Omit<RawDb, 'sess
 			Effect.try({ try: () => copiedBatch(batch), catch: dbError }).pipe(
 				Effect.flatMap((prepared) => attempt((signal) => port.transaction(prepared, signal)))
 			)
-	};
-};
-const database = (port: HostTenantDb): TenantDbShape =>
-	TenantDb.typed({
-		...databaseMethods(port),
-		session: () =>
-			Effect.gen(function* () {
-				const session = yield* Effect.acquireRelease(
-					Effect.tryPromise({ try: (signal) => port.session(signal), catch: dbError }),
-					(lease) =>
-						Effect.tryPromise({ try: () => lease.rollback(), catch: dbError }).pipe(
-							Effect.catch(() => Effect.void)
-						)
-				);
-				return {
-					db: databaseMethods(session.db),
-					commit: Effect.tryPromise({ try: (signal) => session.commit(signal), catch: dbError }),
-					rollback: Effect.tryPromise({ try: (signal) => session.rollback(signal), catch: dbError })
-				};
-			})
 	});
+};
 /** This release's own diagnostics, in every runtime: one JSON event per line on stdout, for the host's collector. */
 const logging = Logger.layer([Logger.consoleJson]);
 /** Random bytes from the runtime's `crypto`; the digests are this release's own (a cell has no `crypto.subtle`). */
@@ -667,7 +642,6 @@ export const facilityLayers = (f: Facilities) =>
 		auditFromAbi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
 		Logs.fromAbi(f.logs.runtime),
 		Files.fromAbi(f.storage.files),
-		Speech.fromAbi(f.intelligence.speech),
 		Ai.fromAbi(f.intelligence),
 		Keys.fromAbi(f.keys),
 		Http.fromAbi(isOff(f.ports.outbound) ? off : f.ports.outbound.http),

@@ -40,7 +40,6 @@
 		Option,
 		Predicate,
 		Result,
-		Schedule,
 		Schema,
 		Stream
 	} from 'effect';
@@ -65,9 +64,9 @@
 		ReadonlyMarkdown,
 		Spinner,
 		StructuredData,
-		useKinds,
 		virtualList,
-		type CommandItem
+		type CommandItem,
+		type ModelExposure
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import type { Attachment } from '../../decl/runtime/integration.ts';
@@ -76,6 +75,7 @@
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
 	import type { ShellError } from '../api-types.ts';
 	import type { ShellApi } from '../api-types.ts';
+	import type { RunView } from '../../engine/runs/index.ts';
 	import type { StudioView } from '../studio/model.ts';
 	import type { LogRow } from '../../engine/contracts.ts';
 	import AgentChild from './AgentChild.svelte';
@@ -124,13 +124,15 @@
 		unconfigured = false,
 		admin = false,
 		envoys = {},
+		catalog = {},
+		zone,
 		nav = [],
 		entries = [],
 		onConversation,
 		storageKey
 	}: {
 		api: ShellApi;
-		bolt: Pick<ShellBolt, 'observe' | 'fileUrl'>;
+		bolt: Pick<ShellBolt, 'observe' | 'file_url' | 'query'>;
 		t: (key: string) => string;
 		request: AgentRequest;
 		onClose: () => void;
@@ -139,6 +141,8 @@
 		/** The same authorized apps offered by Find. */
 		nav?: readonly NavNode[];
 		entries?: readonly ManifestItem[];
+		catalog?: Readonly<Record<string, ModelExposure>>;
+		zone?: string;
 		/** Each envoy's display name (`ShellBoot.envoys`), for the picker's groups. */ envoys?: {
 			readonly [envoy: string]: string;
 		};
@@ -1366,30 +1370,36 @@
 			.map((w) => w.id)
 			.join(' ')
 	);
-	/** Each run's status, re-read every few seconds while the rail shows them (as the command center's Automations does). */
-	const runs = liveEdge(() =>
-		!rail || runIds === ''
-			? null
-			: Stream.fromEffectSchedule(
-					Effect.forEach(runIds.split(' '), (id) => Effect.option(api.run(id)), {
-						concurrency: 4
-					}).pipe(
-						Effect.map(
-							(views) =>
-								new Map(views.flatMap((v) => (Option.isSome(v) ? [[v.value.id, v.value]] : [])))
-						)
-					),
-					Schedule.spaced('3 seconds')
+	/** The rail follows the same live runs view as the command center. */
+	const runs = liveEdge(() => {
+		if (!rail || runIds === '') return null;
+		const streams = runIds.split(' ').map((id) =>
+			bolt
+				.observe<{ rows: readonly RunView[] }>({ read: { m: 'runs', a: [{ id, limit: 1 }] } })
+				.pipe(
+					Stream.map(({ rows }) => ({ id, view: rows[0] })),
+					Stream.catch(() => Stream.succeed({ id, view: undefined }))
 				)
-	);
+		);
+		return Stream.mergeAll(streams, { concurrency: 'unbounded' }).pipe(
+			Stream.scan(
+				() => new Map<string, RunView>(),
+				(current, { id, view }) => {
+					const next = new Map(current);
+					if (view === undefined) next.delete(id);
+					else next.set(id, view);
+					return next;
+				}
+			)
+		);
+	});
 	const stopRun = (id: string) => dispatch(api.stopRun(id).pipe(Effect.asVoid));
 	// Between steps show the whole run's elapsed time, not a claim about the current model wait. A steps group that already
 	// says it is working is that line: do not repeat it below.
 	const workingGroup = $derived(
 		status === 'running' &&
 			items.some(
-				(item, index) =>
-					'steps' in item && (index === items.length - 1 || item.steps.some(active))
+				(item, index) => 'steps' in item && (index === items.length - 1 || item.steps.some(active))
 			)
 	);
 	const quiet = $derived(
@@ -1537,9 +1547,8 @@
 		a.click();
 		URL.revokeObjectURL(a.href);
 	}
-	const kinds = useKinds();
 	/** A stored file's link (a made file's card, a workspace screenshot). */
-	const fileHref = (id: string) => bolt.fileUrl({ id });
+	const fileHref = (id: string) => bolt.file_url({ id });
 	// Preview and Session are independent panels, opened by their own header controls.
 	let previewing = $state(false),
 		seenPreview = $state<string | null>(null);
@@ -1623,13 +1632,13 @@
 			?.focus({ preventScroll: true });
 	}
 	function mentions(q: string) {
-		return recordMentions(kinds.catalog ?? {}, kinds.query ?? (() => Effect.succeed({})), q, t, {
+		return recordMentions(catalog, bolt.query, q, t, {
 			nav,
 			entries
 		});
 	}
 	function commands(q: string) {
-		return recordMentions(kinds.catalog ?? {}, kinds.query ?? (() => Effect.succeed({})), q, t, {
+		return recordMentions(catalog, bolt.query, q, t, {
 			nav,
 			entries,
 			prefix: '/'
@@ -1930,7 +1939,7 @@
 		>
 			{#snippet details()}
 				{#if shownPreview?.about !== undefined}<p data-preview-caption>
-						{captionOf(shownPreview.about, kinds.zone)}
+						{captionOf(shownPreview.about, zone)}
 					</p>{:else}<p>{shownPreview?.url ?? t('No preview yet.')}</p>{/if}
 			{/snippet}
 		</PreviewFrame>
@@ -2399,7 +2408,7 @@
 										{#each item.steps.filter((step) => step.tool?.approval !== undefined) as st (st.id)}
 											<!-- a live change the host holds for the person: at the call that asked for it -->
 											<div class="my-2">
-												{#key st.tool?.approval}<StudioApproval {api} step={st} {t} />{/key}
+												{#key st.tool?.approval}<StudioApproval {api} step={st} {t} {zone} />{/key}
 											</div>
 										{/each}
 										{#each item.steps as st (st.id)}

@@ -1,14 +1,20 @@
 import { expect, it } from '@effect/vitest';
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { inputSchema } from '@norbital-ai/std/kind';
-import { decodePublicHydration, PublicBoot, toPublicBoot } from '../src/protocol/public-page.ts';
+import {
+	decodePublicHydration,
+	publicReadKey,
+	PublicBoot,
+	toPublicBoot
+} from '../src/protocol/public-page.ts';
 import type { ShellBoot } from '../src/shell/nav.ts';
 import { storedFileUrl } from '../src/page/file-ref.ts';
+import { createBolt } from '../src/page/bolt.ts';
 
 const boot: PublicBoot = {
 	workspace: { name: 'Public fixture', locale: 'en-SG', tz: 'Asia/Singapore' },
 	actor: null,
+	location: { pathname: '/app/portal/book', search: '?slot=morning' },
 	base: '/fixture',
 	visitor: { app: 'portal' },
 	kiosk: null,
@@ -18,13 +24,12 @@ const boot: PublicBoot = {
 	catalog: {},
 	automations: {}
 };
-const data = Schema.Struct({ title: Schema.String, amount: Schema.Number });
 const body = {
 	route: 'app/portal/book',
 	release: 'release-a',
 	locale: 'en-SG',
 	boot,
-	data: { title: 'Book', amount: 0 }
+	reads: {}
 };
 
 it('keeps native image previews and original downloads within one encoded public surface', () => {
@@ -49,23 +54,23 @@ it('keeps native image previews and original downloads within one encoded public
 });
 
 it.effect(
-	'decodes exact public data and refuses a different route, release, locale or codec shape',
+	'decodes admitted reads and refuses a different route, release, locale or envelope shape',
 	() =>
 		Effect.gen(function* () {
 			expect(
-				yield* decodePublicHydration(JSON.stringify(body), data, {
+				yield* decodePublicHydration(JSON.stringify(body), {
 					route: body.route,
 					release: body.release
 				})
-			).toEqual({ boot, data: body.data });
+			).toEqual({ boot, reads: body.reads });
 			for (const changed of [
 				{ ...body, route: 'app/portal/visits' },
 				{ ...body, release: 'release-b' },
 				{ ...body, locale: 'fr' },
-				{ ...body, data: { title: 'Book', amount: '0' } }
+				{ ...body, reads: 123 }
 			]) {
 				const result = yield* Effect.result(
-					decodePublicHydration(JSON.stringify(changed), data, {
+					decodePublicHydration(JSON.stringify(changed), {
 						route: body.route,
 						release: body.release
 					})
@@ -101,7 +106,11 @@ it.effect(
 				automations: {},
 				contract: boot.contract
 			};
-			const projected = yield* toPublicBoot(source, { base: boot.base, kiosk: null });
+			const projected = yield* toPublicBoot(source, {
+				base: boot.base,
+				location: boot.location,
+				kiosk: null
+			});
 			expect(projected).toEqual(boot);
 			const text = JSON.stringify(projected);
 			for (const privateText of [
@@ -116,17 +125,24 @@ it.effect(
 		})
 );
 
-it.effect('hydrates native decimal values through the same codec used to encode server data', () =>
+it.effect('seeds the hydrated query with its native decimal before the stream answers', () =>
 	Effect.gen(function* () {
-		const codec = Schema.Struct({ total: inputSchema({ kind: 'money', currency: 'SGD' }) });
-		const encoded = { total: { $dec: '12.5' } };
-		const decoded = yield* decodePublicHydration(
-			JSON.stringify({ ...body, data: encoded }),
-			codec,
+		const request = { jobs: { fields: ['total'] } };
+		const key = publicReadKey({ m: 'query', a: [request] });
+		const rows = [{ id: 'job', total: { $dec: '12.5' } }];
+		const props = yield* decodePublicHydration(
+			JSON.stringify({ ...body, reads: { [key]: { jobs: { rows, next: null } } } }),
 			{ route: body.route, release: body.release }
 		);
-		expect(decoded.data.total).toBeInstanceOf(Decimal);
-		expect(yield* Schema.encodeEffect(codec)(decoded.data)).toEqual(encoded);
+		const client = yield* createBolt({
+			actor: boot.actor,
+			locale: boot.workspace.locale,
+			initialRead: (read) => props.reads[publicReadKey(read)]
+		});
+		const query = client.query<{ jobs: { rows: readonly { total: Decimal }[] } }>(request);
+		expect(query.current?.jobs.rows[0]?.total).toBeInstanceOf(Decimal);
+		expect(query.current?.jobs.rows[0]?.total.toString()).toBe('12.5');
+		expect(query.loading).toBe(false);
 	})
 );
 
@@ -141,7 +157,6 @@ it.effect('retains search-index metadata in public hydration', () =>
 		};
 		const decoded = yield* decodePublicHydration(
 			JSON.stringify({ ...body, boot: { ...boot, catalog } }),
-			data,
 			{ route: body.route, release: body.release }
 		);
 		expect(decoded.boot.catalog).toEqual(catalog);

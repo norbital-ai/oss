@@ -18,7 +18,6 @@ import {
 import type { EngineActor } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { approvalFlow, snapshotOf } from '../src/decl/access/policy.ts';
 
 const state = {
 	kind: 'state',
@@ -56,13 +55,12 @@ const m: EngineManifest = {
 	relationships: { 'lines.order': { to: 'orders', inverse: 'lines', owned: true } },
 	exposures: {
 		orders: {
-			read: { orders: { fields: 'all' }, 'orders.lines': { fields: 'all' } },
-			outputs: { summary: { orders: { fields: ['status', 'region'] } } },
+			outputs: { default: { orders: { fields: 'all' }, 'orders.lines': { fields: 'all' } }, summary: { orders: { fields: ['status', 'region'] } } },
 			update: { columns: { orders: ['note', 'status'], 'orders.lines': ['qty'] } }
 		},
-		lines: { read: { lines: { fields: 'all' } } },
+		lines: { outputs: { default: { lines: { fields: 'all' } } } },
 		employees: {
-			read: { employees: { fields: 'all' } },
+			outputs: { default: { employees: { fields: 'all' } } },
 			update: { columns: { employees: ['face', 'checked_at'] } }
 		}
 	},
@@ -83,7 +81,7 @@ const m: EngineManifest = {
 						orders: { where: { region: { eq: 'north' } } },
 						'orders.lines': { where: { qty: { gt: 0 } } }
 					},
-					update: { columns: { orders: ['note', 'status'] }, check: true },
+					update: { columns: { orders: ['note', 'status'] }, verdict: true },
 					moves: { status: ['draft->submitted'] }
 				}
 			}
@@ -93,13 +91,13 @@ const m: EngineManifest = {
 		kiosk: {
 			description: '',
 			grants: {
-				employees: { update: { columns: { employees: ['face'] }, check: true } }
+				employees: { update: { columns: { employees: ['face'] }, verdict: true } }
 			}
 		},
 		stamp: {
 			description: '',
 			grants: {
-				employees: { update: { check: true } }
+				employees: { update: { verdict: true } }
 			}
 		},
 		desk: {
@@ -118,7 +116,6 @@ const m: EngineManifest = {
 		nightly: { description: '', policies: ['auditor'] }
 	},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {
 		careers: {
@@ -312,7 +309,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 				...m.policies,
 				open: {
 					description: '',
-					grants: { orders: { read: true, update: { check: true } } }
+					grants: { orders: { read: true, update: { verdict: true } } }
 				}
 			}
 		};
@@ -330,7 +327,6 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		]);
 		expect(granted.create).toEqual([]);
 		expect(granted.delete).toEqual([]);
-		expect(() => snapshotOf(approvalFlow())).toThrow('add a step');
 	});
 
 	it('the kernel directory: staff read staff (id, name); externals themselves and their party (rule 35a)', () => {

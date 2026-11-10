@@ -25,7 +25,7 @@
 	} = $props();
 	// The mounted fixture owns one native shell client for its whole lifetime.
 	// svelte-ignore state_referenced_locally
-	provideBolt(bolt);
+	provideBolt(() => bolt);
 	provideKinds({
 		get locale() {
 			return workspace.locale;

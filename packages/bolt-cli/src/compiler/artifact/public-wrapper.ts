@@ -6,24 +6,23 @@ import { BOLT, EXT } from '../bolt.ts';
 
 const key = JSON.stringify;
 
-/** One concrete, codec-typed component shared by the route's server render and browser hydration. */
+/** One concrete component shared by the route's server render and browser hydration. */
 export const publicWrapper = Effect.fn('bolt.publicWrapper')(function* (
 	root: string,
-	file: Discovered
+	file: Discovered,
+	route: string
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const route = `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`;
 	const path = join(root, '.norbital', 'cache', 'public', `${route}.svelte`);
-	const codec = join(root, file.path.replace(/\+([^/]+)\.page\.svelte$/, '$1.page.data.ts'));
+
 	const source = `<script lang="ts">
-import type { Schema } from 'effect';
 import type { PublicBoot } from ${key(join(BOLT, 'protocol', `public-page${EXT}`))};
+import type { PublicClient } from ${key(join(BOLT, 'shell', 'public', `client${EXT}`))};
 import PublicPage from ${key(join(BOLT, 'shell', 'public', 'PublicPage.svelte'))};
 import Page from ${key(join(root, file.path))};
-import dataCodec from ${key(codec)};
-let { data, boot }: { data: Schema.Schema.Type<typeof dataCodec>; boot: PublicBoot } = $props();
+let { boot, ctx }: { boot: PublicBoot; ctx: PublicClient } = $props();
 </script>
-<PublicPage {boot}><Page {data} /></PublicPage>
+<PublicPage {boot} {ctx}><Page {ctx} /></PublicPage>
 `;
 	yield* fs.makeDirectory(dirname(path), { recursive: true });
 	yield* fs.writeFileString(path, source);

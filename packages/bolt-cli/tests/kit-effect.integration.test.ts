@@ -42,7 +42,7 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		customers: {
-			read: { customers: { fields: 'all' } },
+			outputs: { default: { customers: { fields: 'all' } } },
 			create: { columns: { customers: ['name'] } }
 		}
 	},
@@ -65,7 +65,6 @@ const manifest = {
 	},
 	teams: {},
 	connections: { calendar: { integration: 'calendar' }, ledger: { integration: 'ledger' } },
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -134,7 +133,7 @@ it.live(
 				delete: { check: true }
 			});
 			expect(callbacks.exposures.customers).toEqual({
-				read: { customers: { fields: 'all' } },
+				outputs: { default: { customers: { fields: 'all' } } },
 				create: { columns: { customers: ['name'] } },
 				update: { columns: { customers: ['name'] } },
 				delete: {}
@@ -151,7 +150,7 @@ it.live('a clock set back finds the crons it passed ahead of it again', () =>
 					description: 'Runs at two',
 					input: {},
 					policies: ['reader'],
-					on: { cron: '0 2 * * *' }
+					on: [{ cron: '0 2 * * *' }]
 				}
 			}
 		} satisfies EngineManifest;

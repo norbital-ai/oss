@@ -21,7 +21,7 @@ A workspace author writes `src/`, `seed/`, `tests/`, `assets/`. The compiler wri
 
 - `.norbital/` holds the names index, tsconfig, bundle, source, seed packs, `release.json` and cache. It is never edited or committed. The authored `tsconfig.json` only extends its config.
 - The names index stores declarations as type text with layer paths. A changed field reaches bodies on the next sync.
-- Representations import `$bolt` directly. Custom field renderers capture `useBolt()` during initialization when they need device or text. Type-only `$bolt` imports do not evaluate the SDK.
+- Representations and custom field renderers receive `ctx` as a prop.
 - Module initialization must not start mounted work: record components mount on open, but their modules load before the shell.
 - SSR pages have independent browser entries and private server files; server files are never browser assets.
 

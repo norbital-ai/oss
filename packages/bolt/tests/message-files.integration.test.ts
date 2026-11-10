@@ -21,7 +21,6 @@ const manifest = Result.getOrThrow(
 		teams: {},
 		connections: { desk_wa: { integration: 'whatsapp' } },
 		automations: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

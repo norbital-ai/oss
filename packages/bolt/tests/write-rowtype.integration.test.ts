@@ -33,12 +33,12 @@ const manifest: EngineManifest = {
 	relationships: { 'line.point': { to: 'point', inverse: 'lines' } },
 	exposures: {
 		point: {
-			read: { point: { fields: 'all' } },
+			outputs: { default: { point: { fields: 'all' } } },
 			create: { columns: { point: ['code'] } },
 			update: { columns: { point: ['code'] } }
 		},
 		line: {
-			read: { line: { fields: 'all' } },
+			outputs: { default: { line: { fields: 'all' } } },
 			create: { columns: { line: ['code', 'amount', 'point'] } },
 			update: { columns: { line: ['code', 'amount'] } },
 			delete: {}

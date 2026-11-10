@@ -3,8 +3,7 @@ install();
 import { Effect, Result } from 'effect';
 // The runtime roles of the type corpus workspace: what a template puts in +workspace.ts, +secrets.ts, src/integration,
 // src/automation and src/agent. Every body sits in its literal, typed from `../registry.ts` by its name.
-import { automation, envoy, integration, mcp, secrets, workspace } from '../../../src/index.ts';
-import { Refusal } from '../../../src/decl/errors.ts';
+import { automation, integration, mcp, secrets, workspace } from '../../../src/index.ts';
 
 export const secretNames = secrets({
 	ERP_URL: { label: 'ERP base URL' },
@@ -27,17 +26,8 @@ export const ws = workspace({
 		erp: { integration: 'erp' },
 		ledger_main: { integration: 'kingdee' },
 		support: { integration: 'support_mail' },
-		whatsapp: { integration: 'whatsapp', envoy: 'desk' }
+		whatsapp: { integration: 'whatsapp' }
 	}
-});
-
-export const desk = envoy({
-	name: 'Norbius',
-	audience: 'private',
-	policies: ['sales_rep'],
-	groupMessages: 'mention_or_reply',
-	delegation: 'disabled',
-	task: 'Keep orders up to date from what people report.'
 });
 
 // HTTP: a configured base URL, a credential sealed at pairing, Standard Webhooks, a request rate and a pairing test
@@ -96,10 +86,10 @@ export const erp_mcp = mcp({
 	tools: ['search_docs']
 });
 
-export const nightly = automation('nightly', {
+export const nightly = automation({
 	description: 'Nightly order digest',
 	policies: ['sales_rep'],
-	on: { cron: '0 2 * * *' },
+	on: [{ cron: '0 2 * * *' }],
 	output: { kind: 'int' },
 	run: function* (_, ctx) {
 		const open = yield* ctx.query({
@@ -112,7 +102,7 @@ export const nightly = automation('nightly', {
 	}
 });
 
-export const follow_up = automation('follow_up', {
+export const follow_up = automation({
 	description: 'Chase an order three days after it is placed',
 	policies: ['sales_rep'],
 	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } } },
@@ -136,7 +126,7 @@ export const follow_up = automation('follow_up', {
 	}
 });
 
-export const render = automation('render', {
+export const render = automation({
 	description: 'Render an order confirmation',
 	policies: ['sales_rep'],
 	input: { order: { kind: 'id', of: 'orders' } },
@@ -152,10 +142,10 @@ export const render = automation('render', {
 	}
 });
 
-export const inbound_hook = automation('inbound_hook', {
+export const inbound_hook = automation({
 	description: 'Payment provider callback',
 	policies: ['sales_rep'],
-	on: { webhook: '/payments', verify: { scheme: 'stripe', secret: 'HOOK_SECRET' } },
+	on: [{ webhook: '/payments', verify: { scheme: 'stripe', secret: 'HOOK_SECRET' } }],
 	input: { order: { kind: 'text' } },
 	run: function* ({ order }, ctx) {
 		const answer = yield* Effect.result(
@@ -172,7 +162,7 @@ export const inbound_hook = automation('inbound_hook', {
 	}
 });
 
-export const orders_submit = automation('orders_submit', {
+export const orders_submit = automation({
 	description: 'Submit this order',
 	input: { target: { kind: 'id', of: 'orders' } },
 	policies: ['sales_rep'],
@@ -180,14 +170,14 @@ export const orders_submit = automation('orders_submit', {
 		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
 			.rows[0];
 		if (order === undefined)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing order.' }));
+			return yield* ctx.refuse('Choose an existing order.');
 		yield* ctx.act('orders.update', [{ target: order.id, set: { status: 'submitted' } }], {
 			observed: { [order.id]: order.revision }
 		});
 	}
 });
 
-export const orders_renote = automation('orders_renote', {
+export const orders_renote = automation({
 	description: 'Set a note on many orders',
 	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } }, note: { kind: 'text' } },
 	output: { kind: 'int' },
@@ -215,7 +205,7 @@ export const orders_renote = automation('orders_renote', {
 	}
 });
 
-export const order_lines_pay = automation('order_lines_pay', {
+export const order_lines_pay = automation({
 	description: 'Pay',
 	input: {
 		p: {
@@ -232,7 +222,7 @@ export const order_lines_pay = automation('order_lines_pay', {
 	}
 });
 
-export const order_lines_chase = automation('order_lines_chase', {
+export const order_lines_chase = automation({
 	description: 'Chase the lines',
 	input: {},
 	policies: ['sales_rep'],
@@ -242,7 +232,7 @@ export const order_lines_chase = automation('order_lines_chase', {
 	}
 });
 
-export const customers_return_row = automation('customers_return_row', {
+export const customers_return_row = automation({
 	description: 'One native row',
 	input: {},
 	output: { kind: 'row', of: 'customers' },
@@ -251,7 +241,7 @@ export const customers_return_row = automation('customers_return_row', {
 		const page = yield* ctx.query({ customers: { limit: 1 } });
 		const customer = page.customers.rows[0];
 		if (customer === undefined)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing customer.' }));
+			return yield* ctx.refuse('Choose an existing customer.');
 		return customer;
 	}
 });

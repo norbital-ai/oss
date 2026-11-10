@@ -31,9 +31,14 @@ export default model('approval_request', {
 		revision: { kind: 'int', default: 1 },
 		created_at: { kind: 'instant' }
 	},
-	unique: [{ fields: ['collection_name', 'record_id'], where: { status: { eq: 'ONGOING' } } }],
+	constraints: {
+		one_ongoing_request: {
+			unique: ['collection_name', 'record_id'],
+			where: { status: { eq: 'ONGOING' } }
+		}
+	},
 	table: { primary: 'uuid' },
 	// Target labels are searched through the existing model/id reference by the query catalogue.
 	search: { text: ['collection_name'] },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

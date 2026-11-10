@@ -9,7 +9,6 @@ export const ManifestItemSchema = Schema.Struct({
 		'automation',
 		'integration',
 		'connection',
-		'envoy',
 		'mcp',
 		'policy',
 		'team',
@@ -64,7 +63,6 @@ export function manifestItems(
 	add('automation', m.automations, (name) => `src/automation/+${name}.automation.ts`);
 	add('integration', m.integrations, (name) => `src/integration/${name}/+integration.ts`);
 	add('connection', m.connections, () => 'src/+workspace.ts');
-	add('envoy', m.envoys, (name) => `src/agent/envoy/+${name}.envoy.ts`);
 	add('mcp', m.mcp, (name) => `src/agent/mcp/+${name}.mcp.ts`);
 	add('policy', m.policies, (name) => `src/access_control/policy/+${name}.policy.ts`);
 	add('team', m.teams, () => 'src/access_control/team/+team.ts');

@@ -155,11 +155,11 @@ export async function scriptedBolt(script: Script) {
 		)
 	);
 	const native = await runtime.runPromise(Client);
-	const { decode: _decode, options: _options, recordCapabilities: _capabilities, ...core } = native;
+	const { decode: _decode, options: _options, record_capabilities: _capabilities, ...core } = native;
 	const bolt: ViewBolt = {
 		...core,
 		clock: () => ({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' }),
-		...(script.capabilities === undefined ? {} : { recordCapabilities: native.recordCapabilities }),
+		...(script.capabilities === undefined ? {} : { record_capabilities: native.record_capabilities }),
 		...(script.t === undefined ? {} : { t: script.t }),
 		...(script.runs === undefined ? {} : { runs: script.runs })
 	};

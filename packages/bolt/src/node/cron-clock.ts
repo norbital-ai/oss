@@ -3,6 +3,7 @@
 // watermark: a restart starts from now. A multi-host kernel runs its own clock, with leases and watermarks.
 import { Clock, Cron, Effect, FiberMap, Result, type Scope } from 'effect';
 import type { CronEntry, CronFired } from '../engine/contracts.ts';
+import { parseCron } from '../engine/runs/cron.ts';
 
 const MINUTE = 60_000;
 
@@ -13,7 +14,7 @@ export const cronClock = <E>(source: {
 	Effect.gen(function* () {
 		const entries: { readonly id: string; readonly cron: Cron.Cron }[] = [];
 		for (const entry of yield* source.crons) {
-			const parsed = Cron.parse(entry.cron, entry.zone);
+			const parsed = parseCron(entry.cron, entry.zone);
 			if (Result.isSuccess(parsed)) entries.push({ id: entry.id, cron: parsed.success });
 			else yield* Effect.logWarning(`cron ${entry.id} never fires: ${parsed.failure.message}`);
 		}

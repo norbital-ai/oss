@@ -713,7 +713,7 @@ export function readOutputs(m: EngineManifest, a: Authority, root: string): read
 /** The layer map of output `output` of `root`. */
 const outputLayers = (m: EngineManifest, root: string, output: string) => {
 	const spec = layered(m).exposures[root];
-	return (output === 'default' ? spec?.read : spec?.outputs?.[output]) ?? {};
+	return spec?.outputs[output] ?? {};
 };
 /**
  * What the actor may read: each read root (a model with `read`, never the run ledger) with an output it may read, with
@@ -1033,9 +1033,9 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 				!path.slice(root.length + 1).includes('.') &&
 				wrote.lists.has(path.slice(root.length + 1))
 		);
-	const stored =
+	const readBack =
 		reads.length === 0
-			? {}
+			? Result.succeed<typeof StoredReadBack.Type>({})
 			: yield* Effect.try({
 					try: () =>
 						lowerRead(x.engine.manifest, 'query', [
@@ -1091,10 +1091,11 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 					Effect.flatMap((ir) =>
 						x.engine.read([ir], { as: 'caller', authority: x.authority }, x.bindings)
 					),
-					Effect.map(([got]) => got ?? {}),
+					Effect.flatMap(([got]) => Schema.decodeUnknownEffect(StoredReadBack)(got)),
 					Effect.tapCause(Effect.logWarning),
-					Effect.catch(() => Effect.succeed({}))
+					Effect.result
 				);
+	const stored: typeof StoredReadBack.Type = Result.isSuccess(readBack) ? readBack.success : {};
 	const writtenById = new Map(r.outcome.records.map((row) => [`${row.model}:${row.id}`, row]));
 	const fieldMap = new Map<string, Json>();
 	for (const [path, layer] of Object.entries(stored)) {
@@ -1118,30 +1119,33 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 	}
 	// the effect runs this write queued carry its record ids (`queueEffects`): answer them, so the model can `wait` on one
 	const ids = r.outcome.records.map((c) => c.id);
-	const [queued] =
+	const queued =
 		ids.length === 0
-			? [undefined]
+			? Result.succeed([])
 			: yield* x.engine.db
-					.read([
-						{
-							text: `SELECT id, automation FROM sys_run
+					.rows(Schema.Struct({ id: Schema.String, automation: Schema.String }), {
+						text: `SELECT id, automation FROM sys_run
 		WHERE state IN ('queued', 'running') AND cause = 'effect'
 		AND input -> 'ids' ?| ARRAY(SELECT jsonb_array_elements_text($1::jsonb))`,
-							params: [JSON.stringify(ids)]
-						}
-					])
-					.pipe(
-						Effect.tapCause(Effect.logWarning),
-						Effect.catch(() => Effect.succeed([undefined]))
-					);
-	const runs = (queued?.rows ?? []).map((row) => ({
-		run: String(row['id']),
-		automation: String(row['automation'])
-	}));
+						params: [JSON.stringify(ids)]
+					})
+					.pipe(Effect.tapCause(Effect.logWarning), Effect.result);
+	const runs = Result.isFailure(queued)
+		? []
+		: queued.success.map(({ id, automation }) => ({ run: id, automation }));
 	return {
 		...r.outcome,
 		...(fieldMap.size === 0 ? {} : { fieldMap: [...fieldMap.values()] }),
-		stored: uncursored(encodeWire(stored)),
+		...(Result.isFailure(readBack)
+			? {
+					read_back_error: `The write committed. Stored rows could not be read: ${readBack.failure.message}`
+				}
+			: { stored: encodeWire(stored) }),
+		...(Result.isFailure(queued)
+			? {
+					runs_lookup_error: `The write committed. Queued runs could not be read: ${queued.failure.message}`
+				}
+			: {}),
 		...(runs.length === 0 ? {} : { runs }),
 		...(r.outcome.unchanged === undefined
 			? {}
@@ -1196,7 +1200,18 @@ export type ReadToolContext = {
 	authority: Authority;
 	bindings: Bindings;
 };
-/** A committed write's stored rows without their pages' `next` cursor: the answer is those rows, not a read to page. */
+/** The stored rows a committed write returns. Omit the pages' cursors. */
+const StoredReadBack = Schema.Record(
+	Schema.String,
+	Schema.Struct({
+		rows: Schema.Array(
+			Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+				Schema.Record(Schema.String, Schema.Json)
+			])
+		)
+	})
+);
+/** A read answer without their pages' `next` cursor: the answer is those rows, not a read to page. */
 const uncursored = (v: Json): Json =>
 	!Predicate.isObject(v) || EffectArray.isArray<typeof v>(v)
 		? v
@@ -1439,7 +1454,7 @@ export function describeWorkspace(
 	const app = (name: string) => {
 		const spec = m.apps[name]!,
 			group = name.includes('/') ? name.slice(0, name.indexOf('/')) : undefined,
-			label = group === undefined ? undefined : m.groups?.[group]?.label;
+			label = group === undefined ? undefined : m.groups?.[group]?.title;
 		return [
 			`${group === undefined ? '' : `${group}${label === undefined ? '' : ` "${t(label)}"`} ▸ `}${name} "${t(spec.title)}": ${t(spec.description)}`,
 			...Object.entries(spec.pages).map(
@@ -1484,9 +1499,7 @@ export function describeWorkspace(
 	};
 	const automation = (name: string) => {
 		const spec = m.automations[name]!,
-			on = [spec.on ?? []]
-				.flat()
-				.map((x) => ('cron' in x ? `cron ${x.cron}` : `webhook ${x.webhook}`));
+			on = (spec.on ?? []).map((x) => ('cron' in x ? `cron ${x.cron}` : `webhook ${x.webhook}`));
 		return `${automationSignature(m, name)} "${spec.description}"${on.length === 0 ? '' : ` · ${on.join(', ')}`}${spec.agent === undefined ? '' : ` · agent ${spec.agent}`}`;
 	};
 	const sections = {
@@ -3362,7 +3375,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		const askTool = shared('ask', () =>
 			Tool.make('ask', {
 				description:
-					'Ask the person one focused question and end this turn. Use when the brief has two plausible shapes, a page or model tradeoff, or a live-versus-stored choice; include short options when the answer is a choice. Do not build on a guess.',
+					'Sends the person one question with optional answer choices, then ends the turn.',
 				parameters: Schema.Struct({
 					question: Schema.String,
 					options: Schema.optionalKey(Schema.Array(Schema.String))
@@ -3428,46 +3441,50 @@ A committed write answers the stored rows; a held one waits for approval.`,
 								// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
 								// statutory research run for ten minutes and never heard it finish)
 								if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
-									let running: Json = [];
-									const poll = Effect.gen(function* () {
-										const rows = yield* x.engine.db.rows(RunViewRow, {
+									const read = x.engine.db
+										.rows(RunViewRow, {
 											text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))`,
 											params: [JSON.stringify(ids)]
-										});
-										const views = rows
-											.map((row) => runView(a, row))
-											.filter((view) => view !== null);
-										if (views.length === 0)
-											return err(`No job or automation run ${ids.join(', ')}.`);
-										running = encodeWire(views);
-										const ended = views.find(
-											(view) => view.status !== 'queued' && view.status !== 'running'
-										);
-										return ended === undefined ? null : ok({ settled: encodeWire(ended) });
-									});
-									// a run's end arrives as an event, so waiting makes no trips to the database; the slower check
-									// covers a run that ended in another generation
-									const { runEnds } = x.engine;
-									const result = yield* Effect.scoped(
-										Effect.gen(function* () {
-											const heard = runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
-											for (;;) {
-												const answer = yield* poll;
-												if (answer !== null) return answer;
-												yield* heard === null
-													? Effect.sleep('3 seconds')
-													: PubSub.take(heard).pipe(
-															Effect.repeat({
-																until: (ended) => ended.some((id) => ids.includes(id))
-															}),
-															Effect.timeoutOption('30 seconds')
-														);
-											}
 										})
-									).pipe(Effect.timeoutOption(ms));
-									return Option.isSome(result) && result.value !== null
-										? result.value
-										: ok({ settled: null, running });
+										.pipe(
+											Effect.map((rows) =>
+												rows.flatMap((row) => {
+													const view = runView(a, row);
+													return view === null ? [] : [view];
+												})
+											)
+										);
+									return yield* Effect.scoped(
+										Effect.gen(function* () {
+											const { runEnds } = x.engine;
+											const subscription =
+												runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
+											const views = yield* read;
+											if (views.length === 0)
+												return err(`No job or automation run ${ids.join(', ')}.`);
+											const isSettled = (view: (typeof views)[number]) =>
+												view.status !== 'queued' && view.status !== 'running';
+											const settled = views.find(isSettled);
+											if (settled !== undefined) return ok({ settled: encodeWire(settled) });
+											const visible = new Set(views.map((view) => view.id));
+											const heard =
+												subscription === null
+													? Effect.never
+													: PubSub.take(subscription).pipe(
+															Effect.repeat({
+																until: (ended) => ended.some((id) => visible.has(id))
+															})
+														);
+											const ended = yield* heard.pipe(Effect.timeoutOption(ms));
+											if (Option.isNone(ended))
+												return ok({ settled: null, running: encodeWire(views) });
+											const current = yield* read;
+											const answer = current.find(isSettled);
+											return answer === undefined
+												? ok({ settled: null, running: encodeWire(current) })
+												: ok({ settled: encodeWire(answer) });
+										})
+									);
 								}
 								// with no ids and nothing of this turn running there is nothing to wait for: say so, never answer as if time passed
 								// (a probe's agent read `{ settled: null }` as thirty seconds and polled a background run in a loop)

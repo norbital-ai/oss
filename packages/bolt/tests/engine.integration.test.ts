@@ -379,6 +379,16 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 						}
 					])
 				);
+				expect(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{ target: id, set: { title: 'locked after winning' } }
+					])
+				).toMatchObject({ kind: 'refused', code: 'locked', field: 'title' });
+				ok(
+					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+						{ target: id, set: { note: 'still editable' } }
+					])
+				);
 				ok(
 					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
 						{
@@ -391,7 +401,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
 						{
 							target: id,
-							set: { title: 'changed' }
+							set: { note: 'locked after archiving' }
 						}
 					])
 				).toMatchObject({ kind: 'refused', code: 'locked' });

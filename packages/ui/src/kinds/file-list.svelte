@@ -73,6 +73,57 @@ The add control sits at the end.
 			{/if}
 		</span>
 	{/each}
-	{#if refs.length}<FileCollection {refs} onRemove={disabled ? undefined : onRemove} />{/if}
+	{#each shown as ref (ref.id)}
+		{@const url = host.file_url?.(ref, { preview: 64 })}
+		<Popover.Root open={open === ref.id} onOpenChange={(o) => (open = o ? ref.id : null)}>
+			<Popover.Trigger>
+				{#snippet child({ props })}
+					<button
+						{...props}
+						type="button"
+						class={cn(
+							CHIP,
+							'hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
+						)}
+						title={ref.name}
+						data-file-chip
+					>
+						{#if ref.mime.startsWith('image/') && url !== undefined}
+							<Image
+								src={url}
+								alt=""
+								width={16}
+								height={16}
+								class="size-4 shrink-0 rounded-xs"
+								imageClass="size-full object-cover"
+							/>
+						{:else}
+							<Icon icon={fileIcon(ref.mime)} class="size-3.5 shrink-0 text-muted-foreground" />
+						{/if}
+						<span class="truncate">{ref.name}</span>
+					</button>
+				{/snippet}
+			</Popover.Trigger>
+			<Popover.Content
+				class="w-80 max-w-[calc(100vw-2rem)] p-3"
+				align="start"
+				aria-label={`${t('preview')} ${ref.name}`}
+				onCloseAutoFocus={() => {}}
+			>
+				<FilePreview
+					file={ref}
+					onRemove={onRemove && !disabled
+						? () => {
+								open = null;
+								onRemove(ref);
+							}
+						: undefined}
+				/>
+			</Popover.Content>
+		</Popover.Root>
+	{/each}
+	{#if refs.length > shown.length}<span class="shrink-0 text-xs text-muted-foreground"
+			>+{refs.length - shown.length}</span
+		>{/if}
 	{@render children?.()}
 </span>

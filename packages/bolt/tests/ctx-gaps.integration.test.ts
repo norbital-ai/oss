@@ -21,7 +21,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			rates: {
-				read: { rates: { fields: 'all' } },
+				outputs: { default: { rates: { fields: 'all' } } },
 				create: { columns: { rates: ['code', 'value'] } },
 				update: { columns: { rates: ['value'] } }
 			}
@@ -30,7 +30,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			rep: {
 				description: 'Rep',
-				automations: ['put'],
+				capabilities: { automations: ['put'] },
 				grants: {
 					rates: { read: true, create: true, update: true }
 				}
@@ -50,13 +50,11 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		customFields: {},
 		agent: { skills: {} },
 		apps: {},
-		groups: {},
-		kiosks: {}
+		groups: {}
 	})
 );
 const guest = program(`export default {

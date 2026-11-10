@@ -257,7 +257,7 @@ is<
 		[instance: string, providerId: string, report: DeliveryReport]
 	>
 >();
-is<Eq<Answer<OutboundShape['delivered']>, Effect.Effect<Option.Option<Outcome>, EngineError>>>();
+is<Eq<Answer<OutboundShape['delivered']>, Effect.Effect<void, EngineError>>>();
 is<Eq<Args<SyncsShape['invalidate']>, [instance: string, sync: string, partition: string]>>();
 is<Eq<keyof ApprovalsShape, 'decide' | 'view' | 'list'>>();
 is<
@@ -293,12 +293,6 @@ is<
 		| 'send'
 		| 'request'
 		| 'progress'
-		| 'withdraw'
-		| 'transactionBegin'
-		| 'transactionRead'
-		| 'transactionAct'
-		| 'transactionFinish'
-		| 'transactionAbort'
 	>
 >();
 is<

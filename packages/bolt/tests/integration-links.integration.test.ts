@@ -140,13 +140,12 @@ const manifest = {
 		self: {
 			description: 'Manages their own accounts',
 			grants: {
-				sys_integration: { read: true, update: { check: true } }
+				sys_integration: { read: true, update: { verdict: true } }
 			}
 		}
 	},
 	teams: {},
 	automations: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -229,10 +228,10 @@ const key = randomBytes(32);
 /** `self` changes only the accounts they own: one check over the batch, the stored owner against the actor. */
 const OWNED = `function* own(changes, ctx) {
 	const row = changes.findIndex((c) => c.before.owner !== ctx.actor.id);
-	return row >= 0 ? ctx.deny('Only your own accounts change.', { row }) : ctx.allow();
+	return row >= 0 ? yield* ctx.refuse('Only your own accounts change.', { row }) : ctx.allow();
 }
 export default { policy: {
-	self: { grants: { sys_integration: { update: { check: own } } } }
+	self: { grants: { sys_integration: { update: { verdict: own } } } }
 } };`;
 const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports']) =>
 	Effect.gen(function* () {

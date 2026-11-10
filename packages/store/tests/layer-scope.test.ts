@@ -8,12 +8,11 @@ import { shop } from './fixture.ts';
 
 const cat = catalogOf(shop, {
 	order: {
-		read: {
+		outputs: { default: {
 			order: { fields: 'all' },
 			'order.customer': { fields: ['name'] },
 			'order.lines': { fields: 'all' }
-		},
-		outputs: { brief: { order: { fields: ['number'] }, 'order.customer': { fields: ['name'] } } }
+		}, brief: { order: { fields: ['number'] }, 'order.customer': { fields: ['name'] } } }
 	}
 });
 

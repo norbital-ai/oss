@@ -12,8 +12,10 @@ import {
 } from '@norbital-ai/ui';
 import type { ViewNames } from '../../src/decl/ctx.ts';
 import type { AutomationName, Id, ListRow, Row, StartInput } from '../../src/index.ts';
-import { bolt } from '../../src/page/index.ts';
+import type { PageContext } from '../../src/page/index.ts';
 import './registry.ts';
+
+declare const ctx: PageContext;
 
 expectTypeOf<Workspace['names']>().toEqualTypeOf<ViewNames>();
 expectTypeOf<AutomationKey>().toEqualTypeOf<AutomationName>();
@@ -42,7 +44,7 @@ Form(null, { of: { automation: 'render' }, fields: ['missing_field'] });
 // @ts-expect-error A record target belongs in the explicit automation input.
 Form(null, { of: { automation: 'render' }, id: order });
 
-bolt.query({ sites: { fields: ['name', 'rating', 'checklist'], limit: 1 } }).pipe(
+ctx.query({ sites: { fields: ['name', 'rating', 'checklist'], limit: 1 } }).pipe(
 	Effect.map(({ sites }) => {
 		Table(null, { of: sites.rows, columns: ['name', 'rating', 'checklist'] });
 		// @ts-expect-error A picked row never gains fields through a loose ui registry fallback.

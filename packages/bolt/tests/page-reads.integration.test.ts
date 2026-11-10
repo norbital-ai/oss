@@ -45,7 +45,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			orders: {
-				read: { orders: { fields: 'all' } },
+				outputs: { default: { orders: { fields: 'all' } } },
 				create: { columns: { orders: ['title', 'doc', 'color'] } },
 				update: { columns: { orders: ['title'] } }
 			}
@@ -62,7 +62,6 @@ const manifest = Result.getOrThrow(
 		teams: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		customFields: {
 			probe_window: {

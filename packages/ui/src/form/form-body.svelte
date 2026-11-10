@@ -109,9 +109,9 @@
 		spec.target.of !== 'model' ||
 		spec.target.mode !== 'update' ||
 		spec.target.id === undefined ||
-		bolt.recordCapabilities === undefined
+		bolt.record_capabilities === undefined
 			? null
-			: bolt.recordCapabilities(spec.target.model, spec.target.id)
+			: bolt.record_capabilities(spec.target.model, spec.target.id)
 	);
 	watch(
 		() => [capabilities.current, capabilities.error, capabilities.loading] as const,
@@ -186,7 +186,7 @@
 	novalidate
 	aria-busy={form.pending}
 >
-	{#if !matching && asked !== true && !scope?.historical && update && bolt.recordCapabilities !== undefined && form.capabilities === undefined && form.notice === null}
+	{#if !matching && asked !== true && !scope?.historical && update && bolt.record_capabilities !== undefined && form.capabilities === undefined && form.notice === null}
 		<div role="status" aria-busy="true"><Spinner /></div>
 	{:else}
 		<!-- the gutter is kept: a section opening past the fold never narrows the body under a classic scrollbar -->

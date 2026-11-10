@@ -1,6 +1,6 @@
 # Automations and effects
 
-Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[1]`, `import('@norbital-ai/bolt').Ai`, `EffectCtx`.
+Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `import('@norbital-ai/bolt').Ai`, `EffectCtx`.
 
 ## Effects
 
@@ -15,9 +15,9 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[1]`, `i
 - A job the reserved system identity runs with its declared `policies` (required, non-empty), on cron, webhook, manual start or `ctx.schedule`. Every run holds exactly those policies. Automations cannot approve; `ctx.approvals.withdraw(requestId, reason?)` takes back an open request the same automation asked for. A run has 10,000 crossings.
 - `ctx.run.trigger` records `{ kind: 'person', actor, agent? }` or `{ kind: 'system', cause }` (cron, webhook, effect, schedule). It is never authority: `requestor.*` names the system identity, so a requestor-scoped grant matches nothing and a ref default does not apply.
 - A rule about the starter is an explicit check of the trigger in the body. Refs the run writes are set explicitly.
-- `policy.automations` grants manual starts only; code needs none. Delegations lend explicit generated verbs.
+- `capabilities.automations` grants manual starts only; code needs none.
 - A row write runs its model's `effect`, never an automation.
-- `limit` (default `30/min`) applies to manual starts, per starter; beyond it answers `429 rateLimited`. Cron, webhook, effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
+- Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rateLimited`. Cron, webhook, effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
 - A safety-net cron depending only on workspace data declares `rest`: when a run writes nothing, no slot fires until the workspace is used or the rest passes. Never on a cron that finds work by time or reads what a connected link writes.
 - A page starts a run with `bolt.start(name, input)`, which yields `id` and `automation` for run status. Output is readable on the run.
 - Every startable automation appears in the Command Center with its typed form; a page form is optional.
@@ -40,9 +40,9 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 
 ## Facilities
 
-- Triggers are literals: `{ cron, tz?, rest? }`, `{ webhook, verify: { scheme, secret } }`.
+- `on` is a list of trigger literals: `{ cron, tz?, rest? }`, `{ webhook, verify: { scheme, secret } }`.
 - Business I/O runs in automations: `ctx.request`, `ctx.send`, `ctx.web.read`, `ctx.files.*`, `ctx.geo.*`, `ctx.convert.*`, `ctx.ai.*`. Integration bodies call `ctx.request(op)` on their own instance.
-- `ctx.convert.document`, `ctx.convert.ingest` and `ctx.ai.speak` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
+- `ctx.convert.document` and `ctx.convert.ingest` are optional. Recover `Unavailable` only when absence is allowed; other failures propagate unless the workflow recovers them.
 - Discover each member's input on `AutomationCtx` and `Ai`.
 
 ## AI
@@ -52,6 +52,5 @@ A dropped run reruns from the start, up to 3 times; a retry also starts over. No
 - Request `rules` (CEL over top-level properties) make an unfinished draft fail `invalid`.
 - `tools: ['read', ...hostTools]` reads records as the run's policies across turns; bound it with `steps`. The draft reader is then `read_answer`.
 - Transient provider failures retry inside the invocation, keeping the transcript and edited answer.
-- `jsonDiff(before, after, output)` gives the same keyed change list host-side.
 - Infer results are proposals. Store them for native form review before a separate confirmed apply; a write still runs through grants, checks and approvals. A person confirms anything changing money or access.
 - Use the public `Ai` signature; test with scripted output, never a live model.

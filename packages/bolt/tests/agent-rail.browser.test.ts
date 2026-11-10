@@ -233,7 +233,7 @@ const withComposer = async (
 					});
 					const bolt: typeof client = {
 						...client,
-						fileUrl: (file, options) => imageFixtures.get(file.id) ?? client.fileUrl(file, options)
+						file_url: (file, options) => imageFixtures.get(file.id) ?? client.file_url(file, options)
 					};
 					yield* Effect.promise(async () => {
 						const props = { api: shellApi(fetch, { base: location.origin }), bolt };

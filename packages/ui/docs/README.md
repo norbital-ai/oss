@@ -33,26 +33,26 @@ query execution and lifetime. Shared text, cells and actions have their own modu
 Use `Form` and `RecordShell` for record editing; they own loading, drafts and mutation feedback.
 Table, Board, RecordShell and the pickers read the caller's view output of the model
 (`ModelExposure.output`: `default` when granted, else the first granted named output).
-For custom workspace reads, import `bolt` from `$bolt` and capture reactive arguments in `$derived`.
-`bolt.query(name, input)` returns a `Query<T>` whose `.current`, `.error` and `.loading` subscribe
+For custom workspace reads, use the `ctx` prop and capture reactive arguments in `$derived`.
+`ctx.query(request)` returns a `Query<T>` whose `.current`, `.error` and `.loading` subscribe
 when read in a component. The same query reads once when awaited in an event handler and composes
 as an Effect with `yield*`.
 
 ```svelte
 <script lang="ts">
-	import { bolt } from '$bolt';
-	let { selected } = $props();
-	const order = $derived(selected === null ? null : bolt.query('orders', { id: selected }));
-	const orders = $derived(bolt.query('orders', { limit: 100 }));
+	import type { Id } from '@norbital-ai/bolt';
+	import type { PageContext } from '@norbital-ai/bolt/page';
+	let { ctx, selected }: { ctx: PageContext; selected: Id<'orders'> | null } = $props();
+	const order = $derived(selected === null ? null : ctx.query({ orders: { where: { id: { eq: selected } }, limit: 1 } }));
 </script>
 
-{#if order?.loading}<p>Loading…</p>{:else if order?.current}<p>{order.current.number}</p>{/if}
+{#if order?.loading}<p>Loading…</p>{:else if order?.current?.orders.rows[0]}<p>{order.current.orders.rows[0].number}</p>{/if}
 ```
 
 Identical reads share a subscription, released after a 30-second grace when its last reactive reader
 leaves. Changed arguments create a new query; check its loading and error states before showing an
 empty result. Live reads receive relevant commits from the host. `aggregate` and `history` use the
-same contract. Render a public page's typed `pageServer.load` data during SSR and hydration; browser
+same contract. Read the public page's `ctx.query` state during SSR and hydration. browser
 queries begin after mount.
 
 Host components with ordinary Effects or Streams can use `observeOnce(() => effect)` or

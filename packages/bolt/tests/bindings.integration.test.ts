@@ -35,7 +35,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			notes: {
-				read: { notes: { fields: 'all' } },
+				outputs: { default: { notes: { fields: 'all' } } },
 				create: { columns: { notes: ['title', 'due', 'photo'] }, transform: true }
 			}
 		},
@@ -50,7 +50,6 @@ const manifest = Result.getOrThrow(
 		teams: { Readers: { name: 'Readers', policies: ['reader'] } },
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

@@ -9,7 +9,6 @@ import { DbError } from '../src/engine/errors.ts';
 import { Files, Images } from '../src/engine/ports.ts';
 import { imagesPort } from '../src/node/images.ts';
 import { manifest as baseManifest } from './engine-fixture.ts';
-import { canOpenKiosk } from '../src/decl/runtime/kiosk.ts';
 import type { Authority, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import {
@@ -98,15 +97,13 @@ const m: EngineManifest = {
 			icon: 'i',
 			audience: { public: ['applicant'], challenge: 'turnstile' },
 			pages: { apply: { title: 'Apply' } }
-		}
-	},
-	groups: { hr: { label: 'HR', icon: 'g', defaultChild: 'people' } },
-	kiosks: {
+		},
 		clock: {
 			title: 'Clock',
 			description: 'd',
 			icon: 'i',
-			auth: 'members',
+			shell: 'kiosk',
+			audience: 'members',
 			policies: ['kiosk_clock'],
 			pages: { clock: { title: 'Clock' } }
 		},
@@ -114,17 +111,17 @@ const m: EngineManifest = {
 			title: 'Lobby',
 			description: 'd',
 			icon: 'i',
-			auth: 'none',
-			policies: ['lobby_public'],
+			shell: 'kiosk',
+			audience: { public: ['lobby_public'] },
 			pages: { welcome: { title: 'Welcome' } }
 		}
-	}
+	},
+	groups: { hr: { title: 'HR', icon: 'g', default_child: 'people' } }
 };
 const member = (
 	apps: string[],
 	over: Partial<Extract<EngineActor, { kind: 'member' }>> = {},
-	admin = false,
-	kiosks: string[] = []
+	admin = false
 ): Authority => ({
 	key: 'k',
 	admin,
@@ -146,7 +143,7 @@ const member = (
 		party: null,
 		...over
 	},
-	capabilities: { apps, kiosks, tools: [], mcp: [] }
+	capabilities: { apps, tools: [], mcp: [] }
 });
 const names = (ns: ReturnType<typeof nav>): unknown[] =>
 	ns.map((n) => (n.kind === 'group' ? { [n.name]: names(n.children) } : n.name));
@@ -171,7 +168,8 @@ describe('app visibility (§3.9, capabilities.apps)', () => {
 	it('externals see only external/all apps; admins see every app; visitors only their own', () => {
 		const ext = member(['*'], { external: true });
 		expect(['sales', 'portal', 'both'].map((a) => canOpen(m, ext, a))).toEqual([false, true, true]);
-		expect(Object.keys(m.apps).every((a) => canOpen(m, member([], {}, true), a))).toBe(true);
+		const apps = Object.entries(m.apps).filter(([, app]) => app.shell !== 'kiosk');
+		expect(apps.every(([name]) => canOpen(m, member([], {}, true), name))).toBe(true);
 		const visitor: Authority = {
 			...member([]),
 			actor: { kind: 'visitor', app: 'careers', visitor: 'v' }
@@ -264,7 +262,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			relationships: { 'jobs.site': { to: 'sites', optional: true } },
 			exposures: {
 				jobs: {
-					read: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } },
+					outputs: { default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } } },
 					update: { columns: { jobs: ['title'] } }
 				}
 			},
@@ -276,7 +274,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...em,
 			exposures: {
 				jobs: {
-					read: { jobs: { fields: ['title', 'pay'] } },
+					outputs: { default: { jobs: { fields: ['title', 'pay'] } } },
 					create: { columns: { jobs: ['title', 'pay'] } },
 					update: { columns: { jobs: ['title', 'pay'] } }
 				}
@@ -303,7 +301,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...em,
 			exposures: {
 				jobs: {
-					read: { jobs: { fields: ['title'] } },
+					outputs: { default: { jobs: { fields: ['title'] } } },
 					syncs: {
 						report: {
 							with: 'file',
@@ -363,11 +361,11 @@ describe('exposure (the boot catalog ui reads)', () => {
 			relationships: { 'lines.job': { to: 'jobs', inverse: 'lines', owned: true } },
 			exposures: {
 				jobs: {
-					read: { jobs: { fields: 'all' }, 'jobs.lines': { fields: 'all' } },
+					outputs: { default: { jobs: { fields: 'all' }, 'jobs.lines': { fields: 'all' } } },
 					update: { columns: { jobs: ['title'], 'jobs.lines': ['amount'] } }
 				},
 				lines: {
-					read: { lines: { fields: 'all' } },
+					outputs: { default: { lines: { fields: 'all' } } },
 					create: { columns: { lines: ['amount', 'job'] } },
 					update: { columns: { lines: ['amount'] } }
 				}
@@ -396,7 +394,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 				'jobs.site': { to: 'sites', optional: true, where: { title: { eq: 'Yard' } } }
 			},
 			exposures: {
-				jobs: { read: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } }
+				jobs: { outputs: { default: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } } }
 			}
 		};
 		expect(exposure(narrowed, { ...member([]), admin: true })['jobs']?.relations).toEqual({
@@ -409,7 +407,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			relationships: { 'jobs.site': { to: 'sites', optional: true, owned: true } },
 			exposures: {
 				jobs: {
-					read: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } },
+					outputs: { default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } } },
 					update: { columns: { jobs: ['title', 'site'] } },
 					syncs: { jobs: { with: 'operations', read: true } }
 				}
@@ -467,12 +465,14 @@ describe('exposure (the boot catalog ui reads)', () => {
 		});
 	});
 	it('a caller holding only a named output reads that output: its fields, its layers, its name', () => {
+		const jobs = em.exposures['jobs'];
+		if (jobs === undefined) throw new Error('Missing jobs exposure');
 		const source: EngineManifest = {
 			...em,
 			exposures: {
 				jobs: {
-					...em.exposures['jobs']!,
-					outputs: { brief: { jobs: { fields: ['title'] } } }
+					...jobs,
+					outputs: { ...jobs.outputs, brief: { jobs: { fields: ['title'] } } }
 				}
 			}
 		};
@@ -520,7 +520,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 						}
 					}
 				},
-				exposures: { jobs: { ...em.exposures['jobs'], read: { jobs: { fields: 'all' } } } }
+				exposures: { jobs: { ...em.exposures['jobs'], outputs: { default: { jobs: { fields: 'all' } } } } }
 			})
 		);
 		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({
@@ -558,7 +558,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					}
 				},
 				relationships: { ...em.relationships, 'lines.order': { to: 'orders', inverse: 'lines' } },
-				exposures: { orders: { read: { orders: { fields: 'all' } } } }
+				exposures: { orders: { outputs: { default: { orders: { fields: 'all' } } } } }
 			})
 		);
 		expect(exposure(orders, { ...member([]), admin: true })['orders']!.fields).toEqual({
@@ -601,8 +601,8 @@ describe('exposure (the boot catalog ui reads)', () => {
 					'lines.bill': { to: 'bills', inverse: 'bill_lines' }
 				},
 				exposures: {
-					orders: { read: { orders: { fields: 'all' } } },
-					bills: { read: { bills: { fields: 'all' } } }
+					orders: { outputs: { default: { orders: { fields: 'all' } } } },
+					bills: { outputs: { default: { bills: { fields: 'all' } } } }
 				}
 			})
 		);
@@ -719,7 +719,7 @@ describe('nav tree', () => {
 			},
 			groups: {
 				...m.groups,
-				'hr/settings': { label: 'Settings', icon: 'i', defaultChild: 'lineage' }
+				'hr/settings': { title: 'Settings', icon: 'i', default_child: 'lineage' }
 			}
 		};
 		const [, hr] = nav(nested, member(['sales', 'hr']));
@@ -1126,19 +1126,11 @@ describe('sidebar model', () => {
 			['payroll/compliance', false]
 		]);
 	});
-	it("kiosks sit in the ellipsis menu's Kiosks group: members ones by capability, `none` ones for everyone", () => {
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'clock', member([], {}, false, ['clock']))).toBe(
-			true
-		);
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'clock', member([]))).toBe(false);
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'lobby', member([]))).toBe(true);
-		expect(m.kiosks?.['lobby']?.auth === 'none').toBe(true);
-		expect(m.kiosks?.['clock']?.auth === 'none').toBe(false);
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'clock', member([], {}, true))).toBe(true);
-		expect(kioskNav(m, member([], {}, false, ['clock'])).map((k) => k.name)).toEqual([
-			'clock',
-			'lobby'
-		]);
+	it("kiosks sit in the ellipsis menu's Kiosks group: members ones by capability, public ones for everyone", () => {
+		expect(kioskNav(m, member([])).map((k) => k.name)).toEqual(['lobby']);
+		expect(kioskNav(m, member([], {}, true)).map((k) => k.name)).toEqual(['clock', 'lobby']);
+		expect(route(m, new URL('http://x/app/clock'))).toEqual({ kind: 'notFound' });
+		expect(kioskNav(m, member(['clock'])).map((k) => k.name)).toEqual(['clock', 'lobby']);
 		expect(kioskHref('clock', 'clock')).toBe('/kiosk/clock/clock');
 		expect(route(m, new URL('http://x/kiosk/clock/clock'))).toEqual({
 			kind: 'kiosk',
@@ -1150,10 +1142,7 @@ describe('sidebar model', () => {
 		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'lobby', page: 'welcome' })).toBe(true);
 		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'clock', page: 'clock' })).toBe(false);
 		expect(
-			tree(
-				navigationModel(bootOf(member([], {}, false, ['clock'])), '/kiosk/clock/clock', (k) => k)
-					.utilities
-			)
+			tree(navigationModel(bootOf(member(['clock'])), '/kiosk/clock/clock', (k) => k).utilities)
 		).toContainEqual(['kiosks', ['clock', 'lobby']]);
 	});
 });
@@ -1239,7 +1228,7 @@ describe('Studio port boundary', () => {
 				},
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: { rep: { description: 'Representative', grants: {} } },
-				envoys: {},
+
 				automations: { nightly: { description: 'Nightly task', policies: ['rep'] } },
 				connections: { stripe: { integration: 'stripe' }, mail: { integration: 'mail' } },
 				mcp: { docs: { description: 'Documentation tools', url: 'API' } },
@@ -1277,17 +1266,10 @@ describe('Studio port boundary', () => {
 			releases: []
 		};
 		const v = studioView(state);
-		// Released shells still require this retired section in their wire decoder.
-		expect(
-			Schema.decodeUnknownSync(
-				Schema.Struct({ sections: Schema.Struct({ remotes: Schema.Array(Schema.Unknown) }) })
-			)(v).sections.remotes
-		).toEqual([]);
 		const names = Object.fromEntries(
 			Object.entries(v.sections!).map(([s, es]) => [s, es.map((e) => e.name)])
 		);
 		expect(names).toEqual({
-			remotes: [],
 			models: ['a', 'b'],
 			apps: ['x'],
 			kiosks: [],
@@ -1316,7 +1298,7 @@ describe('Studio port boundary', () => {
 				},
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: {},
-				envoys: {},
+
 				automations: {},
 				connections: {},
 				mcp: {},
@@ -1390,8 +1372,7 @@ describe('reading files over the files port', () => {
 						}
 					]),
 				write: () => Effect.die('unused write'),
-				session: () =>
-					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
@@ -1432,8 +1413,7 @@ describe('reading files over the files port', () => {
 			const db = TenantDb.typed({
 				read: () => Effect.succeed([{ rows: [{ key: 'k', mime: 'image/heic' }], affected: 0 }]),
 				write: () => Effect.die('unused write'),
-				session: () =>
-					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
@@ -1471,6 +1451,8 @@ describe('workspace media', () => {
 
 describe('embedding', () => {
 	const partner = 'https://partner.example';
+	const lobby = m.apps['lobby'];
+	if (lobby === undefined) throw new Error('missing lobby fixture');
 	const embedded: EngineManifest = {
 		...m,
 		apps: {
@@ -1479,14 +1461,13 @@ describe('embedding', () => {
 				title: 'Kiosk',
 				description: 'd',
 				icon: 'i',
-				pages: {
-					clock: { title: 'Clock', portal: true, embed: [partner, 'https://b.example:8443'] }
-				}
-			}
-		},
-		kiosks: { lobby: { ...m.kiosks!['lobby']!, embed: [partner] } }
+				embed: [partner, 'https://b.example:8443'],
+				pages: { clock: { title: 'Clock' } }
+			},
+			lobby: { ...lobby, embed: [partner] }
+		}
 	};
-	it('a kiosk or portal page is framed by the workspace and the origins its `embed` names; without `embed`, by the workspace alone', () => {
+	it('an app or kiosk page is framed by the workspace and the origins its `embed` names; without `embed`, by the workspace alone', () => {
 		expect(framePolicy(embedded, '/app/hr/kiosk/clock')).toBe(
 			`frame-ancestors 'self' ${partner} https://b.example:8443`
 		);

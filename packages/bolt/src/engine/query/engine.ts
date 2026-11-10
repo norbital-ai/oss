@@ -913,9 +913,14 @@ export const ReadsLive = Layer.effect(
 			);
 		const held = new Set<string>();
 		db.owe(
-			Effect.map(heldModels(db), (models) => {
-				for (const model of models) held.add(model);
-			})
+			heldModels(db).pipe(
+				Effect.map((models) => {
+					for (const model of models) held.add(model);
+				}),
+				Effect.mapError((error) =>
+					error instanceof DbError ? error : DbError.make('XX000', error.message)
+				)
+			)
 		);
 		/** A pure search body (`probe`, `rerank`): 0 crossings, run as the platform. */
 		const invoke = Effect.fn('Bolt.searchBody')(function* (

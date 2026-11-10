@@ -33,16 +33,16 @@ import type { WebhookScheme } from './automation.ts';
 import type { SecretName } from './names.ts';
 
 /** Checks the definition of a read integration instance before using its id in a definition-pinned ref. */
-export function instanceId<const D extends string>(
+export function instance_id<const D extends string>(
 	definition: Is<D, IntegrationName>,
 	instance: { readonly id: Id<'sys_integration'>; readonly integration: string }
 ): InstanceId<D> {
-	if (!isInstance<D>(definition, instance))
+	if (!is_instance<D>(definition, instance))
 		throw new RangeError(`Expected an instance of '${definition}', got '${instance.integration}'`);
 	return instance.id;
 }
 /** Narrows a read instance and its id by its declared integration definition. */
-export function isInstance<const D extends string>(
+export function is_instance<const D extends string>(
 	definition: Is<D, IntegrationName>,
 	instance: { readonly id: Id<'sys_integration'>; readonly integration: string }
 ): instance is { readonly id: InstanceId<D>; readonly integration: D } {

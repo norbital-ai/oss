@@ -367,7 +367,7 @@ const failure = (e) => {
 // ── values (D6): the wire's one tag, { $dec }, becomes std/decimal's Decimal; dates and instants are their ISO text ──
 const reviveWire = ${String(reviveWire)};
 
-function start(kind, path, inputJson, ctxJson, invocationId) {
+function start(kind, path, inputJson, ctxJson, invocation_id) {
 	const ns = G.__boltGuest; delete G.__boltGuest;
 	let body = ns && ns.default;
 	for (const p of path) body = isObject(body) && Object.hasOwn(body, p) ? body[p] : undefined;
@@ -379,8 +379,8 @@ function start(kind, path, inputJson, ctxJson, invocationId) {
 		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
 		delete raw.$secrets;
 		ctx = Object.defineProperty(kind === 'page'
-			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocationId }
-			: { ...raw, invocationId }, Symbol.for('norbital.bolt.ctx'), { value: kind });
+			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocation_id }
+			: { ...raw, invocation_id }, Symbol.for('norbital.bolt.ctx'), { value: kind });
 	}
 	const args = kind === 'tool' || kind === 'integration'
 		? (Array.isArray(input) ? input : [input]).map((a) => isObject(a) && a.$ctx === true ? ctx : a)

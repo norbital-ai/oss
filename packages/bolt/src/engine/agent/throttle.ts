@@ -11,8 +11,7 @@
 // per-conversation lock, under a bounded model call, and never waits for the turn it admits. Failure answers: a direct
 // conversation is answered and a group stays quiet. `delivered_turn` (set by the agent's claim, guarded by `IS NULL`) and
 // `addressed` are the one record of what the agent received, so no row is new input twice.
-import type { EnvoySpec } from '../../decl/runtime/agent.ts';
-import { Clock, Context, Effect, FiberSet, Layer, Option, Schema, Semaphore } from 'effect';
+import { Clock, Context, Effect, FiberSet, Layer, Option, RcMap, Schema, Semaphore } from 'effect';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
 import {
@@ -29,7 +28,6 @@ import { triageAttachments } from './attachments.ts';
 import { Manifest, Live, Turns, Links, Wake, RunHandlers, type LiveShape } from '../services.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { FacilityFailure } from '../../decl/errors.ts';
 import { Port } from '../port.ts';
 import { enqueueTurn, TURN_LEASE_MS, TurnHandlers } from './turns.ts';
 import {
@@ -41,15 +39,13 @@ import {
 } from '../decisions/index.ts';
 import { FileRef, messageCommit, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
-import { envoySpec } from '../envoys/spec.ts';
+import { envoySpec, type EnvoySpec } from '../envoys/spec.ts';
 /** The durable run's name: queued runs and the logs carry it across releases. */
 const THROTTLE_RUN = 'agent.triage';
 /** Engine constants (rule 72's budget row), never authoring options. */
 export const HOLD_MAX_MS = 3000;
 /** A burst nothing decided by then is taken over by the host's queue: the process died, or the decision failed. */
 export const TAKEOVER_MS = 15_000;
-/** The decider's whole allowance: past it the decision is a failed one, so a hung model never holds a message. */
-const DECISION_MS = 6000;
 /** The presence of a sender still typing pushes a hold out by this, within its cap. */
 const TYPING_MS = 1000;
 const WINDOW_ROWS = 30;
@@ -140,14 +136,14 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 	/** The decisions under way, and the turns they admitted: a turn outlives the decision that started it. */
 	const decisions = yield* FiberSet.make<void, never>(),
 		turns = yield* FiberSet.make<void, never>();
-	// One decision per conversation at a time; a decision is bounded and ends when it has admitted.
-	// ponytail: one semaphore per conversation ever held in this process; evict idle ones if that set grows large
-	const locks = new Map<string, Semaphore.Semaphore>();
-	const serial = (conversation: string) => {
-		let lock = locks.get(conversation);
-		if (lock === undefined) locks.set(conversation, (lock = Semaphore.makeUnsafe(1)));
-		return Semaphore.withPermit(lock);
-	};
+	// One decision per conversation at a time, releasing the lock after its final waiter exits.
+	const locks = yield* RcMap.make({ lookup: (_conversation: string) => Semaphore.make(1) });
+	const serial =
+		(conversation: string) =>
+		<A, E, R>(work: Effect.Effect<A, E, R>) =>
+			Effect.scoped(
+				RcMap.get(locks, conversation).pipe(Effect.flatMap((lock) => lock.withPermit(work)))
+			);
 	const logs = yield* Logs;
 	const { manifest: m, db } = cfg.engine;
 	const announce = cfg.announce;
@@ -324,7 +320,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		const spent = ran || hold?.held === true;
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
-		const spec = envoyKey === null ? undefined : yield* envoySpec(m, db, envoyKey);
+		const spec = envoyKey === null ? undefined : yield* envoySpec(db, envoyKey);
 		const filterable = envoy && conv.kind === 'group';
 		const throttled =
 			cfg.ai !== undefined &&
@@ -486,19 +482,6 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		if (imageParts.length > 0) req = { ...req, state: [JSON.stringify(textState), ...imageParts] };
 		const decisionStarted = yield* Clock.currentTimeMillis;
 		const d = yield* (cfg.ai === undefined ? Port.unavailable('ai') : ask(cfg.ai, req)).pipe(
-			Effect.timeoutOption(DECISION_MS),
-			Effect.flatMap(
-				Option.match({
-					onSome: Effect.succeed,
-					onNone: () =>
-						Effect.fail(
-							new FacilityFailure({
-								kind: 'upstream',
-								message: 'the decider did not answer in time'
-							})
-						)
-				})
-			),
 			Effect.catch((error) =>
 				Effect.succeed(
 					error._tag === 'Unavailable'

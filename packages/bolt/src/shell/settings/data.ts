@@ -74,7 +74,6 @@ export type Settings = {
 		triage: boolean;
 		dm: 'union' | 'envoy';
 		active: boolean;
-		created: boolean;
 	}[];
 	/**
 	 * Every integration instance (`sys_integration`): `named` is a connection of `+workspace.ts`, `status` the host's last
@@ -213,37 +212,21 @@ export const settings = Effect.fn('shell.settings')(function* (
 			label: d.label,
 			set: status === null ? null : status[name] === true
 		})),
-		envoys: [
-			...Object.entries(m.envoys).map(([id, e]) => ({
-				id,
-				name: e.name,
-				audience: e.audience ?? 'private',
-				task: e.task,
-				policies: e.policies,
-				groupMessages: e.groupMessages ?? 'mention_or_reply',
-				delegation: e.delegation ?? 'disabled',
-				triage: e.triage !== false && e.triage !== undefined,
-				dm: e.dm ?? 'union',
-				active: true,
-				created: false
-			})),
-			...runtimeEnvoys.map((e) => ({
-				id: e.id,
-				name: e.name,
-				audience: e.audience === 'public' ? ('public' as const) : ('private' as const),
-				task: e.task,
-				policies: e.policies,
-				groupMessages:
-					e.group_messages === 'disabled' || e.group_messages === 'all'
-						? e.group_messages
-						: ('mention_or_reply' as const),
-				delegation: e.delegation === 'enabled' ? ('enabled' as const) : ('disabled' as const),
-				triage: e.triage,
-				dm: e.dm === 'envoy' ? ('envoy' as const) : ('union' as const),
-				active: e.active,
-				created: true
-			}))
-		],
+		envoys: runtimeEnvoys.map((e) => ({
+			id: e.id,
+			name: e.name,
+			audience: e.audience === 'public' ? ('public' as const) : ('private' as const),
+			task: e.task,
+			policies: e.policies,
+			groupMessages:
+				e.group_messages === 'disabled' || e.group_messages === 'all'
+					? e.group_messages
+					: ('mention_or_reply' as const),
+			delegation: e.delegation === 'enabled' ? ('enabled' as const) : ('disabled' as const),
+			triage: e.triage,
+			dm: e.dm === 'envoy' ? ('envoy' as const) : ('union' as const),
+			active: e.active
+		})),
 		instances: (yield* decode(InstanceRow, instances?.rows ?? [])).map((i) => ({
 			...i,
 			configuration: i.configuration ?? {},

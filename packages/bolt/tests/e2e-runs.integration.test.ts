@@ -29,7 +29,7 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		quotes: {
-			read: { quotes: { fields: 'all' } },
+			outputs: { default: { quotes: { fields: 'all' } } },
 			create: { columns: { quotes: ['title'] } },
 			update: { columns: { quotes: ['status'] } },
 			effect: { created: true }
@@ -52,7 +52,6 @@ const manifest = {
 	integrations: {},
 	teams: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -154,7 +153,7 @@ describe('a started automation whose body fails', () => {
 									ops: {
 										description: 'Ops',
 										grants: { quotes: { read: true, create: true, update: true } },
-										automations: ['quotes_boom']
+										capabilities: { automations: ['quotes_boom'] }
 									}
 								},
 								automations: {

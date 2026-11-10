@@ -87,7 +87,7 @@ The live status of one automation run: queued, running with its progress, or its
 					{#each runFiles(r) as f (f.id)}
 						<a
 							class="text-primary text-xs underline-offset-4 hover:underline"
-							href={bolt.fileUrl(f)}
+							href={bolt.file_url(f)}
 							download={f.name}>{msg(bolt, 'run.download', 'Download {name}', { name: f.name })}</a
 						>
 					{/each}

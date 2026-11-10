@@ -18,7 +18,7 @@ const manifest: EngineManifest = {
 		...base.exposures,
 		orders: {
 			...base.exposures['orders'],
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			notify: true
 		}
 	},

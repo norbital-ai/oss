@@ -259,16 +259,6 @@ const liveStatus = /*#__PURE__*/ (() =>
 		}).pipe(Effect.mapError(fromStore));
 		return { status, inspected };
 	}))();
-/** Read-only source/ledger/physical status. Application rechecks every observation with SQL guards under its lock. */
-export const statusMigrations = /*#__PURE__*/ (() =>
-	Effect.fn('Bolt.statusMigrations')(function* (
-		db: TenantDbShape,
-		manifest: EngineManifest,
-		bundle: MigrationBundle
-	) {
-		yield* current(bundle.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
-		return (yield* liveStatus(db, bundle)).status;
-	}))();
 const requirePhysical = (status: { readonly physical: string }) =>
 	status.physical === 'current' || status.physical === 'prefix'
 		? Effect.void

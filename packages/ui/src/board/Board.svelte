@@ -53,7 +53,7 @@
 
 <script lang="ts" generics="C extends ModelKey">
 	import { formatValue as show } from '../kinds/kind.js';
-	import { Effect, Predicate, Schedule, Stream } from 'effect';
+	import { Effect, Predicate, Queue, Stream } from 'effect';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { encodeWire } from '@norbital-ai/std/wire';
 	import { fork } from '../effect/index.js';
@@ -71,7 +71,6 @@
 	import { orderOf, sortable } from '../filter/filter.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
-	import { COUNT_EVERY_MS } from '../read/paging.js';
 	import { flat } from '../read/aggregate.js';
 	import { label, lowerLead, msg } from '../text/messages.js';
 	import { listRequest } from '../relations/select.js';
@@ -200,13 +199,12 @@
 	// lane values and counts: one aggregate by `by` (the one-shot count rule 7 applies per lane)
 	let countsInvalid = $state(false);
 	let countsRevision = 0;
+	let refreshCounts = () => {};
 	const countsRead = watchRead(() => {
 		const model = of,
 			field = by,
 			where = scope;
-		let cached: Page<Values> | undefined;
-		const read = Effect.suspend(() => {
-			if (cached !== undefined && !countsInvalid) return Effect.succeed(cached);
+		const read = () => {
 			const revision = countsRevision;
 			return bolt
 				.aggregate<Page<Values>>(model, {
@@ -216,15 +214,35 @@
 					...(where === undefined ? {} : { where })
 				})
 				.pipe(
-					Effect.tap((answer) =>
+					Effect.tap(() =>
 						Effect.sync(() => {
-							cached = answer;
 							countsInvalid = revision !== countsRevision;
 						})
 					)
 				);
-		});
-		return Stream.fromEffectSchedule(read, Schedule.spaced(COUNT_EVERY_MS));
+		};
+		const changes = Stream.callback<void>(
+			(queue) =>
+				Effect.acquireRelease(
+					Effect.sync(() => {
+						const refresh = () => {
+							Queue.offerUnsafe(queue, undefined);
+						};
+						refreshCounts = refresh;
+						return refresh;
+					}),
+					(refresh) =>
+						Effect.sync(() => {
+							if (refreshCounts === refresh) refreshCounts = () => {};
+						})
+				),
+			{ bufferSize: 1, strategy: 'sliding' }
+		);
+		// The first count loads immediately. A burst of live lane changes triggers one recount.
+		return Stream.concat(
+			Stream.succeed(undefined),
+			changes.pipe(Stream.debounce('30 seconds'))
+		).pipe(Stream.mapEffect(read));
 	});
 	const found = $derived.by<
 		ReadState<
@@ -335,6 +353,7 @@
 	const invalidateCounts = () => {
 		countsRevision++;
 		countsInvalid = true;
+		refreshCounts();
 	};
 	// a lane's cards: the board's scope AND the lane's own condition (a relation lane's `where`, else `by` is its value)
 	const laneWhere = (lane: { value: import('@norbital-ai/std/kind').Value; where?: Json }) =>
@@ -543,7 +562,8 @@
 								>
 									<span class="flex min-w-0 items-center gap-1.5"
 										>{#if dot}<span class={['size-2 shrink-0 rounded-full', dot]} aria-hidden="true"
-											></span>{/if}<span class="truncate">{lane.label}</span>{#if search === ''}<span
+											></span>{/if}<span class="truncate">{lane.label}</span
+										>{#if search === ''}<span
 												class="text-muted-foreground shrink-0 text-xs tabular-nums"
 												data-lane-count>{lane.count}</span
 											>{/if}</span

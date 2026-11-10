@@ -27,7 +27,7 @@
 	} = $props();
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(bolt);
+	provideBolt(() => bolt);
 	provideKinds({
 		get catalog() {
 			return catalog;

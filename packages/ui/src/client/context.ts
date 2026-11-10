@@ -3,9 +3,10 @@ import { Predicate } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
 import type { ViewBolt } from './contract.js';
 import { useKinds, type ModelExposure } from '../kinds/context.js';
-export const BOLT = Symbol('ui.views.bolt');
+const BOLT = Symbol('ui.views.bolt');
 /** Hands the page's client to every view beneath; the shell calls it once per page. */
-export const provideBolt = (bolt: ViewBolt) => setContext(BOLT, bolt);
+export const provideBolt = (client: () => ViewBolt) => setContext(BOLT, client);
+export const usePageContext = () => getContext<(() => ViewBolt) | undefined>(BOLT);
 /**
  * A view's read request with each root that names no `output` reading the one the catalog gives the caller's views
  * (`ModelExposure.output`; absent: `default`).
@@ -27,12 +28,13 @@ export const withOutputs = (
 	);
 /** The host client when present, its reads in the caller's view outputs; controlled local views can render without one. */
 export const useOptionalBolt = (): ViewBolt | undefined => {
-	const bolt = getContext<ViewBolt | undefined>(BOLT),
+	const client = usePageContext(),
 		catalog = useKinds().catalog;
-	if (bolt === undefined) return undefined;
+	if (client === undefined) return undefined;
 	// every member reads through the host's own client; `query` and `aggregate` gain the views' outputs
-	return new Proxy(bolt, {
-		get: (target, key) => {
+	return new Proxy(client(), {
+		get: (_target, key) => {
+			const target = client();
 			if (key === 'query')
 				return (request: { readonly [path: string]: Json }) =>
 					target.query(withOutputs(request, catalog));
@@ -44,10 +46,9 @@ export const useOptionalBolt = (): ViewBolt | undefined => {
 		}
 	});
 };
-/** The shell client for native reads, actions and translated text. Capture it during component initialization; eagerly registered renderers can avoid importing `$bolt` before boot. */
+/** The shell client for native reads, actions and translated text. Capture it during component initialization. */
 export function useBolt(): ViewBolt {
 	const bolt = useOptionalBolt();
-	if (bolt === undefined)
-		throw new Error('A view needs the shell: call provideBolt(bolt) above it.');
+	if (bolt === undefined) throw new Error('A view needs the shell: call provideBolt above it.');
 	return bolt;
 }

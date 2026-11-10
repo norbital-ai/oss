@@ -282,10 +282,10 @@ const titled = (rows: readonly Readonly<Record<string, unknown>>[], title: strin
 	present(rows.find((r) => r['title'] === title));
 
 // rep's create check approves a row titled 'held'; the create transform refuses a blocked customer
-const check = 'create: { check: function* (rows, ctx) {';
+const check = 'create: { verdict: function* (rows, ctx) {';
 const approving = guest.source.replace(
 	check,
-	`${check} if (rows.some((r) => r.title === 'held')) return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] }));`
+	`${check} if (rows.some((r) => r.title === 'held')) return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });`
 );
 layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approving)), {
 	excludeTestServices: true

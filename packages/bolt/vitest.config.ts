@@ -133,11 +133,8 @@ export default defineConfig({
 				extends: false,
 				plugins: [liveFixture(), svelte(), tailwindcss()],
 				resolve: { alias: SOURCE },
-				// this project inherits nothing (`extends: false`): without the list a dependency found mid-run is
-				// optimized late, Vite reloads, and every file after it fails to import
-				optimizeDeps: {
-					include: [...BROWSER_DEPS, '@norbital-ai/ui > leaflet', '@norbital-ai/ui > codemirror']
-				},
+				// Prebundle the UI's indirect dependencies before the browser loads the Vitest runner.
+				optimizeDeps: { include: ['@norbital-ai/ui > codemirror', '@norbital-ai/ui > leaflet'] },
 				test: {
 					name: 'browser',
 					include: ['tests/**/*.browser.{test,spec}.ts'],

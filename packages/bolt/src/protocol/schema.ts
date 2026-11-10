@@ -6,7 +6,6 @@ import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
 import {
-	CONVERT_TARGETS,
 	type EngineActor,
 	type RunTrigger,
 	type RunTriggerView
@@ -436,7 +435,7 @@ export const AgentRow = Schema.Struct({
 	author: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	detail: Schema.optionalKey(Schema.String),
 	about: Schema.optionalKey(Schema.Json),
-	/** The files a message carries (`id` when stored, for `fileUrl`). */
+	/** The files a message carries (`id` when stored, for `file_url`). */
 	files: Schema.optionalKey(
 		Schema.mutable(
 			Schema.Array(
@@ -572,15 +571,6 @@ export const PreviewPdf = Schema.Struct({
 	source: ConvertSource,
 	options: Schema.Struct(PdfOptions)
 });
-const ConvertDocument = Schema.Struct({
-	source: ConvertSource,
-	request: Schema.Struct({
-		to: Schema.Literals(CONVERT_TARGETS),
-		name: Schema.String,
-		...PdfOptions,
-		reference: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
-	})
-});
 const Describe = Schema.Struct({
 	model: Schema.String,
 	text: Schema.String,
@@ -636,7 +626,6 @@ const own = <C extends string, I extends Schema.Constraint>(callable: C, input: 
 export const OwnCall = Schema.Union([
 	own('start', Start),
 	own('approvals.decide', Decide),
-	own('convert.document', ConvertDocument),
 	own('filter.describe', Describe),
 	own('filter.options', Options),
 	/** Never refused: what does not decode starts a conversation with the defaults. */
@@ -677,9 +666,6 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 		[Start, 'start takes { automation, input, id } or { automation, runs: [{ input, id }] }']
 	],
 	'approvals.decide': [[Decide, 'approvals.decide takes { requestId, decision, reason? }']],
-	'convert.document': [
-		[ConvertDocument, 'convert.document takes { source, request: { to, name } }']
-	],
 	'filter.describe': [
 		[
 			Schema.Struct({ model: Schema.String, text: Schema.String }),

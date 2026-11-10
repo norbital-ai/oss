@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // The agent UI's engine half (§5.9): an in-app conversation starts on the workspace's `ai.default`; a failed turn's log
 // line and staff row name the real reason; `setAgent`, `file` and `markRead` over `/__bolt/act`; staff
 // list the envoy conversations with an unread mark; `read_file` reads an xlsx into std/sheet's cells.
@@ -33,21 +34,11 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } }
+			quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } }
 		},
 		policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
-		envoys: {
-			field: {
-				audience: 'public',
-				name: 'Norbius',
-				policies: ['rep'],
-				triage: false,
-				groupMessages: 'disabled',
-				delegation: 'disabled',
-				task: 'Help.'
-			}
-		},
-		connections: { field: { integration: 'whatsapp', envoy: 'field' } },
+
+		connections: { field: { integration: 'whatsapp' } },
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
 		teams: { 't-ops': { name: 'Ops', policies: ['rep'] } },
@@ -57,6 +48,20 @@ const manifest = Result.getOrThrow(
 		customFields: {}
 	})
 );
+const fieldEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: fieldEnvoy,
+		connections: ['field'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['rep'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		task: 'Help.'
+	}
+] as const;
 
 const setup = () =>
 	Effect.gen(function* () {
@@ -69,7 +74,9 @@ const setup = () =>
 			embed: () => Port.unavailable('ai.embed'),
 			infer: () => Stream.fail(Port.failure('ai')(new Error('not called')))
 		});
-		const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
+		const context = yield* Layer.build(
+			withEnvoys(TestWorkspace.layer({ manifest, ports }), runtimeEnvoys)
+		);
 		const t = Context.get(context, TestWorkspace),
 			agent = Context.get(context, Agents),
 			conversations = Context.get(context, Conversations);
@@ -217,13 +224,13 @@ describe('the agent UI actions', () => {
 				).toMatchObject({ _tag: 'ActRefused' });
 				expect(
 					yield* Effect.flip(
-						act('bob', 'sys_conversation.setAgent', { conversation: c, agent: 'field' })
+						act('bob', 'sys_conversation.setAgent', { conversation: c, agent: fieldEnvoy })
 					)
 				).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
 				expect(
-					yield* act('ann', 'sys_conversation.setAgent', { conversation: c, agent: 'field' })
+					yield* act('ann', 'sys_conversation.setAgent', { conversation: c, agent: fieldEnvoy })
 				).toMatchObject({ kind: 'committed' });
-				expect((yield* agent.conversation(c)).envoy).toBe('field');
+				expect((yield* agent.conversation(c)).envoy).toBe(fieldEnvoy);
 				yield* act('ann', 'sys_conversation.setAgent', { conversation: c, agent: 'workspace' });
 				expect((yield* agent.conversation(c)).envoy).toBeNull();
 

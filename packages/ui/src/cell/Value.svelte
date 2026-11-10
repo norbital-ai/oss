@@ -263,7 +263,14 @@
 		{...name === undefined ? {} : { name }}
 	/>
 {:else if files.length > 0}
-	<FileCollection refs={files} />
+	{#each files as f (f.id)}
+		{#if bolt === undefined}<span>{f.name}</span>{:else}<a
+				class="text-primary mr-2 underline-offset-4 hover:underline"
+				href={bolt.file_url(f)}
+				target="_blank"
+				rel="noopener">{f.name}</a
+			>{/if}
+	{/each}
 {:else if dataEntries(value) !== undefined || Array.isArray(value)}
 	<StructuredData {value} mode="view" {name} {row} />
 {:else}

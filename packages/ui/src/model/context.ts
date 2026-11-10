@@ -1,6 +1,5 @@
 import { getContext, setContext } from 'svelte';
-import type { ViewBolt } from '../client/contract.js';
-import { BOLT } from '../client/context.js';
+import { usePageContext } from '../client/context.js';
 import { enumText } from '../kinds/kind.js';
 import { label } from '../text/messages.js';
 const MODEL = Symbol('ui.views.model');
@@ -14,18 +13,18 @@ export const useModelKey = (): string | undefined =>
  * shell and a model are above, else the value in words (`enumText`). Call it at a component's init.
  */
 export function useEnumText(): (value: string, field?: string) => string {
-	const bolt = getContext<ViewBolt | undefined>(BOLT),
+	const client = usePageContext(),
 		of = getContext<(() => string) | undefined>(MODEL);
 	return (value, field) =>
 		enumText(value, {
-			...(bolt === undefined ? {} : { t: (k: string) => bolt.t(k) }),
+			...(client === undefined ? {} : { t: (k: string) => client().t(k) }),
 			...(of === undefined ? {} : { model: of() }),
 			...(field === undefined ? {} : { field })
 		});
 }
 /** A field's label beneath a view: the catalog's `models.<c>.fields.<field>`, else `declared`, else the name in words. */
 export function useFieldLabel(): (field: string, declared?: string) => string {
-	const bolt = getContext<ViewBolt | undefined>(BOLT),
+	const client = usePageContext(),
 		of = getContext<(() => string) | undefined>(MODEL);
-	return (field, declared) => label(bolt ?? { t: (k) => k }, of?.() ?? '', field, declared);
+	return (field, declared) => label(client?.() ?? { t: (k) => k }, of?.() ?? '', field, declared);
 }

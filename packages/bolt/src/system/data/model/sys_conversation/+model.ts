@@ -15,7 +15,7 @@ export default model('sys_conversation', {
 		thread: { kind: 'text', optional: true },
 		kind: { kind: 'text', optional: true },
 		/** The integration instance a chat or mail thread travels on. */
-		integration: { kind: 'ref', to: 'sys_integration', optional: true, onDelete: 'cascade' },
+		integration: { kind: 'ref', to: 'sys_integration', optional: true, on_delete: 'cascade' },
 		/** Provider membership for personal sync, shared by the conversation rather than copied into every message. */
 		participants: { kind: 'json', optional: true },
 		parent: { kind: 'text', optional: true },
@@ -38,5 +38,5 @@ export default model('sys_conversation', {
 		updated_at: { kind: 'instant', default: { var: 'now' } }
 	},
 	table: { primary: 'text' },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

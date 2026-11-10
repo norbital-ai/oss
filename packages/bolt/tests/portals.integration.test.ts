@@ -1,5 +1,5 @@
 // Portals carry their policies (§3.3.1, rule 38d): a kiosk with `auth: 'none'` runs a signed-out visitor as exactly
-// its policies; one with `auth: 'external'` sends a signed-out caller to sign in (or sign up), and every external who
+// its policies; one with `shell: 'kiosk', audience: 'external'` sends a signed-out caller to sign in (or sign up), and every external who
 // signs in holds exactly its policies there — and nothing of it anywhere else. A visitor is an anonymous user (a
 // `sys_user` its cookie holds) that owns its rows, is limited by itself, and links to the account it signs in to.
 // Over HTTP on PGlite.
@@ -32,23 +32,19 @@ const source = {
 	},
 	exposures: {
 		services: {
-			read: { services: { fields: 'all' } },
-			// what a portal reads: a service's name, never its cost
-			outputs: { listing: { services: { fields: ['name'] } } },
+			outputs: { default: { services: { fields: 'all' } }, listing: { services: { fields: ['name'] } } },
 			create: { columns: { services: ['name', 'cost'] } }
 		},
 		enquiries: {
-			read: { enquiries: { fields: 'all' } },
+			outputs: { default: { enquiries: { fields: 'all' } } },
 			create: { columns: { enquiries: ['name'] } }
 		},
 		bookings: {
-			read: { bookings: { fields: 'all' } },
-			outputs: { own: { bookings: { fields: ['note', 'customer'] } } },
+			outputs: { default: { bookings: { fields: 'all' } }, own: { bookings: { fields: ['note', 'customer'] } } },
 			create: { columns: { bookings: ['note', 'customer'] } }
 		},
 		orders: {
-			read: { orders: { fields: 'all' } },
-			outputs: { own: { orders: { fields: ['note'] } } },
+			outputs: { default: { orders: { fields: 'all' } }, own: { orders: { fields: ['note'] } } },
 			create: { columns: { orders: ['note', 'owner'] } }
 		}
 	},
@@ -97,17 +93,32 @@ const source = {
 			grants: { services: { read: true }, bookings: { read: true } }
 		}
 	},
-	apps: { desk: { ...card, pages: { home: page } } },
-	kiosks: {
-		site: { ...card, auth: 'none', policies: ['site_visitor'], pages: { home: page } },
-		account: { ...card, auth: 'external', policies: ['account_holder'], pages: { home: page } },
-		shop: { ...card, auth: 'none', policies: ['shopper'], pages: { home: page } },
-		stall: { ...card, auth: 'none', policies: ['stall_visitor'], pages: { home: page } }
+	apps: {
+		desk: { ...card, pages: { home: page } },
+		site: {
+			...card,
+			shell: 'kiosk',
+			audience: { public: ['site_visitor'] },
+			pages: { home: page }
+		},
+		account: {
+			...card,
+			shell: 'kiosk',
+			audience: 'external',
+			policies: ['account_holder'],
+			pages: { home: page }
+		},
+		shop: { ...card, shell: 'kiosk', audience: { public: ['shopper'] }, pages: { home: page } },
+		stall: {
+			...card,
+			shell: 'kiosk',
+			audience: { public: ['stall_visitor'] },
+			pages: { home: page }
+		}
 	},
 	teams: { Staff: ['staff'] },
 	automations: {},
 	connections: { mail: { integration: 'email' } },
-	envoys: {},
 	mcp: {},
 	customFields: {},
 	agent: { skills: {} }
@@ -244,7 +255,7 @@ describe('portal declarations', () => {
 				);
 				expect(findings(broken)).toEqual([
 					"app/public-policy careers: audience.public: there is no policy 'nobody'",
-					"access/kiosk-grant account_holder: kiosk 'account' (auth 'external'): a portal policy holds no capabilities"
+					"access/kiosk-grant account_holder: kiosk 'account' (audience 'external'): a portal policy holds no capabilities"
 				]);
 			})
 	);
@@ -460,7 +471,7 @@ layer(
 				yield* t.runDue();
 				expect(yield* user(me.visitor ?? '')).toEqual([]);
 				expect(yield* user(idle)).toEqual([]);
-				expect(yield* user(owner)).toEqual([{ kind: 'anonymous', active: true, sessions: 1 }]);
+				expect(yield* user(owner)).toEqual([{ kind: 'anonymous', active: true, sessions: 0 }]);
 			})
 	);
 });

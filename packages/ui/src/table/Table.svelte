@@ -194,7 +194,7 @@
 	}: TableProps<S, RowIn<S>, ColumnsIn<S>> = $props();
 	const client = useOptionalBolt();
 	if (client === undefined && !untrack(() => embedded && controlled && localSource(of)))
-		throw new Error('A view needs the shell: call provideBolt(bolt) above it.');
+		throw new Error('A view needs the shell: call provideBolt above it.');
 	const host = () => {
 		if (client === undefined) throw new Error('A remote table needs the shell.');
 		return client;
@@ -390,13 +390,13 @@
 	onChange_(
 		() => debouncedSearch.current,
 		(q) => {
-			if (q !== st.q) ((st = { ...st, q, after: null }), (back = []));
+			if (q !== st.q) restart({ q });
 		}
 	);
 	const restart = (patch: Partial<TableState>) => {
 		st = { ...st, ...patch, after: null };
 		back = [];
-		selected.clear();
+		clearSelection();
 	};
 	// a new filter or sort starts from the first page
 	onChange_(
@@ -565,34 +565,49 @@
 	const pageAll = (rows: readonly RowIn<S>[]) =>
 		rows.length > 0 && rows.every((r) => recordRow(r) && selected.has(r.id));
 	const togglePage = (rows: readonly RowIn<S>[], on: boolean) => {
+		if (!on) matchingRequest = null;
 		for (const id of onPage(rows)) on ? selected.add(id) : selected.delete(id);
 	};
 	const matching = $derived(
 		kind === 'local' ? local.length : kind === 'model' && probe === null ? count : null
 	);
-	let selecting = $state(false);
+	let matchingRequest = $state<symbol | null>(null);
+	function clearSelection() {
+		matchingRequest = null;
+		selected.clear();
+	}
+	onDestroy(() => {
+		matchingRequest = null;
+	});
 	function selectMatching() {
 		if (kind === 'local') return void local.filter(recordRow).forEach((r) => selected.add(r.id));
-		selecting = true;
+		const model = name;
+		const query = searched;
+		const searchText = qText;
+		const request = Symbol();
+		matchingRequest = request;
+		const current = () =>
+			matchingRequest === request && name === model && searched === query && qText === searchText;
 		fork(
 			host()
 				.query<QueryAnswer<RowIn<S>>>(
-					requestJson({ [name]: { ...searched, fields: [], limit: READ_LIMIT } })
+					requestJson({ [model]: { ...query, fields: [], limit: READ_LIMIT } })
 				)
 				.pipe(
 					Effect.tap((answer) =>
 						Effect.sync(() => {
-							for (const row of (answer[name]?.rows ?? []).filter(recordRow)) selected.add(row.id);
+							if (!current()) return;
+							for (const row of (answer[model]?.rows ?? []).filter(recordRow)) selected.add(row.id);
 						})
 					),
 					Effect.catch((error) =>
 						Effect.sync(() => {
-							notice = error.message;
+							if (current()) notice = error.message;
 						})
 					),
 					Effect.ensuring(
 						Effect.sync(() => {
-							selecting = false;
+							if (matchingRequest === request) matchingRequest = null;
 						})
 					)
 				)
@@ -1049,18 +1064,15 @@
 				<Button
 					variant="link"
 					class="h-auto px-0 text-xs"
-					disabled={selecting}
+					disabled={matchingRequest !== null}
 					onclick={selectMatching}
 					data-select-matching
 				>
 					{msg(text, 'table.selectMatching', 'Select all {n} matching', { n: matching })}</Button
 				>
 			{/if}
-			<Button
-				variant="link"
-				class="h-auto px-0 text-xs"
-				onclick={() => selected.clear()}
-				data-select-clear>{msg(text, 'table.clearSelection', 'Clear selection')}</Button
+			<Button variant="link" class="h-auto px-0 text-xs" onclick={clearSelection} data-select-clear
+				>{msg(text, 'table.clearSelection', 'Clear selection')}</Button
 			>
 		{:else}<span class="tabular-nums" data-range>{range}</span>{/if}
 	</div>
@@ -1088,7 +1100,7 @@
 			bind:q={qText}
 			searchable={canSearch}
 			selected={selectable ? [...selected] : undefined}
-			onSettled={() => selected.clear()}
+			onSettled={clearSelection}
 			{exporter}
 			onAdd={kind === 'local' && onChange && add
 				? () => onChange([...(tableSource._tag === 'local' ? tableSource.rows : []), add()])

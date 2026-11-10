@@ -41,7 +41,6 @@ const base: EngineManifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -56,12 +55,11 @@ const present = <A>(value: A | undefined): A => {
 	return value;
 };
 const orders: EngineManifest['exposures'][string] = {
-	read: {
+	outputs: { default: {
 		orders: { fields: ['number', 'total', 'party'] },
 		'orders.party': { fields: ['name', 'credit_limit'] },
 		'orders.lines': { fields: 'all' }
-	},
-	outputs: { logistics: { orders: { fields: ['number'] }, 'orders.lines': { fields: ['product'] } } },
+	}, logistics: { orders: { fields: ['number'] }, 'orders.lines': { fields: ['product'] } } },
 	create: { columns: { orders: ['number', 'party'], 'orders.lines': ['product', 'amount'] } },
 	update: { columns: { orders: ['number'], 'orders.lines': ['amount'] } }
 };
@@ -83,9 +81,9 @@ describe('layer maps at compile time (bolt check)', () => {
 								outputs: { logistics: { 'orders.lines': { where: { product: { ne: '' } } } } },
 								create: {
 									columns: { orders: ['number'], 'orders.lines': ['product'] },
-									check: true
+									verdict: true
 								},
-								update: { check: true }
+								update: { verdict: true }
 							}
 						}
 					}
@@ -103,16 +101,16 @@ describe('layer maps at compile time (bolt check)', () => {
 		expect(
 			findings({
 				exposures: {
-					nodes: { read: Object.fromEntries(deep.map((path) => [path, { fields: 'all' }])) }
+					nodes: { outputs: { default: Object.fromEntries(deep.map((path) => [path, { fields: 'all' }])) } }
 				}
 			})
-		).toEqual([`model/layer nodes: read: '${sixth}' is deeper than ${LAYER_MAX_DEPTH} levels`]);
+		).toEqual([`model/layer nodes: outputs.default: '${sixth}' is deeper than ${LAYER_MAX_DEPTH} levels`]);
 		// the fifth level is the deepest a map may declare
 		expect(
 			findings({
 				exposures: {
 					nodes: {
-						read: Object.fromEntries(deep.slice(0, -1).map((path) => [path, { fields: 'all' }]))
+						outputs: { default: Object.fromEntries(deep.slice(0, -1).map((path) => [path, { fields: 'all' }])) }
 					}
 				}
 			})
@@ -120,11 +118,11 @@ describe('layer maps at compile time (bolt check)', () => {
 		expect(
 			findings({
 				exposures: {
-					nodes: { read: { nodes: { fields: 'all' }, 'nodes.parent.parent': { fields: 'all' } } }
+					nodes: { outputs: { default: { nodes: { fields: 'all' }, 'nodes.parent.parent': { fields: 'all' } } } }
 				}
 			})
 		).toEqual([
-			`model/layer nodes: read: 'nodes.parent.parent' needs its parent layer 'nodes.parent'`
+			`model/layer nodes: outputs.default: 'nodes.parent.parent' needs its parent layer 'nodes.parent'`
 		]);
 	});
 
@@ -132,12 +130,12 @@ describe('layer maps at compile time (bolt check)', () => {
 		const found = findings({
 			exposures: {
 				orders: {
-					read: {
+					outputs: { default: {
 						orders: { fields: ['number', 'nope'] },
 						'orders.customer': { fields: 'all' },
 						'orders.notes': { fields: 'all' },
 						'orders.notes.about': { fields: 'all' }
-					},
+					} },
 					create: {
 						columns: {
 							orders: ['number', 'total'],
@@ -150,17 +148,17 @@ describe('layer maps at compile time (bolt check)', () => {
 		});
 		expect(found).toEqual(
 			expect.arrayContaining([
-				"model/layer orders: read: orders.customer: 'customer' is no relation of orders",
-				"model/layer orders: read: orders.notes.about: 'about' is an arc (a ref to several models) and cannot be a layer",
+				"model/layer orders: outputs.default: orders.customer: 'customer' is no relation of orders",
+				"model/layer orders: outputs.default: orders.notes.about: 'about' is an arc (a ref to several models) and cannot be a layer",
 				"model/layer orders: create.columns: 'orders.party' is a ref; a write layer is a many-relation (its child rows)",
-				"model/layer orders: read: 'nope' is no field of orders (orders)",
+				"model/layer orders: outputs.default: 'nope' is no field of orders (orders)",
 				"model/layer orders: create: 'total' is no writable column of orders (orders)",
 				"model/layer orders: create: orders.lines lists 'order', the key the engine sets from its parent row"
 			])
 		);
 	});
 
-	it("refuses an output named 'default' and an output field the model lacks", () => {
+	it('refuses a named output field the model lacks', () => {
 		expect(
 			findings({
 				exposures: {
@@ -168,8 +166,7 @@ describe('layer maps at compile time (bolt check)', () => {
 				}
 			})
 		).toEqual([
-			"model/layer orders: read: 'nope' is no field of orders (orders)",
-			"model/layer orders: outputs: 'default' is the model's read; name another output"
+			"model/layer orders: outputs.narrow: 'nope' is no field of orders (orders)"
 		]);
 	});
 
@@ -177,7 +174,7 @@ describe('layer maps at compile time (bolt check)', () => {
 		expect(
 			findings({
 				exposures: {
-					orders: { read: orders.read, outputs: present(orders.outputs), create: present(orders.create) }
+					orders: { outputs: orders.outputs, create: present(orders.create) }
 				},
 				policies: {
 					rep: {

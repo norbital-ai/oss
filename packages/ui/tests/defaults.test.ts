@@ -459,6 +459,44 @@ test("select-all: the card list selects its page, then every matching row, besid
 	);
 });
 
+test('select-all discards a matching result from before the search changed', async () => {
+	const requested = Promise.withResolvers<void>();
+	const oldSelection = Promise.withResolvers<Page>();
+	const result = { ...ROW, id: 'filtered', title: 'Filtered' };
+	const { bolt } = await fake([ROW], {
+		read: (_model, options) => {
+			if (everyRow(options)) {
+				requested.resolve();
+				return oldSelection.promise;
+			}
+			return options.search === 'Filtered'
+				? { rows: [result], next: null, total: 1 }
+				: { rows: [ROW], next: 'next', total: 2 };
+		}
+	});
+	const target = await show(
+		{ part: 'table', props: { of: 'jobs', columns: ['title'], toolbar: { select: true } } },
+		bolt,
+		{ ...jobs, jobs: { ...jobs.jobs, search: ['title'] } }
+	);
+	element<HTMLInputElement>(target, '[data-select-page]').click();
+	await settle();
+	element(target, '[data-select-matching]').click();
+	await requested.promise;
+	element(target, '[data-search-toggle]').click();
+	await settle();
+	const input = element<HTMLInputElement>(document, '[data-search]');
+	input.value = 'Filtered';
+	input.dispatchEvent(new Event('input', { bubbles: true }));
+	await vi.waitFor(async () => {
+		await settle();
+		assert.match(element(target, 'tbody tr').textContent ?? '', /Filtered/);
+	});
+	oldSelection.resolve({ rows: [ROW, { ...ROW, id: 'late' }], next: null });
+	await settle();
+	assert.equal(target.querySelector('[data-selected-count]'), null);
+});
+
 test("CustomView with `model`: the menu offers that model's file sync, and the search stays on the view's own rows", async () => {
 	const started: { automation: string; input: Value }[] = [];
 	const { bolt } = await fake([], {

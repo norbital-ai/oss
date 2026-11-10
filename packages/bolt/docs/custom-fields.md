@@ -6,8 +6,8 @@ authority, history or relational queries require one.
 
 ```ts
 // src/data/custom_field/rating/+definition.ts
-import { customField } from '@norbital-ai/bolt';
-export default customField('rating', {
+import { custom_field } from '@norbital-ai/bolt';
+export default custom_field({
 	description: 'A score from one to five.',
 	shape: { kind: 'int', min: 1, max: 5 }
 });

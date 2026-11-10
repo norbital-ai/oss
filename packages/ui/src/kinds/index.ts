@@ -22,7 +22,6 @@ export { default as StructuredData, type StructuredDataProps } from './structure
 export { default as TimeRangeInput, type TimeRangeInputProps } from './time-range-input.svelte';
 export {
 	provideKinds,
-	useKinds,
 	DEFAULT_BASEMAP,
 	photonGeocoder,
 	type ModelExposure,

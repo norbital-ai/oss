@@ -42,7 +42,6 @@ and `bolt dev` run bolt-cli's `nodeGuests`, Colony its isolated-vm runner).
 | `system1` | `System1` | or `off` | Fast structured decisions (`ctx.ai.sys_1.decide`, triage). |
 | `system2` | `System2` | or `off` | The LLM (`ctx.ai.sys_2.infer`, agents). |
 | `embed` | `Embed` | or `off` | Multimodal embeddings (`ctx.ai.embed`). |
-| `speech` | `Speech` | or `off` | Text to speech (`ctx.ai.speak`); transcription is Norbital Convert's ingest (`ctx.convert.ingest`). |
 
 ## ports
 

@@ -146,7 +146,7 @@ describe('one wire literal per kind', () => {
 			}
 		},
 		relationships: {},
-		exposures: { clock: { read: { clock: { fields: 'all' } } } }
+		exposures: { clock: { outputs: { default: { clock: { fields: 'all' } } } } }
 	});
 	it('keeps exact decimal text and scale through the canonical tag and shorthand', () => {
 		const value = { $dec: '9007199254740993.123456789000' };

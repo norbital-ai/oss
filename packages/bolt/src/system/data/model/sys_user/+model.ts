@@ -32,7 +32,9 @@ export default model('sys_user', {
 		party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },
 		phone_key: { kind: 'text', expr: { regexReplace: [{ field: 'phone' }, '\\D', ''] } }
 	},
-	check: { admin_staff: { or: [{ admin: { eq: false } }, { kind: { eq: 'staff' } }] } },
+	constraints: {
+		admin_staff: { check: { or: [{ admin: { eq: false } }, { kind: { eq: 'staff' } }] } }
+	},
 	table: {
 		primary: 'text',
 		indexes: [
@@ -41,7 +43,5 @@ export default model('sys_user', {
 		]
 	},
 	search: { text: ['name', 'email'] },
-	read: 'all',
-	/** The kernel directory (rule 35a): who a member is, by name. Staff read staff; externals themselves and their party. */
-	outputs: { directory: { sys_user: { fields: ['name'] } } }
+	outputs: { default: { fields: 'all' }, directory: { fields: ['name'] } }
 });

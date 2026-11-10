@@ -19,8 +19,8 @@ export default model('sys_file', {
 		updated_by: { kind: 'text', optional: true }
 	},
 	table: { primary: 'text' },
-	read: {
-		sys_file: {
+	outputs: {
+		default: {
 			fields: [
 				'name',
 				'mime',
@@ -33,8 +33,7 @@ export default model('sys_file', {
 				'updated_at',
 				'updated_by'
 			]
-		}
-	},
-	/** What a file picker or attachment list shows: its name and type, without size, digest or uploader. */
-	outputs: { meta: { sys_file: { fields: ['name', 'mime'] } } }
+		},
+		meta: { fields: ['name', 'mime'] }
+	}
 });

@@ -193,8 +193,7 @@ const settings = {
 			delegation: 'enabled',
 			triage: false,
 			dm: 'envoy',
-			active: true,
-			created: false
+			active: true
 		}
 	],
 	instances: [
@@ -347,7 +346,6 @@ const studio = {
 		}
 	],
 	sections: {
-		remotes: [],
 		models: [],
 		apps: entries,
 		kiosks: [],

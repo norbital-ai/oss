@@ -1,6 +1,6 @@
 <!--
 	The workspace shell (§5.10): boots the caller, routes the URL, and renders a page inside the sidebar shell, or
-	a visitor page with no chrome, or the sign-in and invitation pages. `$bolt` is created from the boot
+	a visitor page with no chrome, or the sign-in and invitation pages. The shell creates the page context from the boot
 	before any page chunk loads.
 -->
 <script lang="ts">
@@ -38,8 +38,7 @@
 		provideBolt,
 		provideKinds,
 		provideRepresentations,
-		setUiText,
-		type ViewBolt
+		setUiText
 	} from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
@@ -64,12 +63,10 @@
 	import {
 		agentPanel,
 		challengeQueue,
-		setCurrentBolt,
 		shellApi,
 		shellBolt,
 		type AgentRequest,
-		type ShellBolt,
-		bolt as moduleBolt
+		type ShellBolt
 	} from './runtime.ts';
 	import Access from './auth/Access.svelte';
 	import SignIn from './auth/SignIn.svelte';
@@ -235,6 +232,10 @@
 		};
 	});
 	let bolt = $state.raw<ShellBolt | null>(null);
+	const pageContext = () => {
+		if (bolt === null) throw new Error('The workspace shell has not booted.');
+		return bolt;
+	};
 	let failure = $state<{ code: string; message: string; status: number } | null>(null);
 	let agentRequest = $state<AgentRequest | null>(null);
 	// Norbius is `?agent=<conversation>` (`new`: a new one) beside any `?record=` stack, as the record sheets are: opening
@@ -301,13 +302,13 @@
 		get currency() {
 			return config.manifest.workspace.currency;
 		},
-		query: (request) => moduleBolt.query(request),
+		query: (request) => pageContext().query(request),
 		// a generated form's file field: bytes to `<model>.<field>`, links to the stored file
 		upload: (file, target) =>
-			moduleBolt
+			pageContext()
 				.upload(file, target)
 				.pipe(Effect.map((ref) => ({ id: ref.id, name: ref.name, mime: ref.mime }))),
-		fileUrl: (ref, options) => moduleBolt.fileUrl(ref, options),
+		file_url: (ref, options) => pageContext().file_url(ref, options),
 		get customFields() {
 			return config.customFields;
 		}
@@ -319,8 +320,8 @@
 	// svelte-ignore state_referenced_locally
 	provideRepresentations(config.representations ?? {});
 
-	// ui's views on a page (`Table`, `Board`, …) read `$bolt` from context; pages render only after the boot sets it
-	provideBolt(moduleBolt);
+	// The UI kit's controls share the client of this shell mount.
+	provideBolt(pageContext);
 
 	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Integrations and preview-as
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
@@ -493,7 +494,6 @@
 			boot = result.success;
 			refreshed = null;
 			bolt = client;
-			setCurrentBolt(client);
 			environment = result.success.surfaces.inbox
 				? yield* deviceSession(client.device, {
 						inbox: client.observe({ read: { m: 'inbox', a: [] } }),
@@ -511,9 +511,7 @@
 						if (state !== 'live' || !lapsed) return;
 						lapsed = false;
 						// a release closed the link and it is back: only another client needs a reload
-						const next = yield* api
-							.boot(publicApp, kioskRoute ?? undefined)
-							.pipe(Effect.option);
+						const next = yield* api.boot(publicApp, kioskRoute ?? undefined).pipe(Effect.option);
 						if (
 							Option.isSome(next) &&
 							next.value.client !== undefined &&
@@ -547,7 +545,6 @@
 			yield* Effect.addFinalizer(() =>
 				Effect.gen(function* () {
 					requestLoad = null;
-					setCurrentBolt(null);
 					if (pageScope !== null) yield* Scope.close(pageScope, Exit.void);
 					pageScope = null;
 				})
@@ -574,7 +571,7 @@
 			() => {}
 		);
 
-	function pageOf(key: string): Promise<Component> | null {
+	function pageOf(key: string): Promise<Component<{ ctx: ShellBolt }>> | null {
 		const chunk = config.pages[key];
 		return chunk === undefined ? null : chunk().then((m) => m.default);
 	}
@@ -593,7 +590,7 @@
 	);
 	// a page chunk loads once: switching between an app's pages keeps its banner and tabs mounted, shows the page at once
 	// when it has loaded before, and keeps the previous page of the same app on screen until a new chunk arrives
-	const loaded = new SvelteMap<string, Component>();
+	const loaded = new SvelteMap<string, Component<{ ctx: ShellBolt }>>();
 	const unloadable = new SvelteMap<string, unknown>();
 	const loading = new Set<string>();
 	const loadPage = (key: string) => {
@@ -611,7 +608,7 @@
 			if (key !== null) loadPage(key);
 		}
 	);
-	let held: { key: string; Page: Component } | undefined;
+	let held: { key: string; Page: Component<{ ctx: ShellBolt }> } | undefined;
 	const Page = $derived.by(() => {
 		const ready = pageKey === null ? undefined : loaded.get(pageKey);
 		if (pageKey !== null && ready !== undefined) held = { key: pageKey, Page: ready };
@@ -921,7 +918,7 @@
 	{#key bolt}
 		{#each sessions as session (session.name)}
 			{@const Session = session.component}
-			<Session />
+			<Session ctx={bolt} />
 		{/each}
 	{/key}
 {/if}
@@ -1001,10 +998,10 @@
 			<!-- hook:view-ui — a page sits inset from the sidebar; a page's own AppShell inset finds this owner and stays flush -->
 			<svelte:boundary>
 				{#if requires.length === 0}
-					<Bound size="fill" inset><Page /></Bound>
+					<Bound size="fill" inset><Page ctx={pageContext()} /></Bound>
 				{:else}
 					<DeviceWall {requires} {access} native={device.geolocation?.source === 'native'} {t}>
-						<Bound size="fill" inset><Page /></Bound>
+						<Bound size="fill" inset><Page ctx={pageContext()} /></Bound>
 					</DeviceWall>
 				{/if}
 				{#snippet failed(error)}
@@ -1381,6 +1378,8 @@
 							{api}
 							{bolt}
 							{t}
+							catalog={bolt.catalog}
+							zone={bolt.tz}
 							nav={boot.nav}
 							entries={boot.search ?? []}
 							request={agentRequest}

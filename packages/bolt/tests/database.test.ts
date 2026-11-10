@@ -4,8 +4,9 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
+import { inline } from '../src/engine/db/wire.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { Drivers } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
@@ -46,8 +47,7 @@ const db = TenantDb.typed({
 			}
 		]),
 	write: () => Effect.succeed({ rows: [], affected: 0 }),
-	session: () =>
-		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 	transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 });
 const drivers = (request: Drivers['Service']['request']): Drivers['Service'] => ({
@@ -58,6 +58,26 @@ const drivers = (request: Drivers['Service']['request']): Drivers['Service'] => 
 	read: () => Port.unavailable('link'),
 	changed: () => Port.unavailable('link')
 });
+
+it('rejects unterminated SQL quotes', () => {
+	for (const quote of ["'", '"'])
+		expect(() => inline({ text: 'select $1, ' + quote, params: ['value'] })).toThrowError(
+			expect.objectContaining({ sqlstate: '42601' })
+		);
+});
+
+it.live('refuses writes through a PGlite read batch and leaves the table intact', () =>
+	Effect.gen(function* () {
+		const db = PgliteDb.make(yield* PgliteDb.open());
+		yield* db.write({ text: 'create table read_probe (value text)', params: [] });
+		const select = { text: 'select value from read_probe', params: [] };
+		const answer = yield* Effect.result(
+			db.read([select, { text: 'insert into read_probe values ($1)', params: ['unexpected'] }])
+		);
+		expect(answer).toMatchObject({ _tag: 'Failure', failure: { sqlstate: '25006' } });
+		expect(yield* db.read([select])).toEqual([{ rows: [], affected: 0 }]);
+	}).pipe(Effect.provide(Pristine.layer))
+);
 
 it.live('interrupts a SQL batch and drains native rollback before closing its database', () =>
 	Effect.gen(function* () {

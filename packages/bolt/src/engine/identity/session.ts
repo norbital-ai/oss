@@ -9,11 +9,11 @@ import { canonical, sha256 as sha256Bytes, toHex } from '@norbital-ai/store';
 import { addressBucket, macKey, ratePiece, type Charge, type RateWindows } from '../access/rate.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { LIMITS, type Authority, type Lock, type TransportPort } from '../contracts.ts';
-import { Cache, Clock, Crypto, Effect, Layer, Option, Result, Schema, Struct } from 'effect';
+import { Clock, Crypto, Effect, Layer, Option, Result, Schema } from 'effect';
 import { relations, type EngineManifest } from '../manifest.ts';
 import { TenantDb as TenantDbService, type TenantDbShape as TenantDb } from '../db/tenant-db.ts';
 import { Activation, Identity, Manifest, type Authenticated } from '../services.ts';
-import { Authorities, MEMO_MS } from './actor.ts';
+import { Authorities } from './actor.ts';
 import { RateWindows as Windows } from '../access/rate.ts';
 import { Port } from '../port.ts';
 import { DbError, IdentityRefusal } from '../errors.ts';
@@ -100,12 +100,6 @@ export type IdentityHost = {
 	};
 	db: TenantDb;
 	now: Effect.Effect<Date>;
-	/** Each token's session, and the identity writes when it was read. */
-	sessions: Cache.Cache<
-		string,
-		Authenticated & { readonly stamp: number },
-		DbError | IdentityRefusal
-	>;
 	windows: RateWindows;
 	/** Read when a sign-in needs them (`lazyKeys`), never at a cold start: most starts of a cell sign nobody in. */
 	keys: Keys | Effect.Effect<Keys, DbError>;
@@ -850,53 +844,23 @@ SELECT 1`
 });
 const lock = (born: boolean): Lock | undefined =>
 	born ? { advisory: ['sys_user.address'] } : undefined;
-const MEMO_MAX = 10000;
 export const makeIdentityHost = Effect.fn('Bolt.identityHost')(function* (
-	config: Omit<IdentityHost, 'sessions' | 'crypto'>
+	config: Omit<IdentityHost, 'crypto'>
 ) {
 	const crypto = yield* Crypto.Crypto;
 	// the host's own facility: a verb may be called outside the context that built it
 	const audit = config.audit ?? (yield* Audit);
-	const sessions = yield* Cache.make({
-		capacity: MEMO_MAX,
-		timeToLive: MEMO_MS,
-		lookup: (hash: string) =>
-			Effect.suspend(() => {
-				const stamp = config.db.identityWrites();
-				return lookup(config, hash).pipe(
-					Effect.flatMap((session) =>
-						session === null
-							? Effect.fail(refuse('notMember', 'No active session.'))
-							: Effect.succeed({ ...session, stamp })
-					)
-				);
-			})
-	});
-	return { ...config, crypto, sessions, audit };
+	return { ...config, crypto, audit };
 });
-export const forget = (h: IdentityHost, token: string) =>
-	Cache.invalidate(h.sessions, sha256(token));
-/** The caller's activation cache retains successes for at most `MEMO_MS`, past no write to people or sessions, and never past expiry. */
+/** Read the current session so a revocation from another activation applies to the next request. */
 export const authenticate = Effect.fn('Bolt.authenticate')(function* (
 	h: IdentityHost,
 	token: string
 ) {
-	const hash = sha256(token);
-	const read = Cache.get(h.sessions, hash).pipe(
-		Effect.tapError(() => Cache.invalidate(h.sessions, hash))
-	);
-	let session = yield* read;
-	// a statement on people or sessions since it was read: whoever else it touched, this one is read again
-	if (session.stamp !== h.db.identityWrites()) {
-		yield* Cache.invalidate(h.sessions, hash);
-		session = yield* read;
-	}
-	const now = yield* h.now;
-	if (session.expiresAt <= now.getTime()) {
-		yield* Cache.invalidate(h.sessions, hash);
+	const session = yield* lookup(h, sha256(token));
+	if (session === null)
 		return yield* Effect.fail(refuse('notMember', 'No active session.'));
-	}
-	return Struct.omit(session, ['stamp']);
+	return session;
 });
 const lookup = Effect.fn('Bolt.lookup')(function* (
 	h: Pick<IdentityHost, 'db' | 'now'>,
@@ -923,7 +887,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 				last_seen: Schema.NullOr(Schema.String)
 			})
 		),
-		rows!.rows[0]
+		rows?.rows[0]
 	);
 	if (r === undefined) return null;
 	if (
@@ -1012,10 +976,7 @@ export const revokeSession = Effect.fn('Bolt.revokeSession')(function* (
 		text: 'SELECT id,"user" FROM sys_session WHERE token_hash=$1',
 		params: [hash]
 	});
-	if (session._tag === 'None') {
-		yield* forget(h, token);
-		return;
-	}
+	if (session._tag === 'None') return;
 	const now = yield* h.now,
 		op = yield* newId(h.crypto),
 		s = new IdentityStatement(h);
@@ -1070,7 +1031,6 @@ ${result} SELECT ${select}`,
 				)
 			)
 	).pipe(Effect.provideService(Audit, audit));
-	yield* forget(h, token);
 });
 /** A new member's display name until they set one: an email's local part as words (`mei.ling.tan` → `Mei Ling Tan`), else the number. */
 export const defaultName = (a: Address): string =>

@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // The shell host's administration surface over HTTP on PGlite: the environment badge and host notice in the boot,
 // `access.explain`, member handles, invitation resend, API keys and team membership.
 import { expect, layer } from '@effect/vitest';
@@ -15,7 +16,7 @@ const manifest = Result.getOrThrow(
 			openings: { description: 'Roles', label: 'title', fields: { title: { kind: 'text' } } }
 		},
 		relationships: {},
-		exposures: { openings: { read: { openings: { fields: 'all' } } } },
+		exposures: { openings: { outputs: { default: { openings: { fields: 'all' } } } } },
 		integrations: {},
 		policies: {
 			rep: {
@@ -30,19 +31,22 @@ const manifest = Result.getOrThrow(
 		teams: { sales: { name: 'Sales', policies: ['rep'] } },
 		automations: {},
 		connections: {},
-		envoys: {
-			service: {
-				name: 'Source desk',
-				audience: 'private',
-				policies: ['rep'],
-				task: 'Answer about openings.'
-			}
-		},
+
 		mcp: {},
 		customFields: {},
 		agent: { skills: {} }
 	})
 );
+const serviceEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: serviceEnvoy,
+		name: 'Source desk',
+		audience: 'private',
+		policies: ['rep'],
+		task: 'Answer about openings.'
+	}
+] as const;
 
 const ORIGIN = 'https://acme.example';
 type Jar = Map<string, string>;
@@ -115,23 +119,26 @@ const boot = (j: Jar) => api(j).pipe(Effect.flatMap((host) => host.boot()));
 const workspace = Layer.effectContext(
 	Effect.gen(function* () {
 		const context = yield* Layer.build(
-			TestWorkspace.layer({
-				manifest,
-				host: {
-					publicUrl: ORIGIN,
-					workspace: () => ({ name: 'Acme', handle: 'acme' }),
-					environment: 'staging',
-					notice: async (a) =>
-						a.admin
-							? {
-									text: 'Your trial ends in 3 days.',
-									tone: 'warning',
-									href: '/billing',
-									action: 'Upgrade'
-								}
-							: null
-				}
-			})
+			withEnvoys(
+				TestWorkspace.layer({
+					manifest,
+					host: {
+						publicUrl: ORIGIN,
+						workspace: () => ({ name: 'Acme', handle: 'acme' }),
+						environment: 'staging',
+						notice: async (a) =>
+							a.admin
+								? {
+										text: 'Your trial ends in 3 days.',
+										tone: 'warning',
+										href: '/billing',
+										action: 'Upgrade'
+									}
+								: null
+					}
+				}),
+				runtimeEnvoys
+			)
 		);
 		yield* founderBootstrap(Context.get(context, HostIdentity), 'boss@acme.example');
 		return context;

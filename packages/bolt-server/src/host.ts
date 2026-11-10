@@ -22,7 +22,6 @@ import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
 import { apns, push } from './push.ts';
 import { webSearch } from './search.ts';
-import { openRouterSpeech, type SpeechServices } from './speech.ts';
 import { publicWeb } from './web.ts';
 
 /** One optional facility's selection: the provider name, its endpoint and credential. */
@@ -61,13 +60,6 @@ export type HostSettings = {
 		sys2: { readonly [modelClass: string]: string };
 		embed: { readonly [embedding: string]: AiModel };
 	};
-	/** `ctx.ai.speak` over OpenRouter; null when off. Transcription is Norbital Convert's (`ctx.convert.ingest`). */
-	speech: {
-		endpoint: string;
-		credential: string;
-		speak: string;
-		voice: string | null;
-	} | null;
 	vapid: { publicKey: string; privateKey: string } | null;
 	/** Each Apple team's provider-token key (its id and `.p8` PEM), by team id; `{}` sends no APNs. */
 	apns: { readonly [teamId: string]: { readonly keyId: string; readonly key: string } };
@@ -212,17 +204,6 @@ export const host = Effect.fn('server.host')(function* (
 					files.get,
 					run
 				);
-	const speechContext = yield* Effect.context<SpeechServices>();
-	const speech =
-		config.speech === null
-			? undefined
-			: openRouterSpeech({
-					baseUrl: config.speech.endpoint,
-					apiKey: config.speech.credential,
-					speakModel: config.speech.speak,
-					...(config.speech.voice === null ? {} : { speakVoice: config.speech.voice })
-				});
-	const speak = speech?.speak;
 	const fs = yield* FileSystem.FileSystem;
 	yield* fs.makeDirectory(config.auditDir, { recursive: true });
 	const auditDir = yield* fs.realPath(config.auditDir);
@@ -275,16 +256,7 @@ export const host = Effect.fn('server.host')(function* (
 					? off
 					: cloudflare(config.turnstile.siteKey, config.turnstile.secret)
 		},
-		intelligence: {
-			...intelligence,
-			speech:
-				speak === undefined
-					? off
-					: {
-							speak: (text, o, signal) =>
-								run(speak(text, o).pipe(Effect.provide(speechContext)), { signal })
-						}
-		},
+		intelligence,
 		ports: {
 			webhooks: { publicUrl: config.publicUrl },
 			websockets: off,

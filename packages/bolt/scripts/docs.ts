@@ -52,7 +52,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 			'UpdateCheck',
 			'PolicyCtx',
 			'Expr',
-			'Flow'
+			'ApprovalFlow'
 		]
 	},
 	automation: {
@@ -62,7 +62,7 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 	sync: { bolt: ['integration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput'] },
 	tool: { bolt: ['tool', 'ToolRun', 'ToolFiles'] },
 	page: {
-		bolt: ['app', 'Page', 'group', 'pageServer', 'PageReadContext'],
+		bolt: ['app', 'Page', 'group'],
 		'bolt/page': ['PageBolt'],
 		ui: [
 			'Table',
@@ -87,9 +87,9 @@ const CONTRACT_HEAD: { readonly [role: string]: string } = {
 // src/automation/+<name>.automation.ts
 import { automation } from '@norbital-ai/bolt';
 
-export default automation('<name>', {
+export default automation({
 	description: '<what it does>',
-	on: { cron: '0 2 * * *' }, // or a webhook; a row write runs its model's effect, never an automation
+	on: [{ cron: '0 2 * * *' }], // or a webhook; a row write runs its model's effect, never an automation
 	policies: ['<policy>'],
 	run: function* (input, ctx) {
 		const { rows } = (yield* ctx.query({ <model>: { fields: ['<field>'] } })).<model>;
@@ -102,7 +102,7 @@ A model answers \`yield* ctx.ai.sys_2.infer({ system: '<role>', prompt: '<task>'
 
 \`yield* ctx.notify({ title: '<title>', to: [{ team: '<team>' }], via: ['<connection>'] })\` reaches each recipient in the app and through \`via\`. WhatsApp, Telegram, email and the other conversation integrations are built in, never a \`src/integration/\` of your own: \`via\` names a slot \`+workspace.ts\` declares, \`connections: { <connection>: { integration: 'whatsapp' } }\`.
 
-Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`addDays\` and \`addMonths\` for a date, and \`Date.parse\` gives an instant's milliseconds. A model's \`effect\` has the same two.
+Time is \`ctx.today\`, a \`PlainDate\`, and \`ctx.now\`, an ISO instant string: \`@norbital-ai/std/date\` has \`addDays\` and \`addMonths\` for a date, and \`add_instant\` and \`diff_instants\` work with signed durations. A model's \`effect\` has the same two.
 
 In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.runDue()\` fires what is due at that instant. Assert \`expect(failed).toEqual([])\` first: a run that failed says why there, and nothing else will.`,
 	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
@@ -116,9 +116,9 @@ export default model('<name>', {
 	label: '<field>',
 	fields: {
 		<field>: { kind: 'text' },
-		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', onDelete: 'restrict' }
+		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', on_delete: 'restrict' }
 	},
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	// a write layer is a path from the model's own name: '<name>', then '<name>.<relation>' for children; never 'default'
 	create: { columns: { <name>: ['<field>', '<other>'] } },
 	update: { columns: { <name>: ['<field>', '<other>'] } }
@@ -172,7 +172,7 @@ export default run;
 // src/app/<app>/+app.ts
 import { app } from '@norbital-ai/bolt';
 
-export default app('<app>', {
+export default app({
 	title: '<Title>',
 	description: '<what it is for>',
 	icon: 'lucide:<icon>',

@@ -24,16 +24,16 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		customers: {
-			read: { customers: { fields: 'all' } },
+			outputs: { default: { customers: { fields: 'all' } } },
 			create: { columns: { customers: ['name', 'note'] } },
 			update: { columns: { customers: ['name', 'note'] } }
 		},
-		orders: { read: { orders: { fields: 'all' } }, create: { columns: { orders: ['title'] } } }
+		orders: { outputs: { default: { orders: { fields: 'all' } } }, create: { columns: { orders: ['title'] } } }
 	},
 	policies: {
 		writer: {
 			description: 'Writes both models',
-			automations: ['followup'],
+			capabilities: { automations: ['followup'] },
 			grants: {
 				customers: { read: true, create: true, update: true },
 				orders: { read: true, create: true }
@@ -48,7 +48,7 @@ const manifest: EngineManifest = {
 		},
 		requester: {
 			description: 'Requests customer creation',
-			grants: { customers: { read: true, create: { check: true } } }
+			grants: { customers: { read: true, create: { verdict: true } } }
 		},
 		reviewer: { description: 'Reviews requests', grants: { customers: { read: true } } }
 	},
@@ -66,7 +66,7 @@ export default {
  automation:{
   followup:{body:function*(input,ctx){return yield* ctx.act.checked(input.operations);}}
  },
- policy:{requester:{grants:{customers:{create:{check:function*(_rows,ctx){return ctx.approve((flow)=>flow.step('Review',{teams:['Reviewers']}));}}}}}}
+ policy:{requester:{grants:{customers:{create:{verdict:function*(_rows,ctx){return ctx.approve({ steps: [{ name: 'Review', teams: ['Reviewers'] }] });}}}}}}
 };`);
 // One workspace for the file: the second case reads only the row it names.
 const fileScope = Effect.runSync(Scope.make());

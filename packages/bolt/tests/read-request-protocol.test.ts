@@ -18,8 +18,6 @@ import { manifest, rep } from './query.fixture.ts';
 const db = TenantDb.typed({
 	read: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol database read')),
 	write: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol database write')),
-	session: () =>
-		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol transaction'))
 });
 const request = (body: QBody) =>

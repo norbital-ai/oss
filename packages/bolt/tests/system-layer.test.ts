@@ -40,7 +40,7 @@ const EMPTY: EngineManifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -263,6 +263,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			group_messages: 'text not null default mention_or_reply',
 			delegation: 'text not null default disabled',
 			triage: 'boolean not null default false',
+			triage_scope: 'text not null default all',
 			dm: 'text not null default union',
 			active: 'boolean not null default true',
 			created_at: 'timestamptz not null default now()',
@@ -274,6 +275,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			"(delegation in ('enabled', 'disabled'))",
 			"(dm in ('union', 'envoy'))",
 			"(group_messages in ('disabled', 'mention_or_reply', 'all'))",
+			"(triage_scope in ('dm', 'group', 'all'))",
 			'(isfinite(created_at))',
 			"(not jsonb_path_exists(to_jsonb(policies), 'strict $[*] ? (@.type() != string)'))"
 		]

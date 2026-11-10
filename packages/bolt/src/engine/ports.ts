@@ -24,7 +24,6 @@ import type {
 	ConvertTarget,
 	GeoHit,
 	IngestOptions,
-	SpeechFormat,
 	WebPage
 } from '../decl/runtime/facilities.ts';
 import type { Json, Point } from '../decl/values.ts';
@@ -79,7 +78,6 @@ import type {
 	McpPort,
 	McpServer,
 	McpToolInfo,
-	SpeechPort,
 	TransportPort,
 	WebReadPort
 } from './contracts.ts';
@@ -225,38 +223,6 @@ export class Convert extends Context.Service<
 }
 
 // ── speech ──
-const SpeechAnswer = Schema.Struct({ bytes: Schema.Uint8Array, mime: Schema.String });
-/** Text to speech behind `ctx.ai.speak`; a provider refusal keeps its kind (`rateLimited`, `tooLarge`, …). */
-export class Speech extends Context.Service<
-	Speech,
-	{
-		readonly speak: (
-			text: string,
-			options: {
-				readonly voice?: string;
-				readonly format: SpeechFormat;
-				readonly language?: string;
-			}
-		) => Effect.Effect<{ readonly bytes: Uint8Array; readonly mime: string }, PortFailure>;
-	}
->()('bolt/Speech') {
-	static fromAbi(port: Required<SpeechPort> | Off): Layer.Layer<Speech> {
-		return Layer.succeed(
-			Speech,
-			isOff(port)
-				? { speak: () => turnedOff('ai.speak') }
-				: {
-						speak: (text, options) =>
-							Port.fromPromise(
-								(signal) => port.speak(text, options, signal),
-								SpeechAnswer,
-								'ai.speak'
-							)
-					}
-		);
-	}
-}
-
 // ── web, geo ──
 /** Reads a public page; refuses private, loopback and link-local addresses. `raw` also answers the markup and its links. */
 export class WebRead extends Context.Service<

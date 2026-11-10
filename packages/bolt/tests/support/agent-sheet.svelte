@@ -4,7 +4,7 @@
 	import type { ShellApi } from '../../src/shell/api-types.ts';
 	import type { ShellBolt } from '../../src/shell/runtime.ts';
 
-	let { api, bolt }: { api: ShellApi; bolt: Pick<ShellBolt, 'observe' | 'fileUrl'> } = $props();
+	let { api, bolt }: { api: ShellApi; bolt: Pick<ShellBolt, 'observe' | 'file_url'> } = $props();
 	let open = $state(true);
 </script>
 

@@ -197,11 +197,19 @@ export function decodeInput(
 						visit(kind.of, item, at ? `${at}.${key}` : key);
 				return;
 			case 'object':
-				if (Predicate.isObject(value))
+				if (Predicate.isObject(value)) {
 					for (const [key, child] of Object.entries(kind.fields)) {
 						const item = value[key];
 						if (item !== undefined) visit(child, item, at ? `${at}.${key}` : key);
 					}
+					if (kind.rest !== undefined)
+						for (const [key, item] of Object.entries(value))
+							if (!Object.hasOwn(kind.fields, key))
+								visit(kind.rest, item, at ? `${at}.${key}` : key);
+				}
+				return;
+			case 'json':
+				if (kind.shape !== undefined) visit(kind.shape, value, at);
 				return;
 			case 'union': {
 				if ('of' in kind) {

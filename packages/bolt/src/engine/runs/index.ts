@@ -26,7 +26,6 @@ import type { Json } from '../../decl/values.ts';
 import { RunAttempt, RunError } from './attempt.ts';
 import { EngineActorSchema, RunTriggerSchema } from '../../protocol/schema.ts';
 import { exposed, viewOutput, type Holder } from '../access/authority.ts';
-import { issueAutomationDelegation, delegatedVerbAuthority } from '../access/delegation.ts';
 import { Port, type PortFailure } from '../port.ts';
 import { makeParking } from '../parking.ts';
 import { TURN_RUN } from '../agent/turns.ts';
@@ -101,7 +100,6 @@ import { catalogOf } from '../access/pred.ts';
 import type { AutomationSpec } from '../../decl/runtime/automation.ts';
 import { backoffMs, dueAt, iso, materialize } from './time.ts';
 import { NOTICE_PUSH, noticePush } from './push.ts';
-import { makeTransactions, transactionFailure } from '../transactions.ts';
 import { Audit } from '../audit.ts';
 import { audited } from '../audit-operation.ts';
 import { NOTIFY, noticeRows, runNotify } from '../notifications/notify.ts';
@@ -319,17 +317,7 @@ export const runList = Effect.fn('Runs.list')(function* (
 	});
 	return rows.flatMap((row) => runView(auth, row) ?? []);
 });
-const EFFECTS = new Set([
-	'act',
-	'acts',
-	'schedule',
-	'notify',
-	'send',
-	'request',
-	'progress',
-	'withdraw',
-	'transactionBegin'
-]);
+const EFFECTS = new Set(['act', 'acts', 'schedule', 'notify', 'send', 'request', 'progress']);
 /**
  * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
  * stored files it reads (each must be the run's to read), whether it stores a new one (then the run's own),
@@ -349,7 +337,6 @@ function factsOf(call: FacilityCall): CallFacts {
 	switch (call._tag) {
 		case 'files.put':
 		case 'browser.download':
-		case 'ai.speak':
 			return { reads: [], stores: true, tools: undefined };
 		case 'files.image':
 			return {
@@ -363,9 +350,6 @@ function factsOf(call: FacilityCall): CallFacts {
 		case 'files.meta':
 		case 'files.get':
 		case 'files.url':
-		case 'files.text':
-		case 'files.table':
-		case 'files.sheet':
 			return { reads: ids(Option.toArray(referenceOf(first))), stores: false, tools: undefined };
 		case 'convert.ingest':
 			return {
@@ -408,8 +392,6 @@ function factsOf(call: FacilityCall): CallFacts {
 const stepOf = Schema.decodeUnknownOption(StepContent),
 	saidOf = Schema.decodeUnknownOption(SaidContent);
 const MAX_IDS = 10000,
-	/** A model effect's runs: no authored retry, so a transient failure is retried this often, with backoff: over an hour. */
-	EFFECT_RETRY: RetrySpec = { attempts: 10, backoff: '10s' },
 	DAY = 86400000,
 	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
 	LANES = 12,
@@ -644,6 +626,9 @@ export const RunsLive = Layer.effect(
 				bolt_rate: `window_start < $1::timestamptz - interval '1 day'`,
 				// a consumed delivery only dedupes a redelivery, and providers stop retrying within days
 				sys_inbox: `consumed_at < $1::timestamptz - interval '30 days'`,
+				sys_outbox: `status IN ('acked', 'failed', 'skipped') AND greatest(at, acked_at, claimed_at) < $1::timestamptz - interval '90 days'
+				AND NOT EXISTS (SELECT 1 FROM sys_message s WHERE s.direction = 'outbound' AND s.status IN ('queued', 'sending') AND s.meta->>'sync_write' = sys_outbox.key)`,
+				sys_challenge: `expires_at <= $1::timestamptz`,
 				sys_notification: `(read_at < $1::timestamptz - interval '90 days') OR at < $1::timestamptz - interval '365 days'`, // L-BOLT-354
 				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`,
 				// an anonymous user whose session lapsed (30 days unused) or was retired by a sign-in, unless a record references it
@@ -656,14 +641,15 @@ export const RunsLive = Layer.effect(
 					.map(
 						(r) => ` AND NOT EXISTS (SELECT 1 FROM "${r.from}" r WHERE r."${r.fk}" = sys_user.id)`
 					)
-					.join('')}`
+					.join('')}`,
+				sys_session: `expires_at <= $1::timestamptz AND NOT EXISTS (SELECT 1 FROM sel_sys_user u WHERE u.id = sys_session."user")`
 			};
 			const tables = Object.keys(aged);
 			const ctes = Object.entries(aged).map(
 				([
 					t,
 					where
-				]) => `sel_${t} AS (SELECT ctid${t === 'sys_run' ? ', id' : ''} FROM ${t} WHERE ${where} LIMIT ${MAX_IDS}),
+				]) => `sel_${t} AS (SELECT ctid${t === 'sys_run' || t === 'sys_user' ? ', id' : ''} FROM ${t} WHERE ${where} LIMIT ${MAX_IDS}),
 			del_${t} AS (DELETE FROM ${t} WHERE ctid IN (SELECT ctid FROM sel_${t}) RETURNING 1)`
 			);
 			const counts = tables.map(
@@ -696,18 +682,6 @@ export const RunsLive = Layer.effect(
 			yield* db.write(c.sql('NULL AS outcome'));
 			return { deleted: deleted + pruned, continued: now };
 		});
-		/** A crossing that writes, sends, schedules or reports: a fired cron's run writes its row before the first. */
-		const effecting = (call: Exclude<CrossCall, { _tag: 'read' }>) =>
-			EFFECTS.has(call._tag) ||
-			call._tag.startsWith('ai.') ||
-			call._tag === 'convert.document' ||
-			call._tag === 'files.put' ||
-			call._tag === 'browser.download' ||
-			(call._tag === 'files.image' &&
-				Option.exists(
-					Schema.decodeUnknownOption(ImageOptions)(call.args[1] ?? {}),
-					(o) => o.jpeg !== undefined
-				));
 		/** The first wake or written fire of a day prunes (rule 56); `undefined` once it ran today, or when it made no progress. */
 		const daily = (now: number) =>
 			Effect.suspend(
@@ -758,27 +732,10 @@ export const RunsLive = Layer.effect(
 					b = bindingsAt(now, m.workspace.tz),
 					// the run's writes queue model effects one deeper, as this holder (`writerOf`)
 					authority = { ...(yield* identity.authority(holder)), run: { depth: run.depth, holder } };
-				const delegation = issueAutomationDelegation(m, authority, run.id, run.automation);
 				// One optimistic read boundary per confirmed commit, retained across failures within this attempt.
 				const priorReads = makeReadGuards(activation.release);
 				// Only native write admission is sequenced; inference and other facilities remain parallel.
 				const writeLane = yield* Semaphore.make(1);
-				const transactions = yield* makeTransactions({
-					audit,
-					db,
-					manifest: m,
-					reads,
-					writes,
-					authority,
-					authorityForVerb: (name) => delegatedVerbAuthority(m, authority, delegation, name),
-					bindings: b,
-					sourceEpoch: activation.release,
-					invocationId: run.id,
-					input
-				});
-				let transactionOpen = false;
-				let transactionReadGeneration: number | undefined;
-				let transactionInvocationId = run.id;
 				const nativeTables = new Set([
 					...Object.keys(m.models),
 					'bolt_schema',
@@ -790,8 +747,7 @@ export const RunsLive = Layer.effect(
 					'bolt_push_subscriptions',
 					'bolt_host_nonce',
 					'bolt_credential',
-					'bolt_approvals',
-					'bolt_run_admitted'
+					'bolt_approvals'
 				]);
 				const createdFiles = new Set<string>();
 				const halt = yield* Deferred.make<void>();
@@ -1086,52 +1042,9 @@ export const RunsLive = Layer.effect(
 				): Effect.Effect<CrossAnswer, EngineError> => {
 					const work = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 						if (stopping.has(run.id)) return fail('stopped', 'The run was stopped.');
-						if (transactionOpen && !call._tag.startsWith('transaction')) {
-							yield* transactions.abort();
-							transactionOpen = false;
-							return fail('invalidInput', 'Only tx.query and tx.act may run inside a transaction.');
-						}
-						if (effecting(call) && !(yield* record))
+						if ((EFFECTS.has(call._tag) || call._tag.startsWith('ai.')) && !(yield* record))
 							return fail('stopped', 'This cron slot already ran.');
 						switch (call._tag) {
-							case 'transactionBegin': {
-								const key = keyOf('transaction', 'transaction', null);
-								transactionInvocationId = key;
-								const snapshot = priorReads.snapshot();
-								const begun = yield* transactions.begin({
-									key,
-									issuedAt: b.now,
-									readGuards: snapshot.guards
-								});
-								transactionOpen = !begun.cached;
-								transactionReadGeneration = begun.cached ? undefined : snapshot.generation;
-								return {
-									ok: true,
-									value: begun.cached
-										? { cached: true, outcome: encodeWire(begun.outcome) }
-										: { cached: false }
-								};
-							}
-							case 'transactionRead':
-								return {
-									ok: true,
-									value: { value: yield* transactions.read(call.reads, call.keys) }
-								};
-							case 'transactionAct':
-								return { ok: true, value: yield* transactions.act(call) };
-							case 'transactionFinish': {
-								const result = yield* transactions.finish(call);
-								transactionOpen = false;
-								if (result.readGuardsConsumed === true && transactionReadGeneration !== undefined)
-									priorReads.consume(transactionReadGeneration);
-								transactionReadGeneration = undefined;
-								return { ok: true, value: encodeWire(result.outcome) };
-							}
-							case 'transactionAbort':
-								yield* transactions.abort();
-								transactionOpen = false;
-								transactionReadGeneration = undefined;
-								return { ok: true, value: null };
 							case 'progress': {
 								const decoded = yield* Schema.decodeUnknownEffect(
 									Schema.Struct({
@@ -1194,7 +1107,7 @@ export const RunsLive = Layer.effect(
 									key: k,
 									issuedAt: b.now,
 									retry: false,
-									authority: delegatedVerbAuthority(m, authority, delegation, name),
+									authority,
 									bindings: b,
 									invocationId: k,
 									...(call.options?.observed === undefined
@@ -1369,6 +1282,8 @@ export const RunsLive = Layer.effect(
 							}
 							default: {
 								const facts = factsOf(call);
+								if (facts.stores && !(yield* record))
+									return fail('stopped', 'This cron slot already ran.');
 								if (!(yield* checkFiles(facts)))
 									return {
 										ok: false,
@@ -1380,12 +1295,7 @@ export const RunsLive = Layer.effect(
 							}
 						}
 					});
-					return call._tag === 'act' ||
-						call._tag === 'acts' ||
-						call._tag === 'withdraw' ||
-						call._tag.startsWith('transaction')
-						? writeLane.withPermit(work)
-						: work;
+					return call._tag === 'act' || call._tag === 'acts' ? writeLane.withPermit(work) : work;
 				};
 				return yield* guest
 					.invoke(
@@ -1424,23 +1334,6 @@ export const RunsLive = Layer.effect(
 						{
 							cross: (batch) =>
 								Effect.gen(function* () {
-									if (
-										(batch.length !== 1 &&
-											batch.some((call) => call._tag.startsWith('transaction'))) ||
-										(transactionOpen && batch.some((call) => !call._tag.startsWith('transaction')))
-									) {
-										const aborted = yield* Effect.result(transactions.abort());
-										transactionOpen = false;
-										transactionReadGeneration = undefined;
-										return batch.map(() =>
-											Result.isFailure(aborted)
-												? failure(aborted.failure)
-												: fail(
-														'invalidInput',
-														'A transaction admits one native operation at a time.'
-													)
-										);
-									}
 									const requests = batch.flatMap((call) =>
 										call._tag === 'read' ? [call.read] : []
 									);
@@ -1495,25 +1388,7 @@ export const RunsLive = Layer.effect(
 													answers[index++] ?? fail('internal', 'the read returned no answer')
 												)
 											: crossing(call).pipe(
-													Effect.catch((error): Effect.Effect<CrossAnswer> =>
-														call._tag.startsWith('transaction')
-															? transactions.abort().pipe(
-																	Effect.catch(() => Effect.void),
-																	Effect.andThen(
-																		Effect.sync((): CrossAnswer => {
-																			transactionOpen = false;
-																			transactionReadGeneration = undefined;
-																			return {
-																				ok: true,
-																				value: encodeWire(
-																					transactionFailure(error, transactionInvocationId)
-																				)
-																			} satisfies CrossAnswer;
-																		})
-																	)
-																)
-															: Effect.succeed(failure(error))
-													),
+													Effect.catch((error) => Effect.succeed(failure(error))),
 													Effect.raceFirst(
 														Deferred.await(halt).pipe(
 															Effect.as(fail('stopped', 'The run was stopped.'))
@@ -1648,7 +1523,6 @@ export const RunsLive = Layer.effect(
 							(Predicate.isObject(outcome.output) && outcome.output['pages'] === 0));
 					if (idle || !(yield* ledger.record)) return dues;
 				}
-				for (const row of rows) stopping.delete(row.id);
 				const platformRetry = yield* registry.retry(head.automation),
 					policy = spec?.retry ?? Option.getOrUndefined(platformRetry);
 				const retry =
@@ -1721,7 +1595,12 @@ export const RunsLive = Layer.effect(
 				Effect.onInterrupt(() =>
 					interrupted(rows, 'The run was interrupted while its generation was draining (rule 71a).')
 				),
-				Effect.ensuring(Effect.sync(() => parking.leave(rows[0]?.id ?? '')))
+				Effect.ensuring(
+					Effect.sync(() => {
+						for (const row of rows) stopping.delete(row.id);
+						parking.leave(rows[0]?.id ?? '');
+					})
+				)
 			);
 		const tick = tickPermit.withPermit(
 			Effect.scoped(
@@ -1830,13 +1709,13 @@ export const RunsLive = Layer.effect(
 					const first = yield* claim(now, pruned);
 					yield* start(first.runs);
 					yield* FiberSet.awaitEmpty(inflight);
-					if (errors.reasons.length > 0) return yield* Effect.failCause(errors);
 					const next = yield* db.value(Schema.NullOr(Schema.String), {
 						text: `SELECT min(due_at)::text AS next FROM sys_run WHERE state = 'queued'`,
 						params: []
 					});
 					const earliest = Math.min(...dues, next === null ? Infinity : Date.parse(next));
 					yield* deadlines.settle(Number.isFinite(earliest) ? iso(earliest) : null);
+					if (errors.reasons.length > 0) return yield* Effect.failCause(errors);
 				})
 			)
 		);
@@ -1864,12 +1743,14 @@ export const RunsLive = Layer.effect(
 					params: [id, iso(yield* Clock.currentTimeMillis)]
 				});
 				if (rows.length > 0) {
+					const halt = halts.get(id);
+					if (halt !== undefined) {
+						stopping.add(id);
+						yield* Deferred.succeed(halt, undefined);
+					}
 					live.syncChanged('sys_run', [id]);
 					yield* PubSub.publish(ends, [id]);
 				}
-				if (rows.length > 0 && found.value.state === 'running') stopping.add(id);
-				const halt = halts.get(id);
-				if (rows.length > 0 && halt !== undefined) yield* Deferred.succeed(halt, undefined);
 				return Option.fromNullishOr(runView(authority, rows[0] ?? found.value));
 			});
 		const webhook = (path: string, request: WebhookRequest) =>

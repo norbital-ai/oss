@@ -23,7 +23,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		documents: {
-			read: { documents: { fields: 'all' } },
+			outputs: { default: { documents: { fields: 'all' } } },
 			syncs: {
 				sheet: {
 					with: 'file',
@@ -61,7 +61,7 @@ it.live(
 				syncs: {
 					sheet: {
 						write: function*({ context }, ctx) {
-							const { documents } = yield* ctx.db.query({
+							const { documents } = yield* ctx.query({
 								documents: { where: { id: { eq: context.document } }, fields: ['secret'] }
 							});
 							return [{ secret: documents.rows[0]?.secret ?? 'missing' }];

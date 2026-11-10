@@ -9,7 +9,6 @@ import type { Role } from '@norbital-ai/bolt/tooling';
 /** These roles supply browser modules; every other authored declaration stays on the compiler/server side. */
 const CLIENT_ROLES: ReadonlySet<Role> = new Set([
 	'page',
-	'kiosk_page',
 	'session',
 	'representation',
 	'renderer',

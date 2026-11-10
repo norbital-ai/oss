@@ -12,7 +12,6 @@ import type {
 	HttpPort,
 	KeysPort,
 	LogPort,
-	SpeechPort,
 	TcpPort,
 	TransportPort,
 	WebReadPort
@@ -74,8 +73,6 @@ export type System1 = AiPort['sys_1'];
 export type System2 = AiPort['sys_2'];
 /** Multimodal embeddings (`ctx.ai.embed`). */
 export type Embed = EmbeddingsPort;
-/** Text to speech (`ctx.ai.speak`); transcription is Norbital Convert's ingest (`ctx.convert.ingest`). */
-export type Speech = Required<SpeechPort>;
 
 // ── 5. ports: how Bolt reaches the outside ──
 /** Inbound: the public URL under which the host routes `/hooks/integration/<instance>` and OAuth callbacks into Bolt. */
@@ -141,7 +138,6 @@ export type Facilities = {
 		readonly system1: Optional<System1>;
 		readonly system2: Optional<System2>;
 		readonly embed: Optional<Embed>;
-		readonly speech: Optional<Speech>;
 	};
 	readonly ports: {
 		readonly webhooks: Optional<Webhooks>;

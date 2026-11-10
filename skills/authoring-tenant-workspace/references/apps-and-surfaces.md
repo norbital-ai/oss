@@ -1,6 +1,6 @@
 # Apps and surfaces
 
-Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `AppSpec`, `KioskSpec`, `GroupSpec`.
+Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `AppSpec`, `GroupSpec`.
 
 ## Workspace and secrets
 
@@ -23,33 +23,31 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Ap
 
 - `audience`: `members`, `external`, `all`, or `{ public: [...policies], challenge? }`.
 - A public app runs as an anonymous visitor holding exactly those policies: `create` on a submission model and field-listed `read` of published or own rows. The build refuses the rest.
-- A portal for people without a workspace login is a kiosk; its `policies` are everything a caller holds on its pages.
+- A public app can use the kiosk shell. The policies in `audience.public` govern access inside it.
 - External newcomers join through `signup` or invitation. `signup.policies` are what they hold outside portals: keep that an empty `grants: {}` policy for portal-only customers. Scope rows with `{ var: 'requestor.id' }` or `{ var: 'requestor.party' }`.
-- External members open no members app. Staff open a portal only through `capabilities.kiosks`. An external portal's policies list fields, never delete, and hold no `capabilities`.
-- A page with `portal: true` renders alone and may be embedded where its `embed` origins admit it. Portals list under the account menu, so link them yourself. `audience` still decides who opens it.
+- External members open no members app. Staff open a signed-in kiosk through `capabilities.apps`. An external portal's policies list fields, never delete, and hold no `capabilities`.
+- A page with `portal: true` renders alone and is listed under the account menu. The app’s `embed` allows the named sites to frame any of its pages. `audience` decides who opens each page.
 
 ## SSR
 
-- Non-member apps and non-member kiosks use SSR then hydration. A members-only portal stays in the internal SPA.
-- Every SSR page needs `+<page>.page.server.ts` and an ordinary `<page>.page.data.ts` exporting its default codec, imported into the server declaration and shared with hydration.
-- The loader gets `pathname`, `search`, the admitted actor, clock and read-only caller methods. It cannot write, call facilities, read instance credentials or import Node modules. Its data enters the HTML: return only what the caller may receive; never secrets.
-- Render from `data` synchronously; the server `$bolt` rejects workflow execution and reads. Use `bolt.query` after hydration. Never issue a second read before mount or hide loaded data behind loading.
+- Apps with a public, external or shared audience use SSR then hydration. A members-only portal stays in the internal SPA.
+- Use `ctx.query` for initial and live data. The engine resolves the reads used during server rendering under the caller's authority and passes their answers to hydration.
+- Use `ctx.location.pathname` and `ctx.location.search` for a public page's filters. Run device work and writes on mount or in handlers.
 - Keep device effects on client attachments and module-level code free of mounted effects.
 - Only the requested page's graph enters its browser bundle; navigation between public pages is a new document request.
-- Browser imports cannot reach server role values, `.env`, server-named files or `server/` directories, even transitively. Type-only imports are allowed. Share codecs through browser-safe modules.
-- `bolt.fileUrl(file, { preview })` takes an options object; `preview` is 64, 512 or 1024. Public URLs keep their app or kiosk scope and still require file access.
+- Browser imports cannot reach server role values, `.env`, server-named files or `server/` directories, even transitively. Type-only imports are allowed. Keep shared helpers in browser-safe modules.
+- `ctx.file_url(file, { preview })` takes an options object; `preview` is 64, 512 or 1024. Public URLs keep their app or kiosk scope and still require file access.
 - Embedding: the default admits no origin. Embedded sessions use partitioned cookies per site. The iframe's allow attribute delegates device permissions, never data authority.
 
 ## Kiosks
 
-- A kiosk is a standalone chromeless surface at `src/kiosk/<name>/`, top-level, never under `src/app/`. Each page needs a `pages` entry; served at `/kiosk/<name>/<page>`; no `portal` flag.
-- `auth`: `members`, `external`, `all`, `none`. Staff open by `capabilities.kiosks`; signed-in externals when `auth` admits them; `none` needs no sign-in.
-- `policies` run every read and write on its pages, overriding the requestor, administrators included. An unknown or closed kiosk is refused, never run as the caller.
-- Kiosk policies read narrow named outputs (the root lists its fields, the label included), list their columns and never delete; a `none` kiosk's are create-only. The build refuses the rest.
+- Declare an app in `src/app/<name>/+app.ts` with `shell: 'kiosk'` for a shared device. Its pages render alone at `/kiosk/<name>/<page>`.
+- A signed-in kiosk uses `policies` as the authority for every read and write, including those by administrators. A public kiosk uses `audience.public`.
+- Kiosk policies read narrow named outputs, list write columns and never delete. Public kiosk policies follow the same visitor restrictions as other public apps.
 
 ## Anonymous users
 
-- A visitor of a public app or `none` kiosk is a `sys_user` of kind `anonymous`, held by a cookie for 30 unused days. Never a member; it holds exactly the surface's policies; `requestor.id` is that user.
+- A visitor of a public app is a `sys_user` of kind `anonymous`, held by a cookie for 30 unused days. Never a member; it holds exactly the surface's policies; `requestor.id` is that user.
 - A public policy reads a model it creates only through an owner ref defaulting to `{ var: 'requestor.id' }`.
 - Limits per IP: `act 120/h`, `register 20/h`; past that the page opens with no identity.
 - Signing in links the user: a newcomer keeps id and rows; an existing account takes over owner refs unless state locks them. `requestor.visitor` text copies and `created_by` do not move: scope ownership with a `sys_user` ref.

@@ -43,16 +43,16 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		invoices: {
-			read: { invoices: { fields: 'all' } },
+			outputs: { default: { invoices: { fields: 'all' } } },
 			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
 			update: { columns: { invoices: ['note'] } },
 			effect: { created: true }
 		},
 		purchase_orders: {
-			read: { purchase_orders: { fields: 'all' } },
+			outputs: { default: { purchase_orders: { fields: 'all' } } },
 			create: { columns: { purchase_orders: ['number', 'supplier', 'amount', 'margin'] } }
 		},
-		ledgers: { read: { ledgers: { fields: 'all' } }, create: { columns: { ledgers: ['title'] } } }
+		ledgers: { outputs: { default: { ledgers: { fields: 'all' } } }, create: { columns: { ledgers: ['title'] } } }
 	},
 	policies: {
 		matcher: {
@@ -82,7 +82,6 @@ const manifest = {
 	integrations: {},
 	teams: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

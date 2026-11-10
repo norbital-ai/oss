@@ -3,7 +3,7 @@ import type { Reader } from '../contracts.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { publicEnvoys, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
 import { inboxRequests, openRequests } from '../approvals/inbox.ts';
 import { INBOX_LIMIT, noticeRow } from '../live/hub.ts';
 import {
@@ -60,12 +60,11 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 					text: `SELECT to_jsonb(c) || jsonb_build_object('peer', CASE WHEN c.kind = 'dm' THEN (SELECT u.name FROM sys_message p
     JOIN sys_user u ON u.id = COALESCE(p."as"->'envoy'->>'member', p."as"->>'member', p.author) WHERE p.conversation = c.id
     ORDER BY p.seq LIMIT 1) END) AS r FROM sys_conversation c WHERE c.parent IS NULL AND
-    (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$3', staff: '$4', envoys: '$2' })})
+    (c.owner = $1 OR ${sharedConversations({ member: '$1', admin: '$2', staff: '$3' })})
     ORDER BY updated_at DESC, id COLLATE "C" DESC LIMIT ${CONVERSATIONS}`,
 					// an automation's inference transcripts are an administrator's to read
 					params: [
 						read.member,
-						JSON.stringify(publicEnvoys(manifest)),
 						reader.as === 'workspace' || reader.authority.admin,
 						reader.as === 'workspace' || isStaff(reader.authority)
 					]

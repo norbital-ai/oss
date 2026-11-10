@@ -4,7 +4,7 @@
 import type { Effect } from 'effect';
 import type { Cursor } from '@norbital-ai/store';
 import type { Actor } from './access/actor.ts';
-import type { ApprovalStep, Flow, Verdict } from './access/policy.ts';
+import type { ApprovalFlow, ApprovalStep, Verdict } from './access/policy.ts';
 import type { ActConflict, ActRefused, ActUnknown, ReadFailed, Refusal } from './errors.ts';
 import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts';
 import type {
@@ -347,29 +347,14 @@ export interface CallerQuery<E = never> {
  * The one read API as the workspace (write callbacks, `notify`, sync bodies, rule 15): the same shapes as `CallerQuery`,
  * answered with every stored row under no grant.
  */
-export interface WorkspaceQuery {
-	/** A read request (as the caller's), answered as the workspace: unscoped, the same declared outputs and layers. */
-	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>>;
-	/** The same layer map built at runtime, checked host-side; answered untyped. */
-	query(request: DynamicRead): Eff<DynamicAnswer, ReadFailed>;
-	/** Without `by`, one row over the whole model. */
-	aggregate<C extends string>(
-		model: Is<C, ReadableName>,
-		args: Measures<C> & { by?: never }
-	): Eff<AggRow<C>>;
-	/** With `by`, a page of buckets (rule 9). */
-	aggregate<C extends string, const B extends Bucket<C> | readonly Bucket<C>[]>(
-		model: Is<C, ReadableName>,
-		args: Measures<C> & { by: B } & Paged
-	): Eff<Page<AggRow<C, BucketField<B>>>>;
-}
-/** What every server body knows of its moment: who it runs as, the instant, today and the zone (`todayIn` another zone). */
+export type WorkspaceQuery = Pick<CallerQuery, 'query' | 'aggregate'>;
+/** What every server body knows of its moment: who it runs as, the instant, today and the zone (`today_in` another zone). */
 export interface Clock {
 	readonly actor: Actor;
 	now: Instant;
 	today: PlainDate;
 	tz: IanaZone;
-	todayIn(zone: IanaZone): PlainDate;
+	today_in(zone: IanaZone): PlainDate;
 }
 
 // ── writes: trees typed from the model's write layers (decision 6: every write is a batch of them) ──
@@ -422,7 +407,7 @@ type AttachInput<C> = [AttachName<C>] extends [never]
  * required, `filled` ones optional) and each declared child layer as a list of child rows (or, for a non-owned relation,
  * ids of existing rows to link).
  */
-export type CreateTree<M> = CreateLayer<M, M & string>;
+export type CreateInput<M> = CreateLayer<M, M & string>;
 type ChildCreate<
 	C,
 	Q extends string,
@@ -448,7 +433,7 @@ type UpdateLayer<C, P extends string, T = PathModel<C, P>> = {
  * rows it creates, updates (`{ target, set }`) and deletes (and, for a non-owned relation, links or unlinks), each with
  * that layer's update columns.
  */
-export type UpdateTree<M> = UpdateLayer<M, M & string>;
+export type UpdateInput<M> = UpdateLayer<M, M & string>;
 type StoredLayer<
 	C,
 	V extends 'create' | 'update',
@@ -459,10 +444,6 @@ type StoredLayer<
 };
 /** The stored row of `M` with each child layer its `V` declares, as the update `check` sees it (`before`). */
 export type StoredTree<M, V extends 'create' | 'update'> = StoredLayer<M, V, M & string>;
-/** A create input of `C`: its create tree. */
-export type Insert<C> = CreateTree<C>;
-/** An update `set` of `C`: its update tree. */
-export type Patch<C> = UpdateTree<C>;
 
 export type Keyed<C> =
 	NamesPart<'models'> extends {
@@ -499,20 +480,20 @@ export type Callable = {
  */
 export type ActInput<N> = N extends `${infer C}.${infer V}`
 	? V extends 'create'
-		? readonly Insert<C>[]
+		? readonly CreateInput<C>[]
 		: V extends 'upsert'
-			? readonly (Insert<C> | ({ id: Id<C> } & Patch<C>))[]
+			? readonly (CreateInput<C> | ({ id: Id<C> } & UpdateInput<C>))[]
 			: V extends 'import'
 				? ImportInput<C>
 				: V extends 'update'
-					? readonly { target: Id<C>; set: Patch<C> }[]
+					? readonly { target: Id<C>; set: UpdateInput<C> }[]
 					: V extends 'delete'
 						? readonly { target: Id<C> }[]
 						: never
 	: never;
 /** An import's rows and how it meets the stored rows its key matches (rule 30). */
 export type ImportInput<C> = {
-	readonly rows: readonly Insert<C>[];
+	readonly rows: readonly CreateInput<C>[];
 	/** `refuse` refuses a row already on file. */
 	readonly onConflict: 'update' | 'keep' | 'refuse';
 	/** `skip` only updates rows already on file. */
@@ -572,9 +553,7 @@ type WrittenOf<_N> = Written;
 export type PlatformRefusal =
 	| 'locked'
 	| 'sourceChanged'
-	/** The native transaction exhausted its fixed deadline. */
 	| 'timeout'
-	/** The selected database backend cannot enforce the native transaction contract. */
 	| 'unsupported'
 	| 'readBudgetExceeded'
 	| 'forbidden'
@@ -720,9 +699,6 @@ export interface Act {
 // ── contexts ──
 // Contexts are interfaces with declared variance: measuring the variance of a generic alias over a large names index
 // cost seconds per body (G1 scale fixture).
-/** Server-rendered page loaders receive caller-scoped reads and a clock, with no write or facility authority. */
-export interface PageReadContext extends Readonly<Clock>, CallerQuery<ReadFailed> {}
-
 // ── policy checks (decision 3): one `check` per write verb, the root's policy only ──
 /** Where a `deny` points: the batch row, the write path (the root when omitted) and a column of that path. */
 export type DenyAt<M, V> = V extends 'create' | 'update'
@@ -735,37 +711,33 @@ export type DenyAt<M, V> = V extends 'create' | 'update'
 				};
 		  }[Exclude<WritePath<M, V>, M>]
 	: { readonly row?: number };
-/** A policy check's reads: read requests as the workspace (unscoped), at most ten per call, as a write callback's. */
-export interface PolicyReads {
-	query<const R extends ReadRequestBase>(request: ReadRequest<R>): Eff<ReadAnswer<R>>;
-}
 /**
- * What a policy's write `check` sees: who writes (`actor`, `policies`), the clock, `db.query` (read requests as the
+ * What a policy's write `check` sees: who writes (`actor`, `policies`), the clock, `query` (read requests as the
  * workspace, at most ten per call, whatever the batch size) and the three verdicts. It writes nothing and does no I/O;
- * it returns `allow()`, `deny(message, at?)` or `approve(flow => …)` (the approval `Flow` builder), nothing else.
+ * it returns `allow()` or `approve(flow => …)`, or stops with `refuse(message, at?)`.
  */
 export interface PolicyCtx<
 	in out M,
 	in out V extends 'create' | 'update' | 'delete'
 > extends Clock {
-	readonly invocationId: string;
+	readonly invocation_id: string;
 	readonly policies: readonly string[];
-	readonly db: PolicyReads;
+	readonly query: WorkspaceQuery['query'];
 	/** The write executes directly. */
 	allow(): Verdict;
 	/** The whole batch is refused (rule 32) with `message`; `at` names the row, the write path and a column of it. */
-	deny(message: string, at?: DenyAt<M, V>): Verdict;
+	refuse(message: string, at?: DenyAt<M, V>): Eff<never, Refusal>;
 	/** The batch is held for the approval flow `build` returns (steps, `if`/`else`, `supersededBy`). */
-	approve(build: (flow: Flow) => Flow): Verdict;
+	approve(flow: ApprovalFlow): Verdict;
 }
 /** A create `check`: the batch of create trees. */
 export type CreateCheck<M> = (
-	rows: readonly CreateTree<M>[],
+	rows: readonly CreateInput<M>[],
 	ctx: PolicyCtx<M, 'create'>
 ) => BodyReturn<Verdict>;
 /** An update `check`: per row the stored tree (`before`) and its `set`. */
 export type UpdateCheck<M> = (
-	changes: readonly { readonly before: StoredTree<M, 'update'>; readonly set: UpdateTree<M> }[],
+	changes: readonly { readonly before: StoredTree<M, 'update'>; readonly set: UpdateInput<M> }[],
 	ctx: PolicyCtx<M, 'update'>
 ) => BodyReturn<Verdict>;
 /** A delete `check`: the stored rows the batch removes. */
@@ -788,29 +760,29 @@ type Unlisted<M, Cols, Fixed = never> = {
  * required, and the declared child layers), any other writable field it derives. Derived and system columns are `never`;
  * the `id` is the act's own (the transform reads it, `CreatedRow`).
  */
-export type CreateRow<M> = CreateTree<M> &
+export type CreateTransformRow<M> = CreateInput<M> &
 	Unlisted<M, LayerColumn<M, 'create', M>> &
 	Underived<M, WritableField<M> | 'id'>;
-/** A row `create.transform` receives: its `CreateRow` and the id it will have. */
-export type CreatedRow<M> = CreateRow<M> & { readonly id: Id<M & string> };
+/** A row `create.transform` receives: its `CreateTransformRow` and the id it will have. */
+export type CreatedRow<M> = CreateTransformRow<M> & { readonly id: Id<M & string> };
 /**
  * One `set` `update.transform` receives and returns: its update tree (the root columns the writer changed and the child
  * layers' changes) and any other writable field it derives, all optional (never an owned child's parent key, rule 41).
  */
-export type UpdateSet<M> = UpdateTree<M> &
+export type UpdateTransformSet<M> = UpdateInput<M> &
 	Unlisted<M, LayerColumn<M, 'update', M>, OwnedFk<M>> &
 	Underived<M>;
 /**
  * Rows of other models a write callback carries into its own commit: creates, and updates naming the revision they read
- * (a newer one is a conflict). They run their own model's callbacks (`ctx.carriedBy` names the carrier), the root write's
+ * (a newer one is a conflict). They run their own model's callbacks (`ctx.carried_by` names the carrier), the root write's
  * grant admits them, and they commit with it or not at all.
  */
 export type CarriedWrites = {
 	readonly [N in AuthoredModelName]?: {
-		readonly create?: readonly CreateRow<N>[];
+		readonly create?: readonly CreateTransformRow<N>[];
 		readonly update?: readonly {
 			readonly target: Id<N>;
-			readonly set: UpdateSet<N>;
+			readonly set: UpdateTransformSet<N>;
 			readonly observed?: number;
 		}[];
 	};
@@ -824,7 +796,7 @@ export type Carried = { readonly with?: CarriedWrites; readonly onApproved?: Car
 /** What `create.transform` and `update.transform` return: their rows in order, or the rows with what they carry. */
 export type TransformAnswer<R> = readonly R[] | ({ readonly rows: readonly R[] } & Carried);
 /** The workspace reads of a write callback, and the act's own rows (`after`). */
-interface WriteReads extends WorkspaceQuery {
+interface ProspectiveQuery {
 	/** Stored rows matching `where` overlaid with this act's rows: what the model will hold once the act commits. */
 	after<C extends string>(
 		model: Is<C, ReadableName>,
@@ -843,17 +815,17 @@ interface WriteReads extends WorkspaceQuery {
 	>;
 }
 /**
- * What a write callback sees: the clock, the writer's policies, the workspace's reads in `db` (unmasked; `db.after` sees
+ * What a write callback sees: the clock, the writer's policies, the workspace reads (unmasked; `query.after` sees
  * this act's rows) and `refuse`. A callback reads at most 10 times per call, whatever the batch size: read for the whole
- * batch at once (`yield* ctx.db.query({ customers: …, prices: … })` is one read), never inside a loop over the rows.
+ * batch at once (`yield* ctx.query({ customers: …, prices: … })` is one read), never inside a loop over the rows.
  * It writes nothing itself: what it returns is written in the writer's one transaction.
  */
-export interface WriteCtx<in out M> extends Clock {
-	readonly invocationId: string;
+export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
+	readonly invocation_id: string;
 	readonly policies: readonly string[];
 	readonly admin: boolean;
 	/** The model whose write carries these rows (its `with` or `onApproved`), or `null` for rows written directly. */
-	readonly carriedBy: string | null;
+	readonly carried_by: string | null;
 	/**
 	 * `true` when the decision that approves a held write asks again: the rows are the records as they now stand (an
 	 * update's `{ before: row, set: {} }`, a delete's row as it was), and only the answer's `onApproved` is written, in the
@@ -865,7 +837,7 @@ export interface WriteCtx<in out M> extends Clock {
 	 * offending row in the batch the callback received.
 	 */
 	refuse(message: string, at?: { field?: WritableField<M>; row?: number }): Eff<never, Refusal>;
-	db: WriteReads;
+	query: WorkspaceQuery['query'] & ProspectiveQuery;
 }
 
 // ── notify ──
@@ -895,9 +867,7 @@ export type NotifyEvent<M> =
 			readonly approvers: Pick<ApprovalStep, 'teams' | 'users'>;
 	  };
 /** What `notify` sees: the clock and the workspace's reads; no I/O (delivery and `via` channels are the platform's). */
-export interface NotifyCtx extends Clock {
-	readonly db: WorkspaceQuery;
-}
+export interface NotifyCtx extends Clock, WorkspaceQuery {}
 
 // ── the names the page client (`page/page-bolt.ts`) shares with the `ctx` above ──
 /** A key of `src/i18n/+messages.ts`. */
@@ -910,7 +880,7 @@ export type ViewNames = [keyof NamesPart<'exposures'>] extends [never]
 				[C in ModelName]: {
 					row: ListRow<C>;
 					record: Row<C>;
-					insert: Insert<C>;
+					insert: CreateInput<C>;
 					where: Where<C>;
 					orderBy: OrderBy<C>;
 					/** Many-relation layers a view may show as a column (a table's multi-link cell). */

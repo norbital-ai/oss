@@ -61,9 +61,9 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Nightly order digest';
 					policies: readonly ['sales_rep'];
-					on: {
+					on: readonly [{
 						cron: '0 2 * * *';
-					};
+					}];
 					output: {
 						kind: 'int';
 					};
@@ -109,13 +109,13 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Payment provider callback';
 					policies: readonly ['sales_rep'];
-					on: {
+					on: readonly [{
 						webhook: '/payments';
 						verify: {
 							scheme: 'stripe';
 							secret: 'HOOK_SECRET';
 						};
-					};
+					}];
 					input: {
 						order: {
 							kind: 'text';
@@ -146,12 +146,9 @@ declare module '../../src/index.ts' {
 		};
 		exposures: {
 			customers: {
-				read: {
+				outputs: { default: {
 					customers: { fields: 'all' };
-				};
-				outputs: {
-					directory: { customers: { fields: readonly ['name', 'tier'] } };
-				};
+				}; directory: { customers: { fields: readonly ['name', 'tier'] } } };
 				create: {
 					columns: { customers: readonly ['name', 'email', 'tier'] };
 					filled: { customers: readonly ['name'] };
@@ -171,17 +168,14 @@ declare module '../../src/index.ts' {
 				};
 			};
 			orders: {
-				read: {
+				outputs: { default: {
 					orders: { fields: 'all' };
 					'orders.customer': { fields: readonly ['name', 'tier'] };
 					'orders.lines': { fields: 'all' };
-				};
-				outputs: {
-					logistics: {
+				}; logistics: {
 						orders: { fields: readonly ['number', 'status', 'customer'] };
 						'orders.lines': { fields: readonly ['item', 'qty'] };
-					};
-				};
+					} };
 				create: {
 					columns: {
 						orders: readonly ['customer', 'note', 'due'];
@@ -237,14 +231,14 @@ declare module '../../src/index.ts' {
 				};
 			};
 			order_lines: {
-				read: {
+				outputs: { default: {
 					order_lines: { fields: 'all' };
-				};
+				} };
 			};
 			notices: {
-				read: {
+				outputs: { default: {
 					notices: { fields: 'all' };
-				};
+				} };
 				syncs: {
 					mail: {
 						with: 'support_mail';
@@ -253,9 +247,9 @@ declare module '../../src/index.ts' {
 				};
 			};
 			notice_notes: {
-				read: {
+				outputs: { default: {
 					notice_notes: { fields: 'all' };
-				};
+				} };
 				create: {
 					columns: { notice_notes: readonly ['notice', 'note'] };
 				};
@@ -286,22 +280,19 @@ declare module '../../src/index.ts' {
 				};
 			};
 			sites: {
-				read: {
+				outputs: { default: {
 					sites: {
 						fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
 					};
-				};
-				outputs: {
-					summary: { sites: { fields: readonly ['name', 'open'] } };
-				};
+				}; summary: { sites: { fields: readonly ['name', 'open'] } } };
 				update: {
 					columns: { sites: readonly ['name', 'location'] };
 				};
 			};
 			products: {
-				read: {
+				outputs: { default: {
 					products: { fields: 'all' };
-				};
+				} };
 				update: {
 					columns: { products: readonly ['commission_factor'] };
 				};
@@ -313,9 +304,9 @@ declare module '../../src/index.ts' {
 				};
 			};
 			entries: {
-				read: {
+				outputs: { default: {
 					entries: { fields: 'all' };
-				};
+				} };
 				update: {
 					columns: { entries: readonly ['filed'] };
 				};
@@ -392,16 +383,6 @@ declare module '../../src/index.ts' {
 						};
 					};
 				};
-			};
-		};
-		envoys: {
-			desk: {
-				name: 'Norbius';
-				audience: 'private';
-				policies: readonly ['sales_rep'];
-				groupMessages: 'mention_or_reply';
-				delegation: 'disabled';
-				task: 'Keep orders up to date from what people report.';
 			};
 		};
 		hostTools: {
@@ -905,17 +886,21 @@ declare module '../../src/index.ts' {
 								orders: readonly ['customer', 'note'];
 								'orders.lines': readonly ['item', 'qty'];
 							};
-							check: true;
+							verdict: true;
 						};
-						update: { columns: { orders: readonly ['status', 'note'] }; check: true };
-						delete: { check: true };
+						update: { columns: { orders: readonly ['status', 'note'] }; verdict: true };
+						delete: { verdict: true };
 						moves: {
 							status: readonly ['draft->submitted', 'submitted->draft'];
 						};
 					};
 					customers: {
 						outputs: {
-							directory: { customers: { where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } } } };
+							directory: {
+								customers: {
+									where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
+								};
+							};
 						};
 						update: true;
 					};
@@ -924,7 +909,9 @@ declare module '../../src/index.ts' {
 					};
 					sites: {
 						outputs: {
-							summary: { sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } };
+							summary: {
+								sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } };
+							};
 						};
 					};
 					sys_user: {
@@ -1112,7 +1099,6 @@ declare module '../../src/index.ts' {
 				};
 				whatsapp: {
 					integration: 'whatsapp';
-					envoy: 'desk';
 				};
 			};
 		};

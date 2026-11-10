@@ -22,12 +22,12 @@ const manifest = {
 	relationships: { 'notes.order': { to: 'orders', inverse: 'notes' } },
 	exposures: {
 		orders: {
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: {
 				columns: { orders: ['title'], 'orders.notes': ['text'] }
 			}
 		},
-		notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['text', 'order'] } } }
+		notes: { outputs: { default: { notes: { fields: 'all' } } }, create: { columns: { notes: ['text', 'order'] } } }
 	},
 	policies: {
 		rep: {
@@ -36,7 +36,7 @@ const manifest = {
 				orders: { read: true, create: true },
 				notes: { read: true, create: true }
 			},
-			automations: ['orders_place']
+			capabilities: { automations: ['orders_place'] }
 		}
 	},
 	integrations: {},
@@ -50,7 +50,6 @@ const manifest = {
 		}
 	},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -168,7 +167,7 @@ describe('a read request (`bolt.query({ … })`)', () => {
 			...manifest.exposures,
 			orders: {
 				...manifest.exposures.orders,
-				read: { orders: { fields: 'all' }, 'orders.notes': { fields: 'all' } }
+				outputs: { default: { orders: { fields: 'all' }, 'orders.notes': { fields: 'all' } } }
 			}
 		},
 		policies: {

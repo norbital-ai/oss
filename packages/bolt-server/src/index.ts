@@ -16,11 +16,4 @@ export { apns, push } from './push.ts';
 // this host's own facility adapters, for another host to reuse
 export { resendMail, type ResendMail } from './resend.ts';
 export { twilioMessages, twilioVerify } from './twilio.ts';
-export {
-	openRouterSpeech,
-	SpeechFailure,
-	type OpenRouterSpeechConfig,
-	type SpeechDef,
-	type SpeechServices
-} from './speech.ts';
 export type { PhoneVerifierDef, TransportDef } from './mail.ts';

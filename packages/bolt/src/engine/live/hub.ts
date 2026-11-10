@@ -51,6 +51,8 @@ const MiB = 1024 * 1024;
 export const LIVE = {
 	subscriptionBytes: 2 * MiB,
 	perConnection: 500,
+	connectionFrames: 1_000,
+	connectionQueueBytes: 16 * MiB,
 	cellBytes: 128 * MiB
 } as const;
 
@@ -76,8 +78,8 @@ type View = LiveView & {
 type Conn = {
 	id: string;
 	authority: Authority;
-	send(frame: Frame): void;
-	end(): void;
+	send(frame: Frame): Effect.Effect<void>;
+	end(discard: boolean): void;
 	views: Map<string, View>;
 	scope: Scope.Closeable;
 };
@@ -198,11 +200,6 @@ export const LiveHubLive = Layer.effect(
 			| { readonly _tag: 'Flush' }
 			| { readonly _tag: 'Barrier'; readonly done: Deferred.Deferred<void> }
 		>();
-		// an envoy declared `public` serves anyone, so its threads are in every member's list (the `conversations` read)
-		const publicEnvoys = () =>
-			Object.entries(manifest.envoys)
-				.filter(([, e]) => e.audience === 'public')
-				.map(([n]) => n);
 		const conns = new Map<string, Conn>();
 		// `v`: the last commit's sequence; `routed`: the last one whose views were answered (frames are stamped with it)
 		let v = 0,
@@ -502,11 +499,11 @@ export const LiveHubLive = Layer.effect(
 			conversations: {
 				...base,
 				decide: (a, view, captured) => {
-					if (view.read.kind !== 'conversations' || captured.model !== view.read.model)
-						return 'skip';
+					if (view.read.kind !== 'conversations') return 'skip';
+					if (captured.model === 'sys_envoy') return isStaff(a) ? 'unknown' : 'skip';
+					if (captured.model !== view.read.model) return 'skip';
 					const row = captured.new ?? captured.old;
-					if (listed(row, view.read.member, isStaff(a) ? publicEnvoys() : [], a.admin))
-						return 'hit';
+					if (listed(row, view.read.member, a.admin)) return 'hit';
 					// a thread the member posted in is listed (`sharedConversations`) though no row image says so: re-read
 					// ponytail: every unlisted thread change re-reads the list; track posted threads per view if that gets hot
 					return row !== null &&
@@ -620,13 +617,13 @@ export const LiveHubLive = Layer.effect(
 						: null;
 			if (over !== null) {
 				yield* drop(conn, view.id);
-				conn.send({ t: 'error', view: view.id, code: over[0], message: over[1] });
+				yield* conn.send({ t: 'error', view: view.id, code: over[0], message: over[1] });
 				return;
 			}
 			retained += bytes - view.bytes;
 			view.bytes = bytes;
 			view.value = value;
-			conn.send(
+			yield* conn.send(
 				ops === undefined
 					? {
 							t: 'answer',
@@ -683,7 +680,7 @@ export const LiveHubLive = Layer.effect(
 				const result = values[i];
 				if (result === undefined) continue;
 				if ('ok' in result) yield* put(conn, view, result.ok);
-				else failed(conn, view, result.err);
+				else yield* failed(conn, view, result.err);
 			}
 		});
 		const drop = (conn: Conn, id: string) =>
@@ -693,14 +690,14 @@ export const LiveHubLive = Layer.effect(
 				retained -= view.bytes;
 				conn.views.delete(id);
 			});
-		const disconnect = Effect.fn('Live.disconnect')(function* (id: string) {
+		const disconnect = Effect.fn('Live.disconnect')(function* (id: string, discard = false) {
 			const conn = conns.get(id);
 			if (conn === undefined) return;
 			for (const view of conn.views.values()) retained -= view.bytes;
 			conn.views.clear();
 			conns.delete(id);
+			conn.end(discard);
 			yield* Scope.close(conn.scope, Exit.void);
-			conn.end();
 		});
 
 		const flush = Effect.fn('Live.flush')(function* () {
@@ -712,8 +709,8 @@ export const LiveHubLive = Layer.effect(
 			syncChanges = new Map();
 			const b = yield* bindings;
 			let hit = 0,
-				patched = 0,
-				fallback = 0;
+				patched = 0;
+			const fallback = new Set<View>();
 			reads = 0;
 			yield* Effect.forEach(
 				[...conns.values()],
@@ -787,17 +784,16 @@ export const LiveHubLive = Layer.effect(
 												)
 											: undefined;
 									yield* put(conn, view, r.ok, undefined, arrivals);
-								} else failed(conn, view, r.err);
+								} else yield* failed(conn, view, r.err);
 							}
 						}
 						let k = full.length;
 						const again: View[] = [];
 						for (const { view, rows } of deltas) {
-							const got = rows.map((x) => ('get' in x ? values[k++]! : null));
+							const got = rows.map((x) => ('get' in x ? values[k++] : null));
 							if (!conn.views.has(view.id)) continue;
 							if (got.some((x) => x !== null)) {
-								fallback++;
-								view.conservative = true;
+								fallback.add(view);
 							}
 							if (view.value === undefined) {
 								again.push(view);
@@ -839,16 +835,16 @@ export const LiveHubLive = Layer.effect(
 							patched++;
 							yield* put(conn, view, work.value, ops);
 						}
-						for (const view of [...full, ...again]) view.conservative = true;
-						fallback += full.length + again.length;
+						for (const view of [...full, ...again]) fallback.add(view);
 						yield* answer(conn, again); // rare: a page boundary moved or an order needed the collation
-						conn.send({ t: 'v', v: routed });
+						yield* conn.send({ t: 'v', v: routed });
 					}),
 				{ concurrency: 'unbounded', discard: true }
 			);
-			conservative += fallback;
+			for (const view of fallback) view.conservative = true;
+			conservative += fallback.size;
 			yield* Effect.logDebug(
-				`live v=${routed} rows=${batch.length} views=${hit} patched=${patched} conservative=${fallback} reads=${reads}`
+				`live v=${routed} rows=${batch.length} views=${hit} patched=${patched} conservative=${fallback.size} reads=${reads}`
 			);
 		});
 
@@ -856,18 +852,30 @@ export const LiveHubLive = Layer.effect(
 			while (true) {
 				const work = yield* Queue.take(lane);
 				if (work._tag === 'Barrier') yield* Deferred.succeed(work.done, undefined);
-				else yield* flush();
+				else
+					yield* flush().pipe(
+						Effect.catchDefect((defect) =>
+							Effect.logError('Live routing failed. Clients will reconnect.', defect).pipe(
+								Effect.andThen(
+									Effect.forEach([...conns.keys()], (id) => disconnect(id, true), { discard: true })
+								)
+							)
+						)
+					);
 			}
 		}).pipe(Effect.forkScoped);
 		yield* Effect.addFinalizer(() =>
-			Effect.forEach([...conns.keys()], disconnect, { discard: true })
+			Effect.forEach([...conns.keys()], (id) => disconnect(id), { discard: true })
 		);
 		return Live.of({
 			v: Effect.sync(() => v),
 			connect: (authority) =>
 				Stream.unwrap(
 					Effect.gen(function* () {
-						const frames = yield* Queue.unbounded<Frame, Cause.Done>();
+						const frames = yield* Queue.dropping<{ frame: Frame; bytes: number }, Cause.Done>(
+							LIVE.connectionFrames
+						);
+						let queuedBytes = 0;
 						const scope = yield* Scope.fork(generation);
 						const id = `c${++n}`;
 						const conn: Conn = {
@@ -875,17 +883,32 @@ export const LiveHubLive = Layer.effect(
 							authority,
 							views: new Map(),
 							scope,
-							send: (frame) => {
-								Queue.offerUnsafe(frames, frame);
-							},
-							end: () => {
+							send: (frame) =>
+								Effect.suspend(() => {
+									const bytes = bytesOf(JSON.stringify(frame));
+									if (
+										queuedBytes + bytes > LIVE.connectionQueueBytes ||
+										!Queue.offerUnsafe(frames, { frame, bytes })
+									)
+										// A skipped patch would invalidate every later frame. Reconnect for a new snapshot.
+										return disconnect(id, true);
+									queuedBytes += bytes;
+									return Effect.void;
+								}),
+							end: (discard) => {
 								Queue.endUnsafe(frames);
+								if (discard) Queue.shutdownUnsafe(frames);
 							}
 						};
 						conns.set(id, conn);
-						conn.send({ t: 'hello', conn: id, v: routed });
+						yield* conn.send({ t: 'hello', conn: id, v: routed });
 						yield* Effect.addFinalizer(() => disconnect(id));
-						return Stream.fromQueue(frames);
+						return Stream.fromQueue(frames).pipe(
+							Stream.map(({ frame, bytes }) => {
+								queuedBytes -= bytes;
+								return frame;
+							})
+						);
 					})
 				),
 			authorityOf: (id) => Effect.sync(() => Option.fromNullishOr(conns.get(id)?.authority)),
@@ -971,7 +994,7 @@ export const LiveHubLive = Layer.effect(
 			}),
 			close: Effect.fn('Live.close')(function* (release: string) {
 				for (const conn of [...conns.values()]) {
-					conn.send({ t: 'close', release });
+					yield* conn.send({ t: 'close', release });
 					yield* disconnect(conn.id);
 				}
 			})

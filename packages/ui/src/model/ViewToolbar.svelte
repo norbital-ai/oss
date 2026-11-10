@@ -669,7 +669,7 @@
 		notify(bolt, outcome, saved);
 		if (outcome.kind === 'committed')
 			for (const file of filesOf(outcome.output))
-				window.open(bolt.fileUrl(file), '_blank', 'noopener');
+				window.open(bolt.file_url(file), '_blank', 'noopener');
 		if (ok(outcome)) onSettled?.();
 	};
 	const track = (handle: RunHandle) =>

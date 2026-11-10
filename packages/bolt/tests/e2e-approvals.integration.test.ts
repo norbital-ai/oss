@@ -26,7 +26,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		orders: {
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: { columns: { orders: ['title', 'note'] } },
 			update: { columns: { orders: ['title', 'note'] } }
 		}
@@ -46,8 +46,8 @@ const manifest: EngineManifest = {
 			grants: {
 				orders: {
 					read: true,
-					create: { check: true },
-					update: { columns: { orders: ['title', 'note'] }, check: true }
+					create: { verdict: true },
+					update: { columns: { orders: ['title', 'note'] }, verdict: true }
 				}
 			}
 		},
@@ -57,7 +57,6 @@ const manifest: EngineManifest = {
 	teams: { sales: ['sales', 'sales_approval'], finance: ['finance'], ops: [] },
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -68,8 +67,8 @@ const manifest: EngineManifest = {
 const workspace = Layer.unwrap(
 	program(
 		`export default { policy: { sales_approval: { grants: { orders: {
-	create: { check: function* (rows, ctx) { const row = rows.findIndex((r) => r.title === 'refuse'); return row >= 0 ? ctx.deny('This title is refused.', { row, field: 'title' }) : ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] })); } },
-	update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] })); } }
+	create: { verdict: function* (rows, ctx) { const row = rows.findIndex((r) => r.title === 'refuse'); return row >= 0 ? yield* ctx.refuse('This title is refused.', { row, field: 'title' }) : ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] }); } },
+	update: { verdict: function* (changes, ctx) { return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] }); } }
 } } } } };`
 	).pipe(Effect.map((guest) => TestWorkspace.layer({ manifest, guest })))
 );

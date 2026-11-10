@@ -13,9 +13,6 @@ export default model('orders', {
 			states: { draft: { to: ['placed'] }, placed: { edit: 'none' } }
 		}
 	},
-	read: {
-		orders: { fields: 'all' },
-		'orders.customer': { fields: ['name', 'rating'] }
-	},
+	outputs: { default: { fields: 'all', customer: { fields: ['name', 'rating'] } } },
 	create: { columns: { orders: ['customer', 'amount'] } }
 });

@@ -1,6 +1,6 @@
 // The one wire shape per kind (D6, std/wire), both ways: a decimal is `{ $dec }`, a date and an instant their ISO text,
 // a period `{ from, to }` / `{ start, end }` of those. An act takes exactly what q, live, the callback's `before` and
-// `ctx.db.query`, an aggregate and a seed load give back.
+// `ctx.query`, an aggregate and a seed load give back.
 import { dec } from '@norbital-ai/std/decimal';
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
@@ -40,7 +40,7 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		items: {
-			read: { items: { fields: 'all' } },
+			outputs: { default: { items: { fields: 'all' } } },
 			create: { columns: { items: columns } },
 			update: { columns: { items: columns } }
 		}
@@ -50,7 +50,6 @@ const manifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -62,7 +61,7 @@ const manifest = {
 const guest =
 	program(`export default { model: { items: { bodies: { update: function* (changes, ctx) {
 	const shape = (r) => r === null ? null : { amount: String(r.amount), day: r.day, at: r.at, span: r.span, slot: r.slot };
-	const { items: page } = yield* ctx.db.query({ items: { where: { id: { in: changes.map(({ before }) => before.id) } } } });
+	const { items: page } = yield* ctx.query({ items: { where: { id: { in: changes.map(({ before }) => before.id) } } } });
 	const rows = new Map(page.rows.map((row) => [row.id, row]));
 	return changes.map(({ before, set }) => ({ ...set, seen: { before: shape(before), query: shape(rows.get(before.id) ?? null) } }));
 } } } } };`);
@@ -180,7 +179,7 @@ describe('wire codec: one shape per kind, both ways (D6)', () => {
 			expect(yield* a.get(id)).toMatchObject(input);
 		})
 	);
-	it.live('the callback reads the same shapes through before and ctx.db.query', () =>
+	it.live('the callback reads the same shapes through before and ctx.query', () =>
 		Effect.gen(function* () {
 			const a = yield* shared;
 			const id = createdId(yield* a.act('items.create', [input]));

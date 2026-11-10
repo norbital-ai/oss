@@ -18,7 +18,6 @@ const manifest: EngineManifest = {
 	automations: { check: { description: 'Check server configuration', policies: ['server'] } },
 	integrations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

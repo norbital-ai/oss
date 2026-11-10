@@ -25,16 +25,12 @@ export default model('sys_integration', {
 		epoch: { kind: 'text', optional: true },
 		revision: { kind: 'int', default: 1 }
 	},
-	unique: [
-		{
-			fields: ['owner', 'integration'],
-			where: { owner: { isNull: false } },
-			name: 'one_per_member'
-		}
-	],
+	constraints: {
+		one_per_member: { unique: ['owner', 'integration'], where: { owner: { isNull: false } } }
+	},
 	table: { primary: 'text' },
-	read: {
-		sys_integration: {
+	outputs: {
+		default: {
 			fields: [
 				'integration',
 				'name',

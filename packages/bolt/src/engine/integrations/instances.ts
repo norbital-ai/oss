@@ -143,10 +143,7 @@ export function instanceTransform(
 		}
 		const envoy = values['envoy'] ?? null;
 		if (envoy !== null) {
-			if (
-				typeof envoy !== 'string' ||
-				(!Object.hasOwn(m.envoys, envoy) && !runtimeEnvoys.has(envoy))
-			)
+			if (typeof envoy !== 'string' || !runtimeEnvoys.has(envoy))
 				return refuse(c.path, 'envoy', `No envoy '${String(envoy)}' exists.`);
 			if (!conversational(def))
 				return refuse(

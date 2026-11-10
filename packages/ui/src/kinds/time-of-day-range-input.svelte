@@ -5,8 +5,8 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 <script lang="ts" module>
 	/** Two times of day (`HH:MM`) in one field, typed by segment; an end before the start is overnight, never refused. */
 	type TimeRange = { start: string | null; end: string | null };
-	/** The props of `TimeRangeInput`. */
-	export type TimeRangeInputProps = {
+	/** The props of `TimeOfDayRangeInput`. */
+	export type TimeOfDayRangeInputProps = {
 		precision?: 'hour' | 'minute';
 		value: TimeRange;
 		onChange(next: TimeRange): void;
@@ -39,7 +39,7 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 		invalid = false,
 		class: className,
 		'aria-label': ariaLabel
-	}: TimeRangeInputProps = $props();
+	}: TimeOfDayRangeInputProps = $props();
 	const controls = useControls();
 	const t = uiText();
 	const disabled = $derived(ownDisabled ?? controls.disabled);

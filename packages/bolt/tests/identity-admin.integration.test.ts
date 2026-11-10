@@ -54,7 +54,6 @@ const m: EngineManifest = {
 	},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

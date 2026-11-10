@@ -1,26 +1,21 @@
 // @norbital-ai/bolt: the declaration functions and their types. Nothing else is a runtime value (P29).
-export { customField } from './decl/custom-field.ts';
+export { custom_field } from './decl/custom-field.ts';
 export type { CustomField } from './decl/custom-field.ts';
 export { model } from './decl/model.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
 export type { SourceTeam, TeamData, TeamEntries, TeamEntry, TeamSpec } from './decl/access/team.ts';
-export { envoy, mcp, tool } from './decl/runtime/agent.ts';
+export { mcp, tool } from './decl/runtime/agent.ts';
 export type { ToolFiles, ToolRun, ToolSpec } from './decl/runtime/agent.ts';
-export type { EnvoySpec, McpBase, McpSpec } from './decl/runtime/agent.ts';
+export type { McpBase, McpSpec } from './decl/runtime/agent.ts';
 export { app, group, messages, secrets, workspace } from './decl/runtime/app.ts';
 export type { AppSpec, DeviceRequirement, EmbedOrigin, GroupSpec } from './decl/runtime/app.ts';
-export { kiosk } from './decl/runtime/kiosk.ts';
-export type { KioskSpec } from './decl/runtime/kiosk.ts';
 export { automation } from './decl/runtime/automation.ts';
-export { browserStart } from './decl/runtime/facilities.ts';
+export { browser_start } from './decl/runtime/facilities.ts';
 export { seeder, type Seeder } from './decl/seeder.ts';
-export { idOf } from './decl/id.ts';
-export { integration, instanceId, isInstance } from './decl/runtime/integration.ts';
-export { pageServer } from './decl/runtime/page.ts';
-export type { PageData, PageLoad, PageLoadRequest, PageServer } from './decl/runtime/page.ts';
+export { id_of } from './decl/id.ts';
+export { integration, instance_id, is_instance } from './decl/runtime/integration.ts';
 /** Pure: what changed between two JSON values, keyed list items matched by key (a reviewed draft's changes). */
-export { jsonDiff } from './engine/agent/draft.ts';
 export type { JsonChange } from './engine/agent/draft.ts';
 
 export type { Actor, Handle, PlatformAutomation } from './decl/access/actor.ts';
@@ -31,7 +26,7 @@ export type {
 	Edge,
 	State,
 	EnvoyLimit,
-	Flow,
+	ApprovalFlow,
 	Grant,
 	IdentityGrant,
 	Limit,
@@ -81,8 +76,7 @@ export type {
 	Clock,
 	Committed,
 	CreateCheck,
-	CreateRow,
-	CreateTree,
+	CreateInput,
 	DeleteCheck,
 	DenyAt,
 	Eff,
@@ -98,18 +92,14 @@ export type {
 	NotifyEvent,
 	Conflict,
 	Cursor,
-	Insert,
 	KeyValues,
 	ListRow,
 	Outcome,
 	Page,
-	PageReadContext,
 	Paged,
-	Patch,
 	PendingApproval,
 	PlatformRefusal,
 	PolicyCtx,
-	PolicyReads,
 	ReadAnswer,
 	DynamicAnswer,
 	ReadRequest,
@@ -123,20 +113,10 @@ export type {
 	Unknown,
 	UpdateCheck,
 	TransformAnswer,
-	UpdateSet,
-	UpdateTree,
+	UpdateInput,
 	WorkspaceQuery,
 	WriteCtx
 } from './decl/ctx.ts';
-export type {
-	Transaction,
-	TxAct,
-	TxApplied,
-	TxCtx,
-	TxInstruction,
-	TxStep,
-	TxValue
-} from './decl/transaction.ts';
 export type {
 	FieldCommon,
 	FieldKind,
@@ -167,12 +147,10 @@ export type {
 	SearchableField,
 	TextField,
 	VectorField,
-	EnvoyName,
 	FieldName,
 	HostToolName,
 	InstanceId,
 	IntegrationName,
-	KioskName,
 	McpName,
 	AuthoredModelName,
 	Names,
@@ -237,7 +215,6 @@ export type {
 	Browser,
 	Convert,
 	ConvertOptions,
-	ConvertRequest,
 	ConvertSource,
 	ConvertTarget,
 	ConvertTargets,
@@ -264,8 +241,6 @@ export type {
 	RunStatus,
 	Schedule,
 	Send,
-	SpeakOptions,
-	SpeechFormat,
 	StartInput,
 	FileSyncStartInput,
 	StartOutput,
@@ -337,7 +312,6 @@ export type {
 	DeclaredConvertTarget,
 	EmbeddingModelName,
 	IntegrationOf,
-	KioskPageName,
 	PageName,
 	SecretName
 } from './decl/runtime/names.ts';

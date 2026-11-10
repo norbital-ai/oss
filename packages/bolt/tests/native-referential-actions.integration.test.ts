@@ -26,24 +26,24 @@ const manifest: EngineManifest = {
 	},
 	exposures: {
 		roots: {
-			read: { roots: { fields: 'all' } },
+			outputs: { default: { roots: { fields: 'all' } } },
 			create: { columns: { roots: ['name'] } },
 			delete: {}
 		},
 		archives: {
-			read: { archives: { fields: 'all' } },
+			outputs: { default: { archives: { fields: 'all' } } },
 			create: { columns: { archives: ['name'] } }
 		},
 		branches: {
-			read: { branches: { fields: 'all' } },
+			outputs: { default: { branches: { fields: 'all' } } },
 			create: { columns: { branches: ['name', 'root'] } }
 		},
 		leaves: {
-			read: { leaves: { fields: 'all' } },
+			outputs: { default: { leaves: { fields: 'all' } } },
 			create: { columns: { leaves: ['name', 'branch'] } }
 		},
 		watchers: {
-			read: { watchers: { fields: 'all' } },
+			outputs: { default: { watchers: { fields: 'all' } } },
 			create: { columns: { watchers: ['name', 'first', 'second'] } },
 			update: { columns: { watchers: ['name'] } }
 		}
@@ -52,8 +52,8 @@ const manifest: EngineManifest = {
 		requester: {
 			description: 'Requests changes',
 			grants: {
-				roots: { read: true, history: true, delete: { check: true } },
-				watchers: { read: true, history: true, update: { check: true } }
+				roots: { read: true, history: true, delete: { verdict: true } },
+				watchers: { read: true, history: true, update: { verdict: true } }
 			}
 		},
 		reviewer: {
@@ -64,8 +64,8 @@ const manifest: EngineManifest = {
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
 };
 const guest = program(`export default { policy: { requester: { grants: {
-	roots: { delete: { check: function* (rows, ctx) { return ctx.approve((flow) => flow.step('Review deletion', {teams:['reviewers']})); } } },
-	watchers: { update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Review watcher', {teams:['reviewers']})); } } }
+	roots: { delete: { verdict: function* (rows, ctx) { return ctx.approve({ steps: [{ name: 'Review deletion', teams: ['reviewers'] }] }); } } },
+	watchers: { update: { verdict: function* (changes, ctx) { return ctx.approve({ steps: [{ name: 'Review watcher', teams: ['reviewers'] }] }); } } }
 } } } };`);
 const Watcher = Schema.Struct({
 	id: Schema.String,

@@ -33,7 +33,6 @@ const manifest: EngineManifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -56,13 +55,11 @@ it.effect('selects public SSR routes by audience, independently of portal chrome
 					site: { ...app, audience: { public: ['visitors'] } },
 					portal: { ...app, audience: 'external' },
 					shared: { ...app, audience: 'all' },
-					'kiosk/clock': { ...app, audience: 'external' }
-				},
-				kiosks: {
-					private: { ...app, policies: ['kiosk'] },
-					clock: { ...app, auth: 'none', policies: ['kiosk'] },
-					portal: { ...app, auth: 'external', policies: ['kiosk'] },
-					shared: { ...app, auth: 'all', policies: ['kiosk'] }
+					'kiosk/clock': { ...app, audience: 'external' },
+					private: { ...app, shell: 'kiosk', policies: ['kiosk'] },
+					clock: { ...app, shell: 'kiosk', audience: { public: ['kiosk'] } },
+					account: { ...app, shell: 'kiosk', audience: 'external', policies: ['kiosk'] },
+					common: { ...app, shell: 'kiosk', audience: 'all', policies: ['kiosk'] }
 				}
 			})
 		).toEqual([
@@ -70,9 +67,9 @@ it.effect('selects public SSR routes by audience, independently of portal chrome
 			'app/portal/home',
 			'app/shared/home',
 			'app/site/home',
+			'kiosk/account/home',
 			'kiosk/clock/home',
-			'kiosk/portal/home',
-			'kiosk/shared/home'
+			'kiosk/common/home'
 		]);
 	})
 );
@@ -113,7 +110,7 @@ const publicFixture = Effect.fnUntraced(function* () {
 	const text = `${JSON.stringify(publicManifest)}\n`;
 	const source = 'export default {};';
 	const pageSource =
-		'export default { page: { "app/site/home": { body: () => ({ body: "<h1>Site</h1>", head: "", data: {} }) } } };';
+		'export default { page: { "app/site/home": { body: () => ({ body: "<h1>Site</h1>", head: "", reads: {}, messages: {} }) } } };';
 	yield* fs.makeDirectory(path.join(dir, 'client', 'assets'), { recursive: true });
 	yield* fs.makeDirectory(path.join(dir, 'client', 'public', 'app', 'site', 'home'), {
 		recursive: true

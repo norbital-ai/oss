@@ -3,21 +3,11 @@
 import type { Json } from '../../decl/values.ts';
 import type { ApprovalSnapshot } from '../../decl/access/policy.ts';
 import { BoltError, storeSync } from '../../protocol/errors.ts';
-import { SqlSessionDb, type TenantDbShape } from '../db/tenant-db.ts';
+import type { TenantDbShape } from '../db/tenant-db.ts';
 import { readGuardBaseline } from '../approvals/read-guards.ts';
-import { Context, Effect, Schema } from 'effect';
-import type { EngineError } from '../errors.ts';
+import { Effect, Schema } from 'effect';
 import { WriteOutcome } from '../../protocol/schema.ts';
-import type {
-	Captured,
-	EngineActor,
-	Lock,
-	NoticeRow,
-	Outcome,
-	QueuedRun,
-	RowData,
-	Sql
-} from '../contracts.ts';
+import type { EngineActor, Lock, NoticeRow, QueuedRun, RowData, Sql } from '../contracts.ts';
 import { relations, type EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
 import { toPred } from '../access/pred.ts';
@@ -98,8 +88,6 @@ export type Commit = {
 	fingerprints?: readonly Fingerprint[];
 	/** Native prior automation query intent, fixed across retries and persisted for held approvals. */
 	readGuards?: ReadGuards;
-	/** Native interactive stages defer their approval and effect publication to the outer receipt. */
-	transactionStage?: true;
 	/**
 	 * Rule 38e: the direct pieces are `erased` revisions. Remove drops every revision of every deleted row; anonymise
 	 * drops `purge` fields from the targets' earlier revisions (a revision left empty goes). Durable audit defers the
@@ -537,12 +525,6 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 			'underApproval',
 			`(SELECT id::text || ' An approval decision cannot change another held request.' FROM ${hit} LIMIT 1)`
 		);
-	if (x.transactionStage === true && hit !== null)
-		c.assertWith(
-			`NOT EXISTS (SELECT 1 FROM ${hit})`,
-			'underApproval',
-			`(SELECT id::text || ' An interactive transaction cannot edit an existing approval request.' FROM ${hit} LIMIT 1)`
-		);
 	const request =
 		x.approval !== undefined
 			? `coalesce((SELECT id FROM ${hit} LIMIT 1), ${c.p(x.approval.requestId)}::uuid)`
@@ -564,8 +546,8 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	x.resubmit?.pieces(c);
 	if (erasures.length > 0 && hasWrites) erasePieces(c, erasures);
 	c.cte('effectp', 'SELECT * FROM allp WHERE NOT erased');
-	if (x.transactionStage !== true) queueEffects(m, c, x.now, x.writer, 'effectp'); // effects exclude erased rows (rule 50)
-	if (x.transactionStage !== true && x.approvalDecision === undefined && x.rollback !== true) {
+	queueEffects(m, c, x.now, x.writer, 'effectp'); // effects exclude erased rows (rule 50)
+	if (x.approvalDecision === undefined && x.rollback !== true) {
 		const notified = Object.entries(m.exposures).filter(
 			([model, spec]) => spec.notify === true && byTable.has(model)
 		);
@@ -587,7 +569,6 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	// and a rollback restores a record without sending it again
 	// (a routed write that joined an open request queues what that request does not hold; one that opened its own, nothing)
 	if (
-		x.transactionStage !== true &&
 		x.approvalDecision === undefined &&
 		x.rollback !== true &&
 		(x.approval === undefined || hit !== null)
@@ -606,9 +587,8 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 	WHERE r ->> 'collection' = x.c AND r ->> 'id' = x.id)${x.approval === undefined ? '' : ` AND EXISTS (SELECT 1 FROM ${hit})`}`
 					)
 		);
-	if (x.transactionStage !== true && x.runs.length > 0)
-		enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
-	if (x.transactionStage !== true && x.notices.length > 0)
+	if (x.runs.length > 0) enqueue(c, x.runs, { when: GATED, conflict: 'replace' });
+	if (x.notices.length > 0)
 		noticeInsert(c, 'notices', x.notices, x.now, GATED, m.teams, m.workspace.signup?.policies);
 	x.pieces?.(c); // hook:syncs
 
@@ -854,25 +834,6 @@ export const CommitAnswer = Schema.Struct({
 	read_guards_applied: Schema.optionalKey(Schema.Boolean)
 });
 export type CommitAnswer = typeof CommitAnswer.Type;
-export type CommitPublisher = (
-	answer: Pick<CommitAnswer, 'captured' | 'next_due' | 'changed_instances'>,
-	outcome?: Outcome
-) => Effect.Effect<number>;
-/** Native orchestration only: stages remain ordinary guarded writes on the leased connection. */
-export type CommitStageShape = {
-	execute: (
-		db: TenantDbShape,
-		manifest: EngineManifest,
-		catalog: Catalog,
-		commit: Commit,
-		lock?: Lock
-	) => Effect.Effect<readonly CommitAnswer[], EngineError>;
-	publisher: (publish: CommitPublisher) => void;
-};
-export const CommitStage = Context.Reference<CommitStageShape | undefined>('bolt/CommitStage', {
-	defaultValue: () => undefined
-});
-
 /** A guarded provisional write and its post-image approval baseline settle in the same locked native batch. */
 export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
 	db: TenantDbShape,
@@ -881,8 +842,6 @@ export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
 	commit: Commit,
 	lock?: Lock
 ) {
-	const stage = yield* CommitStage;
-	if (stage !== undefined) return yield* stage.execute(db, manifest, catalog, commit, lock);
 	const guards = commit.readGuards;
 	const guarded =
 		guards !== undefined && (guards.fingerprints.length > 0 || guards.inconsistent === true);
@@ -914,53 +873,6 @@ export const executeCommit = Effect.fn('Bolt.executeCommit')(function* (
 	).pipe(Effect.mapError((error) => BoltError.make('badAnswer', 'commit', error.message, error)));
 });
 
-/** Native net effects become visible only with the outer transaction receipt. */
-export function transactionEffects(
-	m: EngineManifest,
-	c: Chain,
-	now: string,
-	actor: EngineActor,
-	writer: Writer,
-	captured: readonly Captured[],
-	held = false
-): void {
-	const source = c.cte(
-		'transaction_effects',
-		`SELECT x.* FROM jsonb_to_recordset(${c.p(
-			captured.map((row) => ({
-				c: row.model,
-				id: row.id,
-				revision: row.revision,
-				op: row.op,
-				cause: row.cause,
-				erased: row.cause === 'erased',
-				o: row.old,
-				n: row.new
-			}))
-		)}::jsonb) AS x(c text,id text,revision int,op text,cause text,erased boolean,o jsonb,n jsonb) WHERE ${GATED}`
-	);
-	queueEffects(m, c, now, writer, source);
-	const written = new Set(captured.map((row) => row.model));
-	const notified = Object.entries(m.exposures).filter(
-		([model, spec]) => spec.notify === true && written.has(model)
-	);
-	if (notified.length > 0)
-		enqueue(c, {
-			select: notified
-				.map(
-					([
-						model
-					]) => `SELECT 'bolt.notify'::text AS automation, jsonb_build_object('model', ${c.p(model)}::text,
-		'event', jsonb_build_object('kind', 'write', 'action', e.op, 'records', jsonb_agg(coalesce(e.n,e.o) ORDER BY e.id),
-		'previous', jsonb_agg(e.o ORDER BY e.id), 'actor', ${c.p(actor)}::jsonb)) AS input,
-		${c.p(now)}::timestamptz AS due_at, 'schedule'::text AS cause, 0 AS depth FROM ${source} e
-		WHERE e.c = ${c.p(model)} AND e.cause = 'direct' GROUP BY e.op`
-				)
-				.join(' UNION ALL ')
-		});
-	if (!held) syncOutboxPiece(m, c, now, written, actor, source);
-}
-
 /** SQL owns what was queued and which links changed; publish only after its successful commit. */
 export const committed: (
 	answer: Pick<CommitAnswer, 'captured' | 'next_due' | 'changed_instances'>,
@@ -970,21 +882,6 @@ export const committed: (
 	outcome?: WriteOutcome
 ) {
 	const live = yield* Live;
-	const stage = yield* CommitStage;
-	if (stage !== undefined) {
-		const wake = yield* Wake,
-			links = yield* Links;
-		stage.publisher((next, settled) =>
-			committed(next, settled).pipe(
-				Effect.provideService(Live, live),
-				Effect.provideService(Wake, wake),
-				Effect.provideService(Links, links),
-				Effect.provideService(CommitStage, undefined),
-				Effect.provideService(SqlSessionDb, undefined)
-			)
-		);
-		return yield* live.v;
-	}
 	if (answer.next_due !== null) yield* (yield* Wake).at(answer.next_due);
 	if (answer.changed_instances.length > 0) {
 		const links = yield* Links;

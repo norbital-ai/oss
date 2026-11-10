@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // A payroll hotline on PGlite (§2.5, §2.7, §4.3, §4.4): one envoy deployed on two WhatsApp connections, one per legal
 // entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'requestor.instance' }` is the instance
 // the message arrived on, so the same member reads only the entity whose hotline they wrote to, and only their own rows;
@@ -45,11 +46,11 @@ const manifest = {
 	},
 	exposures: {
 		entities: {
-			read: { entities: { fields: 'all' } },
+			outputs: { default: { entities: { fields: 'all' } } },
 			create: { columns: { entities: ['name', 'hotline'] } }
 		},
 		payslips: {
-			read: { payslips: { fields: 'all' } },
+			outputs: { default: { payslips: { fields: 'all' } } },
 			create: { columns: { payslips: ['period', 'net', 'entity', 'employee'] } },
 			update: { columns: { payslips: ['status'] } }
 		}
@@ -61,7 +62,7 @@ const manifest = {
 				"What the payroll hotline answers: the sender's own payslips of the entity whose hotline this is",
 			grants: {
 				payslips: {
-					read: {
+					outputs: { default: {
 						payslips: {
 							where: {
 								employee: { eq: { var: 'requestor.id' } },
@@ -69,7 +70,7 @@ const manifest = {
 							},
 							fields: ['period', 'net', 'status']
 						}
-					}
+					} }
 				}
 			}
 		},
@@ -78,27 +79,31 @@ const manifest = {
 	teams: { payroll: { name: 'Payroll', policies: ['payroll'] } },
 	automations: {},
 	connections: {
-		hotline_a: { integration: 'whatsapp', envoy: 'payroll_hotline' },
-		hotline_b: { integration: 'whatsapp', envoy: 'payroll_hotline' }
+		hotline_a: { integration: 'whatsapp' },
+		hotline_b: { integration: 'whatsapp' }
 	},
-	envoys: {
-		payroll_hotline: {
-			audience: 'private',
-			name: 'Payroll',
-			policies: ['hotline'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'disabled',
-			dm: 'envoy',
-			task: 'Answer payslip questions.'
-		}
-	},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const payrollHotlineEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: payrollHotlineEnvoy,
+		connections: ['hotline_a', 'hotline_b'],
+		audience: 'private',
+		name: 'Payroll',
+		policies: ['hotline'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		dm: 'envoy',
+		task: 'Answer payslip questions.'
+	}
+] as const;
 
 /** The model: "slips" reads the payslips, "pay <id>" marks one paid, "find <word>" searches the sender's own history; then "Done.". */
 function scriptedAi() {
@@ -134,7 +139,8 @@ function scriptedAi() {
 					if (last.role === 'tool')
 						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
 					const said = text(last.content);
-					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said)) return call('read', { request: { payslips: {} } });
+					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said))
+						return call('read', { request: { payslips: {} } });
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {
@@ -158,7 +164,9 @@ afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const build = Effect.gen(function* () {
 	const ai = scriptedAi(),
 		slip = { cal_a: '', cal_b: '', ada_a: '' };
-	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports: ai.layer }));
+	const context = yield* Layer.build(
+		withEnvoys(TestWorkspace.layer({ manifest, ports: ai.layer }), runtimeEnvoys)
+	);
 	const t = Context.get(context, TestWorkspace),
 		agents = Context.get(context, Agents),
 		conversations = Context.get(context, Conversations),

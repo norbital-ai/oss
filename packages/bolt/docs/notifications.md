@@ -1,7 +1,7 @@
 # Notifications
 
 A model's `notify(event, ctx)` returns notices after committed write and approval events. It can
-read with workspace authority through `ctx.db.query`, has no I/O and cannot fail the write.
+read with workspace authority through `ctx.query`, has no I/O and cannot fail the write.
 Delivery is retried in the outbox. `ctx.notify` in an automation accepts the same shape.
 
 ```ts

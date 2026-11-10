@@ -20,13 +20,19 @@ export default model('sys_envoy', {
 		},
 		delegation: { kind: 'enum', values: ['enabled', 'disabled'], default: 'disabled' },
 		triage: { kind: 'bool', default: false },
+		triage_scope: {
+			kind: 'enum',
+			values: ['dm', 'group', 'all'],
+			default: 'all',
+			hidden: true
+		},
 		dm: { kind: 'enum', values: ['union', 'envoy'], default: 'union' },
 		active: { kind: 'bool', default: true },
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		revision: { kind: 'int', default: 1 }
 	},
 	table: { primary: 'uuid' },
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	create: {
 		columns: {
 			sys_envoy: [
@@ -37,6 +43,7 @@ export default model('sys_envoy', {
 				'group_messages',
 				'delegation',
 				'triage',
+				'triage_scope',
 				'dm'
 			]
 		}
@@ -51,6 +58,7 @@ export default model('sys_envoy', {
 				'group_messages',
 				'delegation',
 				'triage',
+				'triage_scope',
 				'dm',
 				'active'
 			]

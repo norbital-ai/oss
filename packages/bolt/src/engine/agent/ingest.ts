@@ -5,7 +5,11 @@
 // its HTML, keeps the shared cache (`ingest/<sha256>/…` in the file store) and windows a stored ingest by line.
 import { Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
-import type { IngestIndex, Transcript } from '../../decl/runtime/facilities.ts';
+import {
+	IngestIndexSchema,
+	type IngestIndex,
+	type Transcript
+} from '../../decl/runtime/facilities.ts';
 import type { Ingested } from '../contracts.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { Files } from '../ports.ts';
@@ -128,7 +132,7 @@ const NO_TEXT = '<p>No text on this page.</p>';
 const pageRanges = (pages: readonly number[]) => {
 	const ranges: string[] = [];
 	let length = 0;
-	for (let i = 0; i < pages.length; ) {
+	for (let i = 0; i < pages.length;) {
 		let last = i;
 		while (pages[last + 1] === pages[last]! + 1) last++;
 		const range = last === i ? `${pages[i]}` : `${pages[i]}–${pages[last]}`;
@@ -229,23 +233,7 @@ const clock = (seconds: number) =>
 // ── the cache: `ingest/<sha256>/…` in the file store, shared by every conversation ──
 const Stored = row('sys_file', ['id', 'name', 'mime', 'size', 'key']);
 export type StoredFile = typeof Stored.Type;
-const IndexJson = Schema.fromJsonString(
-	Schema.Struct({
-		lines: Schema.Number,
-		pages: Schema.Number,
-		slides: Schema.Number,
-		outline: Schema.Array(
-			Schema.Struct({
-				title: Schema.String,
-				level: Schema.Number,
-				from: Schema.Number,
-				to: Schema.Number
-			})
-		),
-		tables: Schema.Number,
-		images: Schema.Array(Schema.String)
-	})
-);
+const IndexJson = Schema.fromJsonString(IngestIndexSchema);
 /** A stored ingest's files may be large; one read answers at most this many bytes. */
 export const INGEST_BYTES = 256 * 1024 * 1024;
 const prefix = (sha256: string) => `ingest/${sha256}/`;
@@ -433,7 +421,10 @@ export function grep(html: string, text: string, limit: number) {
 	const all = html.split('\n'),
 		spans = blocks(all),
 		// a|b finds either: plain words, so no pattern can run away on a long document
-		wants = text.toLowerCase().split('|').filter((want) => want !== ''),
+		wants = text
+			.toLowerCase()
+			.split('|')
+			.filter((want) => want !== ''),
 		hits: { page?: number; from: number; to: number; text: string }[] = [];
 	let total = 0,
 		page: number | undefined;

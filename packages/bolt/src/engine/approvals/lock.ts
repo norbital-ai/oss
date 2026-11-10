@@ -7,6 +7,7 @@ import { Effect, Option, Schema } from 'effect';
 import type { EngineActor } from '../contracts.ts';
 import { relations, teams, type EngineManifest, type GrantData } from '../manifest.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
+import { DbError } from '../errors.ts';
 import { q, type Catalog } from '@norbital-ai/store';
 import type { RowApproval } from '../../decl/names.ts';
 import { GATED, type Chain } from '../write/sql.ts';
@@ -234,7 +235,7 @@ export const heldFields = Effect.fn('Approvals.heldFields')(function* (
 const approvables = new WeakMap<EngineManifest, ReadonlySet<string>>();
 /** A grant with a write `check`: its verdict may hold the write for an approval flow (`ctx.approve`). */
 export const routesApproval = (g: GrantData) =>
-	[g.create, g.update, g.delete].some((arm) => typeof arm === 'object' && arm.check === true);
+	[g.create, g.update, g.delete].some((arm) => typeof arm === 'object' && arm.verdict === true);
 /** The models a request can hold: those a grant routes to approval, and every model nested under them. */
 export const approvable = (m: EngineManifest, cat: Catalog): ReadonlySet<string> => {
 	let set = approvables.get(m);
@@ -292,5 +293,9 @@ export const heldModels = (db: Pick<TenantDbShape, 'rows'>) =>
 		.pipe(
 			Effect.map((rows) => new Set(rows.map((r) => r.c))),
 			// a database not yet planned has no requests
-			Effect.orElseSucceed(() => new Set<string>())
+			Effect.catch((error) =>
+				error instanceof DbError && error.sqlstate === '42P01'
+					? Effect.succeed(new Set<string>())
+					: Effect.fail(error)
+			)
 		);

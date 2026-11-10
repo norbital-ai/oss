@@ -62,33 +62,13 @@ const manifest = {
 		'job_lines.job': { to: 'jobs', inverse: 'lines' }
 	},
 	exposures: {
-		members: { read: { members: { fields: 'all' } } },
-		job_lines: { read: { job_lines: { fields: 'all' } } },
+		members: { outputs: { default: { members: { fields: 'all' } } } },
+		job_lines: { outputs: { default: { job_lines: { fields: 'all' } } } },
 		// `internal_code` is not exposed; `audits` is no model at all and `jobs.audit` no layer: a `where` hops only the
 		// layers jobs' output declares, read under jobs' own arms. `dispatch` omits `notes` and the assignee's `rate`;
 		// `bare` declares no layer and no `assignee`.
 		jobs: {
-			outputs: {
-				dispatch: {
-					jobs: {
-						fields: [
-							'title',
-							'hours',
-							'scheduled_on',
-							'spot',
-							'window',
-							'status',
-							'tags',
-							'assignee'
-						]
-					},
-					'jobs.assignee': { fields: ['name', 'manager'] },
-					'jobs.assignee.manager': { fields: 'all' },
-					'jobs.lines': { fields: 'all' }
-				},
-				bare: { jobs: { fields: ['title', 'hours'] } }
-			},
-			read: {
+			outputs: { default: {
 				'jobs.assignee': { fields: 'all' },
 				'jobs.assignee.manager': { fields: 'all' },
 				'jobs.lines': { fields: 'all' },
@@ -105,7 +85,23 @@ const manifest = {
 						'assignee'
 					]
 				}
-			}
+			}, dispatch: {
+					jobs: {
+						fields: [
+							'title',
+							'hours',
+							'scheduled_on',
+							'spot',
+							'window',
+							'status',
+							'tags',
+							'assignee'
+						]
+					},
+					'jobs.assignee': { fields: ['name', 'manager'] },
+					'jobs.assignee.manager': { fields: 'all' },
+					'jobs.lines': { fields: 'all' }
+				}, bare: { jobs: { fields: ['title', 'hours'] } } }
 		}
 	},
 	integrations: {},
@@ -113,7 +109,6 @@ const manifest = {
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -295,8 +290,6 @@ function system1(pick: (r: System1Request) => { readonly [id: string]: string | 
 const db = TenantDb.typed({
 	read: () => Effect.fail(DbError.make('XX000', 'Unexpected filter fixture database read')),
 	write: () => Effect.succeed({ rows: [], affected: 1 }),
-	session: () =>
-		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'Unexpected filter fixture transaction'))
 });
 const nativeDescriber = (
@@ -561,7 +554,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					...manifest,
 					exposures: {
 						...manifest.exposures,
-						jobs: { ...manifest.exposures.jobs, outputs: { dispatch: narrow } }
+						jobs: { ...manifest.exposures.jobs, outputs: { ...manifest.exposures.jobs.outputs, dispatch: narrow } }
 					}
 				}).describe({
 					model: 'jobs',
@@ -891,16 +884,16 @@ describe('described choices preserve scalar kinds', () => {
 				exposures: {
 					...manifest.exposures,
 					jobs: {
-						read: {
+						outputs: { default: {
 							jobs: {
 								fields: [
-									...manifest.exposures.jobs.read.jobs.fields,
+									...manifest.exposures.jobs.outputs.default.jobs.fields,
 									'urgent',
 									'priority',
 									'visits'
 								]
 							}
-						}
+						} }
 					}
 				}
 			} satisfies EngineManifest;

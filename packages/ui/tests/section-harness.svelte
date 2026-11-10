@@ -14,7 +14,7 @@
 
 	let { bolt, catalog }: { bolt: ViewBolt; catalog: NonNullable<KindsHost['catalog']> } = $props();
 	// svelte-ignore state_referenced_locally
-	provideBolt(bolt);
+	provideBolt(() => bolt);
 	provideKinds({
 		get catalog() {
 			return catalog;

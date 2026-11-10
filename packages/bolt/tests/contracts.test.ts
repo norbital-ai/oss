@@ -51,14 +51,13 @@ describe('next engine contracts', () => {
 			const m = engineManifest(manifest);
 			expect(Object.keys(m.exposures).sort()).toEqual(['customers', 'notices', 'orders']);
 			expect(m.exposures.orders).not.toHaveProperty('bodies');
-			expect(m.exposures.orders).toHaveProperty('read');
+			expect(m.exposures.orders).toHaveProperty('outputs.default.orders');
 			expect(m.integrations.mail).toEqual({
 				description: 'The notices mailbox',
 				driver: 'email'
 			});
 			expect(m.exposures.notices?.syncs).toEqual({ messages: { with: 'mail', read: true } });
-			expect(m.envoys.desk?.policies).toEqual(['sales_rep']);
-			expect(m.connections.support).toEqual({ integration: 'mail', envoy: 'desk' });
+			expect(m.connections.support).toEqual({ integration: 'mail' });
 			expect(m.workspace.tz).toBeTypeOf('string');
 			expect(Object.keys(m.automations)).toEqual(['nightly']);
 			expect(m.automations.nightly).toBeDefined();

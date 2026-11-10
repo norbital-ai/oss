@@ -53,7 +53,7 @@ export type ReadIR =
 	  }
 	/** A read request: each root's read, answered together in one crossing, the answer keyed by root. */
 	| { readonly kind: 'request'; readonly roots: readonly RequestRoot[] }
-	/** The transform's `db.after`: stored rows overlaid with this batch. */
+	/** The transform's `query.after`: stored rows overlaid with this batch. */
 	| {
 			readonly kind: 'after';
 			readonly model: string;
@@ -128,7 +128,7 @@ const declarationsOf = (cat: Catalog) => {
 				])
 			);
 		out = Object.fromEntries(
-			Object.entries(paths).map(([root, read]) => [root, { read, outputs: named(root) }])
+			Object.entries(paths).map(([root, read]) => [root, { outputs: { default: read, ...named(root) } }])
 		);
 		declared.set(cat, out);
 	}

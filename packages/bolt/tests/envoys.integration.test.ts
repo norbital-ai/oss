@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // engine/envoys on PGlite with the agent area's real turn loop and a scripted model (§4.4, P22, P32, rules 57–61; G12 (4), (5)):
 // envoys are source roles deployed on `+workspace.ts` connections, every message admitted by the run its ingest queued.
 // A DM holds the envoy's policies joined by the linked sender's own authority (a contractor's DM does what the
@@ -43,7 +44,7 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		jobs: {
-			read: { jobs: { fields: 'all' } },
+			outputs: { default: { jobs: { fields: 'all' } } },
 			create: { columns: { jobs: ['title', 'status'] } },
 			update: { columns: { jobs: ['status'] } }
 		}
@@ -65,44 +66,54 @@ const manifest = {
 	teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 	automations: {},
 	connections: {
-		field_wa: { integration: 'whatsapp', envoy: 'field_ops' },
-		sales_tg: { integration: 'telegram', envoy: 'sales_desk' },
-		ops_mail: { integration: 'email', envoy: 'ops_desk' }
+		field_wa: { integration: 'whatsapp' },
+		sales_tg: { integration: 'telegram' },
+		ops_mail: { integration: 'email' }
 	},
-	envoys: {
-		field_ops: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			groupMessages: 'mention_or_reply',
-			delegation: 'disabled',
-			task: 'Keep jobs up to date.'
-		},
-		sales_desk: {
-			audience: 'public',
-			name: 'Norbius',
-			policies: ['desk', 'desk_turns'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'enabled',
-			task: 'Answer about jobs.'
-		},
-		ops_desk: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			delegation: 'disabled',
-			task: 'Answer mail.'
-		}
-	},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const salesDeskEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const opsDeskEnvoy = '0199a000-0000-7000-8000-0000000000e3';
+const runtimeEnvoys = [
+	{
+		id: fieldOpsEnvoy,
+		connections: ['field_wa'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Keep jobs up to date.'
+	},
+	{
+		id: salesDeskEnvoy,
+		connections: ['sales_tg'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['desk', 'desk_turns'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'enabled',
+		task: 'Answer about jobs.'
+	},
+	{
+		id: opsDeskEnvoy,
+		connections: ['ops_mail'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		delegation: 'disabled',
+		task: 'Answer mail.'
+	}
+] as const;
 
 /**
  * A scripted model: a message whose own line is "close <id>" says "On it." and asks for `act jobs.update`; after a tool
@@ -268,7 +279,14 @@ const To = Schema.Struct({ to: Schema.String });
 /** The suite's workspace runs on the real clock, as `it.live` would. */
 const LIVE = { excludeTestServices: true };
 layer(
-	TestWorkspace.layer({ manifest, ports: ai.layer, host: { envoys: { workspace: 'Acme Field' } } }),
+	withEnvoys(
+		TestWorkspace.layer({
+			manifest,
+			ports: ai.layer,
+			host: { envoys: { workspace: 'Acme Field' } }
+		}),
+		runtimeEnvoys
+	),
 	LIVE
 )('envoys', (it) => {
 	it.effect(
@@ -287,7 +305,7 @@ layer(
 				expect(ai.sentBeforeEnd.at(-1)).toBe('On it.'); // streamed while the turn worked (parity 2.12)
 				expect(present((yield* rows(`close ${other}`))[0])['as']).toEqual({
 					envoy: {
-						name: 'field_ops',
+						name: fieldOpsEnvoy,
 						instance: 'field_wa',
 						sender: '6598765432@s.whatsapp.net',
 						member: CAL,
@@ -358,7 +376,13 @@ layer(
 				const { say, rows, steps } = yield* setup;
 				yield* say('sales_tg', '777', 'hello 0');
 				expect(present((yield* rows('hello 0'))[0])['as']).toEqual({
-					envoy: { name: 'sales_desk', instance: 'sales_tg', sender: '777', member: null, dm: true }
+					envoy: {
+						name: salesDeskEnvoy,
+						instance: 'sales_tg',
+						sender: '777',
+						member: null,
+						dm: true
+					}
 				});
 				const before = steps();
 				yield* say('sales_tg', '888', 'group chatter', {
@@ -559,7 +583,13 @@ layer(
 				expect(answer.status).toBe(200);
 				yield* paused();
 				expect(present((yield* rows('through the pipeline'))[0])['as']).toEqual({
-					envoy: { name: 'sales_desk', instance: 'sales_tg', sender: '555', member: null, dm: true }
+					envoy: {
+						name: salesDeskEnvoy,
+						instance: 'sales_tg',
+						sender: '555',
+						member: null,
+						dm: true
+					}
 				});
 				// the kit's links stand where the host's do; what the envoy queued now takes the provider's real send
 				const reply = present(sent('sales_tg')[before]);

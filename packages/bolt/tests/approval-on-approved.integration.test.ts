@@ -33,20 +33,20 @@ const manifest: EngineManifest = {
 	relationships: { 'steps.leaf': { to: 'leaves', inverse: 'steps', owned: true } },
 	exposures: {
 		leaves: {
-			read: { leaves: { fields: 'all' } },
+			outputs: { default: { leaves: { fields: 'all' } } },
 			create: { columns: { leaves: ['name'], 'leaves.steps': ['label'] }, transform: true },
 			update: { columns: { leaves: ['note'] }, transform: true }
 		},
-		holds: { read: { holds: { fields: 'all' } }, create: { columns: { holds: ['name'] } } },
+		holds: { outputs: { default: { holds: { fields: 'all' } } }, create: { columns: { holds: ['name'] } } },
 		postings: {
-			read: { postings: { fields: 'all' } },
+			outputs: { default: { postings: { fields: 'all' } } },
 			create: { columns: { postings: ['source', 'carrier'] }, transform: true }
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests',
-			grants: { leaves: { read: true, create: { check: true } } }
+			grants: { leaves: { read: true, create: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews',
@@ -73,11 +73,11 @@ const source = `export default { model: {
 	postings: { bodies: {
 		create: function* (rows, ctx) {
 			if (rows.some((row) => row.source === 'posting refused')) return yield* ctx.refuse('This posting refuses.');
-			return rows.map((row) => ({ ...row, carrier: ctx.carriedBy }));
+			return rows.map((row) => ({ ...row, carrier: ctx.carried_by }));
 		}
 	} }
-}, policy: { requester: { grants: { leaves: { create: { check: function* (_rows, ctx) {
-	return ctx.approve((flow) => flow.step('Manager', { teams: ['managers'] }));
+}, policy: { requester: { grants: { leaves: { create: { verdict: function* (_rows, ctx) {
+	return ctx.approve({ steps: [{ name: 'Manager', teams: ['managers'] }] });
 } } } } } } };`;
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',

@@ -77,7 +77,7 @@ export {
 } from './filter/FilterEditor.svelte';
 export type { FilterVariables } from './filter/filter.js';
 export { carriedContexts, onPageContexts, openRecord, pageContexts } from './record/navigation.js';
-export { provideBolt, useBolt } from './client/context.js';
+export { provideBolt } from './client/context.js';
 export { provideModel, useEnumText } from './model/context.js';
 export { useRecordView, provideRepresentations } from './record/context.js';
 export {

@@ -14,7 +14,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			customers: {
-				read: { customers: { fields: 'all' } },
+				outputs: { default: { customers: { fields: 'all' } } },
 				create: { columns: { customers: ['name'] } }
 			}
 		},
@@ -23,11 +23,9 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		groups: {},
-		kiosks: {},
 		customFields: {},
 		agent: { skills: {} }
 	})

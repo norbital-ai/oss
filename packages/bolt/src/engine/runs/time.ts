@@ -1,22 +1,16 @@
 // The run queue's shared time arithmetic (rules 52a and 54).
 import { Array as EffectArray } from 'effect';
+import { duration_seconds } from '@norbital-ai/std/date';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import { compileVar, evaluateVar, type Requestor } from '@norbital-ai/std/vars';
 
-const UNIT_MS: Readonly<Record<string, number>> = {
-	s: 1_000,
-	min: 60_000,
-	h: 3_600_000,
-	d: 86_400_000
-};
 export const BUCKET_MS = 300_000;
 export function duration(value: string): number {
-	const match = /^(\d+(?:\.\d+)?)(s|min|h|d)$/.exec(value);
-	const unit = match === null ? undefined : UNIT_MS[match[2] ?? ''];
-	if (match === null || unit === undefined)
+	const seconds = duration_seconds(value, true);
+	if (seconds === undefined)
 		throw BoltError.make('invalid', 'decode', `'${value}' is not a duration`);
-	return Number(match[1]) * unit;
+	return seconds * 1_000;
 }
 export function offsetMs(value: string): number {
 	if (value === '') return 0;

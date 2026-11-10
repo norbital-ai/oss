@@ -29,5 +29,3 @@ export function pageRead<R>(
 		});
 	return observeOnce(() => read(pageSize, after).pipe(Effect.map(page)));
 }
-/** Rule 7: a count is re-issued at most once every 30 s while the live page reports changes. */
-export const COUNT_EVERY_MS = 30_000;

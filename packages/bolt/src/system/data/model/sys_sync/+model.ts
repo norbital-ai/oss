@@ -9,7 +9,7 @@ export default model('sys_sync', {
 	fields: {
 		/** `'<model>.sync.<sync>'`. */
 		sync: { kind: 'text' },
-		instance: { kind: 'ref', to: 'sys_integration', onDelete: 'cascade' },
+		instance: { kind: 'ref', to: 'sys_integration', on_delete: 'cascade' },
 		/** The partition (a calendar of the account), `''` when the sync declares none. */
 		partition: { kind: 'text', default: '' },
 		cursor: { kind: 'json', optional: true },
@@ -26,6 +26,6 @@ export default model('sys_sync', {
 		last_change_at: { kind: 'instant', optional: true },
 		last_hint_at: { kind: 'instant', optional: true }
 	},
-	unique: [{ fields: ['sync', 'instance', 'partition'] }],
+	constraints: { one_partition: { unique: ['sync', 'instance', 'partition'] } },
 	table: { primary: 'uuid' }
 });

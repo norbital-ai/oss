@@ -8,6 +8,6 @@ export default model('customers', {
 		rating: { kind: 'custom', of: 'rating', optional: true },
 		order_count: { kind: 'count', of: 'orders' }
 	},
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	create: { columns: { customers: ['name', 'rating'] } }
 });

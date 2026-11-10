@@ -21,11 +21,11 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	exposures: { documents: { read: { documents: { fields: 'all' } } } },
+	exposures: { documents: { outputs: { default: { documents: { fields: 'all' } } } } },
 	policies: {
 		starter: {
 			description: 'Start with a readable document',
-			automations: ['inspect'],
+			capabilities: { automations: ['inspect'] },
 			grants: { documents: { read: { documents: { where: { visible: { eq: true } } } } } }
 		}
 	},

@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // The panel's `conversations` read (§5.9, §5.10), answered by the engine's reader as the live hub asks it: a member lists
 // their own root in-app conversations, newest first, titled by the engine or the first message, plus the envoy threads
 // they may read and (as an administrator) automation transcripts; only Web UI conversations take a post (real handler).
@@ -22,29 +23,34 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: { whatsapp: { integration: 'whatsapp', envoy: 'field_ops' } },
-		envoys: {
-			field_ops: {
-				audience: 'public',
-				name: 'Norbius',
-				policies: ['rep'],
-				triage: false,
-				groupMessages: 'disabled',
-				delegation: 'disabled',
-				task: 'Help.'
-			}
-		},
+		connections: { whatsapp: { integration: 'whatsapp' } },
+
 		mcp: {},
 		apps: {},
 		customFields: {}
 	})
 );
+const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: fieldOpsEnvoy,
+		connections: ['whatsapp'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['rep'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		task: 'Help.'
+	}
+] as const;
+
 const ORIGIN = 'http://cell';
 
 /** One workspace for the file: a public whatsapp envoy beside the in-app agent; no model runs (posts only queue). */
 const fixture = Effect.gen(function* () {
 	const context = yield* Layer.build(
-		TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } })
+		withEnvoys(TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } }), runtimeEnvoys)
 	);
 	const t = Context.get(context, TestWorkspace),
 		agent = Context.get(context, Agents);
@@ -142,7 +148,7 @@ layer(Layer.effect(Fixture, fixture))('the conversations read', (it) => {
 				// a public envoy's thread, a private envoy's thread, and an automation's transcript
 				yield* s.t.db.write({
 					text: `INSERT INTO sys_conversation (id, integration, thread, kind, envoy) VALUES
-						($1, 'whatsapp', '6590000001@s.whatsapp.net', 'dm', 'field_ops'),
+						($1, 'whatsapp', '6590000001@s.whatsapp.net', 'dm', '${fieldOpsEnvoy}'),
 						('secret1', 'whatsapp', 'x@s.whatsapp.net', 'dm', 'secret')`,
 					params: [thread]
 				});

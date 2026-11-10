@@ -17,7 +17,7 @@ type NamesShape = {
 	workspace: {
 		currency?: CurrencyCode;
 		/** Named instances: the slot name is the `sys_integration` id source addresses. */
-		connections?: { readonly [slot: string]: { integration: string; envoy?: string } };
+		connections?: { readonly [slot: string]: { integration: string } };
 	};
 	/** `src/+secrets.ts`: the workspace's secret names. */
 	secrets: { readonly [name: string]: unknown };
@@ -31,8 +31,6 @@ type NamesShape = {
 	layers: { [model: string]: { [path: string]: string } };
 	/** Each `src/integration/<name>/+integration.ts`: the workspace's definitions (bolt's own are `SystemNames`). */
 	integrations: { [integration: string]: unknown };
-	/** Each `src/agent/envoy/+<id>.envoy.ts`. */
-	envoys: { [envoy: string]: unknown };
 	customFields: { [field: string]: { spec: { shape: unknown } } };
 	teams: { [team: string]: unknown };
 	/** The base catalogue `src/i18n/+messages.ts`: its keys are the message keys. */
@@ -41,15 +39,11 @@ type NamesShape = {
 	locales: { [locale: string]: { [key: string]: string } };
 	policies: { [policy: string]: unknown };
 	apps: { [app: string]: unknown };
-	/** Each `src/kiosk/<k>/+kiosk.ts`, by its folder path. */
-	kiosks: { [kiosk: string]: unknown };
 	automations: { [automation: string]: unknown };
 	mcp: { [server: string]: unknown };
 	skills: { [skill: string]: unknown };
 	/** Each app (its folder path) → the union of its `+<page>.page.svelte` names. */
 	pages: { [app: string]: string };
-	/** Each kiosk (its folder path) → the union of its `+<page>.page.svelte` names. */
-	kioskPages: { [kiosk: string]: string };
 	/** Each group (its folder path) → the union of its child app and group folder names. */
 	groups: { [group: string]: string };
 	/** The tools the host advertises (rule 58), written by the build from the host it compiles for. */
@@ -104,12 +98,8 @@ export type TeamName = keyof NamesPart<'teams'> & string;
 export type PolicyName = keyof NamesPart<'policies'> & string;
 /** The app names (`src/app/<a>/+app.ts`). */
 export type AppName = keyof NamesPart<'apps'> & string;
-/** The kiosk names (`src/kiosk/<k>/+kiosk.ts`). */
-export type KioskName = keyof NamesPart<'kiosks'> & string;
 /** The automation names (`src/automation/+<a>.automation.ts`). */
 export type AutomationName = keyof NamesPart<'automations'> & string;
-/** The envoy names (`src/agent/envoy/+<id>.envoy.ts`). */
-export type EnvoyName = keyof NamesPart<'envoys'> & string;
 type Definitions = NamesPart<'integrations'> & SystemNames['integrations'];
 /** The integration definitions: the workspace's (`src/integration/<name>/`) and bolt's conversation definitions. */
 export type IntegrationName = keyof Definitions & string;
@@ -322,7 +312,7 @@ export type RequiredBtreeField<M> = Exclude<
 export type TextField<M> = OfKind<M, { kind: 'text' }>;
 /** The `period` fields of model `M`. */
 export type PeriodField<M> = OfKind<M, { kind: 'period' }>;
-/** The `file` fields of model `M`: what `$bolt.upload` names as `'<c>.<field>'`. */
+/** The `file` fields of model `M`: what `ctx.upload` names as `'<c>.<field>'`. */
 export type FileField<M> = OfKind<M, { kind: 'file' }>;
 /** The `vector` fields of model `M`. */
 export type VectorField<M> = OfKind<M, { kind: 'vector' }>;
@@ -349,16 +339,12 @@ type SpecOf<C> = C extends keyof Exposed
 	? Exposed[C]
 	: C extends SystemName
 		? SystemNames['exposures'][C]
-		: { read: { readonly [path: string]: { fields: 'all' } } };
+		: { outputs: { default: { readonly [path: string]: { fields: 'all' } } } };
 type OutputsOf<C> = SpecOf<C> extends { outputs: infer O } ? O : {};
-/** The read outputs model `C` declares: `default` (its `read`) and each named one of its `outputs`. */
-export type OutputName<C> = 'default' | (keyof OutputsOf<C> & string);
-/** The layer map of output `O` of `C` (`default`: its `read`). */
-type ReadSpec<C, O = 'default'> = O extends 'default'
-	? SpecOf<C> extends { read: infer R }
-		? R
-		: never
-	: OutputsOf<C>[O & keyof OutputsOf<C>];
+/** The read outputs model `C` declares, including `default`. */
+export type OutputName<C> = keyof OutputsOf<C> & string;
+/** The layer map of output `O` of `C`. */
+type ReadSpec<C, O = 'default'> = OutputsOf<C>[O & keyof OutputsOf<C>];
 type RootSpec<C, O> = ReadSpec<C, O> extends infer R ? (C extends keyof R ? R[C] : never) : never;
 /** Fields of `C`'s root layer in output `O` (system columns always). */
 export type ReadField<C, O = 'default'> =
@@ -535,6 +521,6 @@ export type SyncState = {
 type RowOf<C, O> = Simplify<{
 	readonly [P in ReadField<C, O> & (keyof Columns<C> | keyof OneRels<C>)]: ColumnValue<C, P>;
 }>;
-/** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.db`): never masked, every stored field,
+/** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.query`): never masked, every stored field,
  * no seq, roll-up or computed (rule 10). */
 export type StoredRow<M> = Simplify<ColumnValues<M, WritableField<M> | keyof SystemColumns<M>>>;

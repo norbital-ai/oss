@@ -1,5 +1,5 @@
 // Shared xlsx workbook reads and writes in the engine (raw DEFLATE by `fflate`): the agent's `read_file` sheets,
-// `ctx.files.sheet`, and a file sync's upload, template and export.
+// A file sync's upload, template and export.
 import { deflateSync, Inflate } from 'fflate';
 
 const CRC = Uint32Array.from({ length: 256 }, (_, n) => {

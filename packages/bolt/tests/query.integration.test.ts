@@ -40,7 +40,6 @@ const db = TenantDb.typed({
 		}),
 	write: (statement, lock) => native.write(statement, lock),
 	transaction: (batch) => native.transaction(batch),
-	session: () => native.session()
 });
 const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: dbError });
 const query = (text: string, params: readonly Json[] = []) => native.write({ text, params });

@@ -64,7 +64,6 @@ export const ROLES = [
 		file: '+agent.external.md',
 		note: 'agent brief for external members'
 	},
-	{ role: 'envoy', dir: 'agent/envoy', file: '+*.envoy.ts', note: 'envoy default' },
 	{
 		role: 'skill',
 		dir: 'agent/skill/*',
@@ -81,31 +80,12 @@ export const ROLES = [
 	},
 	{ role: 'app', dir: 'app/**', file: '+app.ts', note: 'app label and pages' },
 	{
-		role: 'kiosk',
-		dir: 'kiosk/**',
-		file: '+kiosk.ts',
-		note: 'standalone surface'
-	},
-	{ role: 'kiosk_page', dir: 'kiosk/**', file: '+*.page.svelte', note: '' },
-	{
-		role: 'kiosk_page_server',
-		dir: 'kiosk/**',
-		file: '+*.page.server.ts',
-		note: 'server side of the page'
-	},
-	{
 		role: 'session',
 		dir: 'app/**',
 		file: '+session.svelte',
 		note: 'device work for the whole session'
 	},
 	{ role: 'page', dir: 'app/**', file: '+*.page.svelte', note: '' },
-	{
-		role: 'page_server',
-		dir: 'app/**',
-		file: '+*.page.server.ts',
-		note: 'server side of the page'
-	},
 	{ role: 'messages', dir: 'i18n', file: '+messages.ts', note: 'base text' },
 	{ role: 'locale', dir: 'i18n', file: '+*.messages.ts', note: 'translation' },
 	{ role: 'group', dir: 'app/**', file: '+group.ts', note: 'app group' }
@@ -146,12 +126,12 @@ export const FOLDER_NOTES: { readonly [dir: string]: string } = {
 };
 
 export const NAME = /^[a-z][a-z0-9_]*$/;
-/** A folder pattern as the author reads it: an app's or kiosk's folder names it, any other folder names its thing. */
+/** A folder pattern as the author reads it: an app's folder names it, any other folder names its thing. */
 const placeholders = (dir: string) =>
 	dir
 		.split('/')
 		.map((seg, i, all) =>
-			seg === '**' && (all[i - 1] === 'app' || all[i - 1] === 'kiosk')
+			seg === '**' && all[i - 1] === 'app'
 				? `<${all[i - 1]}>`
 				: seg.includes('*')
 					? '<name>'

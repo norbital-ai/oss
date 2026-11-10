@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // The smart throttle (P31, P33, rule 60a; §11.2 G12 (10)) through the engine entry and the test kit: a scripted `sys_1`
 // (no vendor) decides whether admitted envoy and in-app messages hold or, in an envoy's group, are filtered. It holds at
 // most 3 s and once, never filters a direct conversation, and never wedges: whatever happens to a decision, every pending
@@ -39,7 +40,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			jobs: {
-				read: { jobs: { fields: 'all' } },
+				outputs: { default: { jobs: { fields: 'all' } } },
 				create: { columns: { jobs: ['title', 'status'] } },
 				update: { columns: { jobs: ['status'] } }
 			}
@@ -52,25 +53,29 @@ const manifest = Result.getOrThrow(
 		teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 		automations: {},
 		connections: {
-			field_wa: { integration: 'whatsapp', envoy: 'field_ops' }
+			field_wa: { integration: 'whatsapp' }
 		},
-		envoys: {
-			field_ops: {
-				audience: 'private',
-				name: 'Norbius',
-				policies: ['desk'],
-				groupMessages: 'mention_or_reply',
-				delegation: 'disabled',
-				triage: {},
-				task: 'Keep jobs up to date.'
-			}
-		},
+
 		mcp: {},
 		apps: {},
 		customFields: {},
 		agent: { internal: 'Staff brief.', skills: {} }
 	})
 );
+const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: fieldOpsEnvoy,
+		connections: ['field_wa'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		triage: true,
+		task: 'Keep jobs up to date.'
+	}
+] as const;
 
 /** A user message's text without its envelope's sender header (`[who] `). */
 const text = (c: Json) =>
@@ -235,16 +240,19 @@ const shared = Effect.runSync(
 	Effect.cached(
 		Effect.gen(function* () {
 			const context = yield* Layer.build(
-				TestWorkspace.layer({
-					manifest,
-					ports: Layer.succeed(Ai, {
-						...ai,
-						ask: (request) => port.ask(request),
-						maxChoices: undefined,
-						catalog: Port.unavailable('ai.catalog'),
-						embed: () => Port.unavailable('ai.embed')
-					})
-				})
+				withEnvoys(
+					TestWorkspace.layer({
+						manifest,
+						ports: Layer.succeed(Ai, {
+							...ai,
+							ask: (request) => port.ask(request),
+							maxChoices: undefined,
+							catalog: Port.unavailable('ai.catalog'),
+							embed: () => Port.unavailable('ai.embed')
+						})
+					}),
+					runtimeEnvoys
+				)
 			);
 			workspace = context;
 			t = Context.get(context, TestWorkspace);
@@ -548,20 +556,17 @@ describe('never wedged', () => {
 			const [conv] = yield* q(`SELECT id FROM sys_conversation WHERE thread = $1`, DM);
 			const conversation = String(conv?.['id']);
 			const id = globalThis.crypto.randomUUID();
-			yield* q(
-				`INSERT INTO sys_message (id, conversation, role, content, text, state, mode, "as")
+			yield* t.db.write({
+				text: `INSERT INTO sys_message (id, conversation, role, content, text, state, mode, "as")
 				SELECT $1, $2, 'user', jsonb_build_object('text', $3::text), $3, 'pending', 'agent', "as" FROM sys_message
 				WHERE conversation = $2 AND "as" IS NOT NULL ORDER BY seq LIMIT 1 RETURNING id`,
-				id,
-				conversation,
-				body
-			);
-			yield* q(
-				`INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts)
+				params: [id, conversation, body]
+			});
+			yield* t.db.write({
+				text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth, state, attempts)
 				VALUES (gen_random_uuid()::text, 'agent.triage', jsonb_build_object('conversation', $1::text), $2::timestamptz, 'schedule', 0, 'queued', 0) RETURNING id`,
-				conversation,
-				until(TAKEOVER_MS / 1000)
-			);
+				params: [conversation, until(TAKEOVER_MS / 1000)]
+			});
 			yield* covered();
 			return { id, conversation };
 		});
@@ -581,17 +586,16 @@ describe('never wedged', () => {
 			yield* open();
 			const { id, conversation } = yield* orphan('lost twice');
 			// the pending row no longer decodes, so the decision itself fails
-			yield* q(
-				`UPDATE sys_conversation SET inputs = jsonb_build_array(jsonb_build_object('message', $1::text, 'id', 7)) WHERE id = $2 RETURNING id`,
-				id,
-				conversation
-			);
+			yield* t.db.write({
+				text: `UPDATE sys_conversation SET inputs = jsonb_build_array(jsonb_build_object('message', $1::text, 'id', 7)) WHERE id = $2 RETURNING id`,
+				params: [id, conversation]
+			});
 			t.clock.advance(`${TAKEOVER_MS / 1000}s`);
 			yield* t.runDue();
-			yield* q(
-				`UPDATE sys_conversation SET inputs = '[]'::jsonb WHERE id = $1 RETURNING id`,
-				conversation
-			);
+			yield* t.db.write({
+				text: `UPDATE sys_conversation SET inputs = '[]'::jsonb WHERE id = $1 RETURNING id`,
+				params: [conversation]
+			});
 			yield* t.settled();
 			yield* covered();
 			expect(yield* row('lost twice')).toMatchObject({ state: 'queued' });

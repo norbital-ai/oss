@@ -6,7 +6,6 @@ import { PageResult } from '../../protocol/schema.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { publicEnvoys } from '../manifest.ts';
 import { Agents, Manifest, Reads, Turns, type AgentCallables } from '../services.ts';
 import { Conversation, isStaff, sharedConversations } from './schema.ts';
 import { MessageQueue } from './queue.ts';
@@ -23,21 +22,14 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 	authority: Authority,
 	id: string
 ) {
-	const db = yield* TenantDb,
-		manifest = yield* Manifest;
+	const db = yield* TenantDb;
 	const member = authority.actor.kind === 'member' ? authority.actor.id : null;
 	const row = yield* db.one(Conversation, {
 		text: `SELECT c.id, c.title, c.owner, c.envoy, c.integration, c.thread, c.parent, c.status, c.model, c.plan, c.goals, c.run
   FROM sys_conversation c WHERE c.id = $1 AND
   ((c.integration IS NULL AND c.owner IS NOT NULL AND ($2 OR c.owner = $3)) OR
-   ${sharedConversations({ member: '$3', admin: '$2', staff: '$4', envoys: '$5' })})`,
-		params: [
-			id,
-			authority.admin,
-			member,
-			isStaff(authority),
-			JSON.stringify(publicEnvoys(manifest))
-		]
+   ${sharedConversations({ member: '$3', admin: '$2', staff: '$4' })})`,
+		params: [id, authority.admin, member, isStaff(authority)]
 	});
 	if (Option.isNone(row))
 		return yield* Effect.fail(BoltError.make('notFound', 'admission', 'Not found or no access.'));

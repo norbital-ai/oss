@@ -1,12 +1,11 @@
 // The workspace and its navigation (§3.3.1, X-19): `workspace()`, `app()` with its page files, `group()`.
-// An app or group literal is typed against its own folder's children, so, like `model`, it takes its name (the folder
-// path); the build checks the name against the folder.
+// The path supplies an app or group's name and the compiler checks its child declarations.
+import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
-import type { AppName, ModelName, EnvoyName, IntegrationName, PolicyName } from '../names.ts';
+import type { AppName, ModelName, IntegrationName, PolicyName } from '../names.ts';
 import type { CurrencyCode, IanaZone, IconName, Msg, NonEmpty } from '../values.ts';
 import type { AiModelClass, ChildName, GroupName, PageName } from './names.ts';
 import type { ConvertTarget } from './facilities.ts';
-import type { AudienceAdmits } from '../../engine/services.ts';
 
 /** One secret: the label and help Settings shows; its value is supplied at runtime and sealed in the tenant store. */
 type SecretDecl = { label: string; description?: string };
@@ -46,7 +45,7 @@ type WorkspaceBase = {
 	/** The model classes agents may use, the default one, and the embedding models. */
 	ai?: { models: readonly AiModelClass[]; default: AiModelClass; embeddings?: readonly string[] };
 	/**
-	 * The document formats Markdown or HTML converts to (`bolt.convert`, `ctx.convert.document`, notice attachments, a
+	 * The document formats Markdown or HTML converts to (`ctx.convert.document`, notice attachments, a
 	 * file sync's document export); the host must serve each.
 	 */
 	convert?: { to: readonly ConvertTarget[] };
@@ -57,7 +56,7 @@ type WorkspaceBase = {
 	/** Who may join without an invitation (§5.11.2); absent, only invited members join. */
 	signup?: Signup;
 	/** Named instances source addresses: each slot is a `sys_integration` row of `integration`, its id the slot name. */
-	connections?: { readonly [slot: string]: { integration: string; envoy?: string } };
+	connections?: { readonly [slot: string]: { integration: string } };
 };
 /**
  * Self sign-up: a newcomer proves an address (`via`: a code by email, by SMS to a mobile number, or either) and becomes
@@ -101,10 +100,9 @@ type WorkspaceFor<S> = {
 	/**
 	 * Named instances: the slot name is the instance id (`ctx.send('mail', …)`, a notice's `via`, the instance a remote
 	 * sync writes through). The row's existence is source's; its pairing, configuration, envoy and `active` are run-time.
-	 * `envoy` is the default deployment on a conversation instance (`__verify` refuses one on any other).
 	 */
 	connections?: {
-		[K in keyof Part<S, 'connections'>]: { integration: IntegrationName; envoy?: EnvoyName };
+		[K in keyof Part<S, 'connections'>]: { integration: IntegrationName };
 	};
 };
 type Part<S, K extends string> = S extends { [P in K]: infer V } ? V : {};
@@ -123,94 +121,109 @@ export function workspace<const S extends WorkspaceBase>(
 	return spec;
 }
 
-type Audience =
-	'members' | 'external' | 'all' | { public: NonEmpty<string>; challenge?: 'turnstile' };
 /**
- * A site that may frame a kiosk or portal page in an iframe, as an origin (`https://host[:port]`, no path, no `*`). The
- * page is served with `frame-ancestors 'self' <origins…>`; without `embed` only the workspace itself may frame it. The
- * session cookie is `SameSite=None; Secure; Partitioned`, so a signed-in embed keeps its own session per embedding site;
- * the embedding site decides only the device permissions it delegates (`allow`), never data authority.
+ * An HTTPS origin allowed to frame this app. Session cookies stay partitioned by the embedding site.
  */
 export type EmbedOrigin = `https://${string}`;
-/**
- * `portal`: the page renders alone — no sidebar, banner, tabs or agent. A device kiosk in a members app, or a
- * customer-facing page in an external or public app; the app's audience decides who opens it. Portals are listed under
- * the account menu's Portals, never as sidebar rows or tabs. `embed` (portal pages only) names the sites that may frame it.
- */
-type Page = { title: Msg; icon?: IconName; section?: Msg } & (
-	{ portal?: never; embed?: never } | { portal: true; embed?: readonly EmbedOrigin[] }
-);
-/**
- * Device access an app cannot work without. Until each is granted the shell shows a wall in place of the app's pages,
- * saying what is missing and how to allow it (the browser's prompt, or the phone's settings on a native host).
- * `location:background` needs always-on location on a native host; a browser can only share while the page is open.
- */
-export type DeviceRequirement = 'location' | 'location:background' | 'notifications' | 'camera';
-/** An app literal's general shape (the manifest's app part). */
-export type AppSpec = {
-	title: Msg;
-	description: Msg;
-	icon: IconName;
-	/** The app card image, an asset path. */
-	banner?: string;
-	/** Who sees the app: `members` (default), `external`, `all`, or `{ public }` for signed-out visitors. */
-	audience?: Audience;
-	/** Device access every page of the app needs; the shell walls the app until it is granted. */
-	requires?: readonly DeviceRequirement[];
-	/** The app's pages by file name, in nav order: a title, icon and optional section each. */
-	pages: { readonly [page: string]: Page };
+const appContent = {
+	title: Schema.String,
+	description: Schema.String,
+	icon: Schema.String,
+	banner: Schema.optionalKey(Schema.String),
+	embed: Schema.optionalKey(Schema.Array(Schema.TemplateLiteral(['https://', Schema.String]))),
+	requires: Schema.optionalKey(
+		Schema.Array(Schema.Literals(['location', 'location:background', 'notifications', 'camera']))
+	),
+	pages: Schema.Record(
+		Schema.String,
+		Schema.Struct({
+			title: Schema.String,
+			icon: Schema.optionalKey(Schema.String),
+			section: Schema.optionalKey(Schema.String),
+			portal: Schema.optionalKey(Schema.Literal(true))
+		})
+	)
 };
-type AppFor<A> = {
-	title: Msg;
-	description: Msg;
-	icon: IconName;
-	/** The app card image, an asset path. */
-	banner?: string;
-	/** Default 'members'; `{ public }` pages run as the signed-out visitor (§3.9). */
-	audience?:
-		'members' | 'external' | 'all' | { public: NonEmpty<PolicyName>; challenge?: 'turnstile' };
-	/** Device access every page needs: location (`location:background` on a native host), notifications, camera. */
-	requires?: readonly DeviceRequirement[];
-	/** Key order is nav order; every page file needs an entry (build `app/page-unlisted`). */
-	pages: { [P in PageName<A>]?: Page };
-};
+const SignedInAudience = Schema.Literals(['members', 'external', 'all']);
+const AppPolicies = Schema.NonEmptyArray(Schema.String);
+const PublicAudience = Schema.Struct({
+	public: AppPolicies,
+	challenge: Schema.optionalKey(Schema.Literal('turnstile'))
+});
+export const AppData = Schema.Union([
+	Schema.Struct({
+		...appContent,
+		shell: Schema.optionalKey(Schema.Never),
+		policies: Schema.optionalKey(Schema.Never),
+		audience: Schema.optionalKey(Schema.Union([SignedInAudience, PublicAudience]))
+	}),
+	Schema.Struct({
+		...appContent,
+		shell: Schema.Literal('kiosk'),
+		policies: AppPolicies,
+		audience: Schema.optionalKey(SignedInAudience)
+	}),
+	Schema.Struct({
+		...appContent,
+		shell: Schema.Literal('kiosk'),
+		policies: Schema.optionalKey(Schema.Never),
+		audience: PublicAudience
+	})
+]);
+
+type SignedInAudience = typeof SignedInAudience.Type;
+type PublicAudience<P extends string> = { public: NonEmpty<P>; challenge?: 'turnstile' };
+type AppAccess<P extends string> =
+	| { shell?: never; audience?: SignedInAudience | PublicAudience<P>; policies?: never }
+	| { shell: 'kiosk'; audience?: SignedInAudience; policies: NonEmpty<P> }
+	| { shell: 'kiosk'; audience: PublicAudience<P>; policies?: never };
+
+/** Device permissions that must be granted before an app's pages open. */
+export type DeviceRequirement = NonNullable<AppSpec['requires']>[number];
+/** An app's pages and audience. The kiosk shell runs under its assigned policies. */
+export type AppSpec = typeof AppData.Type;
+type AppContent = Omit<AppSpec, keyof AppAccess<string>>;
+type Page = AppSpec['pages'][string];
+type AppFor = Omit<AppContent, 'pages'> &
+	AppAccess<PolicyName> & {
+		/** Key order is nav order; every page file needs an entry (build `app/page-unlisted`). */
+		pages: { [P in PageName<AppName>]?: Page };
+	};
 
 /**
  * `src/app/<a>/+app.ts`: an app's title, description, icon and banner, its `audience`, and its pages in nav order (each
  * `+<page>.page.svelte` in the folder needs an entry).
  * @example
- * export default app('crm', {
+ * export default app({
  * 	title: 'app.crm.title',
  * 	description: 'app.crm.description',
  * 	icon: 'lucide:handshake',
  * 	pages: { desk: { title: 'app.crm.title', icon: 'lucide:handshake' } }
  * });
  */
-export function app<const A extends AppName, const S extends AppSpec>(
-	name: A,
-	spec: S & Checked<AppSpec, S, Exact<S, AppFor<A>>>
-): { readonly name: A; readonly spec: S } {
-	return { name, spec };
+export function app<const S extends AppSpec>(
+	spec: S & Checked<AppSpec, S, AppFor & Exact<S, AppFor>>
+): S {
+	return spec;
 }
 
-/** A group literal: its label, description, icon and the child it opens. */
-export type GroupSpec = { label: Msg; description?: Msg; icon: IconName; defaultChild: string };
+/** A group literal: its title, description, icon and the child it opens. */
+export type GroupSpec = { title: Msg; description?: Msg; icon: IconName; default_child: string };
 /**
- * `src/app/<g>/+group.ts`: a folder of apps shown as one entry in the nav, opening `defaultChild`; a policy's
- * `capabilities.apps` naming the group reaches every app under it.
+ * `src/app/<g>/+group.ts`: a folder of apps shown as one entry in the nav, opening `default_child`.
+ * A policy's `capabilities.apps` naming the group reaches every app under it.
  * @example
- * export default group('hr', { label: 'HR', icon: 'lucide:briefcase-business', defaultChild: 'people' });
+ * export default group({ title: 'HR', icon: 'lucide:briefcase-business', default_child: 'people' });
  */
-export function group<const G extends GroupName, const S extends GroupSpec>(
-	name: G,
+export function group<const S extends GroupSpec>(
 	spec: S &
 		Checked<
 			GroupSpec,
 			S,
-			Exact<S, { label: Msg; description?: Msg; icon: IconName; defaultChild: ChildName<G> }>
+			Exact<S, Omit<GroupSpec, 'default_child'> & { default_child: ChildName<GroupName> }>
 		>
-): { readonly name: G; readonly spec: S } {
-	return { name, spec };
+): S {
+	return spec;
 }
 
 /**
@@ -221,16 +234,4 @@ export function group<const G extends GroupName, const S extends GroupSpec>(
  */
 export function messages<const M extends { readonly [key: string]: string }>(spec: M): M {
 	return spec;
-}
-
-/** Admission by a declared audience, shared by compiler and shell. */
-export function audienceAdmits(
-	audience: Parameters<AudienceAdmits>[0],
-	authority: Parameters<AudienceAdmits>[1]
-): ReturnType<AudienceAdmits> {
-	if (audience === 'none') return true;
-	if (typeof audience === 'object')
-		return authority.actor.kind === 'visitor' || authority.actor.kind === 'member';
-	if (authority.actor.kind !== 'member') return false;
-	return audience === 'all' || audience === (authority.actor.external ? 'external' : 'members');
 }

@@ -9,7 +9,7 @@ export default model('notices', {
 		subject: { kind: 'text' },
 		inbox: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'mail' } } }
 	},
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	syncs: {
 		messages: {
 			with: 'mail',

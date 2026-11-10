@@ -183,7 +183,7 @@ export type Callable =
 	| { readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	| { readonly _tag: 'Automation'; readonly automation: string }
 	| { readonly _tag: 'Sync'; readonly model: string; readonly sync: string };
-/** Rule 33a: `Server` is `ctx.act`/`ctx.query` from server code; everything else (`/act`, `/q`, `$bolt`, HTTP, agent) is `Client`. */
+/** Rule 33a: `Server` is `ctx.act`/`ctx.query` from server code; everything else (`/act`, `/q`, the page client, HTTP, agent) is `Client`. */
 export type Entry = 'Client' | 'Server';
 export type CallerContext = {
 	readonly authority: Authority;
@@ -612,12 +612,12 @@ export type OutboundShape = {
 		instance: string,
 		providerId: string,
 		report: DeliveryReport
-	) => Effect.Effect<Option.Option<Outcome>, EngineError>;
+	) => Effect.Effect<void, EngineError>;
 	readonly replied: (
 		instance: string,
 		refs: readonly string[],
 		reply: { row: string; at: string; auto: boolean; message: Json }
-	) => Effect.Effect<Option.Option<Outcome>, EngineError>;
+	) => Effect.Effect<void, EngineError>;
 	/** Records the environment's epoch (rule 61). */
 	readonly activate: Effect.Effect<void, EngineError>;
 	readonly handlers: { readonly [name: string]: RunHandler };
@@ -640,9 +640,6 @@ export type FacilityCall =
 	| FacilityArm<'files.meta'>
 	| FacilityArm<'files.get'>
 	| FacilityArm<'files.url'>
-	| FacilityArm<'files.text'>
-	| FacilityArm<'files.table'>
-	| FacilityArm<'files.sheet'>
 	| FacilityArm<'files.image'>
 	| FacilityArm<'files.put'>
 	| FacilityArm<'convert.document'>
@@ -650,7 +647,6 @@ export type FacilityCall =
 	| FacilityArm<'ai.sys_1.decide'>
 	| FacilityArm<'ai.sys_2.infer'>
 	| FacilityArm<'ai.embed'>
-	| FacilityArm<'ai.speak'>
 	| FacilityArm<'geo.search'>
 	| FacilityArm<'geo.reverse'>;
 export type ActOptions = {
@@ -661,20 +657,6 @@ export type ActOptions = {
 };
 /** A guest request to the host, decoded once at the crossing (M2); calls issued before the microtask queue drains cross together (rule 12). */
 export type CrossCall =
-	| { readonly _tag: 'transactionBegin' }
-	| {
-			readonly _tag: 'transactionRead';
-			readonly reads: readonly ReadIR[];
-			readonly keys?: readonly string[];
-	  }
-	| {
-			readonly _tag: 'transactionAct';
-			readonly callable: Extract<Callable, { readonly _tag: 'Verb' }>;
-			readonly input: Json;
-			readonly onConflict?: 'update' | 'keep';
-	  }
-	| { readonly _tag: 'transactionFinish'; readonly output: Json; readonly omitted: boolean }
-	| { readonly _tag: 'transactionAbort' }
 	| {
 			readonly _tag: 'read';
 			readonly read: ReadIR;
@@ -850,24 +832,6 @@ export type WritableColumns = (
 ) => ReadonlySet<string> | 'all';
 export type VisitorMayRead = (authority: Authority, model: string) => boolean;
 export type OperandValue = (operand: Var, authority: Authority) => Json;
-/** Who may open an app or kiosk: a signed-in audience, no authentication (`none`), or a public app's policies. */
-export type Audience =
-	| 'members'
-	| 'external'
-	| 'all'
-	| 'none'
-	| { readonly public: readonly string[]; readonly challenge?: 'turnstile' | undefined };
-/** R4a, `decl/runtime/kiosk.ts` (pure): kiosk lookup and audience admission, for rules, the shell server and nav. */
-export type KioskOf = (
-	manifest: EngineManifest,
-	kiosk: string
-) => Option.Option<{ readonly auth: Audience; readonly policies: readonly string[] }>;
-export type AudienceAdmits = (audience: Audience, authority: Authority) => boolean;
-export type CanOpenKiosk = (
-	manifest: EngineManifest,
-	kiosk: string,
-	authority: Authority
-) => boolean;
 /** E5b, `write/sql.ts`: a row's own predicate over `row` (its alias) as SQL; `twoValued` compiles NULL as false (DDL checks, H5). */
 export type OwnPredSql = (pred: Pred, row: string, chain: Chain, twoValued: boolean) => string;
 /** E12a, `agent/callables.ts`: the OWN agent and conversation callables by name, each with its input Schema. */

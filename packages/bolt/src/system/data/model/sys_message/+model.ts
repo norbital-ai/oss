@@ -12,7 +12,7 @@ export default model('sys_message', {
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		conversation: { kind: 'text', optional: true },
 		/** The integration instance it travels on; deleted with it. */
-		integration: { kind: 'ref', to: 'sys_integration', optional: true, onDelete: 'cascade' },
+		integration: { kind: 'ref', to: 'sys_integration', optional: true, on_delete: 'cascade' },
 		seq: { kind: 'int' },
 		role: { kind: 'text', optional: true },
 		content: { kind: 'json', optional: true },
@@ -71,5 +71,5 @@ export default model('sys_message', {
 			{ on: ['seq'], where: { status: { in: ['queued', 'sending'] } } }
 		]
 	},
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

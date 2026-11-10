@@ -66,35 +66,30 @@ export const manifest: EngineManifest = {
 	},
 	exposures: {
 		accounts: {
-			read: {
+			outputs: { default: {
 				accounts: { fields: 'all' },
 				'accounts.orders': { fields: 'all' },
 				'accounts.orders.lines': { fields: 'all' }
-			},
-			outputs: { brief: { accounts: { fields: ['name', 'region'] } } }
+			}, brief: { accounts: { fields: ['name', 'region'] } } }
 		},
 		orders: {
-			read: {
+			outputs: { default: {
 				orders: { fields: 'all' },
 				'orders.account': { fields: 'all' },
 				'orders.lines': { fields: 'all' }
-			},
-			outputs: {
-				brief: {
+			}, brief: {
 					orders: { fields: ['status', 'qty', 'placed', 'account'] },
 					'orders.account': { fields: ['name', 'region'] }
-				}
-			}
+				} }
 		},
-		lines: { read: { lines: { fields: 'all' }, 'lines.order': { fields: 'all' } } },
-		notes: { read: { notes: { fields: ['body', 'about'] } } }
+		lines: { outputs: { default: { lines: { fields: 'all' }, 'lines.order': { fields: 'all' } } } },
+		notes: { outputs: { default: { notes: { fields: ['body', 'about'] } } } }
 	},
 	integrations: {},
 	policies: {},
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

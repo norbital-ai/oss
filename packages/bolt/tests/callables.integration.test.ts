@@ -65,22 +65,22 @@ const manifest = Result.getOrThrow(
 			'applications.opening': { to: 'openings', inverse: 'applications' }
 		},
 		exposures: {
-			customers: { read: { customers: { fields: 'all' } } },
+			customers: { outputs: { default: { customers: { fields: 'all' } } } },
 			orders: {
-				read: { orders: { fields: 'all' } },
+				outputs: { default: { orders: { fields: 'all' } } },
 				create: { columns: { orders: ['title', 'region', 'customer'] }, transform: true },
-				update: { columns: { orders: ['title', 'status'] } }
+				update: { columns: { orders: ['title', 'status'] } },
+				delete: {}
 			},
 			notes: {
-				read: { notes: { fields: 'all' } },
+				outputs: { default: { notes: { fields: 'all' } } },
 				create: { columns: { notes: ['text', 'order'] } }
 			},
 			openings: {
-				read: { openings: { fields: 'all' } },
-				outputs: { listing: { openings: { fields: ['title', 'location', 'description'] } } }
+				outputs: { default: { openings: { fields: 'all' } }, listing: { openings: { fields: ['title', 'location', 'description'] } } }
 			},
 			applications: {
-				read: { applications: { fields: 'all' } },
+				outputs: { default: { applications: { fields: 'all' } } },
 				create: { columns: { applications: ['opening', 'name', 'email', 'cv'] } }
 			}
 		},
@@ -88,7 +88,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			rep: {
 				description: 'Rep',
-				automations: ['followup', 'place', 'revise'],
+				capabilities: { automations: ['followup', 'place', 'revise'] },
 				grants: {
 					customers: { read: true },
 					orders: {
@@ -145,7 +145,7 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		connections: {},
-		envoys: {},
+
 		mcp: {},
 		customFields: {},
 		agent: { skills: {} },
@@ -322,12 +322,19 @@ const batch = (f: Fixture, authority: Authority, acts: Batch, key: string = cryp
 class Fx extends Context.Service<Fx, Fixture>()('test/CallablesFixture') {}
 // The suite's database fails its next serializable commits while armed: a replay, then a terminal conflict.
 const serialization = { armed: false, failures: 0, attempts: [] as DbBatch[] };
+let customerReadFailure: DbError | undefined;
 const interceptedDb = Layer.effect(
 	TenantDb,
 	Effect.gen(function* () {
 		const inner = yield* TenantDb;
 		return TenantDb.typed({
-			read: inner.read,
+			read: (statements) =>
+				Effect.suspend(() =>
+					customerReadFailure !== undefined &&
+					statements.some((s) => s.text.includes('"customers"'))
+						? Effect.fail(customerReadFailure)
+						: inner.read(statements)
+				),
 			transaction: (batch) =>
 				Effect.suspend(() => {
 					// the act's own batches (its orders and its recorded outcome); the member's bootstrap and audit pass through
@@ -343,7 +350,7 @@ const interceptedDb = Layer.effect(
 					}
 					return inner.transaction(batch);
 				}),
-			session: inner.session,
+
 			write: inner.write
 		});
 	})
@@ -358,6 +365,41 @@ const count = (f: Fixture, sql: string, params: Json[] = []) =>
 layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: true })(
 	'callables',
 	(it) => {
+		it.effect('refuses a null update or delete row as invalid input', () =>
+			Effect.gen(function* () {
+				const f = yield* Fx;
+				const authority = f.t.as(f.t.admin).authority;
+				for (const verb of ['update', 'delete']) {
+					expect(yield* Effect.flip(act(f, authority, `orders.${verb}`, [null]))).toMatchObject({
+						_tag: 'ActRefused',
+						code: 'invalidInput',
+						row: 0
+					});
+				}
+			})
+		);
+
+		it.effect('reports a failed reference read when starting an automation', () =>
+			Effect.gen(function* () {
+				const f = yield* Fx;
+				const now = f.t.clock.now();
+				const outage = DbError.make('08006', 'customer reference read unavailable');
+				customerReadFailure = outage;
+				const result = yield* f.calls
+					.start({
+						automation: 'place',
+						authority: f.t.as(f.t.member(['rep'])).authority,
+						bindings: { now, today: now.slice(0, 10), tz: 'UTC' },
+						runs: [{ id: uuidv7(Date.parse(now)), input: { title: 'Order', customer: ACME } }]
+					})
+					.pipe(
+						Effect.result,
+						Effect.ensuring(Effect.sync(() => void (customerReadFailure = undefined)))
+					);
+				expect(result).toMatchObject({ _tag: 'Failure', failure: outage });
+			})
+		);
+
 		it.effect(
 			'queued ctx.act retains its observed revision, and generated batches keep their per-item guards',
 			() =>

@@ -1,10 +1,11 @@
-import { kiosk } from '../../../../../../src/index.ts';
+import { app } from '../../../../../../src/index.ts';
 
-export default kiosk('clock', {
+export default app({
 	title: 'Clock',
 	description: 'Clock in',
 	icon: 'clock',
-	auth: 'members',
+	audience: 'members',
+	shell: 'kiosk',
 	policies: ['kiosk_reader'],
 	pages: { clock: { title: 'Clock' } }
 });

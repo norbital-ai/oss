@@ -1,8 +1,8 @@
-// `PageBolt` (D9): `$bolt` as pages see it, over the same names, rows and inputs as `ctx`. A read is `query` (and
+// The typed operations on a page context use the same names, rows and inputs as server code. A read is `query` (and
 // `aggregate`, `history`), the same name and arguments as server code's `ctx.query`, answering a `Query<T>`: live where a
 // component reads it, one read where it is awaited outside one, and an Effect to `yield*`. Acts, starts, uploads, record
-// capabilities, conversions, approval decisions and the session are Effects failing with the D3 tags; `clock`, `fileUrl`,
-// `t` and `actor` stay plain. Pages run Effects on the ui edge (`run`, `fork`, `attach` from `$bolt`).
+// capabilities, conversions, approval decisions and the session are Effects failing with the D3 tags; `clock`, `file_url`,
+// `t` and `actor` stay plain. Pages run Effects on the ui edge (`run`, `fork`, `attach` from `@norbital-ai/ui/effect`).
 import type { Effect } from 'effect';
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
 import type { Actor } from '../decl/access/actor.ts';
@@ -40,7 +40,6 @@ import type {
 } from '../decl/errors.ts';
 import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../decl/names.ts';
 import type {
-	ConvertRequest,
 	ConvertSource,
 	PreviewPdfOptions,
 	StartInput
@@ -104,7 +103,7 @@ type ApprovalFilter = {
 	all?: boolean;
 };
 
-/** The typed members of `$bolt` (§3.5); a page reads and acts as its viewer, so rows are caller rows. */
+/** The typed members of a page context (§3.5); a page reads and acts as its viewer, so rows are caller rows. */
 export interface PageBolt {
 	/**
 	 * A read request, as server code's `ctx.query`: roots (models with `read`) and their declared layers in one read, the
@@ -143,14 +142,14 @@ export interface PageBolt {
 	 */
 	clock(unit?: 'minute' | 'hour' | 'day'): PageClock;
 	/** The record's field and operation permissions for its current revision; `null` when it is absent or not readable. */
-	recordCapabilities<C extends string>(
+	record_capabilities<C extends string>(
 		model: Is<C, ReadableName>,
 		id: NoInfer<Id<C>>,
 		parent?: RecordParentContext
 	): PageCall<RecordCapabilities | null, TransportFailed | ProtocolFailed>;
 	/**
 	 * Runs a generated model write as the viewer. Input is a batch derived from that verb's exposure.
-	 * Execute the returned Effect through the mounted page runtime (`run`, `fork` or `attach` from `$bolt`).
+	 * Execute the returned Effect through the mounted page runtime (`run`, `fork` or `attach` from `@norbital-ai/ui/effect`).
 	 * A `pendingApproval` receipt is successful submission, not final approval; `running` is followed through the run ledger.
 	 * Refusal, conflict and uncertain settlement fail with `ActRefused`, `ActConflict` and `ActUnknown` respectively.
 	 * @param callable A generated model verb, such as `orders.create`; automations use start instead.
@@ -178,22 +177,13 @@ export interface PageBolt {
 		file: Blob & { name?: string },
 		field: UploadField
 	): PageCall<FileRef, ActRefused | TransportFailed>;
-	/**
-	 * Converts content the page already has (Markdown or HTML) to a target `+workspace.ts` declares under `convert.to`,
-	 * on the host: a short-lived file the viewer owns (download it with `fileUrl`). Rate-limited by the policy limit key
-	 * `convert` (default `30/min`); an undeclared or unserved target fails `Unavailable`.
-	 */
-	convert(
-		source: ConvertSource,
-		request: ConvertRequest
-	): PageCall<FileRef, ActRefused | TransportFailed | Unavailable>;
 	/** Renders a PDF for this page and returns its bytes without storing a file or a conversion job. */
-	previewPdf(
+	preview_pdf(
 		source: ConvertSource,
 		options?: PreviewPdfOptions
 	): PageCall<Uint8Array, ActRefused | TransportFailed | Unavailable>;
 	/** The URL a page shows or downloads a stored file from. */
-	fileUrl(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
+	file_url(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
 	/** Approval requests: decide the current step, read one request's view, or list the requests the viewer may see. */
 	approvals: {
 		/**

@@ -56,7 +56,7 @@ export const bareHost = (db: TenantDbShape, options: { readonly guest?: GuestPro
 						challenge: off,
 						fixedCodes: false
 					},
-					intelligence: { system1: off, system2: off, embed: off, speech: off },
+					intelligence: { system1: off, system2: off, embed: off,  },
 					ports: { webhooks: off, websockets: off, outbound: off },
 					sandbox: off,
 					keys: keysPort(randomBytes(32))

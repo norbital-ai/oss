@@ -7,7 +7,7 @@
 <script lang="ts">
 	import { Effect, Option, Schema } from 'effect';
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
-	import { Button, Icon, useKinds } from '@norbital-ai/ui';
+	import { Button, Icon } from '@norbital-ai/ui';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { impactLines, stepName } from '../../protocol/migration-impact.ts';
 	import type { AgentRow } from '../../protocol/wire.ts';
@@ -16,10 +16,12 @@
 	let {
 		api,
 		step,
-		t
+		t,
+		zone
 	}: {
 		api: ShellApi;
 		step: AgentRow;
+		zone?: string | undefined;
 		t: (key: string) => string;
 	} = $props();
 
@@ -34,7 +36,6 @@
 	const studio = observeOnce(() => api.studio());
 	const held = $derived(studio.current?.approvals?.find((one) => one.id === id));
 	// the checkpoint's time from Studio's own record, in the workspace's zone: never the agent's wording of it
-	const zone = useKinds().zone;
 	const when = (at: string) =>
 		new Date(at).toLocaleString(undefined, zone === undefined ? {} : { timeZone: zone });
 	const draft = $derived(

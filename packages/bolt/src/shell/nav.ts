@@ -2,7 +2,6 @@
 // page or record, and the route a URL names. Pure: the host and the browser share it.
 import type { Authority, EngineActor } from '../engine/contracts.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
-import { canOpenKiosk } from '../decl/runtime/kiosk.ts';
 import { BOLT } from '../protocol/wire.ts';
 import type { AutomationExposure, ModelExposure } from '@norbital-ai/ui';
 import { Schema } from 'effect';
@@ -12,7 +11,7 @@ import type { ManifestItem } from './finder/manifest.ts';
 type AppSpec = EngineManifest['apps'][string];
 /** Browser route metadata; agent availability comes from the authorized boot surfaces. */
 export type ShellManifest = Pick<EngineManifest, 'workspace' | 'apps'> &
-	Partial<Pick<EngineManifest, 'envoys' | 'kiosks' | 'groups'>>;
+	Partial<Pick<EngineManifest, 'groups'>>;
 
 export type NavPage = {
 	name: string;
@@ -184,7 +183,7 @@ export type ShellBoot = {
 	search?: readonly ManifestItem[];
 	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
 	aiUnconfigured?: true;
-	/** The schema fingerprint the page boots against: `$bolt` sends it as `Bolt-Contract` (L-BOLT-171). */
+	/** The schema fingerprint the page boots against: the page context sends it as `Bolt-Contract` (L-BOLT-171). */
 	contract?: string;
 };
 /** Another workspace the member belongs to; `href` enters it. */
@@ -206,6 +205,27 @@ export function environmentLabel(environment: string | undefined): string | null
 }
 
 const appOf = (m: ShellManifest, name: string) => m.apps[name];
+export const kioskOf = (m: ShellManifest, name: string) => {
+	const app = appOf(m, name);
+	return app?.shell === 'kiosk' ? app : undefined;
+};
+export const kioskPolicies = (app: NonNullable<ReturnType<typeof kioskOf>>) =>
+	typeof app.audience === 'object' ? app.audience.public : app.policies;
+export const canOpenKiosk = (
+	app: NonNullable<ReturnType<typeof kioskOf>>,
+	authority: Authority,
+	name: string
+) =>
+	audienceOf(app) === 'public' ||
+	(authority.actor.kind === 'member' &&
+		(authority.admin ||
+			((app.audience === 'all' ||
+				(app.audience ?? 'members') === (authority.actor.external ? 'external' : 'members')) &&
+				(authority.actor.external || holdsApp(authority, name)))));
+const holdsApp = (authority: Authority, name: string) =>
+	authority.capabilities.apps.some(
+		(app) => app === '*' || app === name || name.startsWith(`${app}/`)
+	);
 
 /** The four kinds of `audience`; `public` apps run every viewer as the visitor (§3.9). */
 export function audienceOf(spec: AppSpec | undefined): 'members' | 'external' | 'all' | 'public' {
@@ -224,7 +244,7 @@ export const challengeOf = (m: ShellManifest, app: string): 'turnstile' | undefi
  */
 export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean {
 	const spec = appOf(m, app);
-	if (spec === undefined) return false;
+	if (spec === undefined || spec.shell === 'kiosk') return false;
 	const audience = audienceOf(spec),
 		actor = auth.actor;
 	if (actor.kind === 'visitor') return actor.app === app;
@@ -232,22 +252,20 @@ export function canOpen(m: ShellManifest, auth: Authority, app: string): boolean
 	if (auth.admin) return true;
 	if (audience === 'public') return holdsPublic(auth, app);
 	if (audience !== 'all' && audience !== (actor.external ? 'external' : 'members')) return false;
-	return auth.capabilities.apps.some((c) => c === '*' || c === app || app.startsWith(`${c}/`));
+	return holdsApp(auth, app);
 }
 
 /**
- * The `Content-Security-Policy` a document is served with: a kiosk page or a `portal: true` page may
- * be framed by the workspace itself and the origins its `embed` names; every other page only by the
- * workspace, so no other site can overlay it (clickjacking). `path` is the workspace path
- * (`/app/portal/book`), without a base.
+ * A document may be framed by the workspace itself and the origins in the app or kiosk’s `embed` list.
+ * `path` is the workspace path without a base.
  */
 export function framePolicy(m: ShellManifest, path: string): string {
 	const r = route(m, new URL(path, 'http://x'));
 	const embed =
 		r.kind === 'kiosk'
-			? m.kiosks?.[r.kiosk]?.embed
+			? kioskOf(m, r.kiosk)?.embed
 			: r.kind === 'page'
-				? appOf(m, r.app)?.pages[r.page]?.embed
+				? appOf(m, r.app)?.embed
 				: undefined;
 	return ["frame-ancestors 'self'", ...(embed ?? [])].join(' ');
 }
@@ -278,12 +296,13 @@ export function kioskNav(
 	m: EngineManifest,
 	authority: Authority | null
 ): { name: string; title: string; icon?: string; href: string }[] {
-	return Object.entries(m.kiosks ?? {})
+	return Object.entries(m.apps)
 		.sort(([left], [right]) => left.localeCompare(right))
 		.flatMap(([name, spec]) => {
 			if (
-				(spec.auth ?? 'members') !== 'none' &&
-				(authority === null || !canOpenKiosk(m, name, authority))
+				spec.shell !== 'kiosk' ||
+				(audienceOf(spec) !== 'public' &&
+					(authority === null || !canOpenKiosk(spec, authority, name)))
 			)
 				return [];
 			const page = Object.keys(spec.pages)[0];
@@ -360,11 +379,11 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 				.map(node)
 				.filter((n) => n !== null);
 			if (children.length === 0) return null;
-			const first = children.find((c) => c.name === `${name}/${g.defaultChild}`) ?? children[0]!;
+			const first = children.find((c) => c.name === `${name}/${g.default_child}`) ?? children[0]!;
 			return {
 				kind: 'group',
 				name,
-				title: g.label,
+				title: g.title,
 				...(g.description === undefined ? {} : { description: g.description }),
 				icon: g.icon,
 				href: first.href,
@@ -396,7 +415,7 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 			(n) => n.split('/').length === depth && (parent === null || n.startsWith(`${parent}/`))
 		);
 		const order =
-			parent === null ? (m.workspace.apps ?? []) : [`${parent}/${groups[parent]?.defaultChild}`];
+			parent === null ? (m.workspace.apps ?? []) : [`${parent}/${groups[parent]?.default_child}`];
 		const rank = (n: string) => {
 			const i = order.indexOf(n);
 			return i < 0 ? order.length : i;
@@ -524,13 +543,15 @@ export function commandCenterTabs(
 export function route(m: ShellManifest, url: URL): Route {
 	const seg = url.pathname.split('/').slice(1).map(decodeURIComponent);
 	if (seg[0] === 'kiosk') {
-		const kiosk = seg[1] ?? '',
-			spec = m.kiosks?.[kiosk];
-		if (spec === undefined) return { kind: 'notFound' };
-		const pages = Object.keys(spec.pages);
-		const page = seg[2] ?? pages[0];
-		if (seg.length > 3 || page === undefined || !pages.includes(page)) return { kind: 'notFound' };
-		return { kind: 'kiosk', kiosk, page };
+		for (let n = seg.length; n > 1; n--) {
+			const kiosk = seg.slice(1, n).join('/');
+			const spec = kioskOf(m, kiosk);
+			if (spec === undefined) continue;
+			const page = seg[n] ?? Object.keys(spec.pages)[0];
+			if (seg.length > n + 1 || page === undefined || !Object.hasOwn(spec.pages, page)) break;
+			return { kind: 'kiosk', kiosk, page };
+		}
+		return { kind: 'notFound' };
 	}
 	switch (seg[0]) {
 		case '':
@@ -576,7 +597,7 @@ export function route(m: ShellManifest, url: URL): Route {
 	for (let n = seg.length; n > 1; n--) {
 		const app = seg.slice(1, n).join('/'),
 			a = appOf(m, app);
-		if (a === undefined) continue;
+		if (a === undefined || a.shell === 'kiosk') continue;
 		const rest = seg.slice(n),
 			page = rest[0] ?? leafOf(app);
 		if (
@@ -612,12 +633,12 @@ export function withRecords(url: URL, depth: number): URL {
 	return next;
 }
 
-/** What a signed-out viewer may open: public app pages, `auth: 'none'` kiosks, sign-in and invitation. */
+/** What a signed-out viewer may open: public app and kiosk pages, sign-in and invitation. */
 export function isOpenRoute(m: ShellManifest, r: Route): boolean {
 	return (
 		r.kind === 'signIn' ||
 		r.kind === 'invite' ||
 		(r.kind === 'page' && audienceOf(appOf(m, r.app)) === 'public') ||
-		(r.kind === 'kiosk' && m.kiosks?.[r.kiosk]?.auth === 'none')
+		(r.kind === 'kiosk' && audienceOf(kioskOf(m, r.kiosk)) === 'public')
 	);
 }

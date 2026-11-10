@@ -1,12 +1,12 @@
 // Type corpus for the data layer (§3.3.2–§3.3.4, §3.3.9, rules 3–5, 9, 10, P14). Each `@ts-expect-error` line is a
 // planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { automation, customField, model } from '../../src/index.ts';
+import { automation, custom_field, model } from '../../src/index.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { PlainDate as plainDate } from '@norbital-ai/std/date';
 import type {
 	Id,
-	Insert,
-	Patch,
+	CreateInput,
+	UpdateInput,
 	PlainDate,
 	PlainTime,
 	Row,
@@ -118,16 +118,16 @@ is<Eq<'total' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // transforms ne
 type Dec = Decimal | number | `${number}`;
 // a create tree: the root's declared columns and, per declared write layer, an array of that layer's rows
 type Flat<T> = { [K in keyof T]: T[K] };
-is<Eq<keyof Insert<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
-is<Eq<Insert<'orders'>['customer'], Id<'customers'>>>();
-is<Eq<Insert<'orders'>['due'], PlainDate | DateLiteral | null | undefined>>();
+is<Eq<keyof CreateInput<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
+is<Eq<CreateInput<'orders'>['customer'], Id<'customers'>>>();
+is<Eq<CreateInput<'orders'>['due'], PlainDate | DateLiteral | null | undefined>>();
 is<
 	Eq<
-		Flat<NonNullable<Insert<'orders'>['lines']>[number]>,
+		Flat<NonNullable<CreateInput<'orders'>['lines']>[number]>,
 		{ readonly item: string; readonly qty: Dec; readonly price: Dec }
 	>
 >();
-is<Eq<keyof Patch<'orders'>, 'status' | 'note' | 'due' | 'placed_at' | 'lines'>>();
+is<Eq<keyof UpdateInput<'orders'>, 'status' | 'note' | 'due' | 'placed_at' | 'lines'>>();
 is<
 	Eq<
 		KindOfExpr<
@@ -298,15 +298,15 @@ model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'date' } },
-	// @ts-expect-error M18 noOverlap over a field that is not a period
-	noOverlap: [{ key: [], period: 'a' }]
+	// @ts-expect-error M18 no_overlap over a field that is not a period
+	constraints: { no_overlapping_dates: { no_overlap: 'a', per: [] } }
 });
 model('data_case', {
 	description: 'x',
 	label: 'a',
 	fields: { a: { kind: 'int' }, d: { kind: 'date' } },
 	// @ts-expect-error M19 a check comparing an int to a date field
-	check: { c: { a: { lte: { field: 'd' } } } }
+	constraints: { c: { check: { a: { lte: { field: 'd' } } } } }
 });
 model('data_case', {
 	description: 'x',
@@ -379,7 +379,7 @@ model('orders', {
 	fields: {
 		...m.orders.spec.fields,
 		// @ts-expect-error R3 setNull on a required ref
-		customer: { kind: 'ref', to: 'customers', onDelete: 'setNull' }
+		customer: { kind: 'ref', to: 'customers', on_delete: 'set_null' }
 	}
 });
 model('orders', {
@@ -406,7 +406,7 @@ model('order_lines', {
 	fields: {
 		...m.order_lines.spec.fields,
 		// @ts-expect-error R9 an owned child restricting its parent's delete
-		order: { kind: 'ref', to: 'orders', owned: true, onDelete: 'restrict' }
+		order: { kind: 'ref', to: 'orders', owned: true, on_delete: 'restrict' }
 	}
 });
 model('orders', {
@@ -419,12 +419,12 @@ model('orders', {
 });
 
 // ── custom fields validate inside their declaration, from generated shape data ──
-customField('rating', {
+custom_field({
 	description: 'x',
 	// @ts-expect-error F1 a shape with an unknown kind
 	shape: { kind: 'object', fields: { a: { kind: 'txt' } } }
 });
-customField('variant', {
+custom_field({
 	description: 'A tagged value',
 	shape: {
 		kind: 'union',
@@ -434,7 +434,7 @@ customField('variant', {
 	validate: (v) =>
 		v.type === 'a' ? (v.n > 0 ? undefined : 'positive') : v.s.length > 0 ? undefined : 'empty'
 });
-customField('variant', {
+custom_field({
 	description: 'A tagged value',
 	shape: {
 		kind: 'union',
@@ -465,7 +465,7 @@ model('orders', { ...m.orders.spec, update: { columns: ['note'] } });
 // @ts-expect-error C9 `with` relation-action allowlists are gone: a write layer is a `columns` path
 model('orders', { ...m.orders.spec, update: { columns: { orders: [] }, with: { lines: {} } } });
 // @ts-expect-error C10 an unexposable read field
-model('orders', { ...m.orders.spec, read: { orders: { fields: ['nope'] } } });
+model('orders', { ...m.orders.spec, outputs: { default: { fields: ['nope'] } } });
 // @ts-expect-error C10b a read without its path key (`relations` is gone)
 model('orders', { ...m.orders.spec, read: { fields: ['note'], relations: ['lines'] } });
 // @ts-expect-error C11 declared queries are gone: read the layers, transform in a src/lib helper
@@ -524,7 +524,7 @@ model('orders', {
 		}
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
 		yield* ctx.act('orders.update', [
@@ -551,7 +551,7 @@ automation('orders_submit', {
 		yield* ctx.query('orders', { all: true });
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* ({ ids, note }, ctx) {
 		yield* ctx.act(
@@ -576,14 +576,14 @@ automation('orders_renote', {
 		return customers.rows.length;
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
 		// @ts-expect-error B4 act on an unknown callable
 		yield* ctx.act('orders.shred', { target: target });
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target }, ctx) {
 		const order =
@@ -599,7 +599,7 @@ automation('orders_submit', {
 		]);
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B6 a create missing a required field
@@ -607,7 +607,7 @@ automation('orders_renote', {
 		return 1;
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* ({ ids }, ctx) {
 		const id = ids[0];
@@ -618,7 +618,7 @@ automation('orders_renote', {
 		return 1;
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B8 an automation has no implicit record target
@@ -633,7 +633,7 @@ model('orders', {
 		indexes: { by_colour: { ...m.orders.spec.search.indexes.by_colour, vector: 'note' } }
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error B11 a model without a create exposure has no create callable
@@ -648,18 +648,18 @@ model('orders', {
 	create: {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
-			const labels = yield* ctx.db.query({ orders: { fields: ['number'] } });
+			const labels = yield* ctx.query({ orders: { fields: ['number'] } });
 			const number: string = labels.orders.rows[0]!.number;
 			void number;
 			// a workspace read request reads the root layer's declared fields, unmasked: the sequence label, roll-ups and
 			// computed fields included (`read: 'all'` declares them)
-			const ordinary = yield* ctx.db.query({ orders: {} });
+			const ordinary = yield* ctx.query({ orders: {} });
 			const label: string = ordinary.orders.rows[0]!.number;
 			const total: Decimal = ordinary.orders.rows[0]!.total;
 			const soon: PlainDate | null = ordinary.orders.rows[0]!.due_soon;
 			void [label, total, soon];
 			// @ts-expect-error a field the root layer does not declare
-			yield* ctx.db.query({ orders: { fields: ['nope'] } });
+			yield* ctx.query({ orders: { fields: ['nope'] } });
 			return inputs;
 		}
 	}
@@ -667,13 +667,13 @@ model('orders', {
 
 // ── named read outputs: each a fixed layer map beside `read` (the `default` output) ──
 // prettier-ignore
-model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' }, b: { kind: 'int' } }, read: 'all', outputs: { narrow: { probe: { fields: ['a'] } }, whole: 'all' } });
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' }, b: { kind: 'int' } }, outputs: { default: { fields: 'all' }, narrow: { fields: ['a'] }, whole: { fields: 'all' } } });
 // prettier-ignore
 // @ts-expect-error O1 `default` is the model's `read`, never a named output
-model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, read: 'all', outputs: { default: { probe: { fields: ['a'] } } } });
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, outputs: { default: { fields: 'all' }, default: { fields: ['a'] } } });
 // prettier-ignore
 // @ts-expect-error O2 an output field the model lacks
-model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, read: 'all', outputs: { narrow: { probe: { fields: ['zone'] } } } });
+model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, outputs: { default: { fields: 'all' }, narrow: { fields: ['zone'] } } });
 // prettier-ignore
 // @ts-expect-error O3 outputs need the model's `read`
 model('probe', { description: 'x', label: 'a', fields: { a: { kind: 'text' } }, outputs: { narrow: { probe: { fields: ['a'] } } } });

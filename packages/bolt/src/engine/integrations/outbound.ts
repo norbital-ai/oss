@@ -1,5 +1,5 @@
 // Outbound conversation messages: queued once, delivered in order, and reported through the sync inbox.
-import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
+import { Clock, Effect, Layer, Predicate, Result, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { Files } from '../ports.ts';
@@ -17,7 +17,7 @@ import { Port } from '../port.ts';
 import { iso, backoffMs } from '../runs/time.ts';
 import { enqueue } from '../runs/queue.ts';
 import type { EngineManifest } from '../manifest.ts';
-import type { Sql, Outcome } from '../contracts.ts';
+import type { Sql } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import { LIMITS } from '../contracts.ts';
@@ -510,7 +510,6 @@ function makeOutbound(cfg: OutboundConfig) {
 			{ ...e, ...extra }
 		);
 		if (res.length > 0) yield* cfg.announce(e.at);
-		return null;
 	});
 
 	return {
@@ -545,14 +544,14 @@ function makeOutbound(cfg: OutboundConfig) {
 			instance: string,
 			providerId: string,
 			report: DeliveryReport
-		): Effect.Effect<Option.Option<Outcome>, EngineError> =>
+		): Effect.Effect<void, EngineError> =>
 			record(
 				'integration = $1 AND provider_id = $2',
 				[instance, providerId],
 				report.reason === undefined && (report.kind === 'bounced' || report.kind === 'failed')
 					? { ...report, reason: report.code ?? report.kind }
 					: report
-			).pipe(Effect.map(Option.fromNullishOr)),
+			),
 		/**
 		 * A reply matched to its sending row by the outbound message's provider id or `thread` (an email's references, a
 		 * chat's quoted message; rule 61); an automatic answer (RFC 3834) is `auto_replied`: recorded, never a reply.
@@ -566,7 +565,7 @@ function makeOutbound(cfg: OutboundConfig) {
 				auto: boolean;
 				message: Json;
 			}
-		): Effect.Effect<Option.Option<Outcome>, EngineError> =>
+		): Effect.Effect<void, EngineError> =>
 			record(
 				`integration = $1 AND (provider_id IN (SELECT jsonb_array_elements_text($2::jsonb)) OR thread IN (SELECT jsonb_array_elements_text($2::jsonb)))`,
 				[instance, JSON.stringify(refs)],
@@ -577,7 +576,7 @@ function makeOutbound(cfg: OutboundConfig) {
 					reply: reply.row
 				},
 				{ reply: reply.message }
-			).pipe(Effect.map(Option.fromNullishOr)),
+			),
 		/** The platform run the outbound pieces queue (rule 48): `runs.platform`. */
 		handlers: { [DELIVER]: (_input: Json) => deliver() }
 	};

@@ -327,90 +327,39 @@ describe('reads', () => {
 	);
 });
 
-describe('document conversion', () => {
-	it.effect('conversion is lazy, sends one declared request and decodes its stored file', () =>
+describe('PDF preview', () => {
+	it.effect('returns PDF bytes from a lazy preview', () =>
 		Effect.gen(function* () {
-			const file = {
-				id: '0199a000-0000-7000-8000-000000000002',
-				name: 'report.pdf',
-				mime: 'application/pdf',
-				size: 12
-			};
-			const { bolt, sent } = yield* client(
-				outcome({ kind: 'committed', output: file, records: [] })
+			const pdf = new TextEncoder().encode('%PDF');
+			const { bolt, sent } = yield* client(() =>
+				new Response(pdf, { headers: { 'content-type': 'application/pdf' } })
 			);
-			const converted = bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' });
+			const preview = bolt.preview_pdf({ markdown: '# Report' }, { page: 'A4' });
 			expect(sent).toHaveLength(0);
-			expect(yield* converted).toEqual(file);
+			expect(yield* preview).toEqual(pdf);
 			expect(sent).toEqual([
 				{
-					callable: 'convert.document',
-					input: {
-						source: { markdown: '# Report' },
-						request: { to: 'pdf', name: 'report.pdf' }
-					},
+					callable: 'convert.previewPdf',
+					input: { source: { markdown: '# Report' }, options: { page: 'A4' } },
 					issuedAt: expect.any(String)
 				}
 			]);
 		})
 	);
-	it.effect('conversion preserves host unavailability and authored refusals', () =>
+	it.effect('reports an unavailable PDF preview as a typed failure', () =>
 		Effect.gen(function* () {
-			const { bolt, sent } = yield* client(() =>
+			const { bolt } = yield* client(() =>
 				Response.json(
 					{ error: { code: 'unavailable', message: 'No document converter is bound.' } },
 					{ status: 503 }
 				)
 			);
-			expect(
-				yield* Effect.flip(
-					bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' })
-				)
-			).toEqual(
+			expect(yield* Effect.flip(bolt.preview_pdf({ markdown: '# Report' }))).toEqual(
 				new Unavailable({
-					facility: 'convert.document',
+					facility: 'convert.previewPdf',
 					reason: 'No document converter is bound.'
 				})
 			);
-			expect(sent).toHaveLength(1);
-			const refused = (yield* client(
-				outcome({ kind: 'refused', code: 'refused', message: 'Closed', field: 'name' })
-			)).bolt;
-			const failure = yield* Effect.flip(
-				refused.convert({ html: '<p>Report</p>' }, { to: 'pdf', name: 'report.pdf' })
-			);
-			expect(failure).toBeInstanceOf(ActRefused);
-			expect(failure).toMatchObject({ code: 'refused', message: 'Closed', field: 'name' });
-		})
-	);
-	it.effect('conversion rejects malformed file answers and noncommitted outcomes', () =>
-		Effect.gen(function* () {
-			for (const answer of [
-				{
-					kind: 'committed',
-					output: { id: 'f1', name: 'report.pdf', mime: 'application/pdf', size: 1 },
-					records: []
-				},
-				{
-					kind: 'committed',
-					output: {
-						id: '0199a000-0000-7000-8000-000000000002',
-						name: 'report.pdf',
-						mime: 'application/pdf',
-						size: { $dec: '1' }
-					},
-					records: []
-				},
-				{ kind: 'conflict', records: [{ model: 'jobs', id: 'j1', fields: ['title'] }] },
-				{ kind: 'unknown', invocation: 'k1' }
-			]) {
-				const { bolt } = yield* client(outcome(answer));
-				expect(
-					yield* Effect.flip(
-						bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' })
-					)
-				).toEqual(new TransportFailed({ status: 0 }));
-			}
 		})
 	);
 });
@@ -506,10 +455,7 @@ describe('acts, starts, uploads and the session', () => {
 						from: null,
 						to: 'Pending',
 						step: 0,
-						reason: 'Review the new job.',
-						changed: undefined,
-						rolledBack: undefined,
-						skipped: undefined
+						reason: 'Review the new job.'
 					}
 				],
 				records: [{ model: 'jobs', id: 'j1', op: 'create' }],
@@ -539,6 +485,18 @@ describe('acts, starts, uploads and the session', () => {
 			});
 		})
 	);
+	it.effect('approval reads reject malformed request views at the wire boundary', () =>
+		Effect.gen(function* () {
+			const malformed = { id: 'ap1', status: 'Pending' };
+			const one = (yield* client(() => Response.json({ value: malformed }))).bolt;
+			const list = (yield* client(() => Response.json({ value: [malformed] }))).bolt;
+			expect(yield* Effect.flip(one.approvals.get('ap1'))).toMatchObject({
+				_tag: 'ProtocolFailed'
+			});
+			expect(yield* Effect.flip(list.approvals.list())).toMatchObject({ _tag: 'ProtocolFailed' });
+		})
+	);
+
 	it.effect('a sign-in refusal is a Refusal with the host message', () =>
 		Effect.gen(function* () {
 			const { bolt } = yield* client(() =>

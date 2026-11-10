@@ -35,7 +35,7 @@ import type { Bridge } from '../services.ts';
 import { layered, type EngineManifest } from '../manifest.ts';
 import type { GuestShape as GuestPort } from '../services.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
-import { LIMITS } from '../contracts.ts';
+import { LIMITS, utf8Bytes } from '../contracts.ts';
 import { SerializationReplay, type EngineError } from '../errors.ts';
 import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { BoltError, fromStore } from '../../protocol/errors.ts';
@@ -43,10 +43,6 @@ import { admitMove, readsAny } from '../access/authority.ts';
 import { catalogOf } from '../access/pred.ts';
 import { approvalHook } from '../approvals/approvals.ts';
 
-const MiB = 1024 * 1024;
-/** One act holds every row until its single insert: the cell's safe input budget, measured at ten-chunk bulk creates. */
-const ACT_INPUT_BYTES = 8 * MiB;
-const ACT_ROWS = 4_000;
 import { readHistory } from '../query/history.ts';
 import { heldFields, holders } from '../approvals/lock.ts';
 import { Snapshot } from '../approvals/snapshot.ts';
@@ -71,7 +67,7 @@ export type { ActRequest, ActResult } from '../services.ts';
 import { indexColumn, nullRowSql, q, SYSTEM_COLUMNS, type Catalog } from '@norbital-ai/store';
 import { evaluate, type EvalEnv } from '../query/eval.ts';
 import { toPred } from '../access/pred.ts';
-import { compileGets } from '@norbital-ai/store';
+import { compileGets, grantSql } from '@norbital-ai/store';
 import {
 	coalescing,
 	memoReads,
@@ -80,7 +76,7 @@ import {
 	readTargets,
 	ReadDeps
 } from '../query/engine.ts';
-import { anyOutputScope, composable, readOptions } from '../query/reader.ts';
+import { anyOutputScope, composable, readOptions, resolverOf } from '../query/reader.ts';
 import { constraintIndex } from '../schema/plan.ts';
 import { type ConstraintMeta } from '@norbital-ai/store';
 import {
@@ -352,22 +348,22 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	if (inputs === undefined)
 		return none(refused('invalidInput', `${r.model}.${r.verb} takes an array of rows.`));
 	// A bulk act holds every row until one atomic insert: refuse before the flattener copies them past the cell's budget.
-	let inputBytes = 0;
-	for (const input of inputs) {
-		inputBytes += JSON.stringify(input)?.length ?? 0;
-		if (inputBytes > ACT_INPUT_BYTES)
+	let inputBytes = 2;
+	for (const [index, input] of inputs.entries()) {
+		inputBytes += utf8Bytes(JSON.stringify(input)) + (index === 0 ? 0 : 1);
+		if (inputBytes > LIMITS.act.inputBytes)
 			return none(
 				refused(
 					'overflow',
-					`An act writes at most ${ACT_INPUT_BYTES / MiB} MiB of input; split the work into smaller acts.`
+					`An act writes at most ${LIMITS.act.inputBytes / 1_048_576} MiB of input; split the work into smaller acts.`
 				)
 			);
 	}
-	if (inputs.length > ACT_ROWS)
+	if (inputs.length > LIMITS.act.rows)
 		return none(
 			refused(
 				'overflow',
-				`An act writes at most ${ACT_ROWS} rows; split the work into smaller acts.`
+				`An act writes at most ${LIMITS.act.rows} rows; split the work into smaller acts.`
 			)
 		);
 	if (byId) {
@@ -436,59 +432,25 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 						path
 					);
 			}
-		} else if (r.verb === 'update')
-			f.update(
-				r.model,
-				sel,
-				(
-					x as {
-						target?: Json;
-					}
-				).target,
-				(
-					x as {
-						set?: Json;
-					}
-				).set,
-				r.observed?.[
-					String(
-						(
-							x as {
-								target?: Json;
-							}
-						).target
-					)
-				] ?? null,
-				path
-			);
-		else
-			f.delete(
-				r.model,
-				(
-					x as {
-						target?: Json;
-					}
-				).target,
-				r.observed?.[
-					String(
-						(
-							x as {
-								target?: Json;
-							}
-						).target
-					)
-				] ?? null,
-				path
-			);
+		} else {
+			if (!Predicate.isObject(x)) {
+				f.problems.push({ path, message: 'expected an object' });
+				return;
+			}
+			const target = x['target'];
+			const observed = r.observed?.[String(target)] ?? null;
+			if (r.verb === 'update') f.update(r.model, sel, target, x['set'], observed, path);
+			else f.delete(r.model, target, observed, path);
+		}
 	});
 	sync?.deletes.forEach((id, i) => f.delete(r.model, id, null, ['deletes', i]));
-	if (f.problems.length > 0) {
-		const [first] = f.problems;
+	const [first] = f.problems;
+	if (first !== undefined) {
 		return none(
 			refused(
 				'invalidInput',
 				f.problems.map((p) => `${p.path.join('.') || 'input'}: ${p.message}`).join('; '),
-				first!.path
+				first.path
 			)
 		);
 	}
@@ -1658,7 +1620,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			if (row === undefined) return stop(refused('notFound', 'The record does not exist.', c.path));
 			if (c.op === 'delete') {
 				const locked = modelLock(env, m, c.model, row);
-				if (locked !== null) return stop(refused('locked', locked, c.path));
+				if (locked !== null) return stop(refused('locked', locked.message, c.path));
 				writes.push({
 					write: {
 						model: c.model,
@@ -1986,7 +1948,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 	const queued = embed.stale
 		? [embedQueued(minter(`${r.invocationId}:embed`, b.now)(), b.now)]
 		: []; // hook:integrations
-	if (JSON.stringify(plain).length > LIMITS.changeSetBytes)
+	if (utf8Bytes(JSON.stringify(plain)) > LIMITS.changeSetBytes)
 		return stop(refused('overflow', 'The change is too large for one act.'));
 	const priorGuards = r.mode._tag === 'Record' ? undefined : r.readGuards;
 	const tables = [
@@ -2078,12 +2040,23 @@ export const hasCallback = (m: EngineManifest, model: string, verb: Write['op'])
 	verb === 'delete'
 		? m.exposures[model]?.delete?.check === true
 		: m.exposures[model]?.[verb]?.transform === true;
-/** A model-level lock over the row's own fields, or `null`: application-layer immutability, never a database grant. */
-function modelLock(env: EvalEnv, m: EngineManifest, model: string, row: RowData): string | null {
-	const locked = m.models[model]?.locked;
-	return locked !== undefined && evaluate(env, model, toPred(m, model, locked), row)
-		? 'This record is locked and cannot be changed.'
-		: null;
+/** Without fields this checks deletion. An update checks only the fields it changes. */
+function modelLock(
+	env: EvalEnv,
+	m: EngineManifest,
+	model: string,
+	row: RowData,
+	fields?: readonly string[]
+): { code: 'locked'; message: string; field: string } | null {
+	for (const { where, except } of Object.values(m.models[model]?.locks ?? {})) {
+		const field =
+			fields === undefined || (except?.length ?? 0) === 0
+				? 'id'
+				: fields.find((name) => !except?.includes(name));
+		if (field !== undefined && evaluate(env, model, toPred(m, model, where), row))
+			return { code: 'locked', message: 'This record is locked and cannot be changed.', field };
+	}
+	return null;
 }
 /** Rules 34, 40, 41 on an update's changed fields: `to` edges, per-state `edit`, and an owned child's fixed parent key. */
 function modelRules(
@@ -2097,8 +2070,8 @@ function modelRules(
 	message: string;
 	field: string;
 } | null {
-	const locked = modelLock(env, m, model, row);
-	if (locked !== null) return { code: 'locked', message: locked, field: 'id' };
+	const locked = modelLock(env, m, model, row, Object.keys(set));
+	if (locked !== null) return locked;
 	for (const [field, kind] of Object.entries(m.models[model]?.fields ?? {}))
 		if (kind.kind === 'enum' && kind.transitions !== undefined && set[field] !== undefined) {
 			const from = String(row[field] ?? ''),
@@ -2326,16 +2299,23 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		const arms = Object.values(authority.models[parent.model]?.read ?? {}).flatMap(
 			(paths) => paths[path] ?? []
 		);
-		const layer = authority.admin || arms.length === 0 ? undefined : arms;
-		// ponytail: in-memory over the stored row; a relation predicate in a layer scope denies, read it through the reader if one is needed
-		const inLayer = layer?.some((arm) => {
-			try {
-				return evaluate({ cat, bindings, authority }, model, arm.where, row);
-			} catch {
-				return false;
-			}
-		});
-		if (inLayer === false) return null;
+		if (!authority.admin && arms.length > 0) {
+			const statement = yield* grantSql(
+				cat,
+				model,
+				{
+					t: 'and',
+					of: [
+						{ t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } },
+						{ t: 'cmp', field: 'revision', op: 'eq', arg: { _tag: 'Lit', value: row['revision'] } },
+						{ t: 'or', of: arms.map((arm) => arm.where) }
+					]
+				},
+				{ resolve: resolverOf(bindings, authority), tz: bindings.tz }
+			).pipe(Effect.mapError(fromStore));
+			const [admitted] = yield* e.db.read([statement]);
+			if (!admitted?.rows.length) return null;
+		}
 		owner = parent.model;
 		fk = relation.column;
 		const relationship = m.relationships[`${model}.${fk}`];
@@ -2440,6 +2420,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 		if (remote.includes(field)) reasons.push('syncOwned');
 		if (field !== fk && m.relationships[`${model}.${field}`]?.owned) reasons.push('ownedParent');
 		if (field === state) {
+			if (modelLock(env, m, model, row, [field]) !== null) reasons.push('stateLocked');
 			if (moves.length === 0) reasons.push(transitions.length === 0 ? 'stateLocked' : 'noGrant');
 		} else if (modelRules(env, m, model, row, { [field]: row[field] ?? null })?.code === 'locked')
 			reasons.push('stateLocked');
@@ -2466,6 +2447,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 				? yield* opened(probe, authority, bindings, model, 'delete', id)
 				: 'deny';
 	const deleteReasons = [...restrictions, ...parentReasons];
+	if (modelLock(env, m, model, row) !== null) deleteReasons.push('stateLocked');
 	if (!deleteDeclared || deleteGate !== 'allow') deleteReasons.push('noGrant');
 	return {
 		model,
@@ -2482,8 +2464,7 @@ export const recordCapabilities = Effect.fn('Bolt.recordCapabilities')(function*
 			proposal:
 				deleteDeclared &&
 				deleteGate === 'approve' &&
-				restrictions.length === 0 &&
-				parentReasons.length === 0,
+				deleteReasons.every((reason) => reason === 'noGrant'),
 			reasons: [...new Set(deleteReasons)]
 		},
 		moves: state !== undefined && fields[state]?.writable ? { [state]: moves } : {},

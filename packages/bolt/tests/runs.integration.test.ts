@@ -72,8 +72,7 @@ const base: EngineManifest = {
 	relationships: {},
 	exposures: {
 		quotes: {
-			read: { quotes: { fields: 'all' } },
-			outputs: { titles: { quotes: { fields: ['title'] } } },
+			outputs: { default: { quotes: { fields: 'all' } }, titles: { quotes: { fields: ['title'] } } },
 			create: { columns: { quotes: ['title', 'status'] } },
 			update: { columns: { quotes: ['title', 'status'] } },
 			delete: {},
@@ -83,7 +82,7 @@ const base: EngineManifest = {
 	integrations: {},
 	teams: { ops: ['ops'], branch: { parent: 'ops', policies: [] }, nobody: [] },
 	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
 	customFields: {},
@@ -92,7 +91,7 @@ const base: EngineManifest = {
 		ops: {
 			description: 'Ops',
 			grants: { quotes: { read: true, create: true, update: true, delete: true } },
-			automations: ['classify']
+			capabilities: { automations: ['classify'] }
 		},
 		// a writer that reads the `titles` output only: its effects see the rows it wrote as that output
 		clerk: {
@@ -109,13 +108,13 @@ const base: EngineManifest = {
 		limited: {
 			description: 'Read quote titles and start a manual review',
 			grants: { quotes: { outputs: { titles: true } } },
-			automations: ['review']
+			capabilities: { automations: ['review'] }
 		},
 		writer: {
 			description: 'Write quotes; starts nothing',
 			grants: { quotes: { read: true, create: true } }
 		},
-		starter: { description: 'Starts a retitle', grants: {}, automations: ['retitle'] },
+		starter: { description: 'Starts a retitle', grants: {}, capabilities: { automations: ['retitle'] } },
 		// the requestor's own quotes: in a run the requestor is the system identity, which owns none
 		own: {
 			description: "Retitle the requestor's quotes",
@@ -162,7 +161,7 @@ const base: EngineManifest = {
 		},
 		hook: {
 			description: 'A webhook',
-			on: { webhook: '/in', verify: { scheme: 'bearer', secret: 'HOOK' } },
+			on: [{ webhook: '/in', verify: { scheme: 'bearer', secret: 'HOOK' } }],
 			policies: ['ops']
 		}
 	}
@@ -370,8 +369,7 @@ const sharedDb = TenantDb.typed({
 				...batch.statements.map((x) => ({ at: shared.clock.ms, text: x.text, params: x.params }))
 			);
 			return current().transaction(batch);
-		}),
-	session: () => Effect.suspend(() => current().session())
+		})
 });
 const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
@@ -596,11 +594,11 @@ describe('run browser scope', () => {
 			const agents = Context.get(w.context, Agents),
 				owner = randomUUID(),
 				conversation = yield* agents.start({ owner });
-			yield* w.sql(
-				`INSERT INTO sys_message (id, conversation, role, content, text, seq)
+			yield* w.db.write({
+				text: `INSERT INTO sys_message (id, conversation, role, content, text, seq)
 				VALUES ('claim-step', $1, 'tool', '{"result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
-				[conversation]
-			);
+				params: [conversation]
+			});
 			expect(yield* agents.claimPageAction('claim-step')).toBe(true);
 			expect(yield* agents.claimPageAction('claim-step')).toBe(false);
 		})
@@ -625,11 +623,11 @@ describe('run browser scope', () => {
 			const agents = Context.get(w.context, Agents),
 				owner = randomUUID(),
 				conversation = yield* agents.start({ owner });
-			yield* w.sql(
-				`INSERT INTO sys_message (id, conversation, role, content, text, seq)
+			yield* w.db.write({
+				text: `INSERT INTO sys_message (id, conversation, role, content, text, seq)
 				VALUES ('page-step', $1, 'tool', '{"result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
-				[conversation]
-			);
+				params: [conversation]
+			});
 			yield* agents.pageResult('page-step', { ok: true, note: 'Pressed “Open”.' });
 			expect(
 				yield* w.sql(
@@ -660,7 +658,10 @@ describe('lost leases (rules 52a, 70)', () => {
 				entered = yield* Deferred.make<void>();
 				// the process dies: its fiber ends, it writes nothing, and the next boot finds the run still running
 				yield* Fiber.interrupt(ticking);
-				yield* w.sql(`UPDATE sys_run SET error = NULL WHERE id = 'dropped'`);
+				yield* w.db.write({
+					text: `UPDATE sys_run SET error = NULL WHERE id = 'dropped'`,
+					params: []
+				});
 				yield* w.r.boot();
 				expect(starts).toBe(drop);
 			}

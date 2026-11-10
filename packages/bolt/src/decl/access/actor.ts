@@ -1,5 +1,5 @@
 // `Actor` (§3.9): who a request runs as. Members hold their authored team policies; the others are static.
-import type { AppName, AutomationName, EnvoyName, TeamName } from '../names.ts';
+import type { AppName, AutomationName, TeamName } from '../names.ts';
 import type { Id, RecordRef } from '../values.ts';
 
 /** A transport address of an outside sender (a phone number, a Telegram id, an email address). */
@@ -12,6 +12,18 @@ export type Handle = string;
 export type PlatformAutomation =
 	'notifications.deliver' | 'bolt.notify' | 'bolt.membership' | 'bolt.embed' | 'bolt.index';
 
+type Member = {
+	kind: 'member';
+	id: Id<'sys_user'>;
+	email: string | null;
+	phone: string | null;
+	external: boolean;
+	teams: readonly TeamName[];
+	teamPath: readonly string[];
+	admin: boolean;
+	party: RecordRef | null;
+};
+
 /**
  * Who a request runs as (§3.9), discriminated by `kind`: a `member` (with teams and admin), an `envoy` answering a sender on
  * the instance it is deployed on, a public `visitor` of an app, an `apiKey`, or the `system` running an automation, a
@@ -21,25 +33,16 @@ export type PlatformAutomation =
  * its `requestor.*` operands name no member, party or team, so a requestor-scoped grant matches nothing.
  */
 export type Actor =
-	| {
-			kind: 'member';
-			id: Id<'sys_user'>;
-			email: string | null;
-			phone: string | null;
-			external: boolean;
-			teams: readonly TeamName[];
-			teamPath: readonly string[];
-			admin: boolean;
-			party: RecordRef | null;
-	  }
+	| Member
 	| {
 			kind: 'envoy';
-			envoy: EnvoyName;
+			envoy: Id<'sys_envoy'>;
 			instance: Id<'sys_integration'>;
 			sender: Handle;
 			member: Id<'sys_user'> | null;
+			linked?: Member;
 	  } // P32: the linked sender, either audience
-	| { kind: 'visitor'; app: AppName; visitor: string }
+	| { kind: 'visitor'; app: AppName; visitor: string; anonymous?: true }
 	| { kind: 'apiKey'; key: Id<'sys_api_key'> }
 	| {
 			kind: 'system';

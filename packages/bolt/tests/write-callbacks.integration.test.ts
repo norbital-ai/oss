@@ -46,7 +46,6 @@ const setup = Effect.gen(function* () {
 				if (batch.rollback !== true) writes++;
 				return db.transaction(batch);
 			}),
-		session: db.session
 	});
 	const engine: WriteEngine = {
 		manifest,

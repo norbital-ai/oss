@@ -1,8 +1,5 @@
 import { describe, expect, it } from '@effect/vitest';
-import { Schema } from 'effect';
-import { IdValue } from '@norbital-ai/std/kind';
-import type { Id } from '../src/decl/values.ts';
-import { approvalFlow, snapshotOf } from '../src/decl/access/policy.ts';
+import { Verdict } from '../src/decl/access/policy.ts';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import {
 	canApprove,
@@ -16,10 +13,6 @@ import { decisionsFor, moveOf, transition } from '../src/engine/approvals/machin
 import { rowApproval } from '../src/engine/approvals/lock.ts';
 import { inboxRequests } from '../src/engine/approvals/inbox.ts';
 import { authority } from './write-fixture.ts';
-
-const MemberId = Schema.declare((value: unknown): value is Id<'sys_user'> =>
-	Schema.is(IdValue)(value)
-);
 
 const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
@@ -103,28 +96,20 @@ describe('approval flows', () => {
 			rowApproval({ ...held, steps: [{ name: 'Manager', teams: [], users: [42] }] })
 		).toBeUndefined();
 	});
-	it('snapshots conditional named steps and direct allow or deny', () => {
-		expect(
-			snapshotOf(
-				approvalFlow()
-					.if(false, (flow) =>
-						flow.step('Manager', {
-							users: [Schema.decodeUnknownSync(MemberId)('0199a000-0000-7000-8000-000000000002')]
-						})
-					)
-					.else((flow) => flow.step('HR', { teams: ['finance'] }))
-					.supersededBy(['sales'])
-			)
-		).toEqual({
-			kind: 'steps',
-			steps: [{ name: 'HR', teams: ['finance'], users: [] }],
-			superseded_by: ['sales']
+	it('snapshots literal steps and refuses an empty route', () => {
+		const verdict = Verdict.approve({
+			steps: [{ name: 'HR', teams: ['finance'] }],
+			superseded_by: ['sales', 'sales']
 		});
-		expect(snapshotOf(approvalFlow().allow())).toEqual({ kind: 'allow' });
-		expect(snapshotOf(approvalFlow().deny('Not available'))).toEqual({
-			kind: 'deny',
-			message: 'Not available'
+		expect(Verdict.dataOf(verdict)).toEqual({
+			kind: 'approve',
+			flow: {
+				kind: 'steps',
+				steps: [{ name: 'HR', teams: ['finance'], users: [] }],
+				superseded_by: ['sales']
+			}
 		});
+		expect(() => Reflect.apply(Verdict.approve, undefined, [{ steps: [] }])).toThrow();
 	});
 	it('allows the named user or current step team, without inheriting parent authority', () => {
 		expect(canApprove(request, as('manager', 'staff'))).toBe(true);

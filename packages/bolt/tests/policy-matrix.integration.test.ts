@@ -61,14 +61,13 @@ const manifest = Result.getOrThrow(
 			'component_entries.employment': { to: 'employments', inverse: 'entries' }
 		},
 		exposures: Object.fromEntries(
-			Object.keys(models).map((c) => [c, { read: { [c]: { fields: 'all' } } }])
+			Object.keys(models).map((c) => [c, { outputs: { default: { [c]: { fields: 'all' } } } }])
 		),
 		integrations: {},
 		policies: {},
 		teams: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

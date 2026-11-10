@@ -1,5 +1,6 @@
 // What server code may cause beyond its own write (§3.3.9 effects, §5.8): runs, notices, and the automation-only I/O
 // facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
+import { Schema } from 'effect';
 import type { Actor } from '../access/actor.ts';
 import type { StartableName } from '../access/policy.ts';
 import type { Eff } from '../ctx.ts';
@@ -89,7 +90,7 @@ export type RunTriggerView =
 			readonly agent?: true;
 	  };
 /**
- * A run as `$bolt.runs` and the run ledger show it: cause and trigger, status, due and start time, progress, result
+ * A run as `ctx.runs` and the run ledger show it: cause and trigger, status, due and start time, progress, result
  * and error. `trigger` is null on an effect's or platform run.
  */
 export type RunRow<O = unknown> = {
@@ -234,10 +235,10 @@ export type Browser = {
 	close: Call<[], void>;
 };
 /**
- * `browserStart(ctx, use)`: runs `use` with the run's browser; the tab closes when the run's scope exits,
+ * `browser_start(ctx, use)`: runs `use` with the run's browser; the tab closes when the run's scope exits,
  * including on failure or interruption. This is the only browser a run gets.
  */
-export const browserStart = <A>(
+export const browser_start = <A>(
 	ctx: { readonly browser: Browser },
 	use: (browser: Browser) => Eff<A>
 ): Eff<A> => use(ctx.browser);
@@ -317,22 +318,14 @@ type FileFieldOf<C> = {
 }[keyof Columns<C> & string];
 /** Where a stored file belongs: a model's file field, or an automation's run (collected with it). */
 type FileOwner = { [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | StartableName;
-/** One worksheet: its name and rows of cell values. */
-type Sheet = {
-	readonly name: string;
-	readonly rows: readonly (readonly (string | number | boolean | null)[])[];
-};
 /** `ctx.files`: stored files by reference; bytes only on request. */
 export type Files = {
 	meta: Call<[ref: FileRef], FileMeta>;
 	/** At most `max` bytes (default and ceiling 4MiB). */
 	get: Call<[ref: FileRef, options?: { max?: Size }], Uint8Array>;
 	url: Call<[ref: FileRef], string>;
-	text: Call<[ref: FileRef], string>;
-	table: Call<[ref: FileRef], readonly (readonly string[])[]>;
-	sheet: Call<[ref: FileRef], readonly Sheet[]>;
 	image: Call<[ref: FileRef], ImageFacts> &
-		Call<[ref: FileRef, derive: { jpeg: { maxEdge: number } }], FileRef>;
+		Call<[ref: FileRef, derive: { jpeg: { max_edge: number } }], FileRef>;
 	put: Call<[bytes: Uint8Array, options: { name: string; mime: string; for: FileOwner }], FileRef>;
 };
 
@@ -349,7 +342,7 @@ export type ConvertTargets = {
 	epub: {};
 	html: {};
 };
-/** A document format the converter can produce (`bolt.convert`, `ctx.convert.document`, notice attachments, file exports). */
+/** A document format the converter can produce (`ctx.convert.document`, notice attachments, file exports). */
 export type ConvertTarget = keyof ConvertTargets;
 /**
  * The source of a conversion: Markdown (pandoc's dialect, with pipe tables and front matter) or an HTML document. HTML is
@@ -358,17 +351,11 @@ export type ConvertTarget = keyof ConvertTargets;
  */
 export type ConvertSource =
 	{ readonly markdown: string } | { readonly html: string } | { readonly layoutHtml: string };
-/**
- * One declared target, its file name and its options, discriminated by `to`: `reference` only where the format takes
- * one, `page` only for PDF. What a page's `bolt.convert(source, request)` takes: the file it answers is the viewer's own
- * and short-lived (`bolt.fileUrl` downloads it), and calls count against the policy limit key `convert` (default `30/min`).
- */
-export type ConvertRequest = {
-	[T in DeclaredConvertTarget]: { to: T; name: string } & ConvertTargets[T];
-}[DeclaredConvertTarget];
 export type PreviewPdfOptions = Pick<ConvertTargets['pdf'], 'page' | 'landscape'>;
-/** `ctx.convert.document`'s options: a `ConvertRequest` and the owner `for` the stored output belongs to. */
-export type ConvertOptions = ConvertRequest & { for: FileOwner };
+/** A declared target, its file name and options, and the owner of the stored output. */
+export type ConvertOptions = {
+	[T in DeclaredConvertTarget]: { to: T; name: string; for: FileOwner } & ConvertTargets[T];
+}[DeclaredConvertTarget];
 /**
  * `ctx.convert` (optional host capability): only the targets `+workspace.ts` declares under `convert.to` type-check, and
  * the host confirms at start that it serves them. The output is stored like `files.put`'s, owned by `for`.
@@ -404,21 +391,24 @@ export type IngestOptions = {
  * A document ingest's index, derived from its HTML: 1-based lines, the `<section data-page>` and `data-slide` counts, the
  * outline (headings, then page, slide and speaker sections at level 7) with line ranges, the table count and image names.
  */
-export type IngestIndex = {
-	readonly lines: number;
-	readonly pages: number;
-	readonly slides: number;
-	readonly outline: readonly {
-		readonly title: string;
-		readonly level: number;
-		readonly from: number;
-		readonly to: number;
-	}[];
-	readonly tables: number;
-	readonly images: readonly string[];
+export const IngestIndexSchema = Schema.Struct({
+	lines: Schema.Number,
+	pages: Schema.Number,
+	slides: Schema.Number,
+	outline: Schema.Array(
+		Schema.Struct({
+			title: Schema.String,
+			level: Schema.Number,
+			from: Schema.Number,
+			to: Schema.Number
+		})
+	),
+	tables: Schema.Number,
+	images: Schema.Array(Schema.String),
 	/** The PDF pages read for their text that hold none, as ranges. */
-	readonly noText?: string;
-};
+	noText: Schema.optionalKey(Schema.String)
+});
+export type IngestIndex = typeof IngestIndexSchema.Type;
 /** One stretch of speech: its speaker (`S1`, `S2`, … across the whole file), start and end in seconds, and the words. */
 export type TranscriptSegment = {
 	readonly speaker: string;
@@ -603,21 +593,6 @@ export type Ai<Tools> = {
 		],
 		readonly Vector[]
 	>;
-	/** Text to speech (optional host capability, P19), stored like `files.put`'s output and owned by `for`. */
-	speak: Call<[text: string, options: SpeakOptions], FileRef>;
-};
-/** An audio format `ctx.ai.speak` writes. */
-export type SpeechFormat = 'mp3' | 'wav' | 'ogg';
-/**
- * `ctx.ai.speak`'s options: the owner `for` and file `name` (default `speech.<format>`), a provider `voice`, the `format`
- * (default mp3) and a `language` hint that providers reading the language from the text ignore.
- */
-export type SpeakOptions = {
-	for: FileOwner;
-	name?: string;
-	voice?: string;
-	format?: SpeechFormat;
-	language?: string;
 };
 /** A geocoding result: the point, a short label and the full address. */
 export type GeoHit = { readonly point: Point; readonly label: string; readonly address: string };

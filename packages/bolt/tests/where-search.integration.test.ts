@@ -39,14 +39,11 @@ const manifest = Result.getOrThrow(
 		relationships: { 'jobs.site': { to: 'sites', inverse: 'jobs' } },
 		exposures: {
 			sites: {
-				read: { sites: { fields: 'all' } },
+				outputs: { default: { sites: { fields: 'all' } } },
 				create: { columns: { sites: ['name', 'address'] } }
 			},
 			jobs: {
-				read: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } },
-				outputs: {
-					dispatch: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } }
-				},
+				outputs: { default: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } }, dispatch: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } },
 				create: { columns: { jobs: ['title', 'notes', 'site'] } }
 			}
 		},
@@ -61,7 +58,6 @@ const manifest = Result.getOrThrow(
 		teams: {},
 		automations: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

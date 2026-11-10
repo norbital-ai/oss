@@ -3,7 +3,12 @@ import { describe, expect, it } from '@effect/vitest';
 import { dueAt as roundedDueAt, materialize } from '../src/engine/runs/time.ts';
 const dueAt = (now: string, at?: string | { var: string }) => {
 	const ms = Date.parse(now);
-	const when = at === undefined ? now : typeof at === 'string' ? at : materialize(at, { now, today: now.slice(0, 10) });
+	const when =
+		at === undefined
+			? now
+			: typeof at === 'string'
+				? at
+				: materialize(at, { now, today: now.slice(0, 10) });
 	return new Date(roundedDueAt(ms, Date.parse(String(when)))).toISOString();
 };
 import { decodeInput as decode } from '../src/engine/callables/decode.ts';
@@ -15,6 +20,31 @@ const decodeInput = (...args: Parameters<typeof decode>) => {
 const ID = '0199a000-0000-4000-8000-0000000000c1';
 
 describe('decodeInput', () => {
+	it('collects declared references inside shaped JSON', () => {
+		expect(
+			decodeInput(
+				{
+					payload: { kind: 'json', shape: { kind: 'list', of: { kind: 'id', of: 'customers' } } },
+					opaque: { kind: 'json' }
+				},
+				{ payload: [ID], opaque: { customer: ID } }
+			)
+		).toEqual({ problems: [], refs: [{ model: 'customers', id: ID, field: 'payload.0' }] });
+	});
+	it('collects references in the open keys of an object', () => {
+		expect(
+			decodeInput(
+				{
+					customers: {
+						kind: 'object',
+						fields: { label: { kind: 'text' } },
+						rest: { kind: 'id', of: 'customers' }
+					}
+				},
+				{ customers: { label: 'Team', lead: ID } }
+			)
+		).toEqual({ problems: [], refs: [{ model: 'customers', id: ID, field: 'customers.lead' }] });
+	});
 	it('reports every offender at once, refuses excess keys, and collects refs', () => {
 		const spec = {
 			title: { kind: 'text', max: 3 },

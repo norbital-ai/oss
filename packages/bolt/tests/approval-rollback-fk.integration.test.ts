@@ -20,12 +20,12 @@ const manifest: EngineManifest = {
 	},
 	exposures: {
 		folders: {
-			read: { folders: { fields: 'all' } },
+			outputs: { default: { folders: { fields: 'all' } } },
 			create: { columns: { folders: ['name'] } },
 			delete: {}
 		},
 		documents: {
-			read: { documents: { fields: 'all' } },
+			outputs: { default: { documents: { fields: 'all' } } },
 			create: { columns: { documents: ['name', 'folder'] } },
 			update: { columns: { documents: ['name', 'folder'] } }
 		}
@@ -35,7 +35,6 @@ const manifest: EngineManifest = {
 	integrations: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},

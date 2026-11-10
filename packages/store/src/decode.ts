@@ -4,6 +4,7 @@
 import { Array as EffectArray, Effect, Predicate, Result } from 'effect';
 import { KIND } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
+import { duration_seconds, isPlainDate } from '@norbital-ai/std/date';
 import { ELEMENT } from './ir.ts';
 import { compileVar, memberAdmits } from '@norbital-ai/std/vars';
 import type {
@@ -58,7 +59,6 @@ const ORDERED = new Set(
 		.map(([kind]) => kind)
 );
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DEC = /^-?\d+(\.\d+)?$/;
 /** `$search` / `$similar` text, and `$similar`'s nearest rows: 20 unless it says, at most 200. */
 const SEARCH_MAX_TEXT = 500,
@@ -89,11 +89,6 @@ const list = (v: unknown, path: string): Effect.Effect<readonly unknown[], Store
 		: v.length > WHERE_MAX_LIST
 			? invalid(`${path}: more than ${WHERE_MAX_LIST} items`)
 			: Effect.succeed(v);
-const validDate = (v: unknown): v is string =>
-	typeof v === 'string' &&
-	DATE.test(v) &&
-	!Number.isNaN(Date.parse(`${v}T00:00:00Z`)) &&
-	new Date(`${v}T00:00:00Z`).toISOString().startsWith(v);
 
 /** The literal a value of `f`'s kind takes, or what it should have been; `null` is refused (`isNull` says it). */
 function literalOf(f: FieldInfo, v: unknown): { readonly ok: Json } | string {
@@ -120,7 +115,7 @@ function literalOf(f: FieldInfo, v: unknown): { readonly ok: Json } | string {
 			? { ok: v }
 			: 'a duration';
 	if (k === 'bool') return typeof v === 'boolean' ? { ok: v } : 'a boolean';
-	if (k === 'date') return validDate(v) ? { ok: v } : 'an ISO date';
+	if (k === 'date') return isPlainDate(v) ? { ok: v } : 'an ISO date';
 	if (k === 'instant')
 		return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v))
 			? { ok: v }
@@ -351,11 +346,8 @@ const fieldOp = Effect.fnUntraced(function* (
 			return { t: 'text', field: f.name, mode: op, value: v } satisfies Pred;
 		}
 		if (op === 'olderThan' && f.kind === 'instant') {
-			const duration = typeof v === 'string' ? /^(\d+)(s|min|h|d)$/.exec(v) : null;
-			const units: Readonly<Record<string, number>> = { s: 1, min: 60, h: 3600, d: 86400 };
-			const seconds =
-				duration === null ? Number.NaN : Number(duration[1]) * (units[duration[2] ?? ''] ?? 0);
-			if (!Number.isSafeInteger(seconds) || seconds < 0)
+			const seconds = typeof v === 'string' ? duration_seconds(v) : undefined;
+			if (seconds === undefined || !Number.isSafeInteger(seconds))
 				return yield* invalid(`${at}: takes a nonnegative duration`);
 			return { t: 'age', field: f.name, seconds } satisfies Pred;
 		}
@@ -493,8 +485,10 @@ const fieldOps = Effect.fnUntraced(function* (
 
 const AGG = ['sum', 'min', 'max', 'avg'] as const;
 const isAgg = (q: string): q is (typeof AGG)[number] => AGG.some((a) => a === q);
-const MIN_MAX = ['int', 'decimal', 'money', 'sum', 'count', 'duration', 'date', 'instant'];
-const SUMMABLE = ['int', 'decimal', 'money', 'sum', 'count', 'duration'];
+const SUMMABLE = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration']);
+/** Whether a related row's scalar field can feed a filter aggregate. */
+export const canAggregateWhere = (kind: string, op: (typeof AGG)[number]): boolean =>
+	SUMMABLE.has(kind) || ((op === 'min' || op === 'max') && (kind === 'date' || kind === 'instant'));
 /** Normalizes a `Where` literal over model `m`, strictly: the first fault is `invalid` with its path. */
 export const where: (
 	cat: Catalog,
@@ -584,9 +578,8 @@ export const where: (
 						typeof name === 'string' && !name.includes('.')
 							? (yield* modelInfo(cat, rel.child)).fields.get(name)
 							: undefined;
-					const kinds = q === 'min' || q === 'max' ? MIN_MAX : SUMMABLE;
-					if (g === undefined || g.many || !kinds.includes(g.kind))
-						return yield* invalid(`${qa}.of: names a child field of ${kinds.join(', ')}`);
+					if (g === undefined || g.many || !canAggregateWhere(g.kind, q))
+						return yield* invalid(`${qa}.of: names a scalar child field supported by ${q}`);
 					const cmps = es.filter(([k]) => k !== 'of');
 					if (cmps.length === 0) return yield* invalid(`${qa}: compares with eq…gte`);
 					for (const [op, lit] of cmps) {
@@ -723,7 +716,8 @@ export const page = (
 };
 const SORTABLE_SYSTEM = new Set(['created_at', 'updated_at']);
 const SYSTEM = new Set<string>(SYSTEM_COLUMNS);
-const UNSORTABLE = new Set([
+/** Kinds that cannot be used as a scalar sort key. */
+export const UNSORTABLE: ReadonlySet<string> = new Set([
 	'json',
 	'list',
 	'object',

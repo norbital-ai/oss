@@ -213,10 +213,14 @@ export function observeOnce<A, E>(
 }
 
 /** A query's component reads subscribe; its Promise and Effect edges read once outside component reactivity. */
-export function reactiveQuery<A, E>(effect: Effect.Effect<A, E>, stream: Stream.Stream<A, E>) {
-	let value = Option.none<A>();
+export function reactiveQuery<A, E>(
+	effect: Effect.Effect<A, E>,
+	stream: Stream.Stream<A, E>,
+	initial = Option.none<A>()
+) {
+	let value = initial;
 	let failure: E | undefined;
-	let loading = true;
+	let loading = Option.isNone(initial);
 	const waiting = new Set<{ resolve(value: A): void; reject(error: E): void }>();
 	const track = createSubscriber((update) => {
 		const fiber = forked(

@@ -1,6 +1,6 @@
 import type { RowData } from '../contracts.ts';
 const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => ({ text, params });
-// Envoys (§4.4, P22, rules 57–60; authority by P32). An envoy is a source role (`src/agent/envoy/+<id>.envoy.ts`)
+// Envoys (§4.4, P22, rules 57–60; authority by P32). An envoy is a runtime `sys_envoy` row
 // deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
 // `envoy` actor on that instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
 // crash between ingest and admission loses no turn. Admission reads the instance and the envoy's spec as they are now
@@ -14,7 +14,6 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // compiles — a group's the envoy's policies alone, a linked member's DM theirs joined (`dm: 'union'`) or bound (`'envoy'`).
 import { Clock, Context, Effect, FiberSet, Layer, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
-import type { EnvoySpec } from '../../decl/runtime/agent.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
 import { chargesFor, RateWindows } from '../access/rate.ts';
@@ -38,7 +37,7 @@ import type { EngineError } from '../errors.ts';
 import { TurnHandlers } from '../agent/turns.ts';
 import { Authorities } from '../identity/actor.ts';
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
-import { envoySpec } from './spec.ts';
+import { envoySpec, type EnvoySpec } from './spec.ts';
 import { DELIVER, EPOCH } from '../integrations/outbound.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue, nextDue } from '../runs/queue.ts';
@@ -179,7 +178,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		)
 			return { admission: 'ignored' };
 		const envoy = r['envoy'],
-			spec = yield* envoySpec(m, db, envoy);
+			spec = yield* envoySpec(db, envoy);
 		const name = String(r['definition']),
 			def = definitionOf(m, name),
 			conv = def === undefined ? undefined : conversationOf(def);

@@ -2,9 +2,8 @@
 // `onConflict`, transform-filled create fields, custom `default`/`many`, untagged unions. Each `@ts-expect-error` is a
 // planted mistake.
 import { Effect } from 'effect';
-import { Refusal } from '../../src/decl/errors.ts';
-import { automation, customField, model } from '../../src/index.ts';
-import type { AutomationCtx, Insert } from '../../src/index.ts';
+import { automation, custom_field, model } from '../../src/index.ts';
+import type { AutomationCtx, CreateInput } from '../../src/index.ts';
 import type { ValueOf } from '../../src/decl/fields.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
@@ -15,7 +14,7 @@ type Flat<T> = { [K in keyof T]: T[K] };
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // (1) automations run named similarity searches (declared queries, and their `refuse`, are gone)
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
 		const near = yield* ctx.query({ orders: {
@@ -33,14 +32,14 @@ automation('orders_submit', {
 		yield* ctx.query({ orders: { search: { by_colour: { lab: 'red' } }, limit: 1 } });
 	}
 });
-is<Eq<'refuse' extends keyof AutomationCtx ? 1 : 0, 0>>(); // automations have no refuse
+is<Eq<'refuse' extends keyof AutomationCtx ? 1 : 0, 1>>();
 
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
 		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
 		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
+			return yield* ctx.refuse('Choose an existing orders record.');
 		yield* ctx.act(
 			'orders.update',
 			[{ target: target.id, set: { note: 'observed' } }],
@@ -56,7 +55,7 @@ automation('orders_submit', {
 });
 
 // (2) upsert from an automation takes onConflict
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const [notices, notes] = yield* Effect.all([
@@ -76,7 +75,7 @@ automation('orders_renote', {
 		return 1;
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const notices = yield* ctx.query({ notices: { fields: ['id'] } });
@@ -91,11 +90,11 @@ automation('orders_renote', {
 // (4) a create field the transform fills is optional in the input
 is<
 	Eq<
-		Flat<Insert<'customers'>>,
+		Flat<CreateInput<'customers'>>,
 		{ readonly name?: string; readonly email?: string | null; readonly tier?: 'basic' | 'gold' }
 	>
 >();
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		yield* ctx.act('customers.create', [{ email: 'a@b.c' }]);
@@ -127,7 +126,7 @@ model('probe', {
 });
 
 // (6) an untagged scalar union
-customField('scalar_variant', {
+custom_field({
 	description: 'x',
 	shape: {
 		kind: 'object',
@@ -147,7 +146,7 @@ is<
 		number | string
 	>
 >();
-customField('rating', {
+custom_field({
 	description: 'x',
 	// @ts-expect-error K2 an untagged union arm of unknown kind
 	shape: { kind: 'union', of: [{ kind: 'bool' }, { kind: 'nmber' }] }

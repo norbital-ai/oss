@@ -29,6 +29,10 @@
 		"lint": {
 			"dependsOn": ["^build", "^lint"]
 		},
+		// UI's test fixtures exercise the built Bolt page client. This dependency is test-only.
+		"@norbital-ai/ui#lint": {
+			"dependsOn": ["^build", "^lint", "@norbital-ai/bolt#build"]
+		},
 		"types:compat": {
 			"dependsOn": ["^build"]
 		}

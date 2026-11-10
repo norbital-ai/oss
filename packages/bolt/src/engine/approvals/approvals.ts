@@ -8,7 +8,6 @@ import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { bindingsAt } from '../query/reader.ts';
-import type { ApprovalStep } from '../../decl/access/policy.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	Approvals,
@@ -56,6 +55,11 @@ import { coalescing } from '../query/engine.ts';
 import { readHistory } from '../query/history.ts';
 import { HistorySnapshotSchema } from '../../protocol/record-contracts.ts';
 import {
+	ApprovalLogFields,
+	ApprovalStateSchema,
+	type ApprovalView
+} from '../../protocol/approval-view.ts';
+import {
 	actorId,
 	actorRef,
 	affectedTables,
@@ -94,19 +98,6 @@ const STATUS = {
 	Superseded: 'SUPERSEDED',
 	Withdrawn: 'WITHDRAWN'
 } as const satisfies { [S in ApprovalState]: string };
-// ponytail: `bolt_approvals.state` keeps `Rejected` for a withdrawn request (closed, rolled back) and its last log
-// entry's `to` names `Withdrawn` (`toStored`, history's `request_state`): migrations evolve engine functions only
-// (bolt-cli `runtimeFunctions`), never a source table's CHECK. Store the state itself once a table constraint can migrate.
-const storedState = (state: ApprovalState) => (state === 'Withdrawn' ? 'Rejected' : state);
-const State = Schema.Literals([
-	'Pending',
-	'ChangesRequested',
-	'Approved',
-	'Rejected',
-	'Superseded',
-	'Withdrawn'
-]);
-
 // stored `records` entries keep their `collection` key (the audit trigger reads it); the engine speaks `model`
 const Entry = Schema.Struct({
 	model: Schema.String,
@@ -114,50 +105,11 @@ const Entry = Schema.Struct({
 	op: Schema.Literals(['create', 'update', 'delete']),
 	before: Schema.NullOr(Schema.Number)
 }).pipe(Schema.encodeKeys({ model: 'collection' }));
-const LogEntry = Schema.Struct({
-	move: Schema.Literals([
-		'request',
-		'approve',
-		'reject',
-		'requestChanges',
-		'resubmit',
-		'supersede',
-		'withdraw'
-	]),
-	by: Schema.String,
-	/** The automation whose run asked (`by` names only that run): any of its runs may withdraw the request. */
-	automation: Schema.optionalKey(Schema.String),
-	at: Schema.String,
-	from: Schema.NullOr(State),
-	to: State,
-	step: Schema.Number,
-	reason: Schema.NullOr(Schema.String),
-	/** A resubmission's changed fields: the root record's by name, any other held row's as `<model>.<field>`. */
-	changed: Schema.optionalKey(Schema.Array(Schema.String)),
-	rolledBack: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({
-				model: Schema.String,
-				id: Schema.String,
-				action: Schema.Literals(['restored', 'removed', 'recreated'])
-			})
-		)
-	),
-	skipped: Schema.optionalKey(
-		Schema.Array(
-			Schema.Struct({
-				model: Schema.String,
-				id: Schema.String,
-				field: Schema.String,
-				reason: Schema.String
-			})
-		)
-	)
-});
+const LogEntry = Schema.Struct({ ...ApprovalLogFields, by: Schema.String });
 type LogEntry = typeof LogEntry.Type;
 const StoredRow = Schema.Struct({
 	id: Schema.String,
-	state: State,
+	state: ApprovalStateSchema,
 	step: Schema.Number,
 	requestor: Schema.String,
 	requestor_user: Schema.NullOr(Schema.String),
@@ -184,43 +136,7 @@ type Refusal = Extract<Outcome, { kind: 'refused' }>;
 type Conflict = Extract<Outcome, { kind: 'conflict' }>;
 export type Decision =
 	{ kind: 'decided'; requestId: string; status: ApprovalState } | Refusal | Conflict;
-type Who = { ref: string; name: string | null };
-/** The approval view (§3.8, spec §7): the request, its named steps, every interaction, the held records and the viewer's decisions. */
-export type ApprovalView = {
-	id: string;
-	model: string;
-	record: string;
-	action: 'create' | 'update' | 'delete';
-	at: string;
-	status: ApprovalState;
-	step: number;
-	steps: readonly ApprovalStep[];
-	superseded_by: readonly string[];
-	/** Current source labels for the snapshot's team handles; labels never affect decision eligibility. */
-	teamNames: Readonly<Record<string, string>>;
-	/** The names of the snapshot's `users` approvers. */
-	userNames: Readonly<Record<string, string>>;
-	requestor: Who;
-	/** Every transition, oldest first: the timeline's back-and-forth. */
-	log: readonly {
-		move: LogEntry['move'];
-		by: Who;
-		at: string;
-		from: ApprovalState | null;
-		to: ApprovalState;
-		step: number;
-		reason: string | null;
-		changed: LogEntry['changed'];
-		rolledBack: LogEntry['rolledBack'];
-		skipped: LogEntry['skipped'];
-	}[];
-	/** The records the provisional change holds (the checkpoint): root first. */
-	records: readonly { model: string; id: string; op: 'create' | 'update' | 'delete' }[];
-	/** The decisions the viewer may take now — the state machine's own answer, so buttons match the engine. */
-	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
-	mine: boolean;
-	participant: boolean;
-};
+export type { ApprovalView } from '../../protocol/approval-view.ts';
 export type DecideInput = {
 	requestId: string;
 	decision: ApprovalDecision;
@@ -784,7 +700,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 						params: [JSON.stringify(ids)]
 					});
 		const name = new Map(names.map((n) => [n.id, n.name]));
-		const who = (ref: string): Who => ({
+		const who = (ref: string): ApprovalView['requestor'] => ({
 			ref,
 			name: ref.startsWith(member) ? (name.get(ref.slice(member.length)) ?? null) : null
 		});
@@ -811,18 +727,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				[...new Set(a.route.steps.flatMap((s) => s.users))].map((id) => [id, name.get(id) ?? id])
 			),
 			requestor: who(a.requestor),
-			log: a.log.map((d) => ({
-				move: d.move,
-				by: who(d.by),
-				at: d.at,
-				from: d.from,
-				to: d.to,
-				step: d.step,
-				reason: d.reason,
-				changed: d.changed,
-				rolledBack: d.rolledBack,
-				skipped: d.skipped
-			})),
+			log: a.log.map(({ by, ...entry }) => ({ ...entry, by: who(by) })),
 			records: a.records.map(({ model, id, op }) => ({ model, id, op })),
 			moves: decisionsFor(a.state, rolesOf(a, auth)),
 			mine: a.requestor === me,

@@ -1,3 +1,4 @@
+import { withEnvoys } from './support/envoys.ts';
 // The agent's conversation controls over `/__bolt/act` (§5.9's generated actions; parity 2.17, 3.2–3.6, 3.13): the
 // author alone revises, reorders and removes queued input; stop, resume, the model class, plan execution and discard;
 // an envoy conversation is read-only here (rule 61) and visible only to its own DM sender, a group's participants, or
@@ -24,32 +25,13 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } }
+			quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } }
 		},
 		policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
-		envoys: {
-			field: {
-				audience: 'private',
-				name: 'Norbius',
-				policies: ['rep'],
-				triage: false,
-				groupMessages: 'mention_or_reply',
-				delegation: 'disabled',
-				task: 'Help.'
-			},
-			desk: {
-				audience: 'public',
-				name: 'Norbius',
-				policies: ['rep'],
-				triage: false,
-				groupMessages: 'disabled',
-				delegation: 'disabled',
-				task: 'Help.'
-			}
-		},
+
 		connections: {
-			field: { integration: 'whatsapp', envoy: 'field' },
-			desk: { integration: 'whatsapp', envoy: 'desk' }
+			field: { integration: 'whatsapp' },
+			desk: { integration: 'whatsapp' }
 		},
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
@@ -60,6 +42,32 @@ const manifest = Result.getOrThrow(
 		customFields: {}
 	})
 );
+const fieldEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const deskEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const runtimeEnvoys = [
+	{
+		id: fieldEnvoy,
+		connections: ['field'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['rep'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Help.'
+	},
+	{
+		id: deskEnvoy,
+		connections: ['desk'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['rep'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		task: 'Help.'
+	}
+] as const;
 
 const reply = (text: string): AiResponse => ({
 	content: text,
@@ -95,7 +103,9 @@ const build = Effect.gen(function* () {
 				})
 			)
 	});
-	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
+	const context = yield* Layer.build(
+		withEnvoys(TestWorkspace.layer({ manifest, ports }), runtimeEnvoys)
+	);
 	const t = Context.get(context, TestWorkspace),
 		agent = Context.get(context, Agents);
 	for (const [id, kind, admin, phone] of [

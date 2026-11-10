@@ -19,14 +19,14 @@ const MOUNT = join(SHELL, `mount${EXT}`);
 /** Where the layer's chunks sit in a client build, beside the workspace's own `assets/*`. */
 export const PLATFORM = 'assets/platform';
 
-/** Bolt's browser entries: the shell, `@norbital-ai/bolt` (and `$bolt`'s page module) and its client subpaths. */
+/** Bolt's browser entries: the shell, `@norbital-ai/bolt` and its client subpaths. */
 const ENTRIES = [
 	'shell/mount',
 	'index',
 	'page/index',
 	'page/integration',
 	'decl/errors',
-	'protocol/cursor'
+	'protocol/index'
 ];
 /** Bare specifiers the layer exposes, resolved as the shell resolves them, else as ui does; one a release lacks is left out. */
 const SPECIFIERS = [
@@ -154,7 +154,8 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 	yield* fs.copy(join(out, PLATFORM), files);
 	const digests: [string, string][] = [];
 	for (const file of yield* tree(files))
-		if (!file.endsWith('.map')) digests.push([file, sha256Hex(yield* fs.readFile(join(files, file)))]);
+		if (!file.endsWith('.map'))
+			digests.push([file, sha256Hex(yield* fs.readFile(join(files, file)))]);
 	const temporary = `${metadata}.${process.pid}`;
 	yield* fs.writeFileString(
 		temporary,

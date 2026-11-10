@@ -19,8 +19,8 @@ export default model('sys_api_key', {
 		created_at: { kind: 'instant', default: { var: 'now' } }
 	},
 	table: { primary: 'text' },
-	read: {
-		sys_api_key: {
+	outputs: {
+		default: {
 			fields: [
 				'name',
 				'prefix',

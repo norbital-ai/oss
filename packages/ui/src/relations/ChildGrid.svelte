@@ -280,11 +280,11 @@ A related-record grid with explicit child operations, original revisions and par
 			? { model: of, id: owner.spec.target.id, relation, revision: owner.revision }
 			: undefined;
 	function permissions(entry: Draft, row: Row): void {
-		if (bolt.recordCapabilities === undefined) return;
+		if (bolt.record_capabilities === undefined) return;
 		const request = ++entry.request;
 		entry.form.expectCapabilities();
 		fork(
-			bolt.recordCapabilities(model, row.id, parentContext()).pipe(
+			bolt.record_capabilities(model, row.id, parentContext()).pipe(
 				Effect.tap((value) =>
 					Effect.sync(() => {
 						if (request !== entry.request) return;
@@ -417,7 +417,7 @@ A related-record grid with explicit child operations, original revisions and par
 					const valid = yield* Effect.forEach(
 						[...drafts.values()],
 						(entry) => {
-							if (entry.removed !== undefined && bolt.recordCapabilities !== undefined) {
+							if (entry.removed !== undefined && bolt.record_capabilities !== undefined) {
 								const capability =
 									entry.removed === 'delete'
 										? entry.form.capabilities?.delete
@@ -530,9 +530,9 @@ A related-record grid with explicit child operations, original revisions and par
 					return;
 				}
 				const capabilities =
-					bolt.recordCapabilities === undefined
+					bolt.record_capabilities === undefined
 						? undefined
-						: yield* bolt.recordCapabilities(model, selected, parentContext());
+						: yield* bolt.record_capabilities(model, selected, parentContext());
 				if (!active) return;
 				if (
 					capabilities !== undefined &&
@@ -630,7 +630,7 @@ A related-record grid with explicit child operations, original revisions and par
 			readonly={!editing}
 			disabled={save === 'parent' && owner?.pending === true}
 			pendingPermissions={!entry.created &&
-				bolt.recordCapabilities !== undefined &&
+				bolt.record_capabilities !== undefined &&
 				entry.form.capabilities === undefined}
 		/>{/if}
 {/snippet}

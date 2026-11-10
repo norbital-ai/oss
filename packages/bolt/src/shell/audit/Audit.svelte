@@ -13,8 +13,8 @@ sits under the table there. -->
 		StructuredData,
 		Table,
 		ToolbarSearch,
-		useKinds,
-		type Kind
+		type Kind,
+		type ModelExposure
 	} from '@norbital-ai/ui';
 	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
 	import { fork, observeOnce } from '@norbital-ai/ui/effect';
@@ -38,15 +38,16 @@ sits under the table there. -->
 		api,
 		admin,
 		locale,
+		catalog,
 		t
 	}: {
 		api: Pick<ShellApi, 'audit' | 'auditDetail' | 'settings'>;
 		admin: boolean;
 		locale: string;
+		catalog: Readonly<Record<string, ModelExposure>>;
 		t: (key: string) => string;
 	} = $props();
 
-	const kinds = useKinds();
 	const narrow = new MediaQuery('max-width: 47.999rem');
 	const WINDOWS = ['day', 'week', 'month', 'all', 'custom'] as const;
 	const SIZES = [25, 50, 100, 200] as const;
@@ -266,7 +267,7 @@ sits under the table there. -->
 	type Given = typeof Given.Type;
 	/** Stored images stay typed so empty, null, missing and false values remain distinct in the shared diff. */
 	const changed = (change: Change, given: Given | undefined) => {
-		const declared = kinds.catalog?.[change.model]?.fields;
+		const declared = catalog[change.model]?.fields;
 		const keep = (field: string) =>
 			!SYSTEM.has(field) &&
 			!declared?.[field]?.hidden &&

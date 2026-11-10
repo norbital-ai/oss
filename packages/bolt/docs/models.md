@@ -41,7 +41,7 @@ export default model('orders', {
 	create: {
 		columns: { orders: ['customer', 'notes'], 'orders.lines': ['product', 'quantity', 'net'] },
 		transform: function* (rows, ctx) {
-			const { customers } = yield* ctx.db.query({
+			const { customers } = yield* ctx.query({
 				customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['blocked'] }
 			});
 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
@@ -180,7 +180,7 @@ import { automation } from '@norbital-ai/bolt';
 import { Effect } from 'effect';
 import { Refusal } from '@norbital-ai/bolt/errors';
 
-export default automation('orders_duplicate', {
+export default automation({
 	description: 'Copy an order as a new draft.',
 	input: { order: { kind: 'id', of: 'orders' } },
 	policies: ['order_duplicating'],
@@ -209,12 +209,7 @@ writes is set explicitly (a `requestor.id` default does not apply). A person or 
 only through a held policy's `automations: ['orders_duplicate']`; code that schedules it needs none. A page starts it with `bolt.start('orders_duplicate', { order: id })` and
 shows its run status. Several independent writes belong in one `ctx.act.many(...)` call when
 they must commit atomically; dependent parent/child creates nest the child rows in the parent's
-write layers. For dependent reads and writes, `ctx.transaction(function* (tx) { ... })` uses one
-native session with read-your-writes and a fixed five-second deadline; it needs no manual
-observations. Its model reads and guarded CRUD retain the run's authority. Inner write answers
-are provisional; the outer answer alone is committed or held. This requires PostgreSQL 17+
-and is explicitly unsupported by PGlite. Keep external I/O outside the callback.
-A whole automation is durable work and may contain several transactions.
+write layers. A transform can carry other rows into the same commit. A whole automation is durable work and may contain several independent commits.
 
 ## Relations
 
@@ -247,7 +242,7 @@ returns no replacement rows. Shared logic is an ordinary helper called by both v
 
 A transform may instead return `{ rows, with, onApproved }`, and a delete check `{ with, onApproved }`,
 each `{ [model]: { create?: [row], update?: [{ target, set, observed? }] } }`: rows of other models the
-write carries into its own transaction. They run their own model's callbacks (`ctx.carriedBy` names the
+write carries into its own transaction. They run their own model's callbacks (`ctx.carried_by` names the
 carrying model), the root write's grant admits them, and an `observed` revision older than the stored
 one is a conflict.
 
@@ -263,7 +258,7 @@ one is a conflict.
 These callbacks run for Forms, pages, agent writes, automations, remote syncs, imports,
 upserts, bulk edits, approval resubmits, per-record restore and nested owned children. They do not
 run for seed restores or derived `sum`/`count` updates. They execute in the caller's transaction,
-read with workspace authority through `ctx.db.query`, and have no direct writes or I/O.
+read with workspace authority through `ctx.query`, and have no direct writes or I/O.
 
 ## Bulk budget
 

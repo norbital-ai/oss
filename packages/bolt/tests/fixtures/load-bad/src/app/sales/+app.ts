@@ -1,1 +1,1 @@
-export default { name: 'sales', spec: { title: 'Sales', pages: { board: {} } } };
+export default { title: 'Sales', pages: { board: {} } };

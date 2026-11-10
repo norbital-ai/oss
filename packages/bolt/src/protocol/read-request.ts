@@ -68,7 +68,7 @@ const DynamicReadSchema = ReadRequestSchema.pipe(Schema.brand('DynamicRead'));
 /** A read request built at runtime (a rule engine's reads): only `dynamicRead` makes one, so a literal never falls to it. */
 export type DynamicRead = typeof DynamicReadSchema.Type;
 /**
- * A runtime-built read request for `ctx.query`/`ctx.db.query`: decoded here exactly as the wire is (throws on a request
+ * A runtime-built read request for `ctx.query`: decoded here exactly as the wire is (throws on a request
  * that is not one), checked against the declarations by the host like any other, answered untyped (`DynamicAnswer`).
  */
 export const dynamicRead: (request: ReadRequestJson) => DynamicRead = Schema.decodeUnknownSync(
@@ -105,10 +105,10 @@ export function planReadRequest(
 		if (spec === undefined || root === 'sys_run')
 			return Result.fail(`'${root}' is no read root: a root is a model with read`);
 		const output = request[root]?.output ?? 'default';
-		const read = output === 'default' ? spec.read : spec.outputs?.[output];
+		const read = spec.outputs[output];
 		if (read === undefined)
 			return Result.fail(
-				`'${root}' declares no read output '${output}'; it declares: ${['default', ...Object.keys(spec.outputs ?? {})].join(', ')}`
+				`'${root}' declares no read output '${output}'; it declares: ${Object.keys(spec.outputs).join(', ')}`
 			);
 		if (!Object.hasOwn(read, path))
 			return Result.fail(

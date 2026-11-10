@@ -38,11 +38,11 @@ const manifest: EngineManifest = {
 	relationships: { 'ledger.account': { to: 'accounts', inverse: 'ledger' } },
 	exposures: {
 		accounts: {
-			read: { accounts: { fields: 'all' } },
+			outputs: { default: { accounts: { fields: 'all' } } },
 			update: { columns: { accounts: ['balance'] } }
 		},
 		ledger: {
-			read: { ledger: { fields: 'all' } },
+			outputs: { default: { ledger: { fields: 'all' } } },
 			create: {
 				columns: { ledger: ['account', 'label', 'amount', 'balance_before', 'balance_after'] }
 			}
@@ -51,7 +51,7 @@ const manifest: EngineManifest = {
 	policies: {
 		debit: {
 			description: 'Start and execute debits',
-			automations: ['debitA', 'debitB', 'reread', 'fanout'],
+			capabilities: { automations: ['debitA', 'debitB', 'reread', 'fanout'] },
 			grants: {
 				accounts: { read: true, update: true },
 				ledger: { read: true, create: true }
@@ -151,7 +151,6 @@ const fixture = (mode: 'concurrent' | 'aba') =>
 				params: [ACCOUNT]
 			});
 		const intercepted = TenantDb.typed({
-			session: db.session,
 			read: (statements) =>
 				Effect.gen(function* () {
 					const result = yield* db.read(statements);

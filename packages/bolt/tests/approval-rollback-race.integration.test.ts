@@ -27,14 +27,14 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		documents: {
-			read: { documents: { fields: 'all' } },
+			outputs: { default: { documents: { fields: 'all' } } },
 			update: { columns: { documents: ['title'] } }
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests changes',
-			grants: { documents: { read: true, update: { check: true } } }
+			grants: { documents: { read: true, update: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews and edits changes',
@@ -44,7 +44,7 @@ const manifest: EngineManifest = {
 	teams: { requesters: ['requester'], reviewers: ['reviewer'] }
 };
 const guest = program(`export default { policy: { requester: { grants: { documents: {
-	update: { check: function* (changes, ctx) { return ctx.approve((flow) => flow.step('Review', { teams: ['reviewers'] })); } }
+	update: { verdict: function* (changes, ctx) { return ctx.approve({ steps: [{ name: 'Review', teams: ['reviewers'] }] }); } }
 } } } } };`);
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
@@ -58,10 +58,10 @@ const member = (id: string, team: string): Extract<EngineActor, { kind: 'member'
 	party: null
 });
 
-it.live('rejection conflicts when an observed no-op rollback row changes before the decision', () =>
+it.live('rejection conflicts when the record or approval changes before the decision', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const paused = yield* Deferred.make<void>(),
+			let paused = yield* Deferred.make<void>(),
 				resume = yield* Deferred.make<void>();
 			const database = yield* Layer.build(PgliteDb.layer());
 			const native = Context.get(database, TenantDb);
@@ -79,8 +79,7 @@ it.live('rejection conflicts when an observed no-op rollback row changes before 
 				write: (statement, lock) =>
 					beforeDecision([statement]).pipe(Effect.andThen(native.write(statement, lock))),
 				transaction: (batch) =>
-					beforeDecision(batch.statements).pipe(Effect.andThen(native.transaction(batch))),
-				session: native.session
+					beforeDecision(batch.statements).pipe(Effect.andThen(native.transaction(batch)))
 			});
 			const context = yield* Layer.build(
 				TestWorkspace.layer({
@@ -165,6 +164,33 @@ it.live('rejection conflicts when an observed no-op rollback row changes before 
 			assert.deepEqual(yield* reject(), { kind: 'decided', requestId, status: 'Rejected' });
 			assert.deepEqual(yield* row(), [{ title: 'A', revision: 5 }]);
 			assert.deepEqual(yield* request(), [{ state: 'Rejected', step: 0, moves: 2 }]);
+
+			const submitted = (yield* update('D', 5, requester)).outcome;
+			assert.ok(submitted.kind === 'pendingApproval');
+			const decision = {
+				requestId: submitted.requestId,
+				authority: reviewer,
+				now: t.clock.now()
+			};
+			paused = yield* Deferred.make<void>();
+			resume = yield* Deferred.make<void>();
+			armed = true;
+			const rejected = yield* approvals
+				.decide({
+					...decision,
+					decision: 'reject',
+					reason: 'Restore the checkpoint'
+				})
+				.pipe(Effect.forkScoped);
+			yield* Deferred.await(paused);
+			assert.deepEqual(yield* approvals.decide({ ...decision, decision: 'approve' }), {
+				kind: 'decided',
+				requestId: submitted.requestId,
+				status: 'Approved'
+			});
+			yield* Deferred.succeed(resume, undefined);
+			assert.equal((yield* Fiber.join(rejected)).kind, 'conflict');
+			assert.deepEqual(yield* row(), [{ title: 'D', revision: 6 }]);
 		})
 	)
 );

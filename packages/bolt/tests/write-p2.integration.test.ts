@@ -56,7 +56,6 @@ const fixture = Effect.gen(function* () {
 				if (batch.rollback !== true) count.writes++;
 				return inner.transaction(batch);
 			}),
-		session: inner.session
 	});
 	count.reads = 0;
 	count.writes = 0;
@@ -366,7 +365,7 @@ describe('engine/query: history (rule 17)', () => {
 		...manifest,
 		exposures: {
 			...manifest.exposures,
-			orders: { ...orders, outputs: { brief: { orders: { fields: ['title', 'status'] } } } }
+			orders: { ...orders, outputs: { ...orders.outputs, brief: { orders: { fields: ['title', 'status'] } } } }
 		}
 	};
 	const history = Effect.fnUntraced(function* (

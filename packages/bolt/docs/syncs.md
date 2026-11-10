@@ -121,7 +121,7 @@ severity is `warn` or `refuse`. An import is one step: a refusal writes nothing;
 is imported and its warnings are reported with the counts. The whole import commits atomically. `scope: { by, range? }` declares a complete
 snapshot for reconciliation. Returned rows still run the model's write callbacks.
 
-File callback reads through `ctx.db.query` retain the importing or exporting caller's authority
+File callback reads through `ctx.query` retain the importing or exporting caller's authority
 and outputs. Context narrows/defaults the operation; it never elevates
 authority. Remote sync reads instead use trusted workspace authority.
 

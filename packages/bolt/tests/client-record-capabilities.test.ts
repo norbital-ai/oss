@@ -32,12 +32,12 @@ it.effect('loads and validates the native current-row capability projection', ()
 			base: 'https://workspace.test',
 			fetch
 		});
-		expect(yield* bolt.recordCapabilities('jobs', 'j1')).toEqual(capabilities);
+		expect(yield* bolt.record_capabilities('jobs', 'j1')).toEqual(capabilities);
 		expect(request).toEqual({
 			url: '/__bolt/record-capabilities?model=jobs&id=j1',
 			credentials: 'same-origin'
 		});
-		yield* bolt.recordCapabilities('jobs', 'j1', {
+		yield* bolt.record_capabilities('jobs', 'j1', {
 			model: 'orders',
 			id: 'o1',
 			relation: 'lines',
@@ -62,19 +62,19 @@ it.effect('an unreadable record is null; malformed and refused capabilities fail
 			base: 'https://workspace.test',
 			fetch
 		});
-		expect(yield* bolt.recordCapabilities('jobs', 'j1')).toBeNull();
+		expect(yield* bolt.record_capabilities('jobs', 'j1')).toBeNull();
 		response = Response.json({
 			value: { ...capabilities, fields: { title: { writable: true, reasons: ['invented'] } } }
 		});
-		expect(yield* Effect.flip(bolt.recordCapabilities('jobs', 'j1'))).toMatchObject({
+		expect(yield* Effect.flip(bolt.record_capabilities('jobs', 'j1'))).toMatchObject({
 			_tag: 'ProtocolFailed'
 		});
 		response = Response.json({ value: { ...capabilities, revision: 3.5 } });
-		expect(yield* Effect.flip(bolt.recordCapabilities('jobs', 'j1'))).toMatchObject({
+		expect(yield* Effect.flip(bolt.record_capabilities('jobs', 'j1'))).toMatchObject({
 			_tag: 'ProtocolFailed'
 		});
 		response = Response.json({}, { status: 503 });
-		expect((yield* Effect.flip(bolt.recordCapabilities('jobs', 'j1'))).message).toBe(
+		expect((yield* Effect.flip(bolt.record_capabilities('jobs', 'j1'))).message).toBe(
 			'Record permissions could not be loaded.'
 		);
 	})

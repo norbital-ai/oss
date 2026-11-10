@@ -13,7 +13,7 @@ import {
 } from 'effect';
 import { Sse } from 'effect/encoding';
 import { Cookies } from 'effect/http';
-import type { EventSourceLike, Holder, Authority, Json } from '@norbital-ai/bolt/tooling/browser';
+import type { EventSourceLike, Holder, Authority } from '@norbital-ai/bolt/tooling/browser';
 import {
 	teams as manifestTeams,
 	Frame,
@@ -40,8 +40,6 @@ export type SweepActor =
 	| { admin: true };
 export type SweepOptions = {
 	pages?: ShellMountConfig['pages'];
-	/** Public routes validate their real isolated SSR document and decoded data; browser interactivity needs a compiled browser probe. */
-	publicPages?: Readonly<Record<string, Schema.Codec<unknown, Json>>>;
 	messages?: ShellMountConfig['messages'];
 	representations?: ShellMountConfig['representations'];
 	as?: readonly SweepActor[];
@@ -110,7 +108,7 @@ const quiet = (state: { inflight: number; last: number }, budget: number) =>
 		);
 		return done.idle;
 	});
-type VisitOptions = Pick<SweepOptions, 'pages' | 'publicPages' | 'messages' | 'representations'> & {
+type VisitOptions = Pick<SweepOptions, 'pages' | 'messages' | 'representations'> & {
 	readonly onRequest?: (request: Request) => void;
 };
 type VisitActor = (Holder & { readonly id: string }) | { readonly visitor: string } | null;
@@ -261,11 +259,6 @@ const mountVisit = (
 		else history.replaceState(null, '', path);
 		const selected = renderMode(t.manifest, path);
 		if (selected !== null) {
-			const codec = options.publicPages?.[selected.key];
-			if (codec === undefined)
-				return yield* new KitInvalid({
-					message: `sweep requires the shared data codec for public page ${selected.key}`
-				});
 			const response = yield* Effect.tryPromise({
 				try: () => fetch(`${ORIGIN}${path}`),
 				catch: (error) => new KitInvalid({ message: String(error) })
@@ -304,7 +297,7 @@ const mountVisit = (
 				return yield* new KitInvalid({
 					message: `Public page ${selected.key} omitted its rendered body, hydration envelope or matching release entry.`
 				});
-			yield* decodePublicHydration(metadata.textContent ?? '', codec, {
+			yield* decodePublicHydration(metadata.textContent ?? '', {
 				route: selected.key,
 				release: t.release
 			}).pipe(Effect.mapError((error) => new KitInvalid({ message: error.message })));

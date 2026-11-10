@@ -211,7 +211,7 @@ export const integrationLinks = (
 		);
 		const live = new Map<string, Held>();
 		const leases = new Map<string, Scope.Closeable>();
-		const locks = new Map<string, Semaphore.Semaphore>();
+		const locks = yield* RcMap.make({ lookup: (_instance: string) => Semaphore.make(1) });
 		const selected = new Map<string, { provider: Provider; opened: Opened }>();
 		let stopped = false,
 			watchers = 0;
@@ -221,15 +221,17 @@ export const integrationLinks = (
 			instance: string,
 			work: Effect.Effect<A, E>
 		): Effect.Effect<A, E | BoltError> =>
-			Effect.gen(function* () {
-				if (stopped) return yield* Effect.fail(unavailable('the integration links are closed'));
-				let lock = locks.get(instance);
-				if (lock === undefined) {
-					lock = yield* Semaphore.make(1);
-					locks.set(instance, lock);
-				}
-				return yield* lock.withPermit(work);
-			});
+			Effect.scoped(
+				RcMap.get(locks, instance).pipe(
+					Effect.flatMap((lock) =>
+						lock.withPermit(
+							Effect.suspend((): Effect.Effect<A, E | BoltError> =>
+								stopped ? Effect.fail(unavailable('the integration links are closed')) : work
+							)
+						)
+					)
+				)
+			);
 		const choices = (driver: DriverName, personal: boolean) =>
 			h.providers.filter(
 				(provider) => provider.driver === driver && (!personal || provider.personal === true)
@@ -408,6 +410,7 @@ export const integrationLinks = (
 								: Effect.logWarning(error)
 						),
 						Effect.retry({
+							times: 4,
 							schedule: Schedule.min([
 								Schedule.exponential('100 millis'),
 								Schedule.spaced('5 seconds')
@@ -1183,7 +1186,9 @@ export const integrationLinks = (
 								});
 							yield* next.calls.pair(rest).pipe(
 								Effect.andThen(persist(next, new Map([[PROVIDER, provider.id]]))),
-								Effect.andThen(database ? verifyDatabase(instance, next.calls.test(null)) : Effect.void),
+								Effect.andThen(
+									database ? verifyDatabase(instance, next.calls.test(null)) : Effect.void
+								),
 								Effect.onError(() =>
 									shut(instance).pipe(
 										Effect.andThen(logged(persist(next, wipe(next.values.keys())))),
@@ -1226,7 +1231,10 @@ export const integrationLinks = (
 						const x = yield* row(instance);
 						if (x === undefined) return yield* Effect.fail(gone(instance));
 						if (x.definition.driver === 'sqlserver')
-							return yield* verifyDatabase(instance, transient(instance, (held) => held.calls.test(input)));
+							return yield* verifyDatabase(
+								instance,
+								transient(instance, (held) => held.calls.test(input))
+							);
 						if (conversational(x.definition) && !isRequest(x.definition.driver)) {
 							if (x.personal)
 								return yield* Effect.fail(

@@ -35,9 +35,13 @@ export type SystemNames = {
 	models: {
 		approval_request: {
 			description: 'An approval request on a record: its status, its steps, and the teams and members that approve or supersede.';
+			table: {
+				primary: 'uuid';
+			};
 			unique: readonly [
 				{
 					fields: readonly ['collection_name', 'record_id'];
+					name: 'one_ongoing_request';
 					where: {
 						status: {
 							eq: 'ONGOING';
@@ -45,9 +49,6 @@ export type SystemNames = {
 					};
 				}
 			];
-			table: {
-				primary: 'uuid';
-			};
 			fields: {
 				collection_name: {
 					kind: 'text';
@@ -357,6 +358,12 @@ export type SystemNames = {
 					kind: 'bool';
 					default: false;
 				};
+				triage_scope: {
+					kind: 'enum';
+					values: readonly ['dm', 'group', 'all'];
+					default: 'all';
+					hidden: true;
+				};
 				dm: {
 					kind: 'enum';
 					values: readonly ['union', 'envoy'];
@@ -427,11 +434,6 @@ export type SystemNames = {
 		sys_inbox: {
 			description: "A webhook delivery received for an integration instance, awaiting its sync's read.";
 			label: 'delivery';
-			unique: readonly [
-				{
-					fields: readonly ['sync', 'instance', 'delivery'];
-				}
-			];
 			table: {
 				primary: 'uuid';
 				indexes: readonly [
@@ -445,6 +447,12 @@ export type SystemNames = {
 					}
 				];
 			};
+			unique: readonly [
+				{
+					fields: readonly ['sync', 'instance', 'delivery'];
+					name: 'one_inbound_delivery';
+				}
+			];
 			fields: {
 				sync: {
 					kind: 'text';
@@ -472,20 +480,20 @@ export type SystemNames = {
 		sys_integration: {
 			description: 'An integration instance: one external account of one integration definition.';
 			label: 'name';
+			table: {
+				primary: 'text';
+			};
 			unique: readonly [
 				{
 					fields: readonly ['owner', 'integration'];
+					name: 'one_per_member';
 					where: {
 						owner: {
 							isNull: false;
 						};
 					};
-					name: 'one_per_member';
 				}
 			];
-			table: {
-				primary: 'text';
-			};
 			fields: {
 				integration: {
 					kind: 'text';
@@ -530,6 +538,21 @@ export type SystemNames = {
 		sys_invitation: {
 			description: 'An invitation to join the workspace.';
 			label: 'email';
+			table: {
+				primary: 'text';
+				indexes: readonly [
+					{
+						on: readonly [
+							{
+								lower: 'email';
+							}
+						];
+					},
+					{
+						on: readonly ['phone'];
+					}
+				];
+			};
 			check: {
 				addressed: {
 					or: readonly [
@@ -545,21 +568,6 @@ export type SystemNames = {
 						}
 					];
 				};
-			};
-			table: {
-				primary: 'text';
-				indexes: readonly [
-					{
-						on: readonly [
-							{
-								lower: 'email';
-							}
-						];
-					},
-					{
-						on: readonly ['phone'];
-					}
-				];
 			};
 			fields: {
 				email: {
@@ -862,20 +870,6 @@ export type SystemNames = {
 		sys_outbox: {
 			description: 'A record change waiting to be written to another system by a sync.';
 			label: 'key';
-			unique: readonly [
-				{
-					fields: readonly ['sync', 'instance', 'record'];
-					where: {
-						status: {
-							eq: 'queued';
-						};
-						attempts: {
-							eq: 0;
-						};
-					};
-					name: 'coalesce';
-				}
-			];
 			table: {
 				primary: 'uuid';
 				identity: 'seq';
@@ -906,6 +900,20 @@ export type SystemNames = {
 					}
 				];
 			};
+			unique: readonly [
+				{
+					fields: readonly ['sync', 'instance', 'record'];
+					name: 'coalesce';
+					where: {
+						status: {
+							eq: 'queued';
+						};
+						attempts: {
+							eq: 0;
+						};
+					};
+				}
+			];
 			fields: {
 				seq: {
 					kind: 'int';
@@ -1105,14 +1113,15 @@ export type SystemNames = {
 		sys_sync: {
 			description: "A remote sync's read cursor and health for one integration instance and partition.";
 			label: 'sync';
-			unique: readonly [
-				{
-					fields: readonly ['sync', 'instance', 'partition'];
-				}
-			];
 			table: {
 				primary: 'uuid';
 			};
+			unique: readonly [
+				{
+					fields: readonly ['sync', 'instance', 'partition'];
+					name: 'one_partition';
+				}
+			];
 			fields: {
 				sync: {
 					kind: 'text';
@@ -1168,18 +1177,20 @@ export type SystemNames = {
 		sys_sync_row: {
 			description: "A remote sync's mapping of one remote row to its record.";
 			label: 'remote_id';
-			unique: readonly [
-				{
-					fields: readonly ['sync', 'instance', 'remote_id'];
-				},
-				{
-					fields: readonly ['sync', 'instance', 'record'];
-				}
-			];
 			index: readonly [readonly ['sync', 'instance', 'partition', 'cycle']];
 			table: {
 				primary: 'uuid';
 			};
+			unique: readonly [
+				{
+					fields: readonly ['sync', 'instance', 'remote_id'];
+					name: 'one_remote_id';
+				},
+				{
+					fields: readonly ['sync', 'instance', 'record'];
+					name: 'one_record';
+				}
+			];
 			fields: {
 				sync: {
 					kind: 'text';
@@ -1235,22 +1246,6 @@ export type SystemNames = {
 					};
 				};
 			};
-			check: {
-				admin_staff: {
-					or: readonly [
-						{
-							admin: {
-								eq: false;
-							};
-						},
-						{
-							kind: {
-								eq: 'staff';
-							};
-						}
-					];
-				};
-			};
 			table: {
 				primary: 'text';
 				indexes: readonly [
@@ -1267,6 +1262,22 @@ export type SystemNames = {
 						unique: true;
 					}
 				];
+			};
+			check: {
+				admin_staff: {
+					or: readonly [
+						{
+							admin: {
+								eq: false;
+							};
+						},
+						{
+							kind: {
+								eq: 'staff';
+							};
+						}
+					];
+				};
 			};
 			fields: {
 				email: {
@@ -1389,46 +1400,56 @@ export type SystemNames = {
 	};
 	exposures: {
 		approval_request: {
-			read: {
-				approval_request: {
-					fields: 'all';
+			outputs: {
+				default: {
+					approval_request: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		requestor: {
-			read: {
-				requestor: {
-					fields: 'all';
+			outputs: {
+				default: {
+					requestor: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		sys_api_key: {
-			read: {
-				sys_api_key: {
-					fields: readonly [
-						'name',
-						'prefix',
-						'team',
-						'created_by',
-						'revoked_at',
-						'last_used_at',
-						'revision',
-						'created_at'
-					];
+			outputs: {
+				default: {
+					sys_api_key: {
+						fields: readonly [
+							'name',
+							'prefix',
+							'team',
+							'created_by',
+							'revoked_at',
+							'last_used_at',
+							'revision',
+							'created_at'
+						];
+					};
 				};
 			};
 		};
 		sys_conversation: {
-			read: {
-				sys_conversation: {
-					fields: 'all';
+			outputs: {
+				default: {
+					sys_conversation: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		sys_envoy: {
-			read: {
-				sys_envoy: {
-					fields: 'all';
+			outputs: {
+				default: {
+					sys_envoy: {
+						fields: 'all';
+					};
 				};
 			};
 			create: {
@@ -1441,6 +1462,7 @@ export type SystemNames = {
 						'group_messages',
 						'delegation',
 						'triage',
+						'triage_scope',
 						'dm'
 					];
 				};
@@ -1455,6 +1477,7 @@ export type SystemNames = {
 						'group_messages',
 						'delegation',
 						'triage',
+						'triage_scope',
 						'dm',
 						'active'
 					];
@@ -1463,23 +1486,23 @@ export type SystemNames = {
 			delete: {};
 		};
 		sys_file: {
-			read: {
-				sys_file: {
-					fields: readonly [
-						'name',
-						'mime',
-						'size',
-						'sha256',
-						'field',
-						'revision',
-						'created_at',
-						'created_by',
-						'updated_at',
-						'updated_by'
-					];
-				};
-			};
 			outputs: {
+				default: {
+					sys_file: {
+						fields: readonly [
+							'name',
+							'mime',
+							'size',
+							'sha256',
+							'field',
+							'revision',
+							'created_at',
+							'created_by',
+							'updated_at',
+							'updated_by'
+						];
+					};
+				};
 				meta: {
 					sys_file: {
 						fields: readonly ['name', 'mime'];
@@ -1488,20 +1511,22 @@ export type SystemNames = {
 			};
 		};
 		sys_integration: {
-			read: {
-				sys_integration: {
-					fields: readonly [
-						'integration',
-						'name',
-						'owner',
-						'named',
-						'envoy',
-						'active',
-						'configuration',
-						'import_start',
-						'status',
-						'revision'
-					];
+			outputs: {
+				default: {
+					sys_integration: {
+						fields: readonly [
+							'integration',
+							'name',
+							'owner',
+							'named',
+							'envoy',
+							'active',
+							'configuration',
+							'import_start',
+							'status',
+							'revision'
+						];
+					};
 				};
 			};
 			create: {
@@ -1517,40 +1542,48 @@ export type SystemNames = {
 			delete: {};
 		};
 		sys_invitation: {
-			read: {
-				sys_invitation: {
-					fields: 'all';
+			outputs: {
+				default: {
+					sys_invitation: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		sys_message: {
-			read: {
-				sys_message: {
-					fields: 'all';
+			outputs: {
+				default: {
+					sys_message: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		sys_notification: {
-			read: {
-				sys_notification: {
-					fields: 'all';
+			outputs: {
+				default: {
+					sys_notification: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		sys_run: {
-			read: {
-				sys_run: {
-					fields: 'all';
+			outputs: {
+				default: {
+					sys_run: {
+						fields: 'all';
+					};
 				};
 			};
 		};
 		sys_user: {
-			read: {
-				sys_user: {
-					fields: 'all';
-				};
-			};
 			outputs: {
+				default: {
+					sys_user: {
+						fields: 'all';
+					};
+				};
 				directory: {
 					sys_user: {
 						fields: readonly ['name'];

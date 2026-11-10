@@ -9,7 +9,13 @@ import {
 import { dbError } from '../src/engine/db/wire.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { ApprovalSnapshot } from '../src/decl/access/policy.ts';
-import type { GuestOutcome, Invocation, Lock, Outcome } from '../src/engine/contracts.ts';
+import {
+	LIMITS,
+	type GuestOutcome,
+	type Invocation,
+	type Lock,
+	type Outcome
+} from '../src/engine/contracts.ts';
 import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { catalogOf } from '../src/engine/access/pred.ts';
@@ -71,8 +77,7 @@ const fixtureFor = (schema: EngineManifest) =>
 			db = TenantDbService.typed({
 				read: (statements) => (count.reads++, inner.read(statements)),
 				write: (statement, lock) => (count.writes++, inner.write(statement, lock)),
-				transaction: (batch) => (count.writes++, inner.transaction(batch)),
-				session: inner.session
+				transaction: (batch) => (count.writes++, inner.transaction(batch))
 			});
 			count.reads = 0;
 			count.writes = 0;
@@ -126,17 +131,17 @@ const ext = {
 	exposures: {
 		...manifest.exposures,
 		projects: {
-			read: { projects: { fields: 'all' } },
+			outputs: { default: { projects: { fields: 'all' } } },
 			create: { columns: { projects: ['title', 'profile', 'stock', 'owner'] } }
 		},
-		quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } },
+		quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } },
 		activities: {
-			read: { activities: { fields: 'all' } },
+			outputs: { default: { activities: { fields: 'all' } } },
 			create: { columns: { activities: ['subject', 'regarding'] } },
 			update: { columns: { activities: ['regarding'] } }
 		},
 		notes: {
-			read: { notes: { fields: 'all' } },
+			outputs: { default: { notes: { fields: 'all' } } },
 			create: { columns: { notes: ['body', 'line'] } }
 		}
 	}
@@ -214,6 +219,15 @@ const order = Effect.fn('Test.order')(function* (
 });
 
 describe('engine/write: one statement per act (rule 20)', () => {
+	it.effect('rejects an act whose UTF-8 input exceeds the byte limit before writing', () =>
+		Effect.gen(function* () {
+			const title = '界'.repeat(Math.ceil(LIMITS.act.inputBytes / 3));
+			const { outcome } = yield* run({ verb: 'create', input: [{ title }] });
+			expect(outcome).toMatchObject({ kind: 'refused', code: 'overflow' });
+			expect(count.writes).toBe(0);
+		})
+	);
+
 	it.effect(
 		'a plain create commits in one write statement with its seq, roll-ups and history',
 		() =>
@@ -297,6 +311,22 @@ describe('engine/write: one statement per act (rule 20)', () => {
 });
 
 describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
+	it.effect('a native constraint failure rolls back every root and child in the batch', () =>
+		Effect.gen(function* () {
+			const result = yield* run({
+				verb: 'create',
+				input: [
+					{ title: 'Duplicate', lines: [{ label: 'First child', amount: '12' }] },
+					{ title: 'Duplicate', lines: [{ label: 'Second child', amount: '21' }] }
+				]
+			});
+			expect(result.outcome).toMatchObject({ kind: 'refused', code: 'unique' });
+			expect(yield* rows('select id from orders')).toEqual([]);
+			expect(yield* rows('select id from lines')).toEqual([]);
+			expect(yield* rows("select revision from bolt_history where collection in ('orders', 'lines')")).toEqual([]);
+		}).pipe(Effect.provide(fixture))
+	);
+
 	it.effect(
 		'a child change moves its parent roll-up in one derived write; nothing is deleted by omission',
 		() =>
@@ -628,8 +658,7 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 				db = TenantDbService.typed({
 					read: inner.read,
 					write: (statement, lock) => (locks.push(lock), inner.write(statement, lock)),
-					transaction: (batch) => (locks.push(batch.lock), inner.transaction(batch)),
-					session: inner.session
+					transaction: (batch) => (locks.push(batch.lock), inner.transaction(batch))
 				});
 				const engine = {
 					...callbackEngine((inv) => ({ kind: 'ok', output: callbackRows(inv) })),

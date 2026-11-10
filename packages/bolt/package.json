@@ -42,10 +42,6 @@
 			"types": "./build/protocol/index.d.ts",
 			"default": "./build/protocol/index.js"
 		},
-		"./protocol/cursor": {
-			"types": "./build/protocol/cursor.d.ts",
-			"default": "./build/protocol/cursor.js"
-		},
 		"./facilities": {
 			"types": "./build/facilities/index.d.ts",
 			"default": "./build/facilities/index.js"
@@ -54,10 +50,6 @@
 			"types": "./build/protocol/host-api.d.ts",
 			"default": "./build/protocol/host-api.js"
 		},
-		"./cell": {
-			"types": "./build/protocol/cell.d.ts",
-			"default": "./build/protocol/cell.js"
-		},
 		"./node": {
 			"types": "./build/node/index.d.ts",
 			"default": "./build/node/index.js"
@@ -65,10 +57,6 @@
 		"./docs": {
 			"types": "./build/docs/index.d.ts",
 			"default": "./build/docs/index.js"
-		},
-		"./isolate-globals": {
-			"types": "./build/engine/guest/globals.d.ts",
-			"default": "./build/engine/guest/globals.js"
 		},
 		"./guest-hooks": {
 			"types": "./build/node/guest-hooks.d.ts",

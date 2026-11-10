@@ -13,7 +13,6 @@ export const NEEDS = [
 	'system1',
 	'system2',
 	'embed',
-	'speech',
 	'webhooks',
 	'websockets',
 	'outbound',
@@ -21,16 +20,11 @@ export const NEEDS = [
 ] as const;
 export type Need = (typeof NEEDS)[number];
 
-const hasWebhookTrigger = (on: unknown): boolean =>
-	Array.isArray(on)
-		? on.some(hasWebhookTrigger)
-		: typeof on === 'object' && on !== null && 'webhook' in on;
-
 type Manifest = Omit<EngineManifest, 'needs'>;
 const integrations = (m: Manifest) =>
 	Object.keys(m.integrations).length > 0 || Object.keys(m.connections).length > 0;
 /**
- * Which declarations need each member. Push, speech, websockets and the sandbox are reached only from guest code or
+ * Which declarations need each member. Push, websockets and the sandbox are reached only from guest code or
  * provider internals, which no declaration records: a notice still reaches the inbox without push, and an unsupported
  * call answers Unavailable at run time.
  */
@@ -46,9 +40,11 @@ const NEEDED: { readonly [N in Need]: (m: Manifest) => boolean } = {
 	system1: (m) => m.workspace.ai !== undefined,
 	system2: (m) => m.workspace.ai !== undefined,
 	embed: (m) => (m.workspace.ai?.embeddings?.length ?? 0) > 0,
-	speech: () => false,
 	webhooks: (m) =>
-		integrations(m) || Object.values(m.automations).some((a) => hasWebhookTrigger(a.on)),
+		integrations(m) ||
+		Object.values(m.automations).some(
+			(a) => a.on?.some((trigger) => 'webhook' in trigger) === true
+		),
 	websockets: () => false,
 	outbound: (m) => integrations(m) || Object.keys(m.workspace.secrets ?? {}).length > 0,
 	sandbox: () => false
@@ -70,7 +66,6 @@ const member = (f: Checked, need: Need): object => {
 		case 'system1':
 		case 'system2':
 		case 'embed':
-		case 'speech':
 			return f.intelligence[need];
 		case 'webhooks':
 		case 'websockets':

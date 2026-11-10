@@ -1,5 +1,4 @@
 import { Effect } from 'effect';
-import { Refusal } from '../../src/decl/errors.ts';
 // G1 (§11.2): the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
 import { Decimal } from '@norbital-ai/std/decimal';
@@ -36,20 +35,20 @@ is<
 	>
 >();
 
-automation('order_lines_pay', {
+automation({
 	...rt.order_lines_pay.spec,
 	run: function* ({ p, split }) {
 		return (p.method === 'card' ? p.last4 : p.iban) + Object.keys(split).join();
 	}
 });
-automation('order_lines_pay', {
+automation({
 	...rt.order_lines_pay.spec,
 	run: function* ({ p }) {
 		// @ts-expect-error U1 a union member is read without narrowing on its tag
 		return p.last4;
 	}
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	// @ts-expect-error U2 a record of an unknown kind
 	input: { r: { kind: 'record', of: { kind: 'txt' } } },
@@ -57,7 +56,7 @@ automation('nightly', {
 		return 0;
 	}
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	// @ts-expect-error U3 a union arm member of an unknown kind
 	input: { u: { kind: 'union', by: 't', arms: { a: { x: { kind: 'strng' } } } } },
@@ -65,7 +64,7 @@ automation('nightly', {
 		return 0;
 	}
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	// @ts-expect-error U4 a union without its tag field
 	input: { u: { kind: 'union', arms: { a: {} } } },
@@ -85,7 +84,7 @@ model('probe', {
 	// @ts-expect-error U6 `union` is an input-only kind
 	fields: { a: { kind: 'union', by: 't', arms: {} } }
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	// @ts-expect-error U7 a union option misspelt (exact at depth, rule 5)
 	input: { u: { kind: 'union', by: 't', arms: {}, strict: true } },
@@ -100,7 +99,9 @@ model('orders', {
 	create: {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
-			const stored = yield* ctx.db.query({ orders: { where: { status: { eq: 'draft' } }, limit: 10 } });
+			const stored = yield* ctx.query({
+				orders: { where: { status: { eq: 'draft' } }, limit: 10 }
+			});
 			// a workspace read is unmasked
 			is<Eq<(typeof stored.orders.rows)[number]['note'], string | null>>();
 			is<Eq<'due_soon' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // never computed, seq or roll-up
@@ -168,7 +169,7 @@ model('orders', {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
 			return (
-				(yield* ctx.db.query({ orders: { fields: ['note'], limit: 1 } })).orders.rows[0]?.note,
+				(yield* ctx.query({ orders: { fields: ['note'], limit: 1 } })).orders.rows[0]?.note,
 				inputs
 			);
 		}
@@ -180,7 +181,7 @@ model('orders', {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
 			// T6b a read request reads what the root layer declares, roll-ups included (`read: 'all'`)
-			const read = yield* ctx.db.query({ orders: { fields: ['total'], limit: 1 } });
+			const read = yield* ctx.query({ orders: { fields: ['total'], limit: 1 } });
 			is<Eq<(typeof read.orders.rows)[number]['total'], Decimal>>();
 			return inputs;
 		}
@@ -192,7 +193,7 @@ model('orders', {
 	create: {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
-			const selected = yield* ctx.db.query({ orders: { fields: ['number'], limit: 1 } });
+			const selected = yield* ctx.query({ orders: { fields: ['number'], limit: 1 } });
 			is<
 				Eq<
 					(typeof selected.orders.rows)[number],
@@ -208,7 +209,7 @@ policy({
 	grants: {
 		orders: {
 			create: {
-				check: function* (_, ctx) {
+				verdict: function* (_, ctx) {
 					// @ts-expect-error T7 a policy check has no I/O facility (rule 63)
 					yield* ctx.request('erp', { method: 'GET', path: 'x', output: { kind: 'json' } });
 					return ctx.allow();
@@ -219,47 +220,52 @@ policy({
 });
 
 // ── automations: writes through `act` ──
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
-		yield* ctx.act('orders.update', [{
-			target: target.id,
-			// @ts-expect-error Q1 `set` naming a computed field (rule 38e)
-			set: { due_soon: target.due_soon }
-		}]);
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		yield* ctx.act('orders.update', [
+			{
+				target: target.id,
+				// @ts-expect-error Q1 `set` naming a computed field (rule 38e)
+				set: { due_soon: target.due_soon }
+			}
+		]);
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
 		// @ts-expect-error Q2 a relation array never replaces a set (rule 22): relation actions are explicit
 		yield* ctx.act('orders.update', [{ target: target.id, set: { lines: [] } }]);
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
 		// @ts-expect-error Q3 a state value outside the state's states (rule 40)
 		yield* ctx.act('orders.update', [{ target: target.id, set: { status: 'shipped' } }]);
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error Q4 `all` is gone: a list's limit defaults to 10,000
 		yield* ctx.query({ orders: { limit: 5, all: true } });
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const out = yield* ctx
@@ -275,7 +281,7 @@ automation('orders_renote', {
 		return 0;
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
 		const { records } = yield* ctx.act('customers.create', [{ name: 'Acme' }]);
@@ -290,13 +296,15 @@ is<Eq<Row<'customers', 'directory'>['name'], string>>();
 // @ts-expect-error K0 a field outside the named output is not on its row
 type DirectoryEmail = Row<'customers', 'directory'>['email'];
 is<Eq<StoredRow<'customers'>['email'], string | null>>();
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		const page = yield* ctx.query({ customers: {
-			output: 'directory',
-			limit: 1
-		} });
+		const page = yield* ctx.query({
+			customers: {
+				output: 'directory',
+				limit: 1
+			}
+		});
 		const first = page.customers.rows[0];
 		const name: string | undefined = first?.name;
 		// @ts-expect-error K1 the directory output carries no email
@@ -335,13 +343,13 @@ model('probe', {
 });
 model('order_lines', {
 	...m.order_lines.spec,
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	create: { columns: { order_lines: ['order', 'item', 'qty', 'price'] } },
 	update: { columns: { order_lines: ['qty'] } }
 });
 model('order_lines', {
 	...m.order_lines.spec,
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	// @ts-expect-error O1 an owned child's parent key never changes after create (rule 41)
 	update: { columns: { order_lines: ['order', 'qty'] } }
 });
@@ -352,15 +360,19 @@ const mine: Where<'customers'> = { email: { eq: { var: 'requestor.email' } } };
 void mine;
 policy({
 	description: 'Customers read themselves',
-	grants: { customers: { read: { customers: { where: { email: { eq: { var: 'requestor.email' } } } } } } }
+	grants: {
+		customers: { read: { customers: { where: { email: { eq: { var: 'requestor.email' } } } } } }
+	}
 });
 // @ts-expect-error E1 on text that is not an email
 // prettier-ignore
 policy({ description: 'x', grants: { customers: { read: { customers: { where: { name: { eq: { var: 'requestor.email' } } } } } } } });
 policy({
 	description: 'x',
-	// @ts-expect-error E2 on a number
-	grants: { order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.email' } } } } } } }
+	grants: {
+		// @ts-expect-error E2 on a number
+		order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.email' } } } } } }
+	}
 });
 // @ts-expect-error E3 an unknown actor operand
 // prettier-ignore
@@ -370,7 +382,7 @@ model('probe', {
 	label: 'e',
 	fields: { e: { kind: 'text', format: 'email' } },
 	// @ts-expect-error E4 not in a static position (`check`, rule 4)
-	check: { mine: { e: { eq: { var: 'requestor.email' } } } }
+	constraints: { mine: { check: { e: { eq: { var: 'requestor.email' } } } } }
 });
 
 // ── the `{ var: 'requestor.visitor' }` operand (anonymous identity) ──
@@ -378,12 +390,16 @@ const guest: Where<'customers'> = { name: { eq: { var: 'requestor.visitor' } } }
 void guest;
 policy({
 	description: 'Guests read their own rows',
-	grants: { customers: { read: { customers: { where: { name: { eq: { var: 'requestor.visitor' } } } } } } }
+	grants: {
+		customers: { read: { customers: { where: { name: { eq: { var: 'requestor.visitor' } } } } } }
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error V1 on a number
-	grants: { order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.visitor' } } } } } } }
+	grants: {
+		// @ts-expect-error V1 on a number
+		order_lines: { read: { order_lines: { where: { qty: { eq: { var: 'requestor.visitor' } } } } } }
+	}
 });
 
 // ── the run ledger (rule 56, X-18): an `Id<>` target, never granted, read or written ──
@@ -391,14 +407,14 @@ const run: Id<'sys_run'> | undefined = undefined;
 void run;
 // @ts-expect-error L1 run-grant: no grant names sys_run
 policy({ description: 'x', grants: { sys_run: { read: true } } });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error L2 run-ctx-read: server code cannot read sys_run
 		return (yield* ctx.query({ sys_run: { limit: 1 } })).rows.length;
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error L3 nor write it
@@ -407,7 +423,7 @@ automation('orders_renote', {
 	}
 });
 // @ts-expect-error L4 nor trigger on it
-automation('nightly', { ...rt.nightly.spec, on: { created: 'sys_run' } });
+automation({ ...rt.nightly.spec, on: [{ created: 'sys_run' }] });
 policy({ description: 'x', grants: { sys_invitation: { read: true } } });
 // @ts-expect-error Invitations remain read-only.
 policy({ description: 'x', grants: { sys_invitation: { read: true, create: true } } });

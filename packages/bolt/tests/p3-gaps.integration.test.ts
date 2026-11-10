@@ -33,7 +33,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			docs: {
-				read: { docs: { fields: 'all' } },
+				outputs: { default: { docs: { fields: 'all' } } },
 				create: { columns: { docs: ['title', 'body'] } },
 				update: { columns: { docs: ['title', 'body'] } }
 			}
@@ -42,14 +42,13 @@ const manifest = Result.getOrThrow(
 			p: {
 				description: 'P',
 				grants: { docs: { read: true, create: true, update: true } },
-				automations: ['tidy']
+				capabilities: { automations: ['tidy'] }
 			}
 		},
 		automations: { tidy: { description: 'Tidy', policies: ['p'] } },
 		integrations: {},
 		teams: {},
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},

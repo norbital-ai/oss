@@ -18,7 +18,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		items: {
-			read: { items: { fields: 'all' } },
+			outputs: { default: { items: { fields: 'all' } } },
 			create: { columns: { items: ['title'] } },
 			update: { columns: { items: ['title'] } }
 		}

@@ -21,7 +21,7 @@ Exact shapes: `EnvoySpec`, `McpSpec`, `IntegrationSpec` from `@norbital-ai/bolt`
 
 ## Envoys
 
-- An envoy is the workspace agent answering senders on a conversation instance. `+<id>.envoy.ts` is a source default; `sys_envoy` rows hold the tenant's name, audience, policies, task and group, delegation, triage and DM settings.
+- An envoy is the workspace agent answering senders on a conversation instance. `sys_envoy` rows hold the tenant's name, audience, policies, task and group, delegation, triage and DM settings.
 - Deployment is `sys_integration.envoy` on a workspace instance (owner null), at most one envoy per instance; `active: false` pauses it. A connection's `envoy` is the default the release writes when creating the slot; a runtime change survives releases. `bolt check` refuses `envoy` on a connection with no conversation.
 - Never seed envoys.
 - `private` admits a sender whose handle matches a member (phone, email, telegram); others get one fixed notice per 15 minutes. Drivers with no member handle admit nobody. `public` admits anyone. Email is always addressed; group chat follows `groupMessages`.
@@ -56,7 +56,7 @@ Exact shapes: `EnvoySpec`, `McpSpec`, `IntegrationSpec` from `@norbital-ai/bolt`
 1. Native channels: whatsapp, email, telegram, slack, discord, wechat.
 2. Through the system `chat` integration: Teams, Google Chat, Lark, WeCom, Webex, Mattermost, Messenger, Instagram, X, XChat, LINE, Zalo, QQ, Weixin, Twitch, SMS, iMessage, Dial, AgentPhone, Zernio, Novu, GitHub, GitLab, Linear, Notion, Liveblocks, Velt, Gmail and Resend. WhatsApp Cloud and Kapso sit under whatsapp.
 3. `sys_integration.create { integration: 'chat', name, envoy }`, then the person pairs it, picking the platform and pasting its settings. Their senders match no member, so give these connections a public envoy.
-4. A platform on neither list has no channel. An `http` definition cannot host an envoy and a workspace cannot supply a provider. Say so. A webhook automation can answer it (`on: { webhook, verify }`, `ctx.ai`, `ctx.request`), and it lacks conversations, sender identity, typing and attachments.
+4. A platform on neither list has no channel. An `http` definition cannot host an envoy and a workspace cannot supply a provider. Say so. A webhook automation can answer it (`on: [{ webhook, verify }]`, `ctx.ai`, `ctx.request`), and it lacks conversations, sender identity, typing and attachments.
 
 A platform's level decides what can be promised to a customer. Read it from the connection form or `integrations.md` before you say a channel stays in step:
 

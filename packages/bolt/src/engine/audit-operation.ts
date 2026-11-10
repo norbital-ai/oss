@@ -5,7 +5,6 @@ import type { AuditActor, AuditEvent } from '../protocol/audit.ts';
 import type { EngineActor } from './contracts.ts';
 import type { Json } from '../decl/values.ts';
 import type { TenantDbShape } from './db/tenant-db.ts';
-import { SqlSessionDb } from './db/tenant-db.ts';
 import { Audit, AuditRecoveryActive, requestAuditRecovery } from './audit.ts';
 import { AuditMutation } from './audit-context.ts';
 import { acknowledgeAudit, drainAuditErases, expireAudit } from './audit-retention.ts';
@@ -43,7 +42,6 @@ export type AuditIntent = {
 	readonly actor: AuditActor;
 	readonly payload: Json;
 	readonly invocation?: string;
-	readonly transaction?: string;
 	readonly run?: string;
 	readonly approval?: string;
 	readonly outcomeKey?: string;
@@ -69,7 +67,7 @@ export const prepareAudit = Effect.fn('Audit.prepare')(function* (intent: AuditI
 		actor: intent.actor,
 		subject: null,
 		invocation: intent.invocation ?? null,
-		transaction: intent.transaction ?? null,
+		transaction: null,
 		run: intent.run ?? null,
 		approval: intent.approval ?? null,
 		payload: intent.payload
@@ -254,8 +252,7 @@ export const audited = <A, E, R>(
 	effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E | BoltError | import('./errors.ts').DbError, R> =>
 	Effect.gen(function* () {
-		if ((yield* AuditMutation) !== undefined || (yield* SqlSessionDb) !== undefined)
-			return yield* effect;
+		if ((yield* AuditMutation) !== undefined) return yield* effect;
 		const operation = yield* prepareAudit(intent);
 		// Recovery wakes only for an operation this fiber leaves unsettled (failed, unknown or interrupted): a settled
 		// one has nothing to recover.

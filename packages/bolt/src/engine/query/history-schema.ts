@@ -2,6 +2,7 @@ import { Predicate, Result, Schema } from 'effect';
 import { canonical, FieldSpec, TableSpec, SYSTEM_COLUMNS, type Json } from '@norbital-ai/store';
 import { Decimal, minorDigits } from '@norbital-ai/std/decimal';
 import { encodeWire } from '@norbital-ai/std/wire';
+import { inputSchema } from '@norbital-ai/std/kind';
 import { decodeInput } from '../callables/decode.ts';
 import type { EngineManifest } from '../manifest.ts';
 
@@ -108,6 +109,11 @@ export function compatibleHistoryValue(
 ): Json | undefined {
 	if (before?.kind === 'custom' && (after.kind !== 'custom' || before.of !== after.of))
 		return undefined;
+	// A stored file reference may carry the upload's size and hash metadata.
+	if (after.kind === 'file')
+		return Result.isSuccess(Schema.decodeUnknownResult(inputSchema(after))(value))
+			? value
+			: undefined;
 	if (
 		before?.kind === 'money' &&
 		after.kind === 'money' &&

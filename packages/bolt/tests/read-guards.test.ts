@@ -254,8 +254,6 @@ describe('native read guards', () => {
 				let captures = 0;
 				const result: Rows = { rows: [{ value: 7 }], affected: 1 };
 				const raw: RawDb = {
-					session: () =>
-						Effect.fail(DbError.make('0A000', 'This SQL capture fixture has no native session.')),
 					read: (statements) =>
 						Effect.sync(() => {
 							reads++;

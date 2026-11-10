@@ -43,9 +43,11 @@ import { readsAny, viewOutput } from '../access/authority.ts';
 import { midnight, startOfDate } from '../query/eval.ts';
 import { materialize } from '../runs/time.ts';
 import {
+	canAggregateWhere,
 	catalogFor,
 	DEFAULT_OUTPUT,
 	exposedField,
+	UNSORTABLE,
 	type Catalog,
 	type ExposureInfo,
 	type FieldInfo
@@ -259,8 +261,6 @@ type Order = {
 		  };
 };
 const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum', 'duration']);
-/** Kinds `OrderBy` refuses: no sort key is offered on them (the builder's own `UNSORTABLE`). */
-const UNSORTABLE = new Set(['json', 'file', 'custom', 'vector', 'point', 'period', 'ref']);
 const STOP = new Set([
 	'the',
 	'and',
@@ -892,7 +892,6 @@ const AGGS = [
 	['lowest', 'min'],
 	['highest', 'max']
 ] as const;
-const SUMMABLE = ['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration'];
 /** Kinds whose value is words: shown quoted in a condition ("Title contains “pump”"). */
 const QUOTED = new Set(['text', 'search', 'semantic']);
 const same = (a: readonly FilterStep[], b: readonly FilterStep[]) =>
@@ -1092,10 +1091,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						const s = spec(rel.child, f.name);
 						if (s === undefined || s.hidden || f.many || !exposedField(child, f.name)) continue;
 						for (const [word, fn] of AGGS)
-							if (
-								SUMMABLE.includes(f.kind) ||
-								((fn === 'min' || fn === 'max') && (f.kind === 'date' || f.kind === 'instant'))
-							)
+							if (canAggregateWhere(f.kind, fn))
 								out.push({
 									label: `${rl} › ${DAY_KINDS.has(f.kind) ? (fn === 'max' ? 'latest' : 'earliest') : word} ${(s.label ?? human(f.name)).toLowerCase()}`,
 									path: [...steps, { k: 'agg', rel: r, fn, of: f.name }],

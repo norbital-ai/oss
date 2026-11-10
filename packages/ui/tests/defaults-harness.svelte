@@ -36,7 +36,7 @@
 	let fixture: DefaultsHarnessProps = $props();
 	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(fixture.bolt);
+	provideBolt(() => fixture.bolt);
 	provideKinds({
 		get catalog() {
 			return fixture.catalog;

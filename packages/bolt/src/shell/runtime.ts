@@ -1,6 +1,6 @@
-// The shell's browser half (§3.5, §5.10): `$bolt` as pages see it (the data client plus `href` and `agent`), the
+// The shell's browser half (§3.5, §5.10): the page context (the data client plus `href` and `agent`), the
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
-// needs one. The generated `$bolt` module re-exports `bolt` (below) with the ui edge (`run`, `fork`, `attach`).
+// needs one.
 import { Clock, Context, Effect, Equal, Layer, Option, Queue, Schema, Stream } from 'effect';
 import { encodeWire, type Wired } from '@norbital-ai/std/wire';
 import type { Json } from '../decl/values.ts';
@@ -528,7 +528,7 @@ const livePoll = () => {
 	return typeof value === 'number' && value > 0 ? (`${value} millis` as const) : undefined;
 };
 
-/** `$bolt` (§3.5): the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
+/** The page context (§3.5): the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
 export function shellBolt(
 	boot: ShellBoot,
 	options: {
@@ -608,6 +608,9 @@ export function shellBolt(
 			href: (...a: Parameters<typeof href>) => based(href(...a)),
 			/** The page's organization: the workspace name and its brand logo (the host's first icon), or `null`. */
 			org: { name: boot.workspace.name, logo: boot.workspace.logo ?? null },
+			tz: boot.workspace.tz,
+			catalog: boot.catalog,
+			automations: boot.automations,
 			runs: Object.assign(
 				(automation: string, options: { where?: Json; limit: number }) =>
 					Effect.gen(function* () {
@@ -668,75 +671,3 @@ class ShellConfiguration extends Context.Service<ShellConfiguration, ShellMountC
 	'@norbital-ai/bolt/ShellConfiguration'
 ) {}
 export const ShellLive = (config: ShellMountConfig) => Layer.succeed(ShellConfiguration, config);
-
-let current: ShellBolt | null = null;
-export const setCurrentBolt = (client: ShellBolt | null) => {
-	current = client;
-};
-export function currentBolt(): ShellBolt {
-	if (current === null) throw new Error('$bolt was read before the workspace shell booted.');
-	return current;
-}
-/** Stable module value: calls and plain getters read the current boot on use. */
-export const bolt: Omit<ShellBolt, 'describe'> & { readonly describe: ShellBolt['describe'] } = {
-	get aggregate() {
-		return currentBolt().aggregate;
-	},
-	get history() {
-		return currentBolt().history;
-	},
-	get query() {
-		return currentBolt().query;
-	},
-	act: (...args) => currentBolt().act(...args),
-	recordCapabilities: (...args) => currentBolt().recordCapabilities(...args),
-	decode: (...args) => currentBolt().decode(...args),
-	get describe() {
-		return currentBolt().describe;
-	},
-	options: (...args) => currentBolt().options(...args),
-	start: (...args) => currentBolt().start(...args),
-	clock: (...args) => currentBolt().clock(...args),
-	convert: (...args) => currentBolt().convert(...args),
-	previewPdf: (...args) => currentBolt().previewPdf(...args),
-	observe: (...args) => currentBolt().observe(...args),
-	upload: (...args) => currentBolt().upload(...args),
-	fileUrl: (...args) => currentBolt().fileUrl(...args),
-	get approvals() {
-		return currentBolt().approvals;
-	},
-	get restore() {
-		return currentBolt().restore;
-	},
-	get session() {
-		return currentBolt().session;
-	},
-	get actor() {
-		return currentBolt().actor;
-	},
-	get locale() {
-		return currentBolt().locale;
-	},
-	t: (...args) => currentBolt().t(...args),
-	get closed() {
-		return currentBolt().closed;
-	},
-	get sync() {
-		return currentBolt().sync;
-	},
-	get device() {
-		return currentBolt().device;
-	},
-	integration: (...args) => currentBolt().integration(...args),
-	integrationSetup: (...args) => currentBolt().integrationSetup(...args),
-	href: (...args) => currentBolt().href(...args),
-	get org() {
-		return currentBolt().org;
-	},
-	get runs() {
-		return currentBolt().runs;
-	},
-	get agent() {
-		return currentBolt().agent;
-	}
-};

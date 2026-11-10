@@ -362,12 +362,13 @@ export const revokeInvitation = Effect.fn('Bolt.revokeInvitation')(function* (
 ) {
 	const denied = requireAdmin(auth);
 	if (denied) return yield* Effect.fail(denied);
-	const s = new IdentityStatement(h);
+	const s = new IdentityStatement(h),
+		now = yield* h.now;
 	return yield* write(
 		h,
 		s,
-		`WITH u AS (UPDATE sys_invitation SET revoked_at = ${s.p((yield* h.now).toISOString())}::timestamptz, revision = revision + 1
-WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${identityHistory(s, 'sys_invitation', 'u', yield* h.now, by(auth))} SELECT id FROM u`,
+		`WITH u AS (UPDATE sys_invitation SET revoked_at = ${s.p(now.toISOString())}::timestamptz, revision = revision + 1
+WHERE id = ${s.p(id)} AND accepted_at IS NULL AND revoked_at IS NULL ${IMAGES}), ${identityHistory(s, 'sys_invitation', 'u', now, by(auth))} SELECT id FROM u`,
 		undefined,
 		(r) => (r === undefined ? refuse('notFound', 'No open invitation.') : null)
 	);
@@ -435,7 +436,8 @@ const setFlag = Effect.fn('Bolt.setFlag')(function* (
 	const denied = requireAdmin(auth);
 	if (denied) return yield* Effect.fail(denied);
 	const s = new IdentityStatement(h),
-		u = s.p(user);
+		u = s.p(user),
+		now = yield* h.now;
 	const keep = value
 		? 'true'
 		: `EXISTS (SELECT 1 FROM sys_user WHERE admin AND active AND id <> ${u})`;
@@ -443,12 +445,12 @@ const setFlag = Effect.fn('Bolt.setFlag')(function* (
 		flag === 'active' && !value
 			? `, push AS (DELETE FROM bolt_push_subscriptions WHERE "user" = ${u} AND EXISTS (SELECT 1 FROM changed))`
 			: '';
-	const project = flag === 'active' ? projection(h, s, 'changed', yield* h.now) : '';
+	const project = flag === 'active' ? projection(h, s, 'changed', now) : '';
 	return yield* write(
 		h,
 		s,
 		`WITH changed AS (UPDATE sys_user SET ${flag} = ${s.p(value)}, revision = revision + 1 WHERE id = ${u} AND (NOT (admin AND active) OR ${keep}) ${IMAGES}),
-${identityHistory(s, 'sys_user', 'changed', yield* h.now, by(auth))}${push}${project}
+${identityHistory(s, 'sys_user', 'changed', now, by(auth))}${push}${project}
 SELECT (SELECT count(*) FROM changed)::int AS n, EXISTS (SELECT 1 FROM sys_user WHERE id = ${u}) AS found`,
 		ADMINS,
 		(r) =>

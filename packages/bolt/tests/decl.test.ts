@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { install } from '../src/decl/runtime/guest.ts';
-import { customField, model, policy } from '../src/index.ts';
+import { custom_field, model, policy } from '../src/index.ts';
 import { splitModel } from '../src/decl/model.ts';
 import { salesRep } from './types/access.ts';
 import * as fixtures from './types/fixture/models.ts';
@@ -16,9 +16,9 @@ describe('declarations', () => {
 	it('policy returns its literal with a check callback on each write grant', () => {
 		expect(policy(salesRep)).toBe(salesRep);
 		expect(salesRep.grants.orders).toMatchObject({
-			create: { check: expect.any(Function) },
-			update: { check: expect.any(Function) },
-			delete: { check: expect.any(Function) }
+			create: { verdict: expect.any(Function) },
+			update: { verdict: expect.any(Function) },
+			delete: { verdict: expect.any(Function) }
 		});
 	});
 
@@ -45,7 +45,7 @@ describe('declarations', () => {
 		expect(parts.exposure?.delete).toEqual({ check: true });
 		expect(parts.exposure?.notify).toBe(true);
 		// the read layer map keys by path, the root first
-		expect(Object.keys(parts.exposure?.read ?? {})[0]).toBe('orders');
+		expect(Object.keys(parts.exposure?.outputs.default ?? {})[0]).toBe('orders');
 		const privateModel = splitModel('private', {
 			description: 'Private rows',
 			label: 'name',
@@ -54,10 +54,10 @@ describe('declarations', () => {
 		expect(privateModel.exposure).toBeUndefined();
 	});
 
-	it('keeps a custom field validator inside its named literal', () => {
+	it('keeps a custom field validator with its literal', () => {
 		const validate = (value: Parameters<NonNullable<typeof fixtures.rating.check>>[0]) =>
 			value.score > 0 ? undefined : 'positive';
-		const field = customField('rating', {
+		const field = custom_field({
 			description: 'Score',
 			shape: {
 				kind: 'object',
@@ -65,7 +65,6 @@ describe('declarations', () => {
 			},
 			validate
 		});
-		expect(field.name).toBe('rating');
 		expect(field.check).toBe(validate);
 		expect(field.spec.validate).toBe(validate);
 		expect(field.check?.({ score: 0 })).toBe('positive');

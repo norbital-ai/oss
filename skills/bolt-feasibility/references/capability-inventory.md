@@ -12,7 +12,7 @@ Everything here is native unless stated. A facility a host left `off` fails `Una
 | Structured domain values | custom fields |
 | Runtime formulas, extraction variants, business catalogues | configuration models validated by write contracts |
 | Parent-owned calculation parts, document snapshots | shaped JSON or custom datatypes |
-| Effective-dated facts, versioned lineages | `period` + `noOverlap` + callbacks, std versioned |
+| Effective-dated facts, versioned lineages | `period` + `no_overlap` constraint + callbacks, std versioned |
 | System columns, history, audit | runtime |
 | Reviewed SQL migrations generated from the manifest | root `migrations/` |
 | Text, semantic and custom-index search, filters, cursor paging, aggregates | `search`, `bolt.query` |
@@ -40,12 +40,12 @@ Everything here is native unless stated. A facility a host left `off` fails `Una
 | Agent tools with packages, in a VM with no network or processes | `agent/tool/<name>/+tool.ts`, `run.ts`; `run_tool` |
 | Remote MCP servers, granted by policy | `agent/mcp/` |
 | Typed decisions; LLM inference with structured output, images and files; embeddings | `ctx.ai.*` |
-| Speech to text, text to speech | `ctx.convert.ingest`, `ctx.ai.speak`; optional |
+| Speech to text | `ctx.convert.ingest` when the host binds Convert |
 | Mail, chat and in-app notifications; record-driven outbound with delivery events | connections, sync `write` and `read`, `notify` |
 | Workspace secrets | `+secrets.ts` |
 | File storage, upload, image facts | `file` fields, `ctx.files` |
 | Portal users and signed-out public forms | `audience` on `+app.ts` |
-| Public and external sites with caller-scoped SSR | `pageServer` loader and shared codec |
+| Public and external sites with caller-scoped SSR | `ctx.query` in the public page |
 | Device kiosks and embeddable customer sites with phone verification and self sign-up | `portal: true`, kiosks, `signup` |
 
 ## External world (mediated)

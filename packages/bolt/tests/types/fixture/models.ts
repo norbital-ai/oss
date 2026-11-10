@@ -2,7 +2,7 @@ import { install } from '../../../src/decl/runtime/guest.ts';
 install();
 // A hand-written workspace for the type corpus: the `src/data/model/<name>/+model.ts` literals a template writes, every
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
-import { customField, model } from '../../../src/index.ts';
+import { custom_field, model } from '../../../src/index.ts';
 import type { Finding, Notice, SyncRow } from '../../../src/index.ts';
 
 export const customers = model('customers', {
@@ -29,8 +29,7 @@ export const customers = model('customers', {
 		email_chain: { kind: 'text', expr: { upper: { field: 'email_lower' } } }
 	},
 	search: { text: ['name'] },
-	read: 'all',
-	outputs: { directory: { customers: { fields: ['name', 'tier'] } } },
+	outputs: { default: { fields: 'all' }, directory: { fields: ['name', 'tier'] } },
 	create: {
 		columns: { customers: ['name', 'email', 'tier'] },
 		filled: { customers: ['name'] },
@@ -108,7 +107,7 @@ export const orders = model('orders', {
 	},
 	index: ['customer', 'due'],
 	computed: { due_soon: { kind: 'date', expr: { plusDays: [{ field: 'due' }, -7] } } },
-	check: { has_customer: { customer: { isNull: false } } },
+	constraints: { has_customer: { check: { customer: { isNull: false } } } },
 	search: {
 		text: ['note'],
 		indexes: {
@@ -125,18 +124,14 @@ export const orders = model('orders', {
 			}
 		}
 	},
-	read: {
-		orders: { fields: 'all' },
-		'orders.customer': { fields: ['name', 'tier'] },
-		'orders.lines': { fields: 'all' }
-	},
 	outputs: {
-		logistics: { orders: { fields: ['number', 'status', 'customer'] }, 'orders.lines': { fields: ['item', 'qty'] } }
+		default: { fields: 'all', customer: { fields: ['name', 'tier'] }, lines: { fields: 'all' } },
+		logistics: { fields: ['number', 'status', 'customer'], lines: { fields: ['item', 'qty'] } }
 	},
 	create: {
 		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
 		transform: function* (rows, ctx) {
-			const known = yield* ctx.db.query({
+			const known = yield* ctx.query({
 				customers: {
 					where: { id: { in: rows.map((r) => r.customer) } },
 					fields: ['tier']
@@ -168,7 +163,7 @@ export const orders = model('orders', {
 	},
 	notify: function* (event, ctx) {
 		if (event.kind !== 'write' || event.action !== 'create') return [];
-		const buyers = yield* ctx.db.query({
+		const buyers = yield* ctx.query({
 			customers: {
 				where: { id: { in: event.records.map((o) => o.customer) } },
 				fields: ['name']
@@ -227,7 +222,9 @@ export const orders = model('orders', {
 					type: 'application/vnd.ms-excel',
 					extensions: ['.xls'],
 					parse: function* (file, ctx) {
-						const text = yield* ctx.files.text(file);
+						const text = new TextDecoder('utf-8', { fatal: true }).decode(
+							yield* ctx.files.get(file)
+						);
 						return text.split('\n').map((line, i) => ({ customer: line, note: null, $at: i + 1 }));
 					}
 				}
@@ -238,30 +235,30 @@ export const orders = model('orders', {
 			},
 			context: { since: { kind: 'date' } },
 			read: function* ({ records, context }, ctx) {
-				const known = yield* ctx.db.query({
+				const known = yield* ctx.query({
 					customers: {
 						where: { name: { in: records.map((r) => r.customer) } },
 						fields: ['name']
 					}
 				});
-				const idOf = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
+				const id_of = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
 				return {
 					rows: records.flatMap((r) => {
-						const customer = idOf(r.customer);
+						const customer = id_of(r.customer);
 						return customer === undefined
 							? []
 							: [{ customer, note: r.note ?? null, due: context.since }];
 					}),
 					scope: { by: ['customer'], range: 'due' },
 					findings: records.flatMap((r): Finding[] =>
-						idOf(r.customer) === undefined
+						id_of(r.customer) === undefined
 							? [{ at: r.$at, field: 'customer', message: 'Unknown customer', severity: 'refuse' }]
 							: []
 					)
 				};
 			},
 			write: function* ({ context }, ctx) {
-				const open = yield* ctx.db.query({
+				const open = yield* ctx.query({
 					orders: {
 						where: { due: { gte: context.since } },
 						fields: ['customer', 'note']
@@ -288,7 +285,7 @@ export const order_lines = model('order_lines', {
 			expr: { round: [{ times: [{ field: 'price' }, { field: 'qty' }] }, 2] }
 		}
 	},
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });
 
 export const notices = model('notices', {
@@ -305,7 +302,7 @@ export const notices = model('notices', {
 		text: ['subject'],
 		semantic: { fields: ['subject'], model: 'text_small', dim: 1536 }
 	},
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	syncs: {
 		// one way in: the mailbox's messages are its deliveries
 		mail: {
@@ -341,8 +338,8 @@ export const notice_notes = model('notice_notes', {
 		integration: { kind: 'ref', to: 'sys_integration', optional: true },
 		note: { kind: 'text' }
 	},
-	unique: [{ fields: ['notice'] }],
-	read: 'all',
+	constraints: { one_notice: { unique: ['notice'] } },
+	outputs: { default: { fields: 'all' } },
 	create: { columns: { notice_notes: ['notice', 'note'] } },
 	update: { columns: { notice_notes: ['note'] } }
 });
@@ -356,7 +353,7 @@ export const sites = model('sites', {
 			kind: 'ref',
 			to: 'customers',
 			optional: true,
-			onDelete: 'setNull',
+			on_delete: 'set_null',
 			inverse: 'sites',
 			where: { tier: { eq: 'gold' } }
 		},
@@ -377,11 +374,14 @@ export const sites = model('sites', {
 		rating: { kind: 'custom', of: 'rating', optional: true },
 		budget: { kind: 'money', currency: 'EUR', optional: true }
 	},
-	noOverlap: [{ key: ['name'], period: 'open' }],
-	// a lock is a predicate over the model's own fields
-	locked: { zone: { isNull: false } },
-	read: { sites: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] } },
-	outputs: { summary: { sites: { fields: ['name', 'open'] } } },
+	constraints: {
+		no_overlapping_sites: { no_overlap: 'open', per: ['name'] },
+		zoned: { locked: { zone: { isNull: false } } }
+	},
+	outputs: {
+		default: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] },
+		summary: { fields: ['name', 'open'] }
+	},
 	update: { columns: { sites: ['name', 'location'] } }
 });
 
@@ -397,7 +397,7 @@ export const products = model('products', {
 		price: { kind: 'decimal', scale: 2, optional: true },
 		commission_factor: { kind: 'decimal', scale: 4, optional: true }
 	},
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	update: { columns: { products: ['commission_factor'] } },
 	syncs: {
 		// one way in from the ledger database, every 15 minutes by default
@@ -435,7 +435,7 @@ export const entries = model('entries', {
 		event_status: { kind: 'enum', values: ['confirmed', 'tentative', 'cancelled'] },
 		filed: { kind: 'bool', default: false }
 	},
-	read: 'all',
+	outputs: { default: { fields: 'all' } },
 	update: { columns: { entries: ['filed'] } },
 	syncs: {
 		// the calendar driver pushes events; one cursor per chosen calendar
@@ -457,7 +457,7 @@ export const entries = model('entries', {
 	}
 });
 
-export const rating = customField('rating', {
+export const rating = custom_field({
 	description: 'A score with an optional note',
 	shape: {
 		kind: 'object',
@@ -474,5 +474,5 @@ export const base = {
 	description: 'x',
 	label: 'note',
 	fields: { note: { kind: 'text', optional: true } },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 } as const;

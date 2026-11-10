@@ -1,5 +1,5 @@
 // The one queue (rules 48–52a): a run is a row with a `due_at`. `key` is rule 51's "one queued, unstarted run per
-// key" (an `on conflict` arbiter); a claim moves a workspace run's key to `run_key`. No grant: read through $bolt.runs,
+// key" (an `on conflict` arbiter); a claim moves a workspace run's key to `run_key`. No grant: read through ctx.runs,
 // RunStatus, RunsFor and /runs (rule 56).
 import { model } from '../../../../decl/model.ts';
 
@@ -30,5 +30,5 @@ export default model('sys_run', {
 		trigger: { kind: 'json', optional: true }
 	},
 	table: { primary: 'text', indexes: [{ on: ['due_at'], where: { state: { eq: 'queued' } } }] },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

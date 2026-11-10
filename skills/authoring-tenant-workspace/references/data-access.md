@@ -2,11 +2,11 @@
 
 Use `query` for every read, in pages and server code. Keep ids, decimals and dates in their platform types. Exact shape: `import('@norbital-ai/bolt').ReadRequest`.
 
-- Decode a text id once with `idOf(model)`; never cast a string to `Id<…>`.
+- Decode a text id once with `id_of(model)`; never cast a string to `Id<…>`.
 
 ## Read requests
 
-- A read is one JSON layer map. A key without a dot is a root, a model with `read`, at most once per request. A dotted key is a layer of that root's output and implies its parents.
+- A read is one JSON layer map. A key without a dot names a root with `outputs.default`, at most once per request. A dotted key is a layer of that root's output and implies its parents.
 - A root reads one output (`output`, `default` when absent) that a held policy must grant.
 - A layer takes `where`, `fields`, `orderBy`, `limit`, `search`, `aggregate`. Only a root takes `output`, `after`, `asOf`.
 - A named ref layer replaces its FK with the row or null; a many-layer is its rows.
@@ -17,10 +17,10 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 
 | Caller | Reads as |
 | --- | --- |
-| Page, `ctx.query` in a page loader | the caller |
+| Page | the caller |
 | Automation | its `policies` |
 | Effect | its writer |
-| Write callback, policy check, `notify` (`ctx.db.query`) | the workspace, whole rows |
+| Write callback, policy verdict, `notify` (`ctx.query`) | the workspace, whole rows |
 | File sync | the importing or exporting caller |
 | Remote sync | trusted workspace |
 
@@ -30,7 +30,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - Capture inputs in `$derived`; return null for no selected query.
 - Never mirror the answer into `$state`, create a subscription `$effect`, or own timers or generation counters.
 - Outside reactivity, `await` reads once; the same Query also yields as an Effect.
-- Mutations hold their own operation state through `fork` or `run` from `$bolt`. Keep Effects out of Svelte state. Mounted element resources belong to `attach`.
+- Mutations hold their own operation state through `fork` or `run` from `@norbital-ai/ui/effect`. Keep Effects out of Svelte state. Mounted element resources belong to `attach`.
 
 ## Time and operands
 
@@ -41,18 +41,18 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 
 ## SSR pages
 
-- A public or external page loads through `pageServer.load` with a shared codec and renders synchronously. Later reads use Query. See [apps-and-surfaces.md](apps-and-surfaces.md).
+- A public or external page uses `ctx.query` during server rendering, hydration and live updates. See [apps-and-surfaces.md](apps-and-surfaces.md).
 
 ## One read, never N+1
 
 - A relation column renders its target's label natively. A custom page names related data as layers of its one read.
 - Never mount a lookup per row. Reads started in the same microtask batch into one round trip and one statement; identical reads deduplicate.
-- A read depending on another row's field is a layer through a declared ref, named in `read`.
+- A read depending on another row's field uses a nested relation in the output.
 
 ## Read, then transform
 
 - A computed answer is one read request plus a pure browser-safe `src/lib` helper typed over the rows, called from pages and server code alike. Helpers take time as an argument.
-- Add the layers it needs to the root's `read`, narrowed in the root's policy where needed.
+- Add its layers to the root's output and scope them in the root's policy where needed.
 - Server checks stay in write callbacks, so a client preview is safe. An export too heavy for the page is a file sync.
 
 ## Writes
@@ -62,13 +62,6 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - `ctx.act.many` commits independent writes together. `ctx.act.checked` does the same for dynamic JSON inputs; its outputs stay JSON. Prefer `many` when inputs are typed.
 - A durable automation holds several transactions, so separate acts are not atomic.
 - A transform computes every id first, prefetches in at most two reads, then decides per row without crossings.
-
-## Transactions
-
-- When writes depend on a current read or an earlier write, use `ctx.transaction(function* (tx) { … })`: one session, read-your-writes, one commit, a fixed five-second deadline on PostgreSQL 17+. PGlite refuses it.
-- Yield only `tx.query` (no `asOf`) and `tx.act`. Facilities, captured outer Effects, raw SQL, nesting and async callbacks are forbidden: finish external work first.
-- `tx.act` uses the standard guards. Inner answers are provisional. The outer answer is `committed` with output and records, or held with a `requestId` and no callback output. A refusal or failure rolls everything back. Refuse by throwing the typed refusal from the errors module.
-- Pass no manual revision maps inside; upserts still need `onConflict`. Return native values or void. The callback is never replayed.
 
 ## Observed revisions
 

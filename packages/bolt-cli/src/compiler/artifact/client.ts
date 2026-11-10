@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // The artifact's `client/**`: an internal SPA whose main-thread module graph initializes before admission, and a
 // shared Vite/Svelte multi-entry graph for server-rendered public routes. Each public entry reaches its requested
-// page, shared wrapper and codec; the internal shell, agent and session registry remain in the private SPA.
+// page and shared wrapper; the internal shell, agent and session registry remain in the private SPA.
 // The SPA imports the shell, Bolt's page entries, ui, svelte and effect from the platform layer (`platform.ts`, under
 // `client/assets/platform/`), the same bytes in every artifact on this Bolt, and bundles only the workspace's code.
 // There is no template Vite config (§3.2: `vite.config.ts` is deleted with no successor). Runtime assets live in the
@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, posix } from 'node:path';
 import type { Server } from 'node:http';
 import { build, createServer, type Connect, type InlineConfig, type Rolldown } from 'vite';
+import { pageRouteKey, publicPageKeys } from '@norbital-ai/bolt/artifact';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
 import type { ShellManifest } from '@norbital-ai/bolt/tooling';
 import type { Discovered } from '../discover.ts';
@@ -100,7 +101,12 @@ export const prepareLayer = Effect.fn('bolt.prepareLayer')(function* (dir: strin
 	const fs = yield* FileSystem.FileSystem;
 	const out = join(dir, '.out'),
 		cache = join(dir, '.cache');
-	yield* cachedPlatformLayer(dir, `prepared-${PLATFORM_CACHE_VERSION}`, out, buildLayer(out, cache));
+	yield* cachedPlatformLayer(
+		dir,
+		`prepared-${PLATFORM_CACHE_VERSION}`,
+		out,
+		buildLayer(out, cache)
+	);
 	for (const scratch of [out, cache]) yield* fs.remove(scratch, { recursive: true, force: true });
 });
 
@@ -307,28 +313,18 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	title: string
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const publicFiles = files.filter((file) => {
-		if (file.role !== 'page' && file.role !== 'kiosk_page') return false;
-		const owner = file.name.slice(0, file.name.lastIndexOf('/'));
-		return (
-			(file.role === 'page'
-				? (m.apps[owner]?.audience ?? 'members')
-				: (m.kiosks?.[owner]?.auth ?? 'members')) !== 'members'
-		);
+	const publicRoutes = new Set(publicPageKeys(m));
+	const pageFiles = files.filter((file) => file.role === 'page');
+	const publicFiles = pageFiles.filter((file) => publicRoutes.has(pageRouteKey(m, file.name)));
+	const pages = pageFiles.map((file) => {
+		const route = pageRouteKey(m, file.name);
+		const name = route.startsWith('app/') ? file.name : route;
+		return `${key(name)}: () => import(${key(join(root, file.path))})`;
 	});
-	const pages = [
-		...files
-			.filter((f) => f.role === 'page')
-			.map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`),
-		...files
-			.filter((f) => f.role === 'kiosk_page')
-			.map((f) => `${key(`kiosk/${f.name}`)}: () => import(${key(join(root, f.path))})`)
-	];
 	const sessions = files.filter((f) => f.role === 'session');
 	const shell: ShellManifest = {
 		workspace: m.workspace,
 		apps: m.apps,
-		kiosks: m.kiosks ?? {},
 		groups: m.groups ?? {}
 	};
 	// hook:ui-kit — the client stylesheet: ui's tokens + Tailwind, scanning the shell and the workspace's pages
@@ -375,7 +371,7 @@ const workspaceLocale = ${key(shell.workspace.locale)}.toLowerCase();
 const tag = [workspaceLocale, workspaceLocale.split('-')[0]].find((l) => l in locales);
 globalThis.__BOLT_BUILD__ = ${key(versions)};
 const ready = initializeShellAssets(import.meta.url);
-ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key(publicFiles.map((file) => `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`))}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
+ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key([...publicRoutes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
 	integrationSetups: { ${integrationSetups.join(', ')} }, representations: { ${reps.join(', ')} }, customFields: { ${customFields.join(', ')} } })).catch((cause) => {
@@ -402,7 +398,6 @@ const graphConfig = (
 		root,
 		// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
 		base: './',
-		// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group
 		resolve: {
 			dedupe: EDITOR_SINGLETONS,
 			alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }]
@@ -415,12 +410,7 @@ const graphConfig = (
 				// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
 				async resolveId(id, importer) {
 					if (id === ENTRY) return `\0${id}`;
-					if (id === '$bolt' || (publicPage && id === '@norbital-ai/bolt/page'))
-						return publicPage
-							? join(SHELL, 'public', `client${EXT}`)
-							: join(BOLT, 'page', `index${EXT}`);
-					// one Svelte runtime and one ui, the shell's: pages and the record view reach ui as the shell does, so its
-					// contexts (`$bolt`, kinds) are the shell's
+					// The page and its controls share the shell's Svelte and UI runtime.
 					if (shellRuntime(id, importer))
 						return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
 					return null;
@@ -636,19 +626,14 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	const publicEntries: Record<string, string> = {};
 	const publicStylesheets = new Map<string, string>();
 	for (const file of internalOnly ? [] : publicFiles) {
-		const role = file.role === 'page' ? 'page_server' : 'kiosk_page_server';
-		if (!files.some((candidate) => candidate.role === role && candidate.name === file.name))
-			return yield* new BuildError({
-				cause: new Error(`Public page ${file.path} requires a server loader and shared data codec.`)
-			});
-		const route = `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`;
+		const route = pageRouteKey(m, file.name);
 		const publicStyles = join(gen, `${encodeURIComponent(route)}.css`);
 		yield* fs.writeFileString(
 			publicStyles,
 			`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n@source ${key(join(root, file.path))};\n@source ${key(join(SHELL, 'public', 'PublicPage.svelte'))};\n`
 		);
-		const codec = join(root, file.path.replace(/\+([^/]+)\.page\.svelte$/, '$1.page.data.ts'));
-		const wrapper = yield* publicWrapper(root, file);
+
+		const wrapper = yield* publicWrapper(root, file, route);
 		const browser = join(gen, 'public', `${route}.ts`);
 		yield* fs.makeDirectory(dirname(browser), { recursive: true });
 		yield* fs.writeFileString(
@@ -656,9 +641,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			`import ${key(publicStyles)};
 import { Effect } from 'effect';
 import Page from ${key(wrapper)};
-import codec from ${key(codec)};
 import { hydratePublicPage } from ${key(join(SHELL, 'public', `client${EXT}`))};
-Effect.runPromise(hydratePublicPage(Page, codec, ${key(route)})).catch((cause) => {
+Effect.runPromise(hydratePublicPage(Page, ${key(route)})).catch((cause) => {
 	console.error('Public page could not hydrate', cause);
 	const status = document.createElement('p'); status.setAttribute('role', 'alert'); status.textContent = 'This page could not become interactive. Reload to try again.'; document.getElementById('bolt')?.append(status);
 });`

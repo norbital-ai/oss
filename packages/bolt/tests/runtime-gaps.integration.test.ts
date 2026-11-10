@@ -35,17 +35,16 @@ const manifest = Result.getOrThrow(
 		},
 		relationships: {},
 		exposures: {
-			notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['title'] } } },
-			docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } },
+			notes: { outputs: { default: { notes: { fields: 'all' } } }, create: { columns: { notes: ['title'] } } },
+			docs: { outputs: { default: { docs: { fields: 'all' } } }, create: { columns: { docs: ['title', 'file'] } } },
 			secrets: {
-				read: { secrets: { fields: 'all' } },
+				outputs: { default: { secrets: { fields: 'all' } } },
 				create: { columns: { secrets: ['title', 'file'] } }
 			}
 		},
 		integrations: {},
 		teams: { ops: ['ops'] },
 		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		customFields: {},
@@ -54,7 +53,7 @@ const manifest = Result.getOrThrow(
 			ops: {
 				description: 'Ops',
 				grants: { notes: { read: true, create: true }, docs: { read: true } },
-				automations: ['report', 'long', 'bundle', 'read_doc']
+				capabilities: { automations: ['report', 'long', 'bundle', 'read_doc'] }
 			}
 		},
 		automations: {

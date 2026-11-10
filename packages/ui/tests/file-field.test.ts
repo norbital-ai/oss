@@ -59,7 +59,7 @@ const reads: [string, Value][] = [];
 const host = (over: Partial<KindsHost> = {}): KindsHost => ({
 	upload: (file) =>
 		Effect.succeed({ id: `up-${file.name}`, name: file.name, mime: file.type, size: file.size }),
-	fileUrl: (r) => (r.mime === 'application/pdf' ? PDF_URL : `/files/${r.id}`),
+	file_url: (r) => (r.mime === 'application/pdf' ? PDF_URL : `/files/${r.id}`),
 	query: (request) =>
 		Effect.sync(() =>
 			Object.fromEntries(

@@ -48,11 +48,11 @@ export const manifest: EngineManifest = {
 	},
 	exposures: {
 		orders: {
-			read: {
+			outputs: { default: {
 				orders: { fields: 'all' },
 				'orders.lines': { fields: 'all' },
 				'orders.tags': { fields: 'all' }
-			},
+			} },
 			create: { columns: { orders: ['title', 'note', 'status'], 'orders.lines': lineCols } },
 			update: {
 				columns: {
@@ -64,25 +64,23 @@ export const manifest: EngineManifest = {
 			delete: {}
 		},
 		lines: {
-			read: { lines: { fields: 'all' } },
+			outputs: { default: { lines: { fields: 'all' } } },
 			create: { columns: { lines: ['label', 'amount', 'order'] } },
 			update: { columns: { lines: lineCols } },
 			delete: {}
 		},
-		tags: { read: { tags: { fields: 'all' } }, create: { columns: { tags: ['name'] } } }
+		tags: { outputs: { default: { tags: { fields: 'all' } } }, create: { columns: { tags: ['name'] } } }
 	},
 	integrations: {},
 	policies: {},
 	teams: {},
 	automations: {},
 	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
-	groups: {},
-	kiosks: {}
+	groups: {}
 };
 
 export const TRUE: Pred = { t: 'const', value: true };

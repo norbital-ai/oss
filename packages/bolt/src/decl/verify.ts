@@ -11,7 +11,6 @@ import type {
 	OneRels,
 	OwnedInverse
 } from './names.ts';
-import type { ConversationOf } from './runtime/integration.ts';
 
 type Models = NamesPart<'models'>;
 type Listed<X> = X extends readonly (infer E)[] ? Listed<E> : X;
@@ -78,6 +77,22 @@ type ModelErrors<M, D = Models[M & keyof Models]> =
 	| Unknown<M, Each<D extends { noOverlap: infer L } ? L : never, 'key'>, FieldName<M>, 'noOverlap'>
 	| Unknown<
 			M,
+			D extends { locks: infer L }
+				? { [N in keyof L]: L[N] extends { except: infer F } ? Listed<F> : never }[keyof L]
+				: never,
+			FieldName<M> | OwnedInverse<M>,
+			'constraints.locked.except'
+	  >
+	| Unknown<
+			M,
+			D extends { locks: infer L }
+				? { [N in keyof L]: L[N] extends { where: infer W } ? WhereKeys<W> : never }[keyof L]
+				: never,
+			keyof Columns<M> | keyof OneRels<M>,
+			'constraints.locked'
+	  >
+	| Unknown<
+			M,
 			D extends { check: infer C }
 				? {
 						[N in keyof C]: WhereKeys<C[N] extends { where: infer W; message: string } ? W : C[N]>;
@@ -104,21 +119,9 @@ export type LocaleErrors<Locales = NamesPart<'locales'>, Base = NamesPart<'messa
 		: never;
 }[keyof Locales & string];
 
-/** Connections deploying an envoy on an instance that carries no conversation, as messages. */
-export type ConnectionErrors<C = NamesPart<'workspace'> extends { connections: infer X } ? X : {}> =
-	{
-		[K in keyof C & string]: C[K] extends { envoy: string; integration: infer D }
-			? [ConversationOf<D>] extends [never]
-				? `connections.${K}: an envoy answers only on a conversation integration; '${D & string}' carries none`
-				: never
-			: never;
-	}[keyof C & string];
-
 /** Every cross-file declaration error in the workspace, as messages; `never` when there is none. */
 export type Verify =
-	| { [M in keyof Models & string]: ModelErrors<M> }[keyof Models & string]
-	| LocaleErrors
-	| ConnectionErrors;
+	{ [M in keyof Models & string]: ModelErrors<M> }[keyof Models & string] | LocaleErrors;
 /**
  * `true` when `E` is `never`; otherwise an object type whose keys are the error messages, so tsc prints them. The generated `Check<Verify>` gate.
  */

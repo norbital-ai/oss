@@ -17,8 +17,7 @@
 		Form,
 		Icon,
 		Show,
-		Table,
-		useKinds
+		Table
 	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import type { LogRow } from '../../engine/contracts.ts';
@@ -53,7 +52,6 @@
 		onAutomationClose?: () => void;
 	} = $props();
 
-	const kinds = useKinds();
 	const runs = observe(() =>
 		bolt.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ limit: 500, brief: true }] } })
 	);
@@ -275,7 +273,7 @@
 
 {#if run !== null && one !== null}
 	{@const w = warnings(one)}
-	{@const input = kinds.automations?.[one.automation]?.input}
+	{@const input = bolt.automations?.[one.automation]?.input}
 	<DetailSheet
 		title={`${one.automation} · ${t(one.status)}`}
 		acts={acts(one)}

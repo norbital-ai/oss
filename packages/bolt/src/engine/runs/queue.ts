@@ -2,7 +2,7 @@
 // statement (`queueEffects`); a due time 5 minutes or more ahead is rounded up to a 5-minute bucket.
 // Crons are not queued: the host's clock fires them (`Runs.fire`), automations' and remote syncs' reads alike
 // (`syncTriggers`, engine/sync/index.ts).
-import { Result, Schema } from 'effect';
+import { Schema } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import { LIMITS, type Authority, type CronEntry, type QueuedRun } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
@@ -14,6 +14,7 @@ import { EFFECT_VERBS } from '../../decl/model.ts';
 import { type Chain } from '../write/sql.ts';
 import { actorRef } from '../write/commit.ts';
 import { duration } from './time.ts';
+import { cronFields } from './cron.ts';
 
 /** Every run INSERT belongs to this builder; the registry also supplies the commit's exact wake time. */
 const pieces = new WeakMap<Chain, string[]>();
@@ -63,17 +64,6 @@ export function nextDue(c: Chain): string {
 		: `(SELECT min(due_at) FROM (${selects.join(' UNION ALL ')}) queued_due)`;
 }
 
-const TriggerSpec = Schema.Union([
-	Schema.Struct({
-		cron: Schema.String,
-		tz: Schema.optionalKey(Schema.String),
-		rest: Schema.optionalKey(Schema.String)
-	}),
-	Schema.Struct({
-		webhook: Schema.String,
-		verify: Schema.Struct({ scheme: Schema.String, secret: Schema.String })
-	})
-]);
 export type WebhookTrigger = { automation: string; path: string; scheme: string; secret: string };
 export type Triggers = {
 	crons: readonly CronEntry[];
@@ -82,16 +72,6 @@ export type Triggers = {
 	rests: ReadonlyMap<string, number>;
 };
 
-// Effect's `Cron` takes fields only: a declared macro is its five fields
-const MACROS: { readonly [macro: string]: string } = {
-	'@yearly': '0 0 1 1 *',
-	'@annually': '0 0 1 1 *',
-	'@monthly': '0 0 1 * *',
-	'@weekly': '0 0 * * 0',
-	'@daily': '0 0 * * *',
-	'@hourly': '0 * * * *'
-};
-const fields = (cron: string) => MACROS[cron.trim()] ?? cron;
 const cache = new WeakMap<EngineManifest, Triggers>();
 /** Every declared trigger, compiled once per manifest; the host's clock computes the crons' slots. */
 export function triggersOf(m: EngineManifest): Triggers {
@@ -101,19 +81,9 @@ export function triggersOf(m: EngineManifest): Triggers {
 		webhooks: WebhookTrigger[] = [],
 		rests = new Map<string, number>();
 	for (const [automation, spec] of Object.entries(m.automations)) {
-		const decoded = Schema.decodeUnknownResult(Schema.Array(TriggerSpec))(
-			spec.on === undefined ? [] : Array.isArray(spec.on) ? spec.on : [spec.on]
-		);
-		if (Result.isFailure(decoded))
-			throw BoltError.make(
-				'invalid',
-				'decode',
-				`automation ${automation}: ${decoded.failure.message}`
-			);
-		const on = decoded.success;
-		for (const x of on) {
+		for (const x of spec.on ?? []) {
 			if ('cron' in x) {
-				crons.push({ id: automation, cron: fields(x.cron), zone: x.tz ?? m.workspace.tz });
+				crons.push({ id: automation, cron: cronFields(x.cron), zone: x.tz ?? m.workspace.tz });
 				if (x.rest !== undefined) rests.set(automation, duration(x.rest));
 				continue;
 			}
@@ -132,8 +102,7 @@ export function triggersOf(m: EngineManifest): Triggers {
  */
 export type Writer = { readonly starter: Json; readonly actor: string; readonly depth: number };
 /**
- * The holder an authority is compiled from: a run's own (`Authority.run`, never a delegation's added policies), else
- * the authority's. A platform or sync actor stays the platform.
+ * The holder an authority is compiled from. A platform or sync actor stays the platform.
  */
 export const holderOf = (a: Authority): Holder =>
 	a.run?.holder ?? {

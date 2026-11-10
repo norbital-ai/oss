@@ -31,11 +31,7 @@ const manifest: EngineManifest = {
 	relationships: {},
 	exposures: {
 		entries: {
-			read: { entries: { fields: 'all' } },
-			outputs: {
-				public: { entries: { fields: ['first_name'] } },
-				directory: { entries: { fields: ['code', 'display_name'] } }
-			},
+			outputs: { default: { entries: { fields: 'all' } }, public: { entries: { fields: ['first_name'] } }, directory: { entries: { fields: ['code', 'display_name'] } } },
 			create: { columns: { entries: ['first_name', 'last_name'] } },
 			update: { columns: { entries: ['first_name', 'last_name'] } }
 		}

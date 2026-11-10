@@ -51,7 +51,7 @@ const manifest: EngineManifest = {
 	exposures: {
 		...base.exposures,
 		sources: {
-			read: { sources: { fields: 'all' } },
+			outputs: { default: { sources: { fields: 'all' } } },
 			create: {
 				columns: {
 					sources: ['reference'],
@@ -61,14 +61,14 @@ const manifest: EngineManifest = {
 			}
 		},
 		accounts: {
-			read: { accounts: { fields: 'all' }, 'accounts.entries': { fields: 'all' } },
+			outputs: { default: { accounts: { fields: 'all' }, 'accounts.entries': { fields: 'all' } } },
 			create: {
 				columns: { accounts: ['code', 'source_id'], 'accounts.entries': ['memo', 'amount'] }
 			},
 			update: { columns: { accounts: ['state'], 'accounts.entries': ['memo', 'amount'] } }
 		},
 		entries: {
-			read: { entries: { fields: 'all' } },
+			outputs: { default: { entries: { fields: 'all' } } },
 			create: { columns: { entries: ['memo', 'amount', 'account_id'] }, transform: true }
 		}
 	}
