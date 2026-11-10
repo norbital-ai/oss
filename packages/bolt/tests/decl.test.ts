@@ -48,7 +48,7 @@ describe('declarations', () => {
 		expect(Object.keys(parts.exposure?.outputs.default ?? {})[0]).toBe('orders');
 		const privateModel = splitModel('private', {
 			description: 'Private rows',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' } }
 		});
 		expect(privateModel.exposure).toBeUndefined();

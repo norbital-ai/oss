@@ -15,7 +15,7 @@
 		card,
 		lane,
 		where,
-		orderBy,
+		order_by,
 		search,
 		pageSize,
 		selectable = false,
@@ -29,7 +29,7 @@
 	}: Pick<BoardProps<C>, 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
-		orderBy: Json | undefined;
+		order_by: Json | undefined;
 		search?: string;
 		pageSize: number;
 		selectable?: boolean;
@@ -47,7 +47,7 @@
 	let pages = $state<(string | null)[]>([null]);
 	let nexts = $state<(string | null)[]>([]);
 	// a new filter or sort starts the lane over (cursors are bound to the query, rule 11)
-	const query = $derived(JSON.stringify({ of, where, orderBy, search }));
+	const query = $derived(JSON.stringify({ of, where, order_by, search }));
 	watch(
 		() => query,
 		() => {
@@ -82,7 +82,7 @@
 		{card}
 		{lane}
 		{where}
-		{orderBy}
+		{order_by}
 		{search}
 		{pageSize}
 		{selectable}
@@ -104,7 +104,6 @@
 		class={grid ? 'col-span-full' : undefined}
 		onclick={load}
 		data-lane-more
-		{@attach nearEnd}
-		>{msg(bolt, 'board.more', 'Load more')}</Button
+		{@attach nearEnd}>{msg(bolt, 'board.more', 'Load more')}</Button
 	>
 {/if}

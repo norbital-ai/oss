@@ -37,7 +37,7 @@ const manifest = {
 	models: {
 		jobs: {
 			description: 'A job',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 		}
 	},

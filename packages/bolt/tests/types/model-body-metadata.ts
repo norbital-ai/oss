@@ -18,28 +18,26 @@ model('orders', {
 			return rows;
 		}
 	},
-	search: {
-		text: ['note'],
-		indexes: {
-			by_colour: {
-				description: 'Orders of a similar colour',
-				dim: 3,
-				metric: 'l2',
-				input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
-				candidates: 4,
-				vector: (row) => {
-					expectTypeOf(row).toEqualTypeOf<StoredRow<'orders'>>();
-					return row.colour;
-				},
-				probe: (input) => {
-					expectTypeOf(input).toEqualTypeOf<{ readonly lab: Vector }>();
-					return { vector: input.lab };
-				},
-				rerank: (input, row) => {
-					expectTypeOf(input).toEqualTypeOf<{ readonly lab: Vector }>();
-					expectTypeOf(row).toEqualTypeOf<StoredRow<'orders'>>();
-					return 0;
-				}
+	indexes: {
+		find: { text: ['note'] },
+		by_colour: {
+			description: 'Orders of a similar colour',
+			dim: 3,
+			metric: 'l2',
+			input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
+			candidates: 4,
+			vector: (row) => {
+				expectTypeOf(row).toEqualTypeOf<StoredRow<'orders'>>();
+				return row.colour;
+			},
+			probe: (input) => {
+				expectTypeOf(input).toEqualTypeOf<{ readonly lab: Vector }>();
+				return { vector: input.lab };
+			},
+			rerank: (input, row) => {
+				expectTypeOf(input).toEqualTypeOf<{ readonly lab: Vector }>();
+				expectTypeOf(row).toEqualTypeOf<StoredRow<'orders'>>();
+				return 0;
 			}
 		}
 	}
@@ -49,7 +47,7 @@ model('orders', {
 automation({
 	description: 'Set a note on many orders',
 	input: {
-		ids: { kind: 'list', of: { kind: 'id', of: 'orders' } },
+		ids: { kind: 'ref', to: 'orders', many: true },
 		note: { kind: 'text' }
 	},
 	output: { kind: 'int' },

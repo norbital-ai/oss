@@ -21,7 +21,7 @@
 // `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
 import { Clock, Effect, Equal, Predicate, Result, Schema } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
-import { labelPaths, recordLabelSpec } from '@norbital-ai/std/label';
+import { labelPaths } from '@norbital-ai/std/label';
 import { Ai } from '../ports.ts';
 import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from '../services.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
@@ -82,7 +82,7 @@ const NEGATION =
 const DAY_WORDS =
 	/\b(after|before|since|until|till|from|on|by|between|during|around|following|prior)\b/i;
 const LIST_OPS = new Set(['in', 'nin', 'hasAny', 'hasAll']);
-const NO_VALUE = new Set(['isNull', 'notNull', 'isEmpty', 'notEmpty']);
+const NO_VALUE = new Set(['is_null', 'notNull', 'isEmpty', 'notEmpty']);
 const DAY_KINDS = new Set(['date', 'instant']);
 /** The child aggregates a many-relation offers. */
 type FilterAgg = 'sum' | 'avg' | 'min' | 'max';
@@ -177,7 +177,7 @@ type Described =
 	| {
 			ok: true;
 			where?: Json;
-			orderBy?: Json;
+			order_by?: Json;
 	  }
 	| {
 			ok: false;
@@ -209,7 +209,7 @@ export type Operator =
 	| 'during'
 	| 'hasAny'
 	| 'hasAll'
-	| 'isNull'
+	| 'is_null'
 	| 'notNull'
 	| 'isEmpty'
 	| 'notEmpty'
@@ -260,7 +260,7 @@ type Order = {
 				};
 		  };
 };
-const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum', 'duration']);
+const NUMERIC = new Set(['int', 'decimal', 'money', 'number', 'count', 'sum']);
 const STOP = new Set([
 	'the',
 	'and',
@@ -641,7 +641,6 @@ export const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 	number: NUMBER_OPS,
 	count: NUMBER_OPS,
 	sum: NUMBER_OPS,
-	duration: NUMBER_OPS,
 	date: DATE_OPS,
 	instant: DATE_OPS,
 	time: NUMBER_OPS.slice(0, 6),
@@ -751,13 +750,13 @@ function options(
 	} else if (k === 'point' || k === 'file' || k === 'vector' || k === 'custom' || k === 'ref') {
 		ops = [];
 	} else return undefined;
-	if (optional) ops.push(op('isNull', 'is empty'), op('notNull', 'is not empty'));
+	if (optional) ops.push(op('is_null', 'is empty'), op('notNull', 'is not empty'));
 	return ops.length === 0 && k !== 'point' ? undefined : { ops, values }; // a point is kept: a found record's location offers "within … of it"
 }
 /** The operator object an op and its argument make; `undefined` when the pair means nothing. */
 const VALUELESS_OPERATORS: Readonly<Record<string, Json>> = {
-	isNull: { isNull: true },
-	notNull: { isNull: false },
+	is_null: { is_null: true },
+	notNull: { is_null: false },
 	isEmpty: { isEmpty: true },
 	notEmpty: { isEmpty: false }
 };
@@ -1021,7 +1020,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 							{ op: 'nin', label: 'is none of' },
 							...(optional
 								? ([
-										{ op: 'isNull', label: 'is empty' },
+										{ op: 'is_null', label: 'is empty' },
 										{ op: 'notNull', label: 'is not empty' }
 									] as const)
 								: [])
@@ -1169,7 +1168,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			const target = c.model.one.get(s.name)!.targets[0]!,
 				x = viewOf(a, target).cat.exposures.get(target)!,
 				layer = levelOf(view, c, s.name, target);
-			const tl = labelPaths(recordLabelSpec(m.models[target] ?? {}))[0] ?? 'name';
+			const tl = labelPaths(m.models[target]?.record_label)[0] ?? 'name';
 			// the phrase is matched through the layer: read the target, then filter across the layer's label
 			if (
 				layer === undefined ||
@@ -1359,7 +1358,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 					x.model.fields.get(f)?.kind === kind &&
 					!x.model.fields.get(f)!.many &&
 					exposedField(x, f);
-				const label = labelPaths(recordLabelSpec(m.models[name] ?? {}))[0] ?? 'name';
+				const label = labelPaths(m.models[name]?.record_label)[0] ?? 'name';
 				const title = [label, ...x.model.search, 'name', 'title'].find((f) => readable(f, 'text'));
 				const when = [label, ...x.model.fields.keys()].find((f) => readable(f, 'date'));
 				if (title === undefined || when === undefined) continue;
@@ -2318,11 +2317,11 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 				? { not: group }
 				: group;
 		const sort = orders.find((x) => x.label === choiceOf(r, 'sort'));
-		const orderBy: Json | undefined =
+		const order_by: Json | undefined =
 			sort === undefined
 				? undefined
 				: sort.key.split('.').reduceRight<Json>((v, k) => ({ [k]: v }), sort.dir as Json);
-		if (where === undefined && orderBy === undefined)
+		if (where === undefined && order_by === undefined)
 			return fail('No field here matches that description. Try naming a field and a value.');
 		if (!local) {
 			// rule 11a: the same strict decode as any read literal, held to the caller's exposure
@@ -2334,7 +2333,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 						o.model,
 						{
 							...(where === undefined ? {} : { where }),
-							...(orderBy === undefined ? {} : { orderBy })
+							...(order_by === undefined ? {} : { order_by })
 						},
 						o.bindings
 					),
@@ -2348,7 +2347,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		return {
 			ok: true,
 			...(where === undefined ? {} : { where }),
-			...(orderBy === undefined ? {} : { orderBy })
+			...(order_by === undefined ? {} : { order_by })
 		};
 	});
 	const opts = Effect.fn('Agents.opts')(function* (o: {
@@ -2386,7 +2385,7 @@ export function decodeDescribed(
 	model: string,
 	q: {
 		where?: Json;
-		orderBy?: Json;
+		order_by?: Json;
 	},
 	/** What its time variables (`{ var: 'today' | 'now' }`) are: the read's own day and instant. */
 	at: { readonly today: string; readonly now: string }
@@ -2435,8 +2434,8 @@ export function decodeDescribed(
 	if (q.where !== undefined)
 		walk(storeSync(decodeWhere(cat, model, materialize(q.where, at))), root);
 	// a related key (`assignee.name`): each hop a declared layer, then its field
-	if (q.orderBy !== undefined)
-		for (const k of storeSync(order(q.orderBy, cat, model))) {
+	if (q.order_by !== undefined)
+		for (const k of storeSync(order(q.order_by, cat, model))) {
 			const steps = k.field.split('.');
 			let x = root;
 			for (const s of steps.slice(0, -1)) x = rel(x, s, x.model.one.get(s)?.targets[0] ?? '');

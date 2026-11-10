@@ -20,14 +20,18 @@ export const manifest = Result.getOrThrow(
 			...base.models,
 			tags: {
 				description: 'A tag',
-				label: 'name',
+				record_label: 'record.name',
 				unique: [{ fields: ['name'] }],
 				fields: { name: { kind: 'text' } }
 			},
-			receipts: { description: 'A receipt', label: 'memo', fields: { memo: { kind: 'text' } } },
+			receipts: {
+				description: 'A receipt',
+				record_label: 'record.memo',
+				fields: { memo: { kind: 'text' } }
+			},
 			people: {
 				description: 'A person',
-				label: 'name',
+				record_label: 'record.name',
 				key: ['code'],
 				search: { text: ['name'] },
 				fields: {

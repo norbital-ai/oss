@@ -39,7 +39,7 @@ const db = TenantDb.typed({
 			return native.read(statements);
 		}),
 	write: (statement, lock) => native.write(statement, lock),
-	transaction: (batch) => native.transaction(batch),
+	transaction: (batch) => native.transaction(batch)
 });
 const exec = (text: string) => Effect.tryPromise({ try: () => pg.exec(text), catch: dbError });
 const query = (text: string, params: readonly Json[] = []) => native.write({ text, params });
@@ -514,7 +514,7 @@ describe('next query engine (PGlite)', () => {
 										to: pick([null, '2026-09-12', bindings.today, '2026-10-01'])
 									}
 								},
-								{ isNull: rnd() < 0.5 }
+								{ is_null: rnd() < 0.5 }
 							]);
 						case 'point':
 							return pick([
@@ -536,13 +536,13 @@ describe('next query engine (PGlite)', () => {
 										]
 									}
 								},
-								{ isNull: true }
+								{ is_null: true }
 							]);
 						case 'json':
 							return pick([
 								{ contains: { big: pick(rows.orders!).id } },
 								{ contains: {} },
-								{ isNull: false }
+								{ is_null: false }
 							]);
 						case 'text': {
 							if (f.many)
@@ -568,7 +568,7 @@ describe('next query engine (PGlite)', () => {
 								{ ne: s },
 								{ in: list() },
 								{ like },
-								{ isNull: rnd() < 0.5 },
+								{ is_null: rnd() < 0.5 },
 								...texts.map((g) => ({ [pick(['eq', 'ne'])]: { field: g.name } })),
 								...(f.email && o.actor
 									? [{ eq: { var: 'requestor.email' } }, { eq: { var: 'requestor.email' } }]
@@ -577,7 +577,7 @@ describe('next query engine (PGlite)', () => {
 							]);
 						}
 						default:
-							return { isNull: rnd() < 0.5 };
+							return { is_null: rnd() < 0.5 };
 					}
 				}
 				const FIELDS = (m: string) =>
@@ -614,7 +614,7 @@ describe('next query engine (PGlite)', () => {
 									: pick([
 											{ eq: pick(rows[t]!).id },
 											{ in: rows[t]!.filter(() => rnd() < 0.3).map((x) => x.id) },
-											{ isNull: rnd() < 0.5 }
+											{ is_null: rnd() < 0.5 }
 										]);
 							return { [rel]: one.targets.length > 1 ? { [t]: body } : body };
 						}
@@ -641,7 +641,7 @@ describe('next query engine (PGlite)', () => {
 					return { [f.name]: leaf(m, f, o) };
 				}
 				// rule 11a's mutation step: one operator object or relation body becomes a shape every kind refuses
-				const BAD = [{}, { nope: 1 }, { eq: null }, { isNull: 'yes' }, { eq: { now: '+-1d' } }];
+				const BAD = [{}, { nope: 1 }, { eq: null }, { is_null: 'yes' }, { eq: { now: '+-1d' } }];
 				function corrupt(m: string, w: object): object {
 					const spots: {
 						obj: {
@@ -763,18 +763,18 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rules 9 and 11: explicit pages walk every row once in orderBy-then-id order; a cursor is bound to its query',
+		'rules 9 and 11: explicit pages walk every row once in order_by-then-id order; a cursor is bound to its query',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
-				for (const orderBy of [{ note: 'asc' }, [{ status: 'asc' }, { note: 'desc' }]]) {
+				for (const order_by of [{ note: 'asc' }, [{ status: 'asc' }, { note: 'desc' }]]) {
 					const seen: string[] = [];
 					let after: string | undefined;
 					do {
 						const page = (yield* run(
 							workspace,
 							read(cat, 'orders', {
-								orderBy,
+								order_by,
 								limit: 7,
 								...(after === undefined ? {} : { after }),
 								select: { total: true, note: true, status: true }
@@ -787,7 +787,7 @@ describe('next query engine (PGlite)', () => {
 					const all = (
 						(yield* run(
 							workspace,
-							read(cat, 'orders', { orderBy, all: true, select: { total: true } })
+							read(cat, 'orders', { order_by, all: true, select: { total: true } })
 						))[0] as Page
 					).rows.map((r) => r.id);
 					expect(seen).toEqual(all);
@@ -797,7 +797,7 @@ describe('next query engine (PGlite)', () => {
 					(yield* run(
 						workspace,
 						read(cat, 'orders', {
-							orderBy: { total: 'desc' },
+							order_by: { total: 'desc' },
 							all: true,
 							select: { total: true }
 						})
@@ -857,14 +857,14 @@ describe('next query engine (PGlite)', () => {
 								: metres(x.spot) - metres(y.spot) || x.id.localeCompare(y.id)
 					)
 					.map((o) => o.id);
-				const orderBy = { spot: { near: at } };
+				const order_by = { spot: { near: at } };
 				const seen: string[] = [];
 				let after: string | undefined;
 				do {
 					const page = (yield* run(
 						workspace,
 						read(cat, 'orders', {
-							orderBy,
+							order_by,
 							limit: 7,
 							...(after === undefined ? {} : { after }),
 							select: { spot: true }
@@ -875,11 +875,11 @@ describe('next query engine (PGlite)', () => {
 				} while (after !== undefined);
 				expect(seen).toEqual(want);
 				// through a one-relation's point is the same key shape; a non-point field is refused
-				expect(() => read(cat, 'orders', { orderBy: { total: { near: at } }, limit: 5 })).toThrow(
+				expect(() => read(cat, 'orders', { order_by: { total: { near: at } }, limit: 5 })).toThrow(
 					/not a point/
 				);
 				expect(() =>
-					read(cat, 'orders', { orderBy: { spot: { near: { lat: 99, lng: 1 } } }, limit: 5 })
+					read(cat, 'orders', { order_by: { spot: { near: { lat: 99, lng: 1 } } }, limit: 5 })
 				).not.toThrow(); // the grammar checks shape, not range
 			})
 	);
@@ -901,7 +901,7 @@ describe('next query engine (PGlite)', () => {
 				const walk = Effect.fnUntraced(function* (
 					reader: Reader,
 					model: string,
-					orderBy: Json,
+					order_by: Json,
 					limit: number
 				) {
 					const seen: string[] = [];
@@ -910,7 +910,7 @@ describe('next query engine (PGlite)', () => {
 						const page = (yield* run(
 							reader,
 							read(cat, model, {
-								orderBy,
+								order_by,
 								limit,
 								...(after === undefined ? {} : { after })
 							})
@@ -930,7 +930,7 @@ describe('next query engine (PGlite)', () => {
 					(
 						(yield* run(
 							workspace,
-							read(cat, 'orders', { orderBy: { account: { name: 'asc' } }, all: true })
+							read(cat, 'orders', { order_by: { account: { name: 'asc' } }, all: true })
 						))[0] as Page
 					).rows.map((r) => r.id)
 				).toEqual(byName);
@@ -950,7 +950,7 @@ describe('next query engine (PGlite)', () => {
 				// a nullable target field: nulls first descending, as an own field; then an own key; every row once across pages
 				const mixed: Json = [{ account: { region: 'desc' } }, { total: 'asc' }];
 				const all = (
-					(yield* run(workspace, read(cat, 'orders', { orderBy: mixed, all: true })))[0] as Page
+					(yield* run(workspace, read(cat, 'orders', { order_by: mixed, all: true })))[0] as Page
 				).rows.map((r) => r.id as string);
 				const region = (id: string) => acc.get(ord.get(id)!.account)!.region;
 				expect(
@@ -965,14 +965,14 @@ describe('next query engine (PGlite)', () => {
 				expect(yield* walk(caller, 'orders', { account: { name: 'asc' } }, 4)).toEqual(scoped);
 				const first = (yield* run(
 					caller,
-					read(cat, 'orders', { orderBy: { account: { name: 'asc' } }, limit: 3 })
+					read(cat, 'orders', { order_by: { account: { name: 'asc' } }, limit: 3 })
 				))[0] as Page;
 				expect(
 					yield* Effect.flip(
 						run(
 							caller,
 							read(cat, 'orders', {
-								orderBy: { account: { region: 'asc' } },
+								order_by: { account: { region: 'asc' } },
 								limit: 3,
 								after: first.next!
 							})
@@ -981,8 +981,8 @@ describe('next query engine (PGlite)', () => {
 				).toMatchObject({ code: 'badCursor' });
 				// rule 14: a target field the output's layer omits and an unread target refuse; the workspace sorts by any of them
 				const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
-				const asClerk = (orderBy: Json) => ({
-					...read(brief, 'orders', { orderBy, limit: 5 }),
+				const asClerk = (order_by: Json) => ({
+					...read(brief, 'orders', { order_by, limit: 5 }),
 					output: 'brief'
 				});
 				const clerkReads: Reader = { as: 'caller', authority: clerk };
@@ -1011,7 +1011,7 @@ describe('next query engine (PGlite)', () => {
 					yield* Effect.flip(
 						run(
 							noAccounts,
-							read(cat, 'orders', { orderBy: { account: { name: 'asc' } }, limit: 5 })
+							read(cat, 'orders', { order_by: { account: { name: 'asc' } }, limit: 5 })
 						)
 					)
 				).toMatchObject({ code: 'invalidInput' });
@@ -1019,23 +1019,23 @@ describe('next query engine (PGlite)', () => {
 					(
 						(yield* run(
 							workspace,
-							read(cat, 'orders', { orderBy: { account: { secret: 'asc' } }, limit: 5 })
+							read(cat, 'orders', { order_by: { account: { secret: 'asc' } }, limit: 5 })
 						))[0] as Page
 					).rows
 				).toHaveLength(5);
 				// the grammar: an arc is not a hop, three hops and a dotted key are invalid
-				expect(() => read(cat, 'notes', { orderBy: { about: { name: 'asc' } }, limit: 5 })).toThrow(
-					/not a one-relation/
-				);
+				expect(() =>
+					read(cat, 'notes', { order_by: { about: { name: 'asc' } }, limit: 5 })
+				).toThrow(/not a one-relation/);
 				expect(() =>
 					read(cat, 'lines', {
-						orderBy: { order: { account: { name: { x: 'asc' } } } },
+						order_by: { order: { account: { name: { x: 'asc' } } } },
 						limit: 5
 					})
 				).toThrow(/at most 2 relations/);
-				expect(() => read(cat, 'orders', { orderBy: { 'account.name': 'asc' }, limit: 5 })).toThrow(
-					/one \{ field/
-				);
+				expect(() =>
+					read(cat, 'orders', { order_by: { 'account.name': 'asc' }, limit: 5 })
+				).toThrow(/one \{ field/);
 			})
 	);
 	it.live('rule 12: one batch is one round trip; identical reads run once', () =>
@@ -1063,7 +1063,7 @@ describe('next query engine (PGlite)', () => {
 				yield* setup();
 				const batch = [
 					read(cat, 'accounts', { all: true, select: { name: true } }),
-					read(cat, 'orders', { limit: 3, orderBy: { placed: 'desc' } }),
+					read(cat, 'orders', { limit: 3, order_by: { placed: 'desc' } }),
 					get(cat, 'orders', ORDERS[1]!.id),
 					get(cat, 'orders', ORDERS[2]!.id),
 					yield* aggregate(cat, 'orders', { count: true, where: { status: { eq: 'open' } } }).pipe(
@@ -1314,7 +1314,7 @@ describe('next query engine (PGlite)', () => {
 				expect(page.rows.every((r) => r.account !== null && !('total' in r))).toBe(true);
 				for (const q of [
 					{ all: true, where: { total: { gt: '500' } } },
-					{ all: true, orderBy: { total: 'asc' } },
+					{ all: true, order_by: { total: 'asc' } },
 					{ all: true, select: { total: true } },
 					{ all: true, select: { account: { select: { secret: true } } } }
 				])

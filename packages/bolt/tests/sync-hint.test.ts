@@ -11,7 +11,11 @@ const manifest = (syncs: ExposureSpec['syncs']) =>
 		decodeProjectedManifest({
 			workspace: { tz: 'UTC', locale: 'en' },
 			models: {
-				contacts: { description: 'A contact', label: 'name', fields: { name: { kind: 'text' } } }
+				contacts: {
+					description: 'A contact',
+					record_label: 'record.name',
+					fields: { name: { kind: 'text' } }
+				}
 			},
 			relationships: {},
 			exposures: { contacts: { outputs: { default: { contacts: { fields: 'all' } } }, syncs } },

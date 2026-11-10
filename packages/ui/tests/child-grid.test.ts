@@ -42,12 +42,14 @@ const input = {
 } as const;
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' } },
 		update: { columns: ['title'], with: { lines: input } },
 		children: { lines: input }
 	},
 	lines: {
+		record_label: 'record.amount',
 		label: ['amount'],
 		fields: { amount: { kind: 'int' } },
 		relations: { job: { targets: ['jobs'] } },

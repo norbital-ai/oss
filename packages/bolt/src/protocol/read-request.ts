@@ -2,7 +2,7 @@
 // agent's `read` tool send the same JSON layer map. Keys without a dot are roots (models with `read`), each reading one
 // named output (`output`, `default` when absent); `'<root>.<rel>…'` is one of that output's declared read layers, at most
 // `LAYER_MAX_DEPTH` segments. `decodeReadRequest` refuses anything but that JSON (an unknown option, a sixth level,
-// `output`/`asOf`/`after` below a root, a function); `planReadRequest` checks the paths against the declarations and
+// `output`/`as_of`/`after` below a root, a function); `planReadRequest` checks the paths against the declarations and
 // groups them by root, implied parents filled in.
 import { Result, Schema } from 'effect';
 import { LAYER_MAX_DEPTH, type ExposureSpec } from '../decl/model.ts';
@@ -19,13 +19,13 @@ const Aggregate = Schema.Struct({
 	/** A field, a list of fields, or a calendar bucket (`{ month: 'issued_on' }`) on a root. */
 	by: Schema.optionalKey(Schema.Json)
 });
-/** One layer's value; `output`, `asOf` and `after` belong to a root only. `{}` reads every exposed field with the defaults. */
+/** One layer's value; `output`, `as_of` and `after` belong to a root only. `{}` reads every exposed field with the defaults. */
 export const LayerRequestSchema = Schema.Struct({
 	/** The root's named read output (`default` when absent): its fixed fields and layers. */
 	output: Schema.optionalKey(Schema.String),
 	where: Schema.optionalKey(Schema.JsonObject),
 	fields: Schema.optionalKey(Fields),
-	orderBy: Schema.optionalKey(Schema.Json),
+	order_by: Schema.optionalKey(Schema.Json),
 	limit: Schema.optionalKey(
 		Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: READ_LIMIT }))
 	),
@@ -34,7 +34,7 @@ export const LayerRequestSchema = Schema.Struct({
 	search: Schema.optionalKey(Schema.Union([Schema.String, Schema.JsonObject])),
 	aggregate: Schema.optionalKey(Aggregate),
 	/** An ISO instant: the root and its layers as they stood then. */
-	asOf: Schema.optionalKey(Schema.String)
+	as_of: Schema.optionalKey(Schema.String)
 });
 export type LayerRequestJson = typeof LayerRequestSchema.Type;
 const PATH = new RegExp(
@@ -49,9 +49,9 @@ const shape = (request: { readonly [path: string]: LayerRequestJson }): string |
 		const layer = request[path]!;
 		if (
 			path.includes('.') &&
-			(layer.output !== undefined || layer.asOf !== undefined || layer.after !== undefined)
+			(layer.output !== undefined || layer.as_of !== undefined || layer.after !== undefined)
 		)
-			return `'${path}': output, asOf and after belong to a root`;
+			return `'${path}': output, as_of and after belong to a root`;
 	}
 	return undefined;
 };

@@ -175,27 +175,27 @@ export type LayerAggregate<F extends string> = {
 };
 /**
  * A root layer of `C`: the read `output` it answers (`default` when absent), its filter, fields, order and page, a text
- * or index search, an aggregate, and `asOf`.
+ * or index search, an aggregate, and `as_of`.
  */
 export type RootRequest<C, O = 'default'> = {
 	/** The model's named read output: its fixed fields and layers. The caller's policies grant it and filter its rows. */
 	output?: OutputName<C>;
 	where?: Where<C, O>;
 	fields?: readonly ReadField<C, O>[];
-	orderBy?: OrderBy<C, O>;
+	order_by?: OrderBy<C, O>;
 	/** 1 to 10,000 (the default). */
 	limit?: number;
 	after?: Cursor;
 	search?: string | IndexSearch<C>;
 	aggregate?: Omit<Measures<C, O>, 'where'> & { by?: Bucket<C, O> | readonly Bucket<C, O>[] };
 	/** An ISO instant: the root and its layers as they stood then (folded from history). */
-	asOf?: string;
+	as_of?: string;
 };
 /** A deeper layer `P` of `C`'s output `O`: `where` filters that layer's rows (a list) or nulls it (a ref), never removing the root. */
 export type LayerRequest<C, P, O = 'default'> = {
 	where?: LayerWhere<C, P, O>;
 	fields?: readonly LayerField<C, P, O>[];
-	orderBy?: LayerOrderBy<LayerField<C, P, O> & string>;
+	order_by?: LayerOrderBy<LayerField<C, P, O> & string>;
 	/** 1 to 10,000 (the default) rows per parent row. */
 	limit?: number;
 	search?: string;
@@ -207,12 +207,12 @@ export type ReadRequestBase = {
 		readonly output?: string;
 		readonly where?: { readonly [key: string]: unknown };
 		readonly fields?: readonly string[];
-		readonly orderBy?: unknown;
+		readonly order_by?: unknown;
 		readonly limit?: number;
 		readonly after?: Cursor;
 		readonly search?: unknown;
 		readonly aggregate?: object;
-		readonly asOf?: string;
+		readonly as_of?: string;
 	};
 };
 /** The output root `C` of request `R` names (`default` when it names none). */
@@ -467,7 +467,7 @@ export type Callable = {
 /**
  * The input of a generated model write. Always a batch: create takes insert trees, update takes
  * `{ target, set }` entries, delete takes `{ target }`, and upsert takes inserts or patches carrying an `id`.
- * Import takes `{ rows, onConflict, onMissing?, prune?, dryRun? }`: one atomic act matching rows by the model's key;
+ * Import takes `{ rows, on_conflict, onMissing?, prune?, dryRun? }`: one atomic act matching rows by the model's key;
  * `dryRun` runs every callback and writes nothing.
  * Fields and child layers come from the model's write exposure, not its read output or complete storage schema.
  * Optional/defaulted insert fields may be omitted; update patches contain only the fields being changed.
@@ -495,7 +495,7 @@ export type ActInput<N> = N extends `${infer C}.${infer V}`
 export type ImportInput<C> = {
 	readonly rows: readonly CreateInput<C>[];
 	/** `refuse` refuses a row already on file. */
-	readonly onConflict: 'update' | 'keep' | 'refuse';
+	readonly on_conflict: 'update' | 'keep' | 'refuse';
 	/** `skip` only updates rows already on file. */
 	readonly onMissing?: 'create' | 'skip';
 	/** Deletes the caller-readable rows inside this predicate whose key the import does not name. */
@@ -527,18 +527,18 @@ export type ActOutput<N> = N extends `${infer C}.${infer V}`
 			? ImportReport<C>
 			: null
 	: never;
-/** `onConflict` is required on `upsert` (rule 28): `update` merges into the row its `id` names, `keep` leaves it. */
+/** `on_conflict` is required on `upsert` (rule 28): `update` merges into the row its `id` names, `keep` leaves it. */
 export type ActOptions = {
 	/** An idempotency key: the same key from the same caller within 24 hours answers the first outcome, writing nothing. */
 	key?: string;
 	/** Writes once for this key across every rerun of the body: a retried run does not repeat the write. */
 	once?: string;
-	onConflict?: 'update' | 'keep';
+	on_conflict?: 'update' | 'keep';
 	/** Each row's revision as the body read it: a row edited since fails `ActConflict` instead of being overwritten. */
 	observed?: Readonly<Record<string, number>>;
 };
 type OptionsOf<N> = N extends `${string}.upsert`
-	? [options: ActOptions & { onConflict: 'update' | 'keep' }]
+	? [options: ActOptions & { on_conflict: 'update' | 'keep' }]
 	: [options?: ActOptions];
 
 // ── outcomes (rule 32, §3.3.9) ──
@@ -585,7 +585,7 @@ export type PlatformRefusal =
 export type Committed<O, N = string> = { kind: 'committed'; output: O; records: WrittenOf<N> };
 /** The write is held for approval (§3.8): `requestId` names the approval request, `records` the held rows. */
 export type PendingApproval<N = string> = {
-	kind: 'pendingApproval';
+	kind: 'pending_approval';
 	requestId: RequestId;
 	records: WrittenOf<N>;
 };
@@ -619,7 +619,7 @@ export type Unknown = { kind: 'unknown'; invocation: string };
  */
 export type Running = { kind: 'running'; run: Id<'sys_run'> };
 /**
- * Every result of a write (rule 32): `committed`, `pendingApproval`, `refused`, `conflict`, `unknown` or `running`, told
+ * Every result of a write (rule 32): `committed`, `pending_approval`, `refused`, `conflict`, `unknown` or `running`, told
  * apart by `kind`.
  */
 export type Outcome<O, N = string> =
@@ -630,7 +630,7 @@ export type ActBatch = readonly {
 	readonly callable: string;
 	readonly input: unknown;
 	readonly observed?: Readonly<Record<string, number>>;
-	readonly onConflict?: 'update' | 'keep';
+	readonly on_conflict?: 'update' | 'keep';
 }[];
 /** A batch's inputs, correlated with each callable in its original tuple. */
 export type ActManyInput<A extends ActBatch> = A & {
@@ -639,8 +639,8 @@ export type ActManyInput<A extends ActBatch> = A & {
 		readonly input: NoInfer<ActInput<A[K]['callable']>>;
 		readonly observed?: Readonly<Record<string, number>>;
 	} & (A[K]['callable'] extends `${string}.upsert`
-		? { readonly onConflict: 'update' | 'keep' }
-		: { readonly onConflict?: never });
+		? { readonly on_conflict: 'update' | 'keep' }
+		: { readonly on_conflict?: never });
 };
 /** Each callable's output, in the same order as the batch. */
 export type ActManyOutput<A extends ActBatch> = {
@@ -681,13 +681,13 @@ export interface Act {
 					readonly callable: string;
 					readonly input: Json;
 					readonly observed?: Readonly<Record<string, number>>;
-					readonly onConflict: 'update' | 'keep';
+					readonly on_conflict: 'update' | 'keep';
 			  }
 			| {
 					readonly callable: string;
 					readonly input: Json;
 					readonly observed?: Readonly<Record<string, number>>;
-					readonly onConflict?: never;
+					readonly on_conflict?: never;
 			  }
 		)[]
 	): Eff<
@@ -805,7 +805,7 @@ interface ProspectiveQuery {
 	after<C extends string, const S extends { readonly [P in keyof StoredRow<C>]?: true } = {}>(
 		model: Is<C, ReadableName>,
 		where: NoInfer<ModelWhere<C>>,
-		query: { select?: S; orderBy?: NoInfer<OrderBy<C>> } & Paged
+		query: { select?: S; order_by?: NoInfer<OrderBy<C>> } & Paged
 	): Eff<
 		Page<
 			[keyof S] extends [never]
@@ -857,7 +857,7 @@ export type NotifyEvent<M> =
 	| {
 			readonly kind: 'approval';
 			readonly move:
-				'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede' | 'withdraw';
+				'request' | 'approve' | 'reject' | 'request_changes' | 'resubmit' | 'supersede';
 			readonly step: number;
 			readonly steps: readonly ApprovalStep[];
 			readonly done: boolean;
@@ -882,7 +882,7 @@ export type ViewNames = [keyof NamesPart<'exposures'>] extends [never]
 					record: Row<C>;
 					insert: CreateInput<C>;
 					where: Where<C>;
-					orderBy: OrderBy<C>;
+					order_by: OrderBy<C>;
 					/** Many-relation layers a view may show as a column (a table's multi-link cell). */
 					many: SelectRel<C> & keyof ManyRels<C> & string;
 				};

@@ -15,12 +15,12 @@ const manifest: EngineManifest = {
 		...base.models,
 		sources: {
 			description: 'A source',
-			label: 'reference',
+			record_label: 'record.reference',
 			fields: { reference: { kind: 'text' } }
 		},
 		accounts: {
 			description: 'A ledger account',
-			label: 'code',
+			record_label: 'record.code',
 			search: { text: ['code'] },
 			fields: {
 				code: { kind: 'text' },
@@ -37,7 +37,7 @@ const manifest: EngineManifest = {
 		},
 		entries: {
 			description: 'An immutable movement',
-			label: 'memo',
+			record_label: 'record.memo',
 			fields: { memo: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } },
 			computed: { upper_memo: { kind: 'text', expr: { upper: { field: 'memo' } } } }
 		}
@@ -163,7 +163,7 @@ const fixture = Effect.gen(function* () {
 																	}
 																}
 												}),
-							...(mode === 'order' ? { orderBy: { amount: 'desc' } } : {}),
+							...(mode === 'order' ? { order_by: { amount: 'desc' } } : {}),
 							...(mode === 'search' ? { search: code } : {})
 						}
 					).pipe(Effect.mapError(fromStore), Effect.orDie);

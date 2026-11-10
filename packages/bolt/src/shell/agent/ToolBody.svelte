@@ -94,7 +94,7 @@
 		{#if outcome !== ''}
 			<div class="flex items-center gap-1.5">
 				<Badge variant={outcome === 'committed' || outcome === 'started' ? 'default' : 'outline'}
-					>{t(outcome === 'pendingApproval' ? 'Waiting for approval' : outcome)}</Badge
+					>{t(outcome === 'pending_approval' ? 'Waiting for approval' : outcome)}</Badge
 				>
 				<span class="font-mono text-micro text-muted-foreground">{text(input['callable'])}</span>
 			</div>

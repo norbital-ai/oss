@@ -24,6 +24,7 @@ const JOB = {
 };
 const catalog: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -145,7 +146,7 @@ test('readonly Show renders nested native decimals as copyable values without in
 				kind: 'object',
 				fields: {
 					amount: { kind: 'decimal', scale: 2 },
-					nested: { kind: 'list', of: { kind: 'decimal', scale: 2 } }
+					nested: { kind: 'decimal', scale: 2, many: true }
 				}
 			},
 			value: { amount: Decimal.of('12345678901234567.89'), nested: [Decimal.of('2.50')] },

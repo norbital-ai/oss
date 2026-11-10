@@ -52,7 +52,7 @@ const manifest: EngineManifest = {
 	models: {
 		quotes: {
 			description: 'A quote',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				region: { kind: 'enum', values: ['north', 'south'], default: 'north' }

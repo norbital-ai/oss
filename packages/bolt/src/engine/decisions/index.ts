@@ -446,7 +446,7 @@ export type DecisionsApiConfig = {
 	format?: 'jev' | 'openai';
 	url: string;
 	model: string;
-	apiKey: string;
+	api_key: string;
 	timeoutMillis?: number | undefined;
 };
 const OpenAiDecisionResponse = Schema.Struct({
@@ -631,7 +631,7 @@ export function decisionsSystem1(config: DecisionsApiConfig, options: HttpOption
 				const body = yield* HttpClientRequest.bodyJson(
 					HttpClientRequest.post(config.url, {
 						headers: {
-							authorization: `Bearer ${config.apiKey}`,
+							authorization: `Bearer ${config.api_key}`,
 							'content-type': 'application/json',
 							...(media.images.length === 0 ? {} : { 'TypeSafe-Danger-Zone-Images': 'true' })
 						}

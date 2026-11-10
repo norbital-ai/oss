@@ -11,23 +11,31 @@ const base: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		nodes: { description: 'A tree node', label: 'name', fields: { name: { kind: 'text' } } },
+		nodes: {
+			description: 'A tree node',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
 		orders: {
 			description: 'An order',
-			label: 'number',
+			record_label: 'record.number',
 			fields: { number: { kind: 'text' }, total: { kind: 'sum', of: 'lines.amount' } }
 		},
 		order_lines: {
 			description: 'A line',
-			label: 'product',
+			record_label: 'record.product',
 			fields: { product: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } }
 		},
 		parties: {
 			description: 'A party',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, credit_limit: { kind: 'decimal', scale: 2 } }
 		},
-		notes: { description: 'A note', label: 'body', fields: { body: { kind: 'text' } } }
+		notes: {
+			description: 'A note',
+			record_label: 'record.body',
+			fields: { body: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		'nodes.parent': { to: 'nodes', inverse: 'children', optional: true },

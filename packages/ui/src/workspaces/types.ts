@@ -47,7 +47,7 @@ type BuildLine = Readonly<{ at: string; level: 'info' | 'warn' | 'error'; messag
 /** Plain operational data rendered identically in tenant Studio and Realm. Host boundaries decode its native schema. */
 export type WorkspaceOperationsData = Readonly<{
 	canInspect: boolean;
-	asOf: string;
+	as_of: string;
 	usage: readonly UsageChartProps[];
 	members: readonly WorkspaceMember[] | null;
 	studio: Readonly<{

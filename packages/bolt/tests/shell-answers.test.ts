@@ -36,7 +36,7 @@ const boot = {
 		phone: null,
 		external: false,
 		teams: ['ops'],
-		teamPath: ['ops'],
+		team_path: ['ops'],
 		admin: true,
 		party: { model: 'customer', id: 'c1' }
 	},
@@ -87,6 +87,8 @@ const boot = {
 	catalog: {
 		customer: {
 			label: ['name'],
+			record_label:
+				"[record.name != null ? string(record.name) : ''].filter(part, part != '').join(' · ')",
 			search: ['name'],
 			semantic: true,
 			indexes: { near: { input: { q: { kind: 'text' } }, description: 'Near' } },
@@ -189,7 +191,7 @@ const settings = {
 			audience: 'public',
 			task: '',
 			policies: [],
-			groupMessages: 'mention_or_reply',
+			group_messages: 'mention_or_reply',
 			delegation: 'enabled',
 			triage: false,
 			dm: 'envoy',

@@ -2,13 +2,13 @@ import { Effect } from 'effect';
 import { expect, it } from '@effect/vitest';
 import { createBolt } from '../src/page/bolt.ts';
 
-it.effect('describe exists only with AI and returns the committed where/orderBy', () =>
+it.effect('describe exists only with AI and returns the committed where/order_by', () =>
 	Effect.gen(function* () {
 		const sent: unknown[] = [];
 		let reply: unknown = {
 			outcome: {
 				kind: 'committed',
-				output: { where: { status: { eq: 'open' } }, orderBy: { created_at: 'desc' } },
+				output: { where: { status: { eq: 'open' } }, order_by: { created_at: 'desc' } },
 				records: []
 			},
 			v: 0
@@ -32,7 +32,7 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 		if (bolt.describe === undefined) throw new Error('expected describe');
 		expect(yield* bolt.describe('jobs', 'open jobs, newest first')).toEqual({
 			where: { status: { eq: 'open' } },
-			orderBy: { created_at: 'desc' }
+			order_by: { created_at: 'desc' }
 		});
 		expect(sent[0]).toMatchObject({
 			callable: 'filter.describe',
@@ -40,10 +40,10 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 		});
 		// a sort alone is an answer: there is no condition to return
 		reply = {
-			outcome: { kind: 'committed', output: { orderBy: { title: 'asc' } }, records: [] },
+			outcome: { kind: 'committed', output: { order_by: { title: 'asc' } }, records: [] },
 			v: 0
 		};
-		expect(yield* bolt.describe('jobs', 'sort by title')).toEqual({ orderBy: { title: 'asc' } });
+		expect(yield* bolt.describe('jobs', 'sort by title')).toEqual({ order_by: { title: 'asc' } });
 		reply = {
 			outcome: {
 				kind: 'refused',

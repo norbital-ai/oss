@@ -34,7 +34,7 @@ const compare = (left: Value, op: string, right: Json): boolean => {
 			return (
 				Array.isArray(right) && right.every((one) => JSON.stringify(one) !== JSON.stringify(left))
 			);
-		case 'isNull':
+		case 'is_null':
 			return right === true ? left === null : right === false && left !== null;
 		case 'notNull':
 			return left !== null;

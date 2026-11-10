@@ -81,7 +81,7 @@
 							host.catalog,
 							of,
 							{
-								where: and(where, view.where, { [at]: { isNull: false } }),
+								where: and(where, view.where, { [at]: { is_null: false } }),
 								search: search || undefined,
 								limit
 							},

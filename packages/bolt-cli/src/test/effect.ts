@@ -1,7 +1,8 @@
 // The workspace kit is a scoped Effect layer; its callers use the same routes as a real host.
-import { inputSchema, type Fields, type Kind } from '@norbital-ai/std/kind';
+import { inputSchema, type Kind } from '@norbital-ai/std/kind';
 import {
 	auditFromAbi,
+	outputSchema,
 	auditShape,
 	compileAuthority,
 	parseCallable,
@@ -227,7 +228,7 @@ export const expect = EffectVitest.expect;
 export type ActOptions = {
 	key?: string;
 	retry?: boolean;
-	onConflict?: 'update' | 'keep';
+	on_conflict?: 'update' | 'keep';
 	observed?: { readonly [id: string]: number };
 };
 /** The workspace's generated write callables, including model erase operations exercised by the test host. */
@@ -240,16 +241,16 @@ export type KitInput<N> = N extends `${infer C}.erase`
  * Reads, writes, approval decisions, uploads and automation starts through the real host routes under one authority, with
  * native decoded values and typed failures. `query` is the one read API with the page's and `ctx.query`'s forms: a read
  * request (a layer map of roots and their declared layers, answered per root), a page of a model (`where`, `select`,
- * `orderBy`, a text or index `search`) or one record (`{ id }`, or `{ id, revision }`). Writes are batches: `act` takes a
+ * `order_by`, a text or index `search`) or one record (`{ id }`, or `{ id, revision }`). Writes are batches: `act` takes a
  * verb's rows as an array; a policy `check` that denies fails with `ActRefused` (`rule`, `row`, `path`, `field`), one that
- * approves answers `pendingApproval`.
+ * approves answers `pending_approval`.
  */
 export interface Caller {
 	readonly authority: Authority;
 	readonly query: CallerQuery<ReadFailed>['query'];
 	/**
 	 * A record's revisions as the page's `bolt.history` reads them, oldest first; `at` starts from an instant, a revision
-	 * or just before an approval request. A record as of a revision: take its `at`, then read the root with `asOf`.
+	 * or just before an approval request. A record as of a revision: take its `at`, then read the root with `as_of`.
 	 */
 	readonly history: CallerQuery<ReadFailed>['history'];
 	act<const N extends string>(
@@ -270,7 +271,7 @@ export interface Caller {
 	readonly approvals: {
 		decide(
 			requestId: string,
-			input: { decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw'; reason?: string }
+			input: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
 		): Effect.Effect<void, ActFailure>;
 	};
 }
@@ -497,78 +498,12 @@ const nativeAnswers = (manifest: EngineManifest) => {
 	const m = layered(manifest),
 		cat = catalog(m);
 	const absent = Schema.Null;
-	const fields = (spec: Fields) =>
-		Schema.Struct(
-			Object.fromEntries(
-				Object.entries(spec).map(
-					([name, member]): [
-						string,
-						Schema.Decoder<unknown> | Schema.optionalKey<Schema.Decoder<unknown>>
-					] => [
-						name,
-						member.optional === true || member.default !== undefined
-							? Schema.optionalKey(kind(member))
-							: kind(member)
-					]
-				)
-			)
-		);
-	const kind = (spec: Kind): Schema.Decoder<unknown> => {
-		let codec: Schema.Decoder<unknown>;
-		switch (spec.kind) {
-			case 'custom': {
-				const shape =
-					m.customFields[spec.of]?.shape ??
-					Object.entries(BUILTIN_FIELDS).find(([name]) => name === spec.of)?.[1].spec.shape;
-				if (shape === undefined)
-					throw new KitInvalid({ message: `unknown custom field '${spec.of}'` });
-				codec = kind(shape);
-				if (spec.many) codec = Schema.Array(codec);
-				break;
-			}
-			case 'json':
-				codec = spec.shape === undefined ? Schema.Json : kind(spec.shape);
-				break;
-			case 'list':
-				codec = Schema.Array(kind(spec.of));
-				break;
-			case 'record':
-				codec = Schema.Record(Schema.String, kind(spec.of));
-				break;
-			case 'object': {
-				const named = fields(spec.fields);
-				const extra = Schema.String.check(
-					Schema.makeFilter((key: string) => !Object.hasOwn(spec.fields, key))
-				);
-				codec =
-					spec.rest === undefined
-						? named
-						: Schema.StructWithRest(named, [Schema.Record(extra, kind(spec.rest))]);
-				break;
-			}
-			case 'union':
-				codec =
-					'of' in spec
-						? Schema.Union(spec.of.map(kind))
-						: Schema.Union(
-								Object.entries(spec.arms).map(([tag, arm]) =>
-									Schema.Struct({
-										...fields(arm).fields,
-										[spec.by]: Schema.Literal(tag)
-									})
-								)
-							);
-				break;
-			default:
-				return inputSchema(spec);
-		}
-		return spec.optional === true ? Schema.NullOr(codec) : codec;
-	};
+	const kind = (spec: Kind): Schema.Decoder<unknown> => outputSchema(m, spec);
 	const identity = (model: string) => {
 		const info = cat.models.get(model);
 		if (info === undefined) throw new KitInvalid({ message: `unknown model '${model}'` });
 		return info.fields.get('id')?.pg === 'uuid'
-			? inputSchema({ kind: 'id', of: model })
+			? inputSchema({ kind: 'ref', to: model })
 			: Schema.String;
 	};
 	const computedKinds = {
@@ -778,7 +713,11 @@ const nativeAnswers = (manifest: EngineManifest) => {
 	};
 	const actCodec = (method: 'act' | 'start', name: string) =>
 		Schema.Union([
-			Schema.Struct({ kind: Schema.Literal('pendingApproval'), requestId: Schema.String, records }),
+			Schema.Struct({
+				kind: Schema.Literal('pending_approval'),
+				requestId: Schema.String,
+				records
+			}),
 			Schema.Struct({
 				kind: Schema.Literal('committed'),
 				output: outputOf(method, name),
@@ -787,7 +726,11 @@ const nativeAnswers = (manifest: EngineManifest) => {
 		]);
 	const manyCodec = (acts: ActBatch) =>
 		Schema.Union([
-			Schema.Struct({ kind: Schema.Literal('pendingApproval'), requestId: Schema.String, records }),
+			Schema.Struct({
+				kind: Schema.Literal('pending_approval'),
+				requestId: Schema.String,
+				records
+			}),
 			Schema.Struct({
 				kind: Schema.Literal('committed'),
 				output: Schema.Tuple(acts.map((act) => outputOf('act', act.callable))),
@@ -834,7 +777,7 @@ const nativeAnswers = (manifest: EngineManifest) => {
 				() =>
 					Schema.Union([
 						Schema.Struct({
-							kind: Schema.Literal('pendingApproval'),
+							kind: Schema.Literal('pending_approval'),
 							requestId: Schema.String,
 							records
 						}),
@@ -1770,7 +1713,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 										callable: Schema.String,
 										input: Schema.Json,
 										observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
-										onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
+										on_conflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
 									})
 								),
 								{ onExcessProperty: 'error' }
@@ -1795,13 +1738,13 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 									);
 								if (
 									callable.verb === 'upsert'
-										? act.onConflict === undefined
-										: act.onConflict !== undefined
+										? act.on_conflict === undefined
+										: act.on_conflict !== undefined
 								)
 									return yield* Effect.fail(
 										new ActRefused({
 											code: 'invalidInput',
-											message: 'A batch upsert requires onConflict; other verbs do not take it.'
+											message: 'A batch upsert requires on_conflict; other verbs do not take it.'
 										})
 									);
 								native.push({
@@ -1809,7 +1752,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 									verb: callable.verb,
 									input: act.input,
 									...(act.observed === undefined ? {} : { observed: act.observed }),
-									...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
+									...(act.on_conflict === undefined ? {} : { on_conflict: act.on_conflict })
 								});
 							}
 							const b = yield* bindings,
@@ -1908,7 +1851,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							if (Option.isSome(failure)) return yield* Effect.fail(failure.value);
 							// past the person-wait the write runs on as its run: `running` is an outcome, not a defect
 							if (
-								reply.outcome.kind === 'pendingApproval' ||
+								reply.outcome.kind === 'pending_approval' ||
 								reply.outcome.kind === 'committed' ||
 								reply.outcome.kind === 'running'
 							)
@@ -2039,7 +1982,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 						phone: null,
 						external: false,
 						teams: [],
-						teamPath: [],
+						team_path: [],
 						admin: false,
 						party: null,
 						...over

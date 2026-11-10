@@ -270,7 +270,7 @@
 							historical = value;
 							// an invalid revision's captured data is shown, never projected into the representation
 							past =
-								value.uncompatible.length === 0
+								value.incompatible.length === 0
 									? // the server's compatibility projection is this record under today's schema
 										(value.compatible as StoredRecord)
 									: null;
@@ -327,9 +327,9 @@
 							o,
 							msg(bolt, 'record.restored', 'Restored revision {n}', { n: p.revision })
 						);
-						if (o.kind === 'pendingApproval')
+						if (o.kind === 'pending_approval')
 							submitted = { model: of, record: id, requestId: o.requestId };
-						if (o.kind === 'committed' || o.kind === 'pendingApproval') pick(null);
+						if (o.kind === 'committed' || o.kind === 'pending_approval') pick(null);
 					})
 				)
 			)
@@ -385,7 +385,7 @@
 		) ?? null
 	);
 	const approvalId = $derived(submittedId ?? openRequest?.id ?? requests.current?.[0]?.id ?? null);
-	const pendingApproval = $derived(openRequest !== null);
+	const pending_approval = $derived(openRequest !== null);
 	// A create rolled back by rejection or withdrawal has no row any more; its request remains readable.
 	const createRequest = $derived(
 		mode !== 'create' &&
@@ -528,7 +528,7 @@
 				prefill,
 				(callable, input, options) => bolt.act(callable, input, options),
 				{
-					pendingApproval: formText('pendingApproval'),
+					pending_approval: formText('pending_approval'),
 					conflict: formText('conflict'),
 					unknown: formText('unknown'),
 					running: formText('running')
@@ -589,10 +589,10 @@
 	const editing = $derived(controller?.mode === 'edit');
 	function done(o: Outcome) {
 		notify(bolt, o);
-		if (o.kind !== 'committed' && o.kind !== 'pendingApproval') return;
+		if (o.kind !== 'committed' && o.kind !== 'pending_approval') return;
 		// the created record is this model's; an act's other writes (a transform's side rows) come first or last
 		const mine = o.records.find((r) => r.model === of);
-		if (o.kind === 'pendingApproval') {
+		if (o.kind === 'pending_approval') {
 			submitted = { model: of, record: id ?? mine?.id, requestId: o.requestId };
 			pane = 'approval';
 		}
@@ -625,7 +625,7 @@
 	const refs = $derived.by<Refs>(() => {
 		const r = related?.current ?? null;
 		if (r === null) return {};
-		const resolved = unref(kinds.catalog, of, labelled, [r], bolt.locale)[0];
+		const resolved = unref(kinds.catalog, of, labelled, [r])[0];
 		return resolved === undefined
 			? {}
 			: Object.fromEntries(
@@ -725,7 +725,7 @@
 					{#if badge || icon}<Badge variant="outline" title={hint}
 							>{#if icon}<Icon {icon} class="size-3" />{/if}{badge ?? ''}</Badge
 						>{/if}
-					{#if pendingApproval || underApproval}
+					{#if pending_approval || underApproval}
 						{@const rfc = openRequest?.status === 'ChangesRequested'}
 						{@const full = rfc
 							? msg(bolt, 'approval.requestForChange', 'Request for change')
@@ -941,7 +941,7 @@
 					class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring/40 aria-pressed:bg-muted aria-pressed:text-foreground relative grid size-8 max-sm:size-11 shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
 				>
 					<Glyph name={t.glyph} class="size-4" />
-					{#if t.key === 'approval' && pendingApproval}<span
+					{#if t.key === 'approval' && pending_approval}<span
 							class="bg-brand ring-popover absolute top-1.5 right-1.5 size-1.5 rounded-full ring-2"
 							aria-hidden="true"
 						></span>{/if}
@@ -977,7 +977,7 @@
 				})
 			})}</span
 		>
-		{#if historical !== null && historical.uncompatible.length > 0}<Badge variant="warning"
+		{#if historical !== null && historical.incompatible.length > 0}<Badge variant="warning"
 				>{msg(bolt, 'record.historyInvalid', 'Not valid')}</Badge
 			>{/if}
 		<button
@@ -1000,7 +1000,7 @@
 {/snippet}
 
 {#snippet historicalRecord(snapshot: HistorySnapshot)}
-	{#if snapshot.uncompatible.length > 0}<Alert data-history-invalid
+	{#if snapshot.incompatible.length > 0}<Alert data-history-invalid
 			>{msg(
 				bolt,
 				'record.historyInvalidRaw',
@@ -1025,10 +1025,10 @@
 					<span class="text-muted-foreground text-xs"
 						>{snapshot.fields[field]?.label ?? humanize(field)}</span
 					>
-					{#if snapshot.uncompatible.includes(field)}<Badge
+					{#if snapshot.incompatible.includes(field)}<Badge
 							variant="warning"
-							data-history-uncompatible={field}
-							>{msg(bolt, 'record.historyUncompatible', 'uncompatible')}</Badge
+							data-history-incompatible={field}
+							>{msg(bolt, 'record.historyUncompatible', 'incompatible')}</Badge
 						>{/if}
 				</div>
 				<Value
@@ -1105,7 +1105,7 @@
 						>
 							<span class="text-muted-foreground truncate">{label(bolt, of, c.field)}</span>
 							<span class="flex min-w-0 flex-wrap items-center gap-2">
-								{#if c.reason === 'uncompatible' || c.reason === 'definitionChanged'}<Badge
+								{#if c.reason === 'incompatible' || c.reason === 'definitionChanged'}<Badge
 										variant="warning">{skipText(bolt, c.reason)}</Badge
 									><Value value={c.restored} dense />
 								{:else}{skipText(bolt, c.reason)}{/if}
@@ -1245,7 +1245,7 @@
 	{#if onApproval}{@render approval()}{/if}
 	<!-- viewing any revision is read-only; a valid one projects into the record, an invalid one shows only captured data -->
 	<fieldset disabled={viewing !== null} class={onApproval ? 'hidden' : 'contents'}>
-		{#if historical !== null && historical.uncompatible.length > 0}{@render historicalRecord(
+		{#if historical !== null && historical.incompatible.length > 0}{@render historicalRecord(
 				historical
 			)}{:else}{@render content()}{/if}
 	</fieldset>

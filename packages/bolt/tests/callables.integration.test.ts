@@ -23,10 +23,14 @@ const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } },
+			customers: {
+				description: 'A customer',
+				record_label: 'record.name',
+				fields: { name: { kind: 'text' } }
+			},
 			orders: {
 				description: 'An order',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					region: { kind: 'enum', values: ['north', 'south'] },
@@ -37,11 +41,15 @@ const manifest = Result.getOrThrow(
 					}
 				}
 			},
-			notes: { description: 'A note', label: 'text', fields: { text: { kind: 'text' } } },
+			notes: {
+				description: 'A note',
+				record_label: 'record.text',
+				fields: { text: { kind: 'text' } }
+			},
 			// rule 38d: the careers recipe (§6.3)
 			openings: {
 				description: 'Roles',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					location: { kind: 'text' },
@@ -51,7 +59,7 @@ const manifest = Result.getOrThrow(
 			},
 			applications: {
 				description: 'Applications',
-				label: 'name',
+				record_label: 'record.name',
 				fields: {
 					name: { kind: 'text' },
 					email: { kind: 'text', format: 'email' },
@@ -131,19 +139,19 @@ const manifest = Result.getOrThrow(
 		automations: {
 			place: {
 				description: 'Place an order',
-				input: { title: { kind: 'text' }, customer: { kind: 'id', of: 'customers' } },
+				input: { title: { kind: 'text' }, customer: { kind: 'ref', to: 'customers' } },
 				output: { kind: 'text' },
 				policies: ['ordering']
 			},
 			revise: {
 				description: 'Apply an observed extraction',
-				input: { order: { kind: 'id', of: 'orders' }, revision: { kind: 'int' } },
+				input: { order: { kind: 'ref', to: 'orders' }, revision: { kind: 'int' } },
 				output: { kind: 'text' },
 				policies: ['ordering']
 			},
 			followup: {
 				description: 'Follow up',
-				input: { order: { kind: 'id', of: 'orders' } },
+				input: { order: { kind: 'ref', to: 'orders' } },
 				policies: ['ordering']
 			}
 		},
@@ -240,7 +248,7 @@ const act = (
 			input,
 			issuedAt: f.t.clock.now(),
 			...(options.observed === undefined ? {} : { observed: options.observed }),
-			...(options.onConflict === undefined ? {} : { onConflict: options.onConflict })
+			...(options.on_conflict === undefined ? {} : { on_conflict: options.on_conflict })
 		},
 		{
 			...(options.key === undefined ? {} : { 'Idempotency-Key': options.key }),
@@ -661,7 +669,7 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 									: { nope: true };
 						const result = yield* Effect.result(attempt('198.51.100.1', input));
 						expect(Result.isSuccess(result) ? result.success.kind : result.failure._tag).not.toBe(
-							'pendingApproval'
+							'pending_approval'
 						);
 					}
 					expect(
@@ -714,7 +722,7 @@ describe('refusal messages by actor (rule 32)', () => {
 			message: 'Shady is blocked',
 			field: 'customer'
 		};
-		expect(forActor(no, { kind: 'apiKey', key: 'k' })).toEqual({
+		expect(forActor(no, { kind: 'api_key', key: 'k' })).toEqual({
 			kind: 'refused',
 			code: 'refused',
 			message: 'refused'
@@ -730,7 +738,7 @@ describe('refusal messages by actor (rule 32)', () => {
 				phone: null,
 				external: false,
 				teams: [],
-				teamPath: [],
+				team_path: [],
 				admin: false,
 				party: null
 			})

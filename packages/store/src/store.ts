@@ -3,6 +3,7 @@
 // connection (Bolt's engine, a host's control store). A statement's rows decode once, by Effect Schema codecs built
 // from the declaration (std's kind codecs: Decimal, PlainDate, Instant, periods, points, inline values), and the
 // decoded value is checked against that codec's own type side before it is handed back as `Row<S, T, Q>`.
+import { item_kind } from '@norbital-ai/std/kind';
 import { Array as EffectArray, Effect, Predicate, Schema } from 'effect';
 import { inputSchema, type Kind } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
@@ -148,7 +149,7 @@ const kindOf = (t: TableSpec, name: string): Kind | undefined => {
 };
 /** Ref values use their target's actual single key, including natural text and identity keys. */
 function fieldCodec(s: SchemaSpec, cat: Catalog, k: Kind): Codec {
-	if (k.kind !== 'ref') return inputSchema(k);
+	if (k.kind !== 'ref' || k.many === true) return inputSchema(k);
 	const targetCodec = (name: string): Codec => {
 		const target = s.tables[name];
 		const key = cat.models.get(name)?.key[0] ?? 'id';
@@ -330,7 +331,7 @@ type Arms<S extends AnySchema, T, W> = {
 								? Only<W[R][K], With<S, Target<S, T, R>>> & Arms<S, Target<S, T, R>, W[R][K]>
 								: never;
 				}
-			: Arm<S, Target<S, T, R>, W[R], 'select' | 'with' | 'where' | 'orderBy' | 'limit' | 'all'>;
+			: Arm<S, Target<S, T, R>, W[R], 'select' | 'with' | 'where' | 'order_by' | 'limit' | 'all'>;
 };
 type Projection<S extends AnySchema, T, Sel, W> = {
 	readonly select?: Only<Sel, Select<S, T>>;
@@ -388,7 +389,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 						if (!changes)
 							return yield* invalid(`'${table}.${name}': atomic changes require update`);
 						const [op, payload] = change;
-						const shape = k.kind === 'json' ? k.shape : k;
+						const shape = k.kind === 'json' && k.many !== true ? k.shape : k;
 						if (
 							op === '$patch' &&
 							(shape?.kind === 'object' || shape?.kind === 'record') &&
@@ -402,8 +403,8 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 							Predicate.isObject(payload)
 						)
 							codec = Schema.Record(Schema.String, Schema.Json);
-						else if ((op === '$append' || op === '$remove') && shape?.kind === 'list')
-							codec = Schema.Array(inputSchema(shape.of));
+						else if ((op === '$append' || op === '$remove') && shape?.many === true)
+							codec = Schema.Array(inputSchema(item_kind(shape)));
 						else return yield* invalid(`'${table}.${name}' does not take ${op}`);
 						input = payload;
 					}
@@ -511,7 +512,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 	type T = TableName<S>;
 	/**
 	 * One page of `table`: `where` filters, `select` names fields (the key always comes), `with` adds relations (each
-	 * a correlated subquery bounded by its own order and limit: one statement at any depth), `orderBy` sorts (the key
+	 * a correlated subquery bounded by its own order and limit: one statement at any depth), `order_by` sorts (the key
 	 * ends every order, so cursors are exact), and a `limit` (with the `next` a page gave back) or `all` bounds it.
 	 */
 	function read<
@@ -522,8 +523,8 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		table: Tb,
 		query: Projection<S, NoInfer<Tb>, Sel, W> & {
 			readonly where?: NoInfer<Where<S, Tb>>;
-			readonly orderBy?: NoInfer<OrderBy<S, Tb>>;
-			/** One row per group, chosen by `orderBy` then primary key. Group keys lead the result order. */
+			readonly order_by?: NoInfer<OrderBy<S, Tb>>;
+			/** One row per group, chosen by `order_by` then primary key. Group keys lead the result order. */
 			readonly firstPer?: readonly NoInfer<Sortable<S, Tb>>[];
 		} & Paged
 	): Effect.Effect<Statement<Page<Row<S, Tb, { select: Sel; with: W }>>>, StoreError> {
@@ -835,7 +836,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		table: Tb,
 		t: Target2<S, Tb> & {
 			readonly observed?: number;
-			readonly keep?: { readonly orderBy: NoInfer<ColumnOrder<S, Tb>>; readonly limit: number };
+			readonly keep?: { readonly order_by: NoInfer<ColumnOrder<S, Tb>>; readonly limit: number };
 			readonly absent?: NoInfer<Absent<S, Tb>>;
 		}
 	): Effect.Effect<Statement<readonly Key<S, Tb>[]>, StoreError> {
@@ -846,7 +847,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 			const kept =
 				t.keep === undefined
 					? undefined
-					: yield* listRead(table, { orderBy: t.keep.orderBy, limit: t.keep.limit });
+					: yield* listRead(table, { order_by: t.keep.order_by, limit: t.keep.limit });
 			const absent =
 				t.absent === undefined
 					? undefined

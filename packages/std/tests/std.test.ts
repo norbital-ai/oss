@@ -39,11 +39,9 @@ describe('native kind values', () => {
 				kind: 'object',
 				fields: {
 					lines: {
-						kind: 'list',
-						of: {
-							kind: 'object',
-							fields: { amount: { kind: 'decimal', scale: 2 }, day: { kind: 'date' } }
-						}
+						kind: 'object',
+						fields: { amount: { kind: 'decimal', scale: 2 }, day: { kind: 'date' } },
+						many: true
 					}
 				}
 			});
@@ -446,7 +444,7 @@ describe('std/formula', () => {
 		fields: {
 			age: { kind: 'int' },
 			salary: { kind: 'money' },
-			kids: { kind: 'list', of: { kind: 'object', fields: { age: { kind: 'int' } } } }
+			kids: { kind: 'object', fields: { age: { kind: 'int' } }, many: true }
 		}
 	} as const;
 	const site = context(

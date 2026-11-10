@@ -115,7 +115,7 @@ it.live(
 					status: 'Rejected',
 					log: [
 						...request.log,
-						entry('requestChanges', 'Sam', '2026-10-14T12:00:00Z', {
+						entry('request_changes', 'Sam', '2026-10-14T12:00:00Z', {
 							to: 'ChangesRequested',
 							reason: 'Add the quote'
 						}),
@@ -142,7 +142,7 @@ it.live(
 			const log = popover();
 			assert.deepEqual(
 				[...log.querySelectorAll<HTMLElement>('[data-move]')].map((li) => li.dataset['move']),
-				['requestChanges', 'resubmit', 'reject']
+				['request_changes', 'resubmit', 'reject']
 			);
 			assert.deepEqual([...log.querySelectorAll('[data-reason]')].map(textOf), [
 				'“Add the quote”',
@@ -177,7 +177,7 @@ it.live(
 					{
 						...request,
 						moves: [
-							{ decision: 'requestChanges', reason: 'required' },
+							{ decision: 'request_changes', reason: 'required' },
 							{ decision: 'approve', reason: 'optional' },
 							{ decision: 'reject', reason: 'required' }
 						]
@@ -189,7 +189,7 @@ it.live(
 				decisions(target).map((b) => textOf(b).trim()),
 				['Approve', 'Reject', 'Request changes']
 			);
-			required(decisions(target).find((b) => b.dataset['decision'] === 'requestChanges')).click();
+			required(decisions(target).find((b) => b.dataset['decision'] === 'request_changes')).click();
 			yield* browser(() => settle());
 			const form = element<HTMLFormElement>(target, '[data-view=approval-controls] form');
 			const reason = element<HTMLTextAreaElement>(form, 'textarea');
@@ -202,7 +202,7 @@ it.live(
 			element<HTMLButtonElement>(form, '[data-back]').click();
 			yield* browser(() => settle());
 			assert.equal(decisions(target).length, 3);
-			required(decisions(target).find((b) => b.dataset['decision'] === 'requestChanges')).click();
+			required(decisions(target).find((b) => b.dataset['decision'] === 'request_changes')).click();
 			yield* browser(() => settle());
 			const note = element<HTMLTextAreaElement>(target, '[data-view=approval-controls] textarea');
 			note.value = 'Add the quote';
@@ -215,7 +215,7 @@ it.live(
 			assert.deepEqual(sent, [
 				{
 					callable: 'approvals.decide',
-					input: { requestId: 'r1', decision: 'requestChanges', reason: 'Add the quote' }
+					input: { requestId: 'r1', decision: 'request_changes', reason: 'Add the quote' }
 				}
 			]);
 			assert.equal(outcomes.length, 1);
@@ -233,7 +233,7 @@ it.live('approve takes an optional reason; a superseder sees the same three deci
 					moves: [
 						{ decision: 'approve', reason: 'optional' },
 						{ decision: 'reject', reason: 'required' },
-						{ decision: 'requestChanges', reason: 'required' }
+						{ decision: 'request_changes', reason: 'required' }
 					]
 				}
 			],
@@ -256,7 +256,7 @@ it.live('approve takes an optional reason; a superseder sees the same three deci
 				moves: [
 					{ decision: 'approve', reason: 'required' },
 					{ decision: 'reject', reason: 'required' },
-					{ decision: 'requestChanges', reason: 'required' }
+					{ decision: 'request_changes', reason: 'required' }
 				]
 			}
 		]);
@@ -321,7 +321,7 @@ it.live('the requester of a request that asks for changes is told that saving re
 				mine: true,
 				log: [
 					...request.log,
-					entry('requestChanges', 'Sam', '2026-10-14T12:00:00Z', {
+					entry('request_changes', 'Sam', '2026-10-14T12:00:00Z', {
 						to: 'ChangesRequested',
 						reason: 'Add the quote'
 					})

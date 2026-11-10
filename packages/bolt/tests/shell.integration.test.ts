@@ -27,12 +27,12 @@ const manifest = Result.getOrThrow(
 		models: {
 			openings: {
 				description: 'Roles',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, status: { kind: 'enum', values: ['open', 'closed'] } }
 			},
 			applications: {
 				description: 'Applications',
-				label: 'name',
+				record_label: 'record.name',
 				fields: { name: { kind: 'text' } }
 			}
 		},
@@ -193,7 +193,7 @@ const studio: StudioPort = {
 		inspectionScopes.push(input);
 		return {
 			canInspect: true,
-			asOf: '2026-10-26T08:00:00.000Z',
+			as_of: '2026-10-26T08:00:00.000Z',
 			usage: [],
 			members: [],
 			studio: null,

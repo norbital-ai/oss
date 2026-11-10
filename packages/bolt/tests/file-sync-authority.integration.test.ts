@@ -16,7 +16,7 @@ const manifest: EngineManifest = {
 	models: {
 		documents: {
 			description: 'Documents',
-			label: 'secret',
+			record_label: 'record.secret',
 			fields: { owner: { kind: 'text' }, secret: { kind: 'text' } }
 		}
 	},
@@ -29,7 +29,7 @@ const manifest: EngineManifest = {
 					with: 'file',
 					parser: ['csv'],
 					schema: { secret: { kind: 'text' } },
-					context: { document: { kind: 'id', of: 'documents' } },
+					context: { document: { kind: 'ref', to: 'documents' } },
 					write: true
 				}
 			}
@@ -99,7 +99,7 @@ it.live(
 						phone: null,
 						external: false,
 						teams: ['sales'],
-						teamPath: ['sales'],
+						team_path: ['sales'],
 						admin: false,
 						party: null
 					},

@@ -4,6 +4,7 @@ import type { Offer, Op, FilterStep } from '../../../ui/src/filter/filter.ts';
 // The browser test's synthetic catalogue: it exercises field-type rendering, not which paths the live engine offers.
 export const filterCatalog: Record<string, ModelExposure> = {
 	people: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -19,8 +20,9 @@ export const filterCatalog: Record<string, ModelExposure> = {
 		relations: { employer: { targets: ['companies'] } },
 		many: ['contracts', 'notes']
 	},
-	companies: { label: ['name'], fields: { name: { kind: 'text' } } },
+	companies: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
 	contracts: {
+		record_label: 'record.alias',
 		label: ['alias'],
 		fields: {
 			alias: { kind: 'text' },
@@ -34,6 +36,7 @@ export const filterCatalog: Record<string, ModelExposure> = {
 		relations: { person: { targets: ['people'], inverse: 'contracts' } }
 	},
 	notes: {
+		record_label: 'record.body',
 		label: ['body'],
 		fields: { body: { kind: 'text' } },
 		relations: { person: { targets: ['people'], inverse: 'notes' } }
@@ -83,7 +86,7 @@ export const filterOffers: Offer[] = [
 		path: [{ k: 'is' as const, rel: 'employer' }],
 		op,
 		opLabel: words[op] ?? op,
-		kind: 'id'
+		kind: 'ref'
 	})),
 	...fields('companies', [{ k: 'is', rel: 'employer' }]),
 	...(['some', 'none', 'every'] as const).flatMap((q) => [

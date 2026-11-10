@@ -3,7 +3,7 @@
 	import type { FilterVariables } from './filter.js';
 
 	/** A saved native filter, independent of a table's viewer preferences and URL. */
-	export type FilterValue = { readonly where?: Json; readonly orderBy?: Json };
+	export type FilterValue = { readonly where?: Json; readonly order_by?: Json };
 	export type FilterEditorProps = {
 		model: string;
 		value?: FilterValue;
@@ -83,7 +83,7 @@
 
 	function parse(next: FilterValue) {
 		const parsed = fromWhere(catalog, model, next.where ?? {}, model, '', variables);
-		const sorted = parseOrder(orderText(orderKeys(next.orderBy)), sortFields);
+		const sorted = parseOrder(orderText(orderKeys(next.order_by)), sortFields);
 		return parsed === null || sorted.dropped > 0 ? null : { rows: parsed, order: sorted.keys };
 	}
 	watch(
@@ -108,10 +108,10 @@
 	);
 	function changed() {
 		const where = rowsWhere(catalog, model, rows, undefined, variables);
-		const orderBy = orderOf(order);
+		const order_by = orderOf(order);
 		const next: FilterValue = {
 			...(where === null ? {} : { where }),
-			...(order.length === 0 ? {} : { orderBy })
+			...(order.length === 0 ? {} : { order_by })
 		};
 		source = JSON.stringify([model, next, catalog[model]]);
 		sourceVariables = variables;
@@ -193,7 +193,7 @@
 							return false;
 						}
 						rows = parsed.rows;
-						if (result.orderBy !== undefined) order = parsed.order;
+						if (result.order_by !== undefined) order = parsed.order;
 						notice = null;
 						changed();
 						return true;
@@ -218,7 +218,7 @@
 			value.where ?? {},
 			null,
 			2
-		)}{#if value.orderBy !== undefined}{`\n${JSON.stringify(value.orderBy, null, 2)}`}{/if}</pre>
+		)}{#if value.order_by !== undefined}{`\n${JSON.stringify(value.order_by, null, 2)}`}{/if}</pre>
 	{#if !readonly}<button type="button" class="text-sm underline" onclick={() => view.clear()}
 			>{msg(bolt, 'view.replaceSaved', 'Replace filter')}</button
 		>{/if}

@@ -64,7 +64,7 @@ export const reads = [
 		orders: {
 			where: { status: { eq: 'draft' } },
 			fields: ['number', 'total'],
-			orderBy: 'due',
+			order_by: 'due',
 			limit: 100
 		},
 		'orders.lines': { where: { item: { ne: '' } }, limit: 50 },
@@ -93,8 +93,8 @@ ctx.query({ 'orders.lines.order.lines.order.lines': {} });
 ctx.query({ orders: { limt: 5 } });
 // @ts-expect-error a field from another layer
 ctx.query({ 'orders.customer': { fields: ['note'] } });
-// @ts-expect-error `asOf` belongs to a root
-ctx.query({ 'orders.lines': { asOf: '2026-01-01T00:00:00Z' } });
+// @ts-expect-error `as_of` belongs to a root
+ctx.query({ 'orders.lines': { as_of: '2026-01-01T00:00:00Z' } });
 // @ts-expect-error a read request is JSON: no function value
 ctx.query({ orders: { where: () => ({}) } });
 // @ts-expect-error a layer `where` over a field that layer does not expose (orders.customer exposes name and tier)
@@ -108,4 +108,4 @@ ctx.query({ orders: { output: 'logistics' }, 'orders.customer': {} });
 // @ts-expect-error a field outside the named output
 ctx.query({ orders: { output: 'logistics', fields: ['note'] } });
 // @ts-expect-error a root `where` over a field outside the named output
-ctx.query({ orders: { output: 'logistics', where: { note: { isNull: true } } } });
+ctx.query({ orders: { output: 'logistics', where: { note: { is_null: true } } } });

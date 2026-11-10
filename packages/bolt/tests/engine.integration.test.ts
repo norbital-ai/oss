@@ -123,7 +123,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 
 			const lines = (yield* read(route, rep.authority, 'lines', {
 				where: { order: { eq: id } },
-				orderBy: [{ label: 'asc' }],
+				order_by: [{ label: 'asc' }],
 				limit: 10
 			})).rows;
 			expect(lines.map((l) => l['label'])).toEqual(['a', 'b']);
@@ -204,12 +204,12 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 				expect(yield* get(route, t.as(a).authority, 'orders', theirs)).toBeNull();
 				// rep's `default` output: its own rows, every field; the auditor's `audit` output: every row, never `note`
 				const own = (yield* read(route, t.as(b).authority, 'orders', {
-					orderBy: [{ title: 'asc' }]
+					order_by: [{ title: 'asc' }]
 				})).rows;
 				expect(own.map((r) => [r['title'], r['note']])).toEqual([['b-order', 'visible']]);
 				const audited = (yield* read(route, t.as(b).authority, 'orders', {
 					output: 'audit',
-					orderBy: [{ title: 'asc' }]
+					order_by: [{ title: 'asc' }]
 				})).rows;
 				expect(audited.map((r) => r['title'])).toEqual(['a-order', 'b-order']);
 				expect(audited.every((r) => !('note' in r))).toBe(true);

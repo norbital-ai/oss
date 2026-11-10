@@ -19,14 +19,22 @@ const manifest: EngineManifest = {
 	models: {
 		leaves: {
 			description: 'Leaves',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		},
-		steps: { description: 'A step', label: 'label', fields: { label: { kind: 'text' } } },
-		holds: { description: 'Holds', label: 'name', fields: { name: { kind: 'text' } } },
+		steps: {
+			description: 'A step',
+			record_label: 'record.label',
+			fields: { label: { kind: 'text' } }
+		},
+		holds: {
+			description: 'Holds',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
 		postings: {
 			description: 'Postings',
-			label: 'source',
+			record_label: 'record.source',
 			fields: { source: { kind: 'text' }, carrier: { kind: 'text', optional: true } }
 		}
 	},
@@ -92,7 +100,7 @@ const member = (id: string, team: string): Extract<EngineActor, { kind: 'member'
 	phone: null,
 	external: false,
 	teams: [team],
-	teamPath: [team],
+	team_path: [team],
 	admin: false,
 	party: null
 });
@@ -174,7 +182,7 @@ const fixture = Effect.gen(function* () {
 	return { requester, manager, act, decide, names, postings, state, idOf };
 });
 const held = (outcome: Outcome) => {
-	if (outcome.kind !== 'pendingApproval') throw new Error(JSON.stringify(outcome));
+	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
 	return outcome.requestId;
 };
 

@@ -17,7 +17,7 @@ const PDF = {
 	kind: 'file',
 	accept: ['application/pdf'],
 	max: '20MiB',
-	multiple: true
+	many: true
 } satisfies Kind;
 const PHOTO = { kind: 'file', accept: ['image/*'], max: '5MiB' } satisfies Kind;
 // A complete blank PDF lets the fixture host serve previews without an HTTP server.

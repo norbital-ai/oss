@@ -7,7 +7,7 @@
 	 * Edits a relation or an `id` input (§3.6): searches the target model through the caller's own read grant, so
 	 * it lists only rows (and fields) the viewer may read. `label` defaults to the target model's `label`; a target
 	 * without `search` is searched over its label's text and patterned `seq` fields. Each keystroke is a server search,
-	 * so `limit` is the page shown, never the rows searched; rows sort by `orderBy`, else by the label.
+	 * so `limit` is the page shown, never the rows searched; rows sort by `order_by`, else by the label.
 	 */
 	export type PickerProps<C = ModelKey> = {
 		of: C;
@@ -16,7 +16,7 @@
 		onChange(next: IdOf<C> | null): void;
 		label?: readonly FieldOf<C>[];
 		where?: WhereOf<C> & Json;
-		orderBy?: OrderByOf<C> & Json;
+		order_by?: OrderByOf<C> & Json;
 		limit?: number;
 		id?: string;
 		/** Shows the chosen row's label as copyable text; an enclosing readonly form sets it. */
@@ -47,7 +47,7 @@
 		onChange,
 		label,
 		where,
-		orderBy,
+		order_by,
 		limit = 20,
 		id,
 		readonly,
@@ -62,7 +62,7 @@
 	const t = uiText();
 	// The shared record identifier: declared label, otherwise its stable id.
 	const textOf = (row: { readonly [f: string]: Value }) =>
-		title(row, label === undefined ? (target?.record_label ?? labels) : labels, (f, v) => {
+		title(row, label === undefined ? (target?.record_label ?? []) : labels, (f, v) => {
 			const kind = target?.fields[f];
 			return kind === undefined
 				? String(v)
@@ -108,10 +108,9 @@
 		const q = query;
 		const base: Json | undefined = where ?? undefined;
 		return Effect.gen(function* () {
-			const scoped =
-				of.endsWith('_catalog')
-					? yield* versionInForce(read, new Date().toISOString().slice(0, 10))
-					: null;
+			const scoped = of.endsWith('_catalog')
+				? yield* versionInForce(read, new Date().toISOString().slice(0, 10))
+				: null;
 			const filter: Json | undefined =
 				scoped === null
 					? base
@@ -125,9 +124,9 @@
 						? labelRead(
 								host.catalog,
 								of,
-								pickerRead(target, labels, { where: filter, orderBy, limit }, q)
+								pickerRead(target, labels, { where: filter, order_by, limit }, q)
 							)
-						: { [of]: pickerRead(target, labels, { where: filter, orderBy, limit }, q) },
+						: { [of]: pickerRead(target, labels, { where: filter, order_by, limit }, q) },
 					host.catalog
 				)
 			);

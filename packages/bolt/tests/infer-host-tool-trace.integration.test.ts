@@ -16,7 +16,7 @@ const manifest = {
 	models: {
 		invoices: {
 			description: 'A supplier invoice',
-			label: 'number',
+			record_label: 'record.number',
 			fields: {
 				number: { kind: 'text' },
 				supplier: { kind: 'text' },
@@ -26,7 +26,7 @@ const manifest = {
 		},
 		purchase_orders: {
 			description: 'A purchase order',
-			label: 'number',
+			record_label: 'record.number',
 			fields: {
 				number: { kind: 'text' },
 				supplier: { kind: 'text' },
@@ -36,7 +36,7 @@ const manifest = {
 		},
 		ledgers: {
 			description: 'Not for matching',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' } }
 		}
 	},
@@ -78,7 +78,7 @@ const manifest = {
 	automations: {
 		match: {
 			description: 'Match new invoices',
-			input: { ids: { kind: 'list', of: { kind: 'id', of: 'invoices' } } },
+			input: { ids: { kind: 'ref', to: 'invoices', many: true } },
 			policies: ['matcher']
 		}
 	},

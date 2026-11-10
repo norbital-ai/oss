@@ -16,7 +16,7 @@ const manifest: EngineManifest = {
 	models: {
 		documents: {
 			description: 'Start admission documents',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, visible: { kind: 'bool' }, ready: { kind: 'bool' } }
 		}
 	},
@@ -35,7 +35,7 @@ const manifest: EngineManifest = {
 	automations: {
 		inspect: {
 			description: 'Inspect the admitted document after dequeue',
-			input: { document: { kind: 'id', of: 'documents', where: { ready: { eq: true } } } },
+			input: { document: { kind: 'ref', to: 'documents', where: { ready: { eq: true } } } },
 			policies: ['starter']
 		}
 	}

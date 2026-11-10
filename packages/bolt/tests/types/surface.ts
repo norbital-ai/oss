@@ -52,16 +52,20 @@ is<
 // ── model search: the semantic model is one +workspace.ts declares, at the width it declares ──
 model('semantic_case', {
 	description: 'x',
-	label: 'body',
+	record_label: 'record.body',
 	fields: { body: { kind: 'text' } },
-	search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small', dim: 1536 } }
+
+	indexes: {
+		find: { text: ['body'] },
+		semantic: { semantic: { fields: ['body'], model: 'text_small', dim: 1536 } }
+	}
 });
 // @ts-expect-error S1 an embedding model +workspace.ts does not declare
 // prettier-ignore
-model('semantic_case', { description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } });
+model('semantic_case', { description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } } });
 // @ts-expect-error the embedding column's width is stated, never guessed
 // prettier-ignore
-model('semantic_case', { description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small' } } });
+model('semantic_case', { description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_small' } } } });
 
 // ── signature helpers ──
 is<Eq<State<'orders'>, 'draft' | 'submitted' | 'ordered'>>();

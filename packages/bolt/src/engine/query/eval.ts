@@ -81,7 +81,7 @@ export function operand(
 const NUMERIC = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration']);
 /** A comparable form: numbers for numeric kinds, epoch ms for instants, case-folded email. */
 function norm(f: FieldInfo, v: Json | undefined): string | number | boolean | null {
-	const p = comparable(v, f);
+	const p = comparable(v);
 	if (p === null || p === undefined) return null;
 	if (NUMERIC.has(f.kind)) return Number(p);
 	if (f.kind === 'instant') return Date.parse(p as string);

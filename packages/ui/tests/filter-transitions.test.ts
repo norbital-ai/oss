@@ -19,6 +19,7 @@ import type { ModelExposure } from '../src/kinds/context.ts';
 
 const catalog: Record<string, ModelExposure> = {
 	people: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -47,13 +48,15 @@ const catalog: Record<string, ModelExposure> = {
 		},
 		many: ['contracts', 'notes']
 	},
-	companies: { label: ['name'], fields: { name: { kind: 'text' } } },
+	companies: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
 	contracts: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' }, amount: { kind: 'number' }, ends: { kind: 'date' } },
 		relations: { person: { targets: ['people'], inverse: 'contracts' } }
 	},
 	notes: {
+		record_label: 'record.body',
 		label: ['body'],
 		fields: { body: { kind: 'text' } },
 		relations: { person: { targets: ['people'], inverse: 'notes' } }
@@ -100,7 +103,7 @@ function valueFor(r: NonNullable<ReturnType<typeof resolve>>, op: Op): Value {
 	return 12;
 }
 function argFor(r: NonNullable<ReturnType<typeof resolve>>, op: Op): RawArg | null {
-	if (['isNull', 'notNull', 'isEmpty', 'notEmpty'].includes(op)) return null;
+	if (['is_null', 'notNull', 'isEmpty', 'notEmpty'].includes(op)) return null;
 	const value = valueFor(r, op);
 	return op === 'in' || op === 'nin' || op === 'hasAny' || op === 'hasAll'
 		? { list: [value] }
@@ -188,7 +191,7 @@ describe('filter state transitions', () => {
 		);
 		const n = condition('hired', 'eq', { lit: '2026-10-01' });
 		expect(change(n, 'like')).toBe(n);
-		expect(change(n, 'isNull')).toMatchObject({ op: 'isNull', arg: null });
+		expect(change(n, 'is_null')).toMatchObject({ op: 'is_null', arg: null });
 	});
 	it('retains only valid variable, field, and range operands', () => {
 		expect(pick(condition('hired', 'gte', { var: 'today' }), 'due')).toMatchObject({
@@ -239,7 +242,7 @@ describe('filter state transitions', () => {
 	it('refuses an operator its field kind cannot take', () => {
 		// fromWhere is the untrusted boundary: a parsed where is JSON, not a Node
 		const badJson: readonly Json[] = [
-			{ name: { isNull: true } },
+			{ name: { is_null: true } },
 			{ hired: { like: '%2026-10-01%' } },
 			{ status: { gt: 'open' } },
 			{ employer: { like: '%company-1%' } },
@@ -257,7 +260,7 @@ describe('filter state transitions', () => {
 			expect(fromWhere(catalog, 'people', bad), JSON.stringify(bad)).toBeNull();
 		// toWhere takes a Node the UI built: these are well-typed nodes the catalogue still refuses
 		const badNodes: readonly Node[] = [
-			condition('name', 'isNull'),
+			condition('name', 'is_null'),
 			condition('hired', 'like', { lit: '2026-10-01' }),
 			condition('status', 'gt', { lit: 'open' }),
 			condition('employer', 'like', { lit: 'company-1' }),

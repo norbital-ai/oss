@@ -16,11 +16,15 @@ import type { Rows } from '../contracts.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { EngineManifest } from '../manifest.ts';
 
+const { party_id, phone_key, ...storedFields } = user.spec.fields;
 const declaration = schema({
 	sys_user: {
 		...tableOf(splitModel(user.name, user.spec).model),
-		fields: user.spec.fields,
-		computed: user.spec.computed,
+		fields: storedFields,
+		computed: {
+			party_id: { kind: party_id.kind, expr: party_id.computed },
+			phone_key: { kind: phone_key.kind, expr: phone_key.computed }
+		},
 		key: user.spec.table.primary
 	}
 });
@@ -107,7 +111,7 @@ export const directory = (db: TenantDbShape) => {
 		members: read(Member, {
 			where: {
 				active: { eq: true },
-				or: [{ email: { isNull: false } }, { phone: { isNull: false } }]
+				or: [{ email: { is_null: false } }, { phone: { is_null: false } }]
 			},
 			select: { id: true, email: true, phone: true, team: true },
 			all: true
@@ -125,7 +129,7 @@ export const directory = (db: TenantDbShape) => {
 				});
 				const members = yield* prepare({
 					select: { id: true, name: true, email: true, active: true },
-					orderBy: ['name', 'id'],
+					order_by: ['name', 'id'],
 					all: true
 				});
 				// Authorization and its projection share one read snapshot.

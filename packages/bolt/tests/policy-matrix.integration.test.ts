@@ -14,7 +14,7 @@ import { whereSql, type Pred } from '@norbital-ai/store';
 import { readOptions } from '../src/engine/query/reader.ts';
 import { fromStore } from '../src/protocol/errors.ts';
 
-const d = { description: 'x', label: 'name' };
+const d = { description: 'x', record_label: 'record.name' };
 const name = { name: { kind: 'text', optional: true } };
 const models = {
 	sites: { ...d, fields: name },
@@ -77,7 +77,7 @@ const manifest = Result.getOrThrow(
 
 // ── the grant predicates, in the new `Where` ──
 const OWN = { assignee: { eq: { var: 'requestor.id' } } };
-const UNCHECKED = { suspicion_checked_at: { isNull: true } };
+const UNCHECKED = { suspicion_checked_at: { is_null: true } };
 const OWN_VARIATION = { assignment: { is: OWN } };
 const OWN_EMPLOYMENT = { employee: { is: { email: { eq: { var: 'requestor.email' } } } } };
 const NOT_A_CORRECTION = { kind: { ne: 'MANUAL_ADJUSTMENT' } };
@@ -259,7 +259,7 @@ const who = (
 		phone: null,
 		external: false,
 		teams: ['Ops'],
-		teamPath: ['Ops'],
+		team_path: ['Ops'],
 		admin,
 		party: null,
 		...over

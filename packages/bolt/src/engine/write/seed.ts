@@ -106,7 +106,7 @@ export const restorer = Effect.fn('Bolt.restorer')(function* (
 			const values: Record<string, Json> = { ...row };
 			for (const [field, value] of Object.entries(row)) {
 				const kind = m.models[model]?.fields[field];
-				if (value === null || (kind?.kind !== 'list' && kind?.kind !== 'object')) continue;
+				if (value === null || (kind?.many !== true && kind?.kind !== 'object')) continue;
 				const decoded = yield* Schema.decodeUnknownEffect(inputSchema(kind))(value).pipe(
 					Effect.mapError((error) =>
 						BoltError.make(

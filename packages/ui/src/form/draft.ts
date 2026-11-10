@@ -2,7 +2,14 @@
 // Pure, so the Svelte state around it stays a thin shell and every rule here has a test.
 import type { AutomationExposure, ModelExposure } from '../kinds/context.js';
 import type { ChildInput } from '../kinds/context.js';
-import { initial, problems, valueObject, type Fields, type Value, type Kind } from '../kinds/kind.js';
+import {
+	initial,
+	problems,
+	valueObject,
+	type Fields,
+	type Value,
+	type Kind
+} from '../kinds/kind.js';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { Where } from '@norbital-ai/std/kind';
 import { Equal } from 'effect';
@@ -17,7 +24,7 @@ export type Outcome =
 			records: readonly { model: string; id: string; revision: number }[];
 	  }
 	| {
-			kind: 'pendingApproval';
+			kind: 'pending_approval';
 			requestId: string;
 			records: readonly { model: string; id: string; revision: number }[];
 	  }
@@ -113,8 +120,8 @@ export function formSpec(
 						name,
 						...readonly,
 						kind: {
-							kind: 'id',
-							of: relation.targets[0] ?? '',
+							kind: 'ref',
+							to: relation.targets[0] ?? '',
 							...(relation.optional || filled ? { optional: true as const } : {}),
 							...(relation.label === undefined ? {} : { label: relation.label }),
 							...(relation.where === undefined ? {} : { where: relation.where })
@@ -215,7 +222,7 @@ type Settled = {
 };
 export type Notice = { tone: 'info' | 'danger' | 'warning'; text: string; run?: string };
 export type NoticeText = {
-	pendingApproval: string;
+	pending_approval: string;
 	conflict: string;
 	unknown: string;
 	running: string;
@@ -238,14 +245,14 @@ export function settle(
 	switch (outcome.kind) {
 		case 'committed':
 			return done(null);
-		case 'pendingApproval':
+		case 'pending_approval':
 			return reset
-				? done({ tone: 'info', text: text.pendingApproval })
+				? done({ tone: 'info', text: text.pending_approval })
 				: {
 						draft: { ...base },
 						base: { ...base },
 						errors: new Map(),
-						notice: { tone: 'info', text: text.pendingApproval },
+						notice: { tone: 'info', text: text.pending_approval },
 						newKey: true
 					};
 		case 'refused': {

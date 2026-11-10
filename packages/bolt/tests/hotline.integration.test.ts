@@ -24,10 +24,14 @@ const present = <A>(value: A | null | undefined): A => {
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	models: {
-		entities: { description: 'A legal entity', label: 'name', fields: { name: { kind: 'text' } } },
+		entities: {
+			description: 'A legal entity',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
 		payslips: {
 			description: 'A payslip',
-			label: 'period',
+			record_label: 'record.period',
 			fields: {
 				period: { kind: 'text' },
 				net: { kind: 'int' },

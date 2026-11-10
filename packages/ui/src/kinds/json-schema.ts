@@ -238,10 +238,7 @@ function shapedKind(schema: JsonSchemaObject): Kind | undefined {
  * `format: 'duration'` stays JSON Schema's ISO 8601 duration. `bolt check` holds a named shape to the datatype's.
  */
 function namedKind(schema: JsonSchemaObject): Kind | undefined {
-	const string = typesOf(schema).every((t) => t === 'string' || t === 'null');
-	const named = DATATYPE_SHAPES.filter(
-		(shape) => shape.name === schema.format && !(string && shape.name === 'duration')
-	);
+	const named = DATATYPE_SHAPES.filter((shape) => shape.name === schema.format);
 	if (named.length > 1)
 		return schema.properties?.['start'] === undefined ? named[0]?.kind : named[1]?.kind;
 	return named[0]?.kind;
@@ -270,11 +267,11 @@ export function jsonSchemaKind(schema: JsonSchema): Kind {
 			return schema.items === undefined
 				? { ...common, kind: 'json' }
 				: {
+						kind: 'json',
+						many: true,
 						...common,
-						kind: 'list',
-						of: { kind: 'json' },
-						min: schema.minItems,
-						max: schema.maxItems
+						min_items: schema.minItems,
+						max_items: schema.maxItems
 					};
 		case 'boolean':
 			return { ...common, kind: 'bool' };

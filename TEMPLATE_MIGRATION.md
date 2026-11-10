@@ -48,5 +48,15 @@
 | Model `check: { rule: where }` | Use `constraints: { rule: { check: where } }`. |
 | Model `noOverlap: [{ period, key, where, name }]` | Use `constraints: { [name]: { no_overlap: period, per: key, where } }`. |
 | Model `locked: where` | Use `constraints: { locked_record: { locked: where } }`. Use `except: ['column']` for fields that stay editable. |
+| Model `label: 'field'` or `label: ['a', 'b']` | Use the CEL expression `record_label: 'record.field'` or `record_label: "[record.a != null ? string(record.a) : '', record.b != null ? string(record.b) : ''].filter(part, part != '').join(' · ')"`. |
+| Model `computed: { total: { kind, expr } }` | Move each entry into `fields.total: { kind, computed: expr }`. |
+| Model `index`, `table.indexes`, `search.text`, `search.semantic`, `search.indexes` | Declare one named `indexes` map. Physical entries use `{ on }`, text entries `{ text }`, semantic entries `{ semantic }`, and custom vector entries retain their bodies and metadata. |
+| `kind: 'list', of: item` | Put `many: true` on the item descriptor. List bounds become `min_items` and `max_items`. Keep `key` on a many-valued object. Wrap nested or nullable item descriptors in `{ kind: 'json', shape: item, many: true }`. |
+| File field `multiple: true` | Use `many: true`. |
+| Input `kind: 'id', of: model` | Use `kind: 'ref', to: model`, including nested inputs and shapes. |
+| Field `kind: 'duration'` | Use `kind: 'int'` for whole seconds, with explicit bounds as required. |
+| `orderBy`, `asOf`, `onConflict`, `isNull` | Use `order_by`, `as_of`, `on_conflict`, `is_null`. |
+| Outcome `pendingApproval`, approval decision `requestChanges`, history reason `uncompatible` | Use `pending_approval`, `request_changes`, `incompatible`. Migrate persisted structured payloads during cutover. |
+| Actor `teamPath`, kind `apiKey`, MCP `clientId` and `clientSecret` | Use `team_path`, `api_key`, `client_id`, `client_secret`. |
 
 Apply these entries when relocking the template to the matching Bolt release. For deployed workspaces, create the runtime envoy rows and remap their connections and conversation references before activating the new release.

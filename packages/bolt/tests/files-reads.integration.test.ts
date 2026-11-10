@@ -14,7 +14,7 @@ const manifest = {
 	models: {
 		docs: {
 			description: 'A document',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, file: { kind: 'file', accept: ['*/*'], max: '1MiB' } }
 		}
 	},

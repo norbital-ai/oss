@@ -2,7 +2,7 @@ import { model } from '../../../../../../../src/index.ts';
 
 export default model('notices', {
 	description: 'Mirrored notices',
-	label: 'subject',
+	record_label: 'record.subject',
 	key: ['inbox', 'message_id'],
 	fields: {
 		message_id: { kind: 'text' },

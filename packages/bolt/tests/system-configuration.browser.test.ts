@@ -80,7 +80,7 @@ it.each(['secret', 'key', 'mcp', 'integration'] as const)(
 					setup: {
 						kind: 'form',
 						steps: [],
-						fields: [{ name: 'apiKey', label: 'API key', secret: true }]
+						fields: [{ name: 'api_key', label: 'API key', secret: true }]
 					}
 				}
 			]
@@ -121,6 +121,7 @@ it.each(['secret', 'key', 'mcp', 'integration'] as const)(
 					surfaces: { inbox: false, runs: false, settings: true, agent: false, studio: false },
 					catalog: {
 						sys_integration: {
+							record_label: 'record.id',
 							label: ['id'],
 							fields: { id: { kind: 'text' }, revision: { kind: 'int' } }
 						}

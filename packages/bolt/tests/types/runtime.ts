@@ -357,7 +357,7 @@ automation({
 // @ts-expect-error MC1 a literal URL where a secret name belongs
 mcp({ description: 'x', url: 'https://mcp.example.com' });
 // @ts-expect-error MC2 oauth credentials must be secret names
-mcp({ description: 'x', url: 'MCP_URL', auth: { oauth: { clientId: 'abc' } } });
+mcp({ description: 'x', url: 'MCP_URL', auth: { oauth: { client_id: 'abc' } } });
 // @ts-expect-error MC3 an unknown key
 mcp({ description: 'x', url: 'MCP_URL', transport: 'sse' });
 const skill: SkillFrontmatter = { description: 'Quote a customer' };
@@ -374,7 +374,7 @@ model('notice_notes', {
 			with: 'file',
 			parser: ['csv'],
 			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-			context: { notice: { kind: 'id', of: 'notices' } },
+			context: { notice: { kind: 'ref', to: 'notices' } },
 			read: function* ({ records, context }, ctx) {
 				is<Eq<typeof context.notice, Id<'notices'>>>();
 				const notices = yield* ctx.query({
@@ -428,12 +428,18 @@ model('notice_notes', {
 					type: 'text/plain',
 					extensions: ['.note'],
 					parse: function* (file, ctx) {
-						return [{ $at: 1, code: file.name, note: new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(file)) }];
+						return [
+							{
+								$at: 1,
+								code: file.name,
+								note: new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(file))
+							}
+						];
 					}
 				}
 			],
 			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-			context: { notice: { kind: 'id', of: 'notices' } },
+			context: { notice: { kind: 'ref', to: 'notices' } },
 			write: function* () {
 				return { document: { markdown: '# Notes' }, name: 'notes' };
 			}

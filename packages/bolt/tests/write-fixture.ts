@@ -20,7 +20,7 @@ export const manifest: EngineManifest = {
 	models: {
 		orders: {
 			description: 'An order',
-			label: 'title',
+			record_label: 'record.title',
 			unique: [{ fields: ['title'] }],
 			fields: {
 				title: { kind: 'text' },
@@ -37,10 +37,10 @@ export const manifest: EngineManifest = {
 		},
 		lines: {
 			description: 'A line',
-			label: 'label',
+			record_label: 'record.label',
 			fields: { label: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } }
 		},
-		tags: { description: 'A tag', label: 'name', fields: { name: { kind: 'text' } } }
+		tags: { description: 'A tag', record_label: 'record.name', fields: { name: { kind: 'text' } } }
 	},
 	relationships: {
 		'lines.order': { to: 'orders', inverse: 'lines', owned: true },
@@ -96,7 +96,7 @@ export const member: EngineActor = {
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null
 };

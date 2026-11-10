@@ -90,7 +90,7 @@ const one = Effect.fnUntraced(function* <A>(schema: Schema.Decoder<A>, sql: stri
 	return required((yield* rows(schema, sql))[0], sql);
 });
 const ok = (o: Outcome) => {
-	if (o.kind !== 'committed' && o.kind !== 'pendingApproval') throw new Error(JSON.stringify(o));
+	if (o.kind !== 'committed' && o.kind !== 'pending_approval') throw new Error(JSON.stringify(o));
 	return o;
 };
 const idOf = (o: Outcome, c = 'orders') =>
@@ -679,12 +679,12 @@ describe('engine/write: import (rule 30)', () => {
 	};
 
 	it.effect(
-		'one act upserts every row and reports each; refuse and skip; onConflict is required on a keyed model',
+		'one act upserts every row and reports each; refuse and skip; on_conflict is required on a keyed model',
 		() =>
 			Effect.gen(function* () {
 				count.writes = 0;
 				expect(
-					report((yield* imp({ rows: [{ code: 'p1', name: 'A' }], onConflict: 'update' })).outcome)
+					report((yield* imp({ rows: [{ code: 'p1', name: 'A' }], on_conflict: 'update' })).outcome)
 				).toEqual(['0:created']);
 				expect(
 					report(
@@ -693,7 +693,7 @@ describe('engine/write: import (rule 30)', () => {
 								{ code: 'p1', name: 'B' },
 								{ code: 'p2', name: 'C' }
 							],
-							onConflict: 'update'
+							on_conflict: 'update'
 						})).outcome
 					)
 				).toEqual(['0:updated', '1:created']);
@@ -704,7 +704,7 @@ describe('engine/write: import (rule 30)', () => {
 							{ code: 'p2', name: 'C' },
 							{ code: 'p1', name: 'X' }
 						],
-						onConflict: 'refuse'
+						on_conflict: 'refuse'
 					})).outcome
 				).toMatchObject({ code: 'unique', row: 0 });
 				expect(
@@ -714,7 +714,7 @@ describe('engine/write: import (rule 30)', () => {
 								{ code: 'p1', name: 'Z' },
 								{ code: 'p9', name: 'N' }
 							],
-							onConflict: 'update',
+							on_conflict: 'update',
 							onMissing: 'skip'
 						})).outcome
 					)
@@ -730,7 +730,7 @@ describe('engine/write: import (rule 30)', () => {
 				]);
 				expect((yield* imp({ rows: [{ code: 'p3', name: 'N' }] })).outcome).toMatchObject({
 					code: 'invalidInput',
-					field: 'onConflict'
+					field: 'on_conflict'
 				});
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
@@ -740,14 +740,14 @@ describe('engine/write: import (rule 30)', () => {
 			ok(
 				(yield* imp({
 					rows: ['p1', 'p2', 'p3'].map((code) => ({ code, name: code })),
-					onConflict: 'update'
+					on_conflict: 'update'
 				})).outcome
 			);
 			expect(
 				report(
 					(yield* imp({
 						rows: [{ code: 'p1', name: 'p1' }],
-						onConflict: 'keep',
+						on_conflict: 'keep',
 						prune: { code: { in: ['p1', 'p2'] } }
 					})).outcome
 				)
@@ -761,7 +761,7 @@ describe('engine/write: import (rule 30)', () => {
 			count.writes = 0;
 			expect(
 				report(
-					(yield* imp({ rows: [{ code: 'p9', name: 'x' }], onConflict: 'update', dryRun: true }))
+					(yield* imp({ rows: [{ code: 'p9', name: 'x' }], on_conflict: 'update', dryRun: true }))
 						.outcome
 				)
 			).toEqual(['0:created']);
@@ -781,10 +781,10 @@ describe('engine/write: import (rule 30)', () => {
 			Effect.gen(function* () {
 				const rows = (name: string) =>
 					Array.from({ length: 400 }, (_, i) => ({ code: `c${i}`, name }));
-				ok((yield* imp({ rows: rows('A'), onConflict: 'update' })).outcome);
+				ok((yield* imp({ rows: rows('A'), on_conflict: 'update' })).outcome);
 				statements.length = 0;
 				expect(
-					report((yield* imp({ rows: rows('B'), onConflict: 'update' })).outcome).filter((r) =>
+					report((yield* imp({ rows: rows('B'), on_conflict: 'update' })).outcome).filter((r) =>
 						r.endsWith(':updated')
 					)
 				).toHaveLength(400);
@@ -1049,7 +1049,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 		}),
 		() => ({
 			name: 'the approval route before the commit',
-			expect: 'pendingApproval',
+			expect: 'pending_approval',
 			guest: false,
 			writes: 1,
 			act: () =>

@@ -186,12 +186,12 @@ sits under the table there. -->
 	);
 	const statusName = (value: AuditSummary['status']) =>
 		t(
-			value === 'pendingApproval'
+			value === 'pending_approval'
 				? 'Pending approval'
 				: value.charAt(0).toUpperCase() + value.slice(1)
 		);
 	const actorName = (value: AuditSummary['actor']['kind']) =>
-		t(value === 'apiKey' ? 'API key' : value.charAt(0).toUpperCase() + value.slice(1));
+		t(value === 'api_key' ? 'API key' : value.charAt(0).toUpperCase() + value.slice(1));
 	const when = (value: string) => new Date(value).toLocaleString(locale);
 	/** A write's verb, as the event line reads it. */
 	const VERBS: { readonly [verb: string]: string } = {

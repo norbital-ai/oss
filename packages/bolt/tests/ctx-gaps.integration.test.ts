@@ -13,7 +13,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			rates: {
 				description: 'A rate',
-				label: 'code',
+				record_label: 'record.code',
 				key: ['code'],
 				fields: { code: { kind: 'text' }, value: { kind: 'text' } }
 			}
@@ -42,7 +42,7 @@ const manifest = Result.getOrThrow(
 				description: 'Upsert one rate',
 				input: {
 					code: { kind: 'text' },
-					id: { kind: 'id', of: 'rates', optional: true },
+					id: { kind: 'ref', to: 'rates', optional: true },
 					v: { kind: 'union', of: [{ kind: 'bool' }, { kind: 'number' }, { kind: 'text' }] }
 				},
 				output: { kind: 'text' },
@@ -59,7 +59,7 @@ const manifest = Result.getOrThrow(
 );
 const guest = program(`export default {
  automation: { put: { body: function* (input, ctx) {
-		const saved=yield* ctx.act('rates.upsert', [input.id ? { id: input.id, value: String(input.v) } : { code: input.code, value: String(input.v) }], { onConflict: 'update' });
+		const saved=yield* ctx.act('rates.upsert', [input.id ? { id: input.id, value: String(input.v) } : { code: input.code, value: String(input.v) }], { on_conflict: 'update' });
 		if(saved.kind!=='committed'||!saved.records[0])throw Error('Expected a committed rate');
 		const rate=(yield* ctx.query({rates:{where:{id:{eq:saved.records[0].id}}}})).rates.rows[0];
 		if(!rate||rate.value!==String(input.v))throw Error('The committed rate was not readable');
@@ -107,7 +107,7 @@ const fixture = Effect.gen(function* () {
 	return { t, route, rep, startPut, run, read };
 });
 describe('ctx gaps', () => {
-	it.live('a queued automation upserts through ctx.act with onConflict', () =>
+	it.live('a queued automation upserts through ctx.act with on_conflict', () =>
 		Effect.gen(function* () {
 			const { t, startPut, run, read } = yield* fixture;
 			const first = yield* startPut({ code: 'a', v: 1 });

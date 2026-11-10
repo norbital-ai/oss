@@ -12,7 +12,7 @@ export function outcomeText<O extends OutcomeFeedback>(bolt: Pick<ViewBolt, 't'>
 	switch (o.kind) {
 		case 'committed':
 			return msg(bolt, 'outcome.saved', 'Saved');
-		case 'pendingApproval':
+		case 'pending_approval':
 			return msg(bolt, 'outcome.pending', 'Submitted for review');
 		case 'refused':
 			return bolt.t(o.message);
@@ -52,7 +52,7 @@ export function notify<O extends OutcomeFeedback>(
 ): void {
 	const text = o.kind === 'committed' && saved !== undefined ? saved : outcomeText(bolt, o);
 	if (o.kind === 'committed') toast.success(text);
-	else if (o.kind === 'pendingApproval' || o.kind === 'running') toast.info(text);
+	else if (o.kind === 'pending_approval' || o.kind === 'running') toast.info(text);
 	else if (o.kind === 'unknown') toast.warning(text);
 	else toast.error(text);
 }

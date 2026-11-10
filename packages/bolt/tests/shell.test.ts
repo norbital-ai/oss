@@ -138,7 +138,7 @@ const member = (
 		phone: null,
 		external: false,
 		teams: [],
-		teamPath: [],
+		team_path: [],
 		admin,
 		party: null,
 		...over
@@ -252,11 +252,15 @@ describe('exposure (the boot catalog ui reads)', () => {
 			models: {
 				jobs: {
 					description: 'Work orders on site',
-					label: 'title',
+					record_label: 'record.title',
 					fields: { title: { kind: 'text' }, pay: { kind: 'money' }, notes: { kind: 'text' } },
 					search: { text: ['title'] }
 				},
-				sites: { description: 'Work sites', label: 'name', fields: { name: { kind: 'text' } } }
+				sites: {
+					description: 'Work sites',
+					record_label: 'record.name',
+					fields: { name: { kind: 'text' } }
+				}
 			},
 			relationships: { 'jobs.site': { to: 'sites', optional: true } },
 			exposures: {
@@ -309,7 +313,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 							parser: ['json'],
 							schema: { name: { kind: 'text' } },
 							context: {
-								ids: { kind: 'list', of: { kind: 'id', of: 'jobs' } },
+								ids: { kind: 'ref', to: 'jobs', many: true },
 								kind: { kind: 'enum', values: ['A', 'B'], default: 'A' },
 								at: { kind: 'instant', optional: true }
 							},
@@ -357,7 +361,11 @@ describe('exposure (the boot catalog ui reads)', () => {
 			...em,
 			models: {
 				...em.models,
-				lines: { label: 'amount', description: 'Order lines.', fields: { amount: { kind: 'int' } } }
+				lines: {
+					record_label: 'record.amount',
+					description: 'Order lines.',
+					fields: { amount: { kind: 'int' } }
+				}
 			},
 			relationships: { 'lines.job': { to: 'jobs', inverse: 'lines', owned: true } },
 			exposures: {
@@ -522,7 +530,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 					...em.models,
 					jobs: {
 						...em.models['jobs']!,
-						label: 'code',
+						record_label: 'record.code',
 						computed: {
 							code: { kind: 'text', expr: { field: 'title' } },
 							quantity: { kind: 'decimal', scale: 6, expr: 1 }
@@ -535,6 +543,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 			})
 		);
 		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({
+			record_label: 'record.code',
 			label: ['code'],
 			fields: {
 				title: { kind: 'text' },
@@ -552,7 +561,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 				models: {
 					...em.models,
 					orders: {
-						label: 'code',
+						record_label: 'record.code',
 						fields: {
 							code: { kind: 'text' },
 							total: { kind: 'sum', of: 'lines.amount' },
@@ -560,7 +569,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 						}
 					},
 					lines: {
-						label: 'code',
+						record_label: 'record.code',
 						fields: {
 							code: { kind: 'text' },
 							amount: { kind: 'money', currency: 'SGD' },
@@ -586,7 +595,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 				models: {
 					...em.models,
 					orders: {
-						label: 'code',
+						record_label: 'record.code',
 						fields: {
 							code: { kind: 'text' },
 							currency: { kind: 'currency' },
@@ -594,7 +603,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 						}
 					},
 					lines: {
-						label: 'code',
+						record_label: 'record.code',
 						fields: {
 							code: { kind: 'text' },
 							currency: { kind: 'currency' },
@@ -602,7 +611,7 @@ describe('exposure (the boot catalog ui reads)', () => {
 						}
 					},
 					bills: {
-						label: 'code',
+						record_label: 'record.code',
 						fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'bill_lines.amount' } }
 					}
 				},
@@ -1233,8 +1242,16 @@ describe('Studio port boundary', () => {
 				...baseManifest,
 				workspace: { tz: 'UTC', locale: 'en', secrets: { API: { label: 'API' } } },
 				models: {
-					b: { description: 'B records', label: 'name', fields: { name: { kind: 'text' } } },
-					a: { description: 'A records', label: 'name', fields: { name: { kind: 'text' } } }
+					b: {
+						description: 'B records',
+						record_label: 'record.name',
+						fields: { name: { kind: 'text' } }
+					},
+					a: {
+						description: 'A records',
+						record_label: 'record.name',
+						fields: { name: { kind: 'text' } }
+					}
 				},
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: { rep: { description: 'Representative', grants: {} } },
@@ -1304,7 +1321,11 @@ describe('Studio port boundary', () => {
 				...baseManifest,
 				workspace: { tz: 'UTC', locale: 'en' },
 				models: {
-					a: { description: 'A records', label: 'name', fields: { name: { kind: 'text' } } }
+					a: {
+						description: 'A records',
+						record_label: 'record.name',
+						fields: { name: { kind: 'text' } }
+					}
 				},
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: {},

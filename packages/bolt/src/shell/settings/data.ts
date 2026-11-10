@@ -69,7 +69,7 @@ export type Settings = {
 		audience: 'public' | 'private';
 		task: string;
 		policies: readonly string[];
-		groupMessages: 'disabled' | 'mention_or_reply' | 'all';
+		group_messages: 'disabled' | 'mention_or_reply' | 'all';
 		delegation: 'enabled' | 'disabled';
 		triage: boolean;
 		dm: 'union' | 'envoy';
@@ -218,7 +218,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 			audience: e.audience === 'public' ? ('public' as const) : ('private' as const),
 			task: e.task,
 			policies: e.policies,
-			groupMessages:
+			group_messages:
 				e.group_messages === 'disabled' || e.group_messages === 'all'
 					? e.group_messages
 					: ('mention_or_reply' as const),
@@ -244,8 +244,8 @@ export const settings = Effect.fn('shell.settings')(function* (
 						: 'bearer' in s.auth
 							? [s.auth.bearer]
 							: [
-									s.auth.oauth.clientId,
-									...(s.auth.oauth.clientSecret === undefined ? [] : [s.auth.oauth.clientSecret])
+									s.auth.oauth.client_id,
+									...(s.auth.oauth.client_secret === undefined ? [] : [s.auth.oauth.client_secret])
 								])
 				])
 			]

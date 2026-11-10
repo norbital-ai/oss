@@ -16,6 +16,7 @@ const { default: Board } = await import('../src/board/Board.svelte');
 // An expanded lane: the lane's cards in a modal grid, searched within that lane only, closing back to its button.
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		search: ['title'],
 		fields: {

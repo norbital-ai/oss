@@ -25,12 +25,12 @@ const manifest = {
 	models: {
 		jobs: {
 			description: 'A job',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 		},
 		sent_emails: {
 			description: 'A customer notice',
-			label: 'subject',
+			record_label: 'record.subject',
 			fields: {
 				to: { kind: 'text' },
 				subject: { kind: 'text' },
@@ -40,8 +40,16 @@ const manifest = {
 				failed_reason: { kind: 'text', optional: true }
 			}
 		},
-		orders: { description: 'An order', label: 'title', fields: { title: { kind: 'text' } } },
-		tickets: { description: 'A ticket', label: 'title', fields: { title: { kind: 'text' } } }
+		orders: {
+			description: 'An order',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
+		tickets: {
+			description: 'A ticket',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		}
 	},
 	relationships: {},
 	exposures: {
@@ -351,7 +359,7 @@ describe('connections through the engine entry (rule 61)', () => {
 						issuedAt: t.clock.now()
 					})).outcome;
 					expect(proposal).toMatchObject({
-						kind: 'pendingApproval',
+						kind: 'pending_approval',
 						records: [{ model: 'orders' }]
 					});
 					expect(

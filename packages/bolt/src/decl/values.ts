@@ -8,8 +8,6 @@ export declare const brand: unique symbol;
 
 /** A `time` field's value: a validated time-of-day string. */
 export type PlainTime = string & { readonly [brand]: 'PlainTime' };
-/** A `duration` field's value: whole seconds. */
-export type Seconds = number & { readonly [brand]: 'Seconds' };
 /** A row id, branded by its model so an id of one model never passes for another's. */
 export type Id<C extends string> = string & { readonly [brand]: C };
 /** A typed reference to one record: its model and id. */

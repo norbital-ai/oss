@@ -191,7 +191,7 @@ function scopeWhere(
 		and: [
 			...scope.by.map((f) => {
 				const v = g.by[f] ?? null;
-				return { [f]: v === null ? { isNull: true } : { eq: v } };
+				return { [f]: v === null ? { is_null: true } : { eq: v } };
 			}),
 			...(scope.range === undefined || g.lo === undefined || g.hi === undefined
 				? []
@@ -203,7 +203,7 @@ function scopeWhere(
 const keyWhere = (key: readonly string[], row: Obj): Json => ({
 	and: key.map((f) => {
 		const v = databaseValue(row[f] ?? null);
-		return { [f]: v === null ? { isNull: true } : { eq: v } };
+		return { [f]: v === null ? { is_null: true } : { eq: v } };
 	})
 });
 
@@ -336,7 +336,7 @@ function decodeRecords(
 ): { records: readonly Obj[]; findings: readonly Finding[] } {
 	const plain = records.map(({ $at: _at, ...r }) => r);
 	const d = decodeInput(
-		{ records: { kind: 'list', of: { kind: 'object', fields: schema } } },
+		{ records: { kind: 'object', fields: schema, many: true } },
 		{
 			records: plain
 		}
@@ -470,7 +470,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 					verb: 'import' as const,
 					input: {
 						rows: list,
-						onConflict: 'update',
+						on_conflict: 'update',
 						...(where === undefined ? {} : { prune: where })
 					}
 				}
@@ -514,7 +514,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 			]
 		};
 	}
-	if (outcome.kind === 'pendingApproval') return { pendingApproval: true, findings: found };
+	if (outcome.kind === 'pending_approval') return { pending_approval: true, findings: found };
 	if (outcome.kind !== 'committed')
 		return yield* Effect.fail(
 			BoltError.make(outcome.kind, 'commit', `The import ended ${outcome.kind}.`)

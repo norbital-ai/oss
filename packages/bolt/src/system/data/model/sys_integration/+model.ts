@@ -10,7 +10,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_integration', {
 	description: 'An integration instance: one external account of one integration definition.',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		integration: { kind: 'text' },
 		name: { kind: 'text' },
@@ -26,7 +26,7 @@ export default model('sys_integration', {
 		revision: { kind: 'int', default: 1 }
 	},
 	constraints: {
-		one_per_member: { unique: ['owner', 'integration'], where: { owner: { isNull: false } } }
+		one_per_member: { unique: ['owner', 'integration'], where: { owner: { is_null: false } } }
 	},
 	table: { primary: 'text' },
 	outputs: {

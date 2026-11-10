@@ -3,7 +3,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_config', {
 	description: 'An engine setting by key.',
-	label: 'key',
+	record_label: 'record.key',
 	fields: {
 		key: { kind: 'text' },
 		value: { kind: 'text' }

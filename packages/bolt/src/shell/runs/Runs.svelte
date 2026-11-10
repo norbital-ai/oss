@@ -307,7 +307,7 @@
 				<div class="grid gap-2" data-run-output-files>
 					<p class="text-meta">{t('Files')}</p>
 					<Show
-						kind={{ kind: 'file', accept: ['*/*'], max: '1024GiB', multiple: true }}
+						kind={{ kind: 'file', accept: ['*/*'], max: '1024GiB', many: true }}
 						value={one.files}
 						readonly
 					/>

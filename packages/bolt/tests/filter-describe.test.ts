@@ -30,13 +30,13 @@ const manifest = {
 	models: {
 		members: {
 			description: 'm',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, rate: { kind: 'money' } }
 		},
-		audits: { description: 'a', label: 'note', fields: { note: { kind: 'text' } } },
+		audits: { description: 'a', record_label: 'record.note', fields: { note: { kind: 'text' } } },
 		jobs: {
 			description: 'j',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				hours: { kind: 'decimal', scale: 1 },
@@ -51,7 +51,7 @@ const manifest = {
 		},
 		job_lines: {
 			description: 'l',
-			label: 'item',
+			record_label: 'record.item',
 			fields: { item: { kind: 'text' }, qty: { kind: 'int' }, amount: { kind: 'money' } }
 		}
 	},
@@ -159,7 +159,7 @@ const caller = (
 		phone: null,
 		external: false,
 		teams: [],
-		teamPath: [],
+		team_path: [],
 		admin: false,
 		party: null
 	}
@@ -167,13 +167,13 @@ const caller = (
 /** The read's own day and instant: what a described filter's time variables are. */
 const AT = { today: '2026-09-26', now: '2026-09-26T00:00:00.000Z' };
 const decode =
-	(where: Json, orderBy?: Json, a = caller()) =>
+	(where: Json, order_by?: Json, a = caller()) =>
 	() =>
 		decodeDescribed(
 			storeSync(catalogFor(cat, 'jobs', viewOutput(manifest, a, 'jobs'))),
 			a,
 			'jobs',
-			{ where, ...(orderBy === undefined ? {} : { orderBy }) },
+			{ where, ...(order_by === undefined ? {} : { order_by }) },
 			AT
 		);
 
@@ -520,7 +520,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				expect(choices(q[spot])).toEqual(['no condition', 'Spot is empty', 'Spot is not empty']);
 				expect(q[spot]).toMatchObject({
 					instructions: { question: expect.any(String), field: { label: 'Spot', kind: 'point' } },
-					criteria: { 'Spot is empty': { where: { spot: { isNull: true } } } }
+					criteria: { 'Spot is empty': { where: { spot: { is_null: true } } } }
 				});
 				expect(port.requests).toHaveLength(1);
 			})
@@ -542,7 +542,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				authority: caller({}),
 				bindings
 			});
-			expect(r).toEqual({ ok: true, where: { number: { gt: 20 } }, orderBy: { name: 'asc' } });
+			expect(r).toEqual({ ok: true, where: { number: { gt: 20 } }, order_by: { name: 'asc' } });
 			expect(askedFields(present(port.requests[0]))).toEqual(['Number', 'Name']);
 		})
 	);
@@ -637,7 +637,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			expect(r).toEqual({
 				ok: true,
 				where: { lines: { some: { qty: { gt: 2 } } } },
-				orderBy: { scheduled_on: 'desc' }
+				order_by: { scheduled_on: 'desc' }
 			});
 		})
 	);
@@ -672,7 +672,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			expect(r).toEqual({
 				ok: true,
 				where: { title: { like: '%pump%' } },
-				orderBy: { assignee: { name: 'asc' } }
+				order_by: { assignee: { name: 'asc' } }
 			});
 		})
 	);
@@ -774,7 +774,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					'within',
 					'startsWithin',
 					'endsWithin',
-					'isNull',
+					'is_null',
 					'notNull'
 				]);
 				expect(ops('Notes')).toEqual([]); // `dispatch` omits it
@@ -798,7 +798,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					'within',
 					'startsWithin',
 					'endsWithin',
-					'isNull',
+					'is_null',
 					'notNull'
 				]);
 			})
@@ -994,7 +994,7 @@ describe('described selection must fit the exposed grammar', () => {
 					authority: caller(),
 					bindings
 				})
-			).toEqual({ ok: true, orderBy: { scheduled_on: 'desc' } });
+			).toEqual({ ok: true, order_by: { scheduled_on: 'desc' } });
 		})
 	);
 
@@ -1017,7 +1017,7 @@ describe('described selection must fit the exposed grammar', () => {
 					authority: caller({}),
 					bindings
 				})
-			).toMatchObject({ ok: true, orderBy: { version: 'desc' } });
+			).toMatchObject({ ok: true, order_by: { version: 'desc' } });
 		})
 	);
 	it.effect(

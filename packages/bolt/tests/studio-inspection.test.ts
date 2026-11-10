@@ -4,7 +4,7 @@ import { StudioInspectInput, StudioInspection } from '../src/shell/studio/inspec
 
 const inspection: StudioInspection = {
 	canInspect: false,
-	asOf: '2026-10-26T08:00:00.000Z',
+	as_of: '2026-10-26T08:00:00.000Z',
 	usage: [
 		{
 			title: 'Memory held',

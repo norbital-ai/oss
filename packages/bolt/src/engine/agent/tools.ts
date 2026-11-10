@@ -8,6 +8,7 @@
 // line or two, and names no model, path or sample; what an actor holds is `describe_workspace`'s, and a wrong name's error
 // lists the right ones. The agent has no authority of its own (decision 10): every call runs as the actor, so a refusal is
 // the engine's answer, never the agent's.
+import { item_kind } from '@norbital-ai/std/kind';
 import { Validator } from '@cfworker/json-schema';
 import {
 	Clock,
@@ -649,7 +650,7 @@ const VERBS = ['create', 'update', 'delete', 'upsert'] as const;
 const APPROVE = 'approvals.decide';
 const Decide = Schema.Struct({
 	requestId: Schema.String,
-	decision: Schema.Literals(['approve', 'reject', 'requestChanges', 'withdraw']),
+	decision: Schema.Literals(['approve', 'reject', 'request_changes']),
 	reason: Schema.optionalKey(Schema.String)
 });
 /** `act { callable: 'automation.<name>' }` starts an automation now; `<model>.sync.<sync>` runs a sync now. */
@@ -779,9 +780,9 @@ function receipt(callable: string, o: Outcome): Receipt | null {
 			callable,
 			records: o.records.map(({ model, id }) => ({ model, id }))
 		};
-	if (o.kind === 'pendingApproval')
+	if (o.kind === 'pending_approval')
 		return {
-			outcome: 'pendingApproval',
+			outcome: 'pending_approval',
 			callable,
 			requestId: o.requestId,
 			records: o.records.map(({ model, id }) => ({ model, id }))
@@ -845,12 +846,12 @@ export const runJob = Effect.fn('AgentTool.runJob')(function* (
 	const run = answer['run'],
 		outcome = answer['outcome'],
 		kind = Predicate.isObject(outcome) && !Array.isArray(outcome) ? outcome['kind'] : undefined;
-	if (kind !== undefined && kind !== 'committed' && kind !== 'pendingApproval') return answer;
+	if (kind !== undefined && kind !== 'committed' && kind !== 'pending_approval') return answer;
 	const name = callable.startsWith(`${AUTOMATION}.`)
 		? callable.slice(AUTOMATION.length + 1)
 		: callable;
 	const held =
-		kind === 'pendingApproval' && Predicate.isObject(outcome) && !Array.isArray(outcome)
+		kind === 'pending_approval' && Predicate.isObject(outcome) && !Array.isArray(outcome)
 			? String(outcome['requestId'] ?? '')
 			: undefined;
 	const job = yield* jobs.add(
@@ -913,7 +914,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		const d = Option.getOrUndefined(Schema.decodeUnknownOption(Decide)(input));
 		if (d === undefined)
 			return {
-				error: `${APPROVE} takes { requestId, decision: approve | reject | requestChanges | withdraw, reason? }`
+				error: `${APPROVE} takes { requestId, decision: approve | reject | request_changes, reason? }`
 			};
 		return encodeWire(
 			yield* x.engine.approvals.decide({
@@ -981,7 +982,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		verb: name,
 		input,
 		// an upsert updates the record each row's id names (rule 28)
-		...(name === 'upsert' ? { onConflict: 'update' as const } : {})
+		...(name === 'upsert' ? { on_conflict: 'update' as const } : {})
 	});
 	const rc = receipt(callable, r.outcome);
 	if (rc !== null) x.receipts.push(rc);
@@ -1219,22 +1220,23 @@ const uncursored = (v: Json): Json =>
 			? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'next'))
 			: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, uncursored(x)]));
 /** An input field as describe shows it: its kind, an enum's values, a range, an object's or custom value's fields. */
-const formatOf = (m: EngineManifest, k: InputKind): Json => {
+const formatOf = (m: EngineManifest, k: import('@norbital-ai/std/kind').Kind): Json => {
 	const optional = k.optional === true ? ' (optional)' : '';
+
+	if (k.many === true) {
+		const size = k.min_items !== undefined && k.min_items === k.max_items ? `${k.min_items} ` : '';
+		const item = formatOf(m, item_kind(k));
+		return typeof item === 'string'
+			? `list of ${size}${item}${optional}`
+			: { [`list of ${size}`]: item };
+	}
 	switch (k.kind) {
 		case 'enum':
 			return `enum ${k.values.join(' | ')}${optional}`;
-		case 'id':
-			return `id of ${k.of}${optional}`;
+		case 'ref':
+			return `id of ${typeof k.to === 'string' ? k.to : k.to.join(' | ')}${optional}`;
 		case 'number':
 			return `number${k.min === undefined && k.max === undefined ? '' : ` ${k.min ?? ''}..${k.max ?? ''}`}${optional}`;
-		case 'list': {
-			const size = k.min !== undefined && k.min === k.max ? `${k.min} ` : '';
-			const item = formatOf(m, k.of);
-			return typeof item === 'string'
-				? `list of ${size}${item}${optional}`
-				: { [`list of ${size}`]: item };
-		}
 		case 'object':
 			return Object.fromEntries(Object.entries(k.fields).map(([f, v]) => [f, formatOf(m, v)]));
 		case 'custom': {
@@ -1297,8 +1299,7 @@ function shapeOf(m: EngineManifest, a: Authority, path: string, output = 'defaul
 		if (link !== undefined) return `link to ${[link.to].flat().join(' | ')}`;
 		const d = all.models[model]?.fields[f];
 		if (d === undefined) return 'system';
-		const many =
-			('many' in d && d.many === true) || ('multiple' in d && d.multiple === true) ? ' (list)' : '';
+		const many = d.many === true ? ' (list)' : '';
 		return d.kind === 'enum'
 			? `enum ${d.values.join(' | ')}${many}`
 			: d.kind === 'state'
@@ -1564,10 +1565,10 @@ export function describeWorkspace(
 const ReadOptions = (() => {
 	// the contract's free JSON options as the same any-JSON, spelled out: an untyped parameter reaches a routed model
 	// wrapped as { item: … }
-	const { orderBy: _orderBy, aggregate, ...fields } = LayerRequestSchema.fields;
+	const { order_by: _orderBy, aggregate, ...fields } = LayerRequestSchema.fields;
 	return Schema.Struct({
 		...fields,
-		orderBy: Schema.optionalKey(ToolJson),
+		order_by: Schema.optionalKey(ToolJson),
 		aggregate: Schema.optionalKey(
 			Schema.Struct({ ...aggregate.schema.fields, by: Schema.optionalKey(ToolJson) })
 		)
@@ -1671,8 +1672,8 @@ export function readTool(x: ReadToolContext) {
 	});
 	return {
 		tool: Tool.make('read', {
-			description: `Read records. request is one read request, the JSON bolt.query and ctx.query take: { "<model>": { output, where, fields, orderBy, limit, after, search, aggregate, asOf }, "<model>.<relation>": { where, fields, orderBy, limit, search, aggregate } }, each key once. orderBy: "<field>", { <field>: "desc" } or a list of them. limit: at most ${READ_LIMIT}.
-where: { <field>: { eq|ne|lt|lte|gt|gte|in|nin|isNull|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
+			description: `Read records. request is one read request, the JSON bolt.query and ctx.query take: { "<model>": { output, where, fields, order_by, limit, after, search, aggregate, as_of }, "<model>.<relation>": { where, fields, order_by, limit, search, aggregate } }, each key once. order_by: "<field>", { <field>: "desc" } or a list of them. limit: at most ${READ_LIMIT}.
+where: { <field>: { eq|ne|lt|lte|gt|gte|in|nin|is_null|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
 Answers each model's { rows, next, total }, total counting every match, so a count needs no aggregate; with aggregate, its measures instead of rows. Long values are clipped.`,
 			parameters: ReadInput,

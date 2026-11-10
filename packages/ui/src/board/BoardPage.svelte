@@ -29,7 +29,7 @@
 		of,
 		card,
 		where,
-		orderBy,
+		order_by,
 		search,
 		pageSize,
 		index,
@@ -46,7 +46,7 @@
 	}: Pick<BoardProps<C>, 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
-		orderBy: Json | undefined;
+		order_by: Json | undefined;
 		search?: string;
 		pageSize: number;
 		index: number;
@@ -81,7 +81,7 @@
 		])
 	]);
 	const query = $derived(
-		JSON.stringify({ of, where, orderBy, search, fields, pageSize, index, after })
+		JSON.stringify({ of, where, order_by, search, fields, pageSize, index, after })
 	);
 	// hook:agent-ui — later pages stay live
 	const page = $derived.by(() => {
@@ -96,7 +96,7 @@
 							listRequest(
 								kinds.catalog,
 								of,
-								{ where, orderBy, search: search || undefined, limit, after: at },
+								{ where, order_by, search: search || undefined, limit, after: at },
 								readFields
 							)
 						)
@@ -181,7 +181,7 @@
 					{@attach lane.anchor}
 				></div>{/if}
 			{#each grid ? cards : lane.slice(cards) as row (row['id'])}
-				{@const displayed = unref(kinds.catalog, of, fields, [row], bolt.locale)[0] ?? row}
+				{@const displayed = unref(kinds.catalog, of, fields, [row])[0] ?? row}
 				<!-- not a <button>: a card snippet's own buttons and links must receive their clicks; the card opens on the rest -->
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 				<div

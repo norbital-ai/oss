@@ -71,6 +71,69 @@ describe('Store over a schema value', () => {
 			expect(upserted).toMatchObject({ revision: 10, updated_at: '2026-10-03T00:00:00.000Z' });
 		})
 	);
+	it.effect(
+		'many fields preserve their element kinds through writes, reads and atomic changes',
+		() =>
+			Effect.gen(function* () {
+				const declaration = schema({
+					target: table({ key: 'text', fields: { name: { kind: 'text' } } }),
+					entry: table({
+						key: 'text',
+						fields: {
+							numbers: { kind: 'int', many: true, min_items: 1, max_items: 4 },
+							labels: { kind: 'text', many: true, optional: true },
+							refs: { kind: 'ref', to: 'target', many: true },
+							items: { kind: 'json', shape: { kind: 'int', optional: true }, many: true }
+						}
+					})
+				});
+				const pg = yield* database;
+				yield* script(pg, (yield* build(declaration)).join(';\n'));
+				const entries = store(declaration),
+					execute = run(pg);
+				yield* execute(
+					yield* entries.create('entry', {
+						id: 'one',
+						numbers: [1, 2],
+						labels: null,
+						refs: ['a'],
+						items: [null, 2]
+					})
+				);
+				yield* execute(
+					yield* entries.update('entry', {
+						key: { id: 'one' },
+						set: {
+							numbers: { $append: [3] },
+							labels: { $append: ['a', 'b', 'a'] },
+							items: { $append: [4] }
+						}
+					})
+				);
+				yield* execute(
+					yield* entries.update('entry', {
+						key: { id: 'one' },
+						set: { numbers: { $remove: [1] }, labels: { $remove: ['a'] } }
+					})
+				);
+				const page = yield* execute(
+					yield* entries.read('entry', {
+						where: { numbers: { some: { gt: 2 } } },
+						all: true
+					})
+				);
+				expect(page.rows).toMatchObject([
+					{
+						id: 'one',
+						numbers: [2, 3],
+						labels: ['b'],
+						refs: ['a'],
+						items: [null, 2, 4]
+					}
+				]);
+			})
+	);
+
 	it.effect('matches normalized addresses through native text predicates', () =>
 		Effect.gen(function* () {
 			const execute = yield* fresh;
@@ -85,7 +148,7 @@ describe('Store over a schema value', () => {
 					where: {
 						or: [{ name: { folded: 'person@example.test' } }, { name: { digits: '821012345678' } }]
 					},
-					orderBy: 'handle',
+					order_by: 'handle',
 					all: true
 				})
 			);
@@ -107,7 +170,7 @@ describe('Store over a schema value', () => {
 			);
 			const query = {
 				firstPer: ['tenant'],
-				orderBy: { generation: 'desc' },
+				order_by: { generation: 'desc' },
 				where: { generation: { lt: 4 } },
 				limit: 1
 			} as const;
@@ -143,11 +206,13 @@ describe('Store over a schema value', () => {
 			);
 			expect(orders.map((o) => o.number)).toEqual(['SO-1', 'SO-2', 'SO-3']);
 			expect(orders[0]?.status).toBe('open');
-			const first = yield* exec(yield* db.read('order', { orderBy: { number: 'desc' }, limit: 2 }));
+			const first = yield* exec(
+				yield* db.read('order', { order_by: { number: 'desc' }, limit: 2 })
+			);
 			expect(first.rows.map((o) => o.number)).toEqual(['SO-3', 'SO-2']);
 			expect(first.next).not.toBeNull();
 			const second = yield* exec(
-				yield* db.read('order', { orderBy: { number: 'desc' }, limit: 2, after: first.next ?? '' })
+				yield* db.read('order', { order_by: { number: 'desc' }, limit: 2, after: first.next ?? '' })
 			);
 			expect(second.rows.map((o) => o.number)).toEqual(['SO-1']);
 			expect(second.next).toBeNull();
@@ -198,7 +263,7 @@ describe('Store over a schema value', () => {
 						select: { number: true },
 						with: {
 							customer: { select: { code: true } },
-							lines: { orderBy: { sku: 'asc' }, limit: 10, select: { sku: true, qty: true } },
+							lines: { order_by: { sku: 'asc' }, limit: 10, select: { sku: true, qty: true } },
 							tags: { all: true, select: { label: true } },
 							notes: { all: true, select: { body: true } }
 						},
@@ -217,7 +282,7 @@ describe('Store over a schema value', () => {
 				const notes = yield* exec(
 					yield* db.read('note', {
 						with: { about: { select: { id: true } } },
-						orderBy: 'body',
+						order_by: 'body',
 						all: true
 					})
 				);
@@ -225,7 +290,7 @@ describe('Store over a schema value', () => {
 
 				const team = yield* exec(
 					yield* db.read('employee', {
-						where: { manager: { isNull: true } },
+						where: { manager: { is_null: true } },
 						with: { reports: { all: true } },
 						all: true
 					})
@@ -311,7 +376,7 @@ describe('Store over a schema value', () => {
 					{ on: ['code'] }
 				)
 			);
-			const all = yield* exec(yield* db.read('customer', { orderBy: 'code', all: true }));
+			const all = yield* exec(yield* db.read('customer', { order_by: 'code', all: true }));
 			expect(all.rows.map((c) => [c.code, c.name, c.revision])).toEqual([
 				['C', 'Second', 2],
 				['D', 'New', 1]
@@ -498,7 +563,7 @@ describe('Store over a schema value', () => {
 			);
 			expect(none.rows.map((o) => o.number)).toEqual(['SO-1']);
 			const byCity = yield* exec(
-				yield* db.read('order', { orderBy: { 'address.city': 'asc' }, all: true })
+				yield* db.read('order', { order_by: { 'address.city': 'asc' }, all: true })
 			);
 			expect(byCity.rows.map((o) => o.address?.city)).toEqual(['Penang', 'Singapore']);
 
@@ -529,9 +594,9 @@ describe('Store over a schema value', () => {
 				expect(
 					yield* failure(read(db.catalog, 'order', { where: { nope: { eq: 1 } }, all: true }))
 				).toContain("where.nope: unknown field 'nope' on 'order'");
-				expect(yield* failure(read(db.catalog, 'order', { where: { $or: { eq: 1 } }, all: true }))).toContain(
-					"where.$or: '$or' is written 'or', no $"
-				);
+				expect(
+					yield* failure(read(db.catalog, 'order', { where: { $or: { eq: 1 } }, all: true }))
+				).toContain("where.$or: '$or' is written 'or', no $");
 				expect(
 					yield* failure(
 						read(db.catalog, 'order', { where: { customer: { some: {} } }, all: true })

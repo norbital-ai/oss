@@ -24,7 +24,7 @@ const manifest = {
 	models: {
 		items: {
 			description: 'An item',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				amount: { kind: 'decimal', scale: 2 },

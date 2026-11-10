@@ -32,7 +32,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			photos: {
 				description: 'A photo',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					file: { kind: 'file', accept: ['image/*'], max: '1MiB' }

@@ -11,8 +11,12 @@ const { default: Harness } = await import('./view-harness.svelte');
 const { default: Matrix } = await import('../src/matrix/Matrix.svelte');
 const { coarsePointer } = await import('../src/primitives/utils.ts');
 const catalog = {
-	loans: { label: ['name'], fields: { name: { kind: 'text' } } },
-	repayments: { label: ['amount'], fields: { amount: { kind: 'int' } } }
+	loans: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
+	repayments: {
+		record_label: 'record.amount',
+		label: ['amount'],
+		fields: { amount: { kind: 'int' } }
+	}
 } satisfies NonNullable<KindsHost['catalog']>;
 const props = {
 	rows: 'loans',

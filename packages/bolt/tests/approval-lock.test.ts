@@ -20,7 +20,7 @@ it.effect('reports a database failure while loading held approval models', () =>
 
 const model = (description: string): EngineManifest['models'][string] => ({
 	description,
-	label: 'name',
+	record_label: 'record.name',
 	fields: { name: { kind: 'text' } }
 });
 const manifest = (

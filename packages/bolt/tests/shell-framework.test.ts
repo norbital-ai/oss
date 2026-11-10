@@ -85,9 +85,9 @@ describe('finder', () => {
 		const scopes = searchScopes(
 			nav,
 			{
-				sales: { label: ['name'], search: ['name'], fields: {} },
-				customers: { label: ['name'], search: ['name'], fields: {} },
-				ops: { label: ['name'], search: ['name'], fields: {} }
+				sales: { record_label: 'record.name', label: ['name'], search: ['name'], fields: {} },
+				customers: { record_label: 'record.name', label: ['name'], search: ['name'], fields: {} },
+				ops: { record_label: 'record.name', label: ['name'], search: ['name'], fields: {} }
 			},
 			(key) => key
 		);
@@ -114,8 +114,8 @@ describe('finder', () => {
 		() =>
 			Effect.gen(function* () {
 				const catalog = {
-					customers: { label: ['name'], search: ['name'], fields: {} },
-					notes: { label: ['title'], fields: {} }
+					customers: { record_label: 'record.name', label: ['name'], search: ['name'], fields: {} },
+					notes: { record_label: 'record.title', label: ['title'], fields: {} }
 				};
 				const requests: Parameters<FinderRead>[0][] = [];
 				const read: FinderRead = (request) =>
@@ -164,8 +164,14 @@ describe('finder', () => {
 				});
 			const finder = yield* recordFinder(
 				{
-					customers: { label: ['name', 'code'], search: ['name'], fields: {} },
-					notes: { label: ['name'], fields: {} }
+					customers: {
+						record_label:
+							"[record.name != null ? string(record.name) : '', record.code != null ? string(record.code) : ''].filter(part, part != '').join(' · ')",
+						label: ['name', 'code'],
+						search: ['name'],
+						fields: {}
+					},
+					notes: { record_label: 'record.name', label: ['name'], fields: {} }
 				},
 				read,
 				(key) => key
@@ -193,6 +199,7 @@ describe('finder', () => {
 		Effect.gen(function* () {
 			const catalog = {
 				customers: {
+					record_label: 'record.name',
 					label: ['name'],
 					search: ['name', 'code'],
 					output: 'directory',
@@ -201,8 +208,13 @@ describe('finder', () => {
 						code: { kind: 'text' as const }
 					}
 				},
-				notes: { label: ['name'], fields: {} },
-				articles: { label: ['name'], semantic: true as const, fields: {} }
+				notes: { record_label: 'record.name', label: ['name'], fields: {} },
+				articles: {
+					record_label: 'record.name',
+					label: ['name'],
+					semantic: true as const,
+					fields: {}
+				}
 			};
 			const requests: Parameters<FinderRead>[0][] = [];
 			const read: FinderRead = (request) =>
@@ -235,12 +247,12 @@ describe('finder', () => {
 			});
 			expect(requests).toEqual(
 				Array.from({ length: 2 }, () => ({
-					customers: { search: 'Acme', limit: 8, output: 'directory' }
+					customers: { search: 'Acme', limit: 8, output: 'directory', fields: ['name'] }
 				}))
 			);
 			yield* searchRecords(catalog, read, 'articles', 'meaning', (key) => key);
 			expect(requests.at(-1)).toEqual({
-				articles: { search: '/semantic meaning', limit: 8, output: 'default' }
+				articles: { search: '/semantic meaning', limit: 8, output: 'default', fields: ['name'] }
 			});
 		})
 	);
@@ -256,7 +268,9 @@ describe('finder', () => {
 						href: '/command-center/automations?automation=manufacturing_pipeline'
 					}
 				];
-				const catalog = { customers: { label: ['name'], search: ['name'], fields: {} } };
+				const catalog = {
+					customers: { record_label: 'record.name', label: ['name'], search: ['name'], fields: {} }
+				};
 				const scopes = searchScopes(nav, catalog, (key) => key, entries);
 				const described = nav.map((node) =>
 					node.kind === 'app' ? { ...node, description: 'Customers and quotes' } : node

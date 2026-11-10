@@ -17,12 +17,12 @@ const manifest: EngineManifest = {
 	models: {
 		quota: {
 			description: 'Synthetic source',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, cap: { kind: 'int' } }
 		},
 		orders: {
 			description: 'Synthetic derived rows',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, derived: { kind: 'text' } }
 		}
 	},

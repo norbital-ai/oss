@@ -213,7 +213,7 @@ const conj = (...parts: (string | null)[]) =>
 	parts.filter((x): x is string => x !== null).join(' AND ') || 'true';
 
 const value = (b: Build, f: FieldInfo, v: Json): Fx<string> => {
-	const p = comparable(v, f);
+	const p = comparable(v);
 	if (p !== null && f.pg === 'uuid' && (typeof p !== 'string' || !UUID.test(p)))
 		return invalid(`'${f.name}' takes an id`);
 	return Effect.succeed(
@@ -486,7 +486,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 				}
 				const raw = argumentList(args) ? args : yield* b.operand(args);
 				const list = (EffectArray.isArray<typeof raw>(raw) ? raw : raw === null ? [] : [raw]).map(
-					(x) => comparable(x, f)
+					(x) => comparable(x)
 				);
 				if (f.pg === 'uuid' && list.some((x) => typeof x !== 'string' || !UUID.test(x)))
 					return yield* invalid(`'${f.name}' takes ids`);
@@ -602,7 +602,7 @@ export const pred: (b: Build, c: ExposureInfo, a: string, p: Pred, lv: Level) =>
 							? `COALESCE(sum(${t}.${q(f.column)}), 0)`
 							: `${p.fn}(${t}.${q(f.column)})`;
 					const pg = p.fn === 'sum' || p.fn === 'avg' ? 'numeric' : f.pg;
-					return `((SELECT ${x} ${from}) ${p.op === 'ne' ? '<>' : OPS[p.op]} ${b.bind(comparable(p.arg, f), pg)})`;
+					return `((SELECT ${x} ${from}) ${p.op === 'ne' ? '<>' : OPS[p.op]} ${b.bind(comparable(p.arg), pg)})`;
 				}
 				if (p.t === 'count')
 					return `((SELECT count(*) ${from}) ${p.op === 'ne' ? '<>' : OPS[p.op]} ${b.bind(p.n, 'int8')})`;
@@ -780,7 +780,7 @@ const arm = Effect.fnUntraced(function* (
 	if (p._tag === 'Limit' && p.after !== undefined)
 		return yield* invalid(`relation arm '${rel}' takes no cursor`);
 	const limit = p._tag === 'All' ? STORE_LIMITS.page.relationArm + 1 : p.limit;
-	const ord = (yield* orderBy(b, x.t, t, r.order ?? [], lv))
+	const ord = (yield* order_by(b, x.t, t, r.order ?? [], lv))
 		.map((k) => `${k.expr} ${k.dir}`)
 		.join(', ');
 	const where = conj(
@@ -814,7 +814,7 @@ const UNORDERED = new Set([
 	'tstzrange'
 ]);
 /** The sort keys, then the primary key's columns: a total order, so a keyset cursor is exact. */
-const orderBy = Effect.fnUntraced(function* (
+const order_by = Effect.fnUntraced(function* (
 	b: Build,
 	c: ExposureInfo,
 	a: string,
@@ -863,7 +863,7 @@ const orderBy = Effect.fnUntraced(function* (
  * exposed there; else `invalidInput`. */
 const readable = Effect.fnUntraced(function* (b: Build, c: ExposureInfo, p: string, lv: Level) {
 	const bad = (why: string) =>
-		Effect.fail(StoreError.of('invalidInput', 'decode', `orderBy '${p}': ${why}`));
+		Effect.fail(StoreError.of('invalidInput', 'decode', `order_by '${p}': ${why}`));
 	const steps = p.split('.');
 	let x = c;
 	for (const s of steps.slice(0, -1)) {
@@ -1090,7 +1090,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 					dir: 'desc'
 				}
 			];
-			const keys = yield* orderBy(b, c, a, [], lv, first);
+			const keys = yield* order_by(b, c, a, [], lv, first);
 			const limit = pageLimit(ir.page),
 				take = limit === 'all' ? STORE_LIMITS.page.all + 1 : limit;
 			const where = conj(
@@ -1128,7 +1128,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 		field,
 		dir: ir.order?.find((key) => key.field === field)?.dir ?? 'asc'
 	}));
-	const keys = yield* orderBy(
+	const keys = yield* order_by(
 		b,
 		c,
 		a,
@@ -1212,7 +1212,7 @@ export const compileGets = Effect.fn('Store.compileGets')(function* (
 });
 
 const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
-const NUM = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number', 'duration']);
+const NUM = new Set(['int', 'decimal', 'money', 'sum', 'count', 'number']);
 /** A field reached by a one-relation path (`'account.region'`), each hop scoped. */
 const path: (
 	b: Build,

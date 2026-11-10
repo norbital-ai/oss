@@ -1,5 +1,5 @@
 // The `__verify` line (§3.3.9, X-12). What a model literal cannot see, because it lives in another model (an inverse
-// declared by another model's ref, a roll-up over a relation back, a FK named in `label`), is checked once over the whole
+// declared by another model's ref, a roll-up over a relation back, a FK named in `record_label`), is checked once over the whole
 // generated names index: `.norbital/names.ts` ends with `export const __verify: Check<Verify> = true;`, which fails tsc
 // with every message below. A model's own ref fields check their target and inverse in `model()`.
 import type {
@@ -70,10 +70,18 @@ type RollUp<M, P extends string, K> = K extends { kind: 'sum' | 'count' | 'state
 	: never;
 
 type ModelErrors<M, D = Models[M & keyof Models]> =
-	| Unknown<M, D extends { label: readonly (infer L)[] } ? L : never, FieldName<M>, 'label'>
 	| Unknown<M, Listed<D extends { key: infer L } ? L : never>, FieldName<M>, 'key'>
 	| Unknown<M, Each<D extends { unique: infer L } ? L : never, 'fields'>, FieldName<M>, 'unique'>
-	| Unknown<M, Listed<D extends { index: infer L } ? L : never>, FieldName<M>, 'index'>
+	| Unknown<
+			M,
+			Each<D extends { indexes: infer L } ? L : never, 'on'> extends infer I
+				? I extends { lower: infer F }
+					? F
+					: I
+				: never,
+			FieldName<M>,
+			'indexes'
+	  >
 	| Unknown<M, Each<D extends { noOverlap: infer L } ? L : never, 'key'>, FieldName<M>, 'noOverlap'>
 	| Unknown<
 			M,

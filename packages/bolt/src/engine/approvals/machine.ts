@@ -4,8 +4,7 @@
 export type ApprovalState =
 	'Pending' | 'ChangesRequested' | 'Approved' | 'Rejected' | 'Superseded' | 'Withdrawn';
 /** `resubmit` is the engine's own move: the requester's save in ChangesRequested takes it (approvals.ts `resubmit`). */
-export type ApprovalMove =
-	'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede' | 'withdraw';
+export type ApprovalMove = 'approve' | 'reject' | 'request_changes' | 'resubmit' | 'supersede';
 /**
  * Who takes a move: the current step's approver (its teams or users), the requester, a superseder (an administrator or a
  * `supersededBy` team).
@@ -28,9 +27,8 @@ export const MACHINE: { readonly [S in ApprovalState]: { readonly [M in Approval
 	Pending: {
 		approve: { by: ['approver'], to: 'next', reason: 'optional' },
 		reject,
-		requestChanges: { by: DECIDERS, to: 'ChangesRequested', reason: 'required' },
-		supersede: { by: ['superseder'], to: 'Superseded', reason: 'required' },
-		withdraw
+		request_changes: { by: DECIDERS, to: 'ChangesRequested', reason: 'required' },
+		supersede: { by: ['superseder'], to: 'Superseded', reason: 'required' }
 	},
 	ChangesRequested: {
 		resubmit: { by: ['requester'], to: 'Pending', reason: 'optional' },
@@ -45,8 +43,8 @@ export const MACHINE: { readonly [S in ApprovalState]: { readonly [M in Approval
 /** Pending and ChangesRequested hold the record's lock; every other state is terminal. */
 export const OPEN: readonly ApprovalState[] = ['Pending', 'ChangesRequested'];
 
-/** What a caller decides (`bolt.approvals.decide`): the approve button is a superseder's supersede; `withdraw` is the requester's. */
-export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges' | 'withdraw';
+/** What a person decides (`bolt.approvals.decide`): the approve button is a superseder's supersede. */
+export type ApprovalDecision = 'approve' | 'reject' | 'request_changes';
 /** The move `decision` takes for `roles`: an approver approves, a superseder who is not one supersedes. */
 export const moveOf = (
 	decision: ApprovalDecision,
@@ -57,7 +55,7 @@ export const moveOf = (
 		: decision;
 /** The decisions `roles` may take from `state`, with their reason requirement: the approval view's buttons. */
 export const decisionsFor = (state: ApprovalState, roles: ReadonlySet<ApprovalRole>) =>
-	(['approve', 'reject', 'requestChanges', 'withdraw'] as const).flatMap((decision) => {
+	(['approve', 'reject', 'request_changes'] as const).flatMap((decision) => {
 		const edge = MACHINE[state][moveOf(decision, roles)];
 		return edge !== undefined && edge.by.some((role) => roles.has(role))
 			? [{ decision, reason: edge.reason }]

@@ -12,7 +12,7 @@ const declaration = schema({
 			title: { kind: 'text' },
 			note: { kind: 'text', optional: true },
 			checked_at: { kind: 'instant', optional: true },
-			labels: { kind: 'list', of: { kind: 'text' }, default: [] },
+			labels: { kind: 'text', many: true, default: [] },
 			status: {
 				kind: 'state',
 				initial: 'draft',
@@ -88,7 +88,7 @@ describe('standalone state rules', () => {
 			);
 			expect(refusal).toMatchObject({ code: 'invalidInput', phase: 'admission' });
 			expect(
-				(yield* execute(yield* db.read('ticket', { orderBy: 'code', all: true }))).rows.map(
+				(yield* execute(yield* db.read('ticket', { order_by: 'code', all: true }))).rows.map(
 					(row) => [row.code, row.status, row.revision]
 				)
 			).toEqual([
@@ -200,7 +200,7 @@ describe('standalone state rules', () => {
 			);
 			expect(stale.code).toBe('stale');
 			expect(
-				(yield* execute(yield* db.read('ticket', { orderBy: 'code', all: true }))).rows.map(
+				(yield* execute(yield* db.read('ticket', { order_by: 'code', all: true }))).rows.map(
 					(row) => [row.title, row.note, row.revision, row.checked_at]
 				)
 			).toEqual([
@@ -256,7 +256,7 @@ describe('standalone state rules', () => {
 				)
 			);
 			expect(
-				(yield* execute(yield* db.read('ticket', { orderBy: 'code', all: true }))).rows.map(
+				(yield* execute(yield* db.read('ticket', { order_by: 'code', all: true }))).rows.map(
 					(row) => [row.code, row.title, row.status]
 				)
 			).toEqual([

@@ -8,26 +8,24 @@ import { nullableOfExpr, type LayerColumns } from '../../decl/model.ts';
 import { FieldsSchema } from '../../protocol/public-page.ts';
 import { SYSTEM } from '../../system/index.ts';
 import { historyArms, viewOutput } from './authority.ts';
-import { labelPaths, recordLabelSpec, recordLabelExpression } from '@norbital-ai/std/label';
+import { labelPaths } from '@norbital-ai/std/label';
 import { catalogOf } from './pred.ts';
 
 const labelMetadata = (
 	model: {
 		record_label?: string;
-		label?: string | readonly string[];
 		table?: unknown;
 		search?: { text: readonly string[] };
 	},
 	readable: (field: string) => boolean
 ) => {
-	const expression = recordLabelExpression(model);
-	const label = expression ?? recordLabelSpec(model);
-	const paths = labelPaths(label);
+	const expression = model.record_label;
+	const paths = labelPaths(expression);
 	const fields = [...new Set(paths.map((path) => path.split('.')[0] ?? path))];
 	const visible = expression !== undefined && fields.every(readable);
 	const search = [...(visible ? ['$label'] : []), ...(model.search?.text.filter(readable) ?? [])];
 	return {
-		label: visible ? fields : expression === undefined ? fields.filter(readable) : [],
+		label: visible ? fields : [],
 		...(visible ? { record_label: expression, labelPaths: paths } : {}),
 		...(search.length === 0 ? {} : { search })
 	};

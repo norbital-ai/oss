@@ -320,7 +320,7 @@ layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approvi
 				const view = yield* orders();
 				expect(
 					yield* bolt.act('orders.create', [{ title: 'held', region: 'north', customer: ACME }])
-				).toMatchObject({ kind: 'pendingApproval', records: [{ model: 'orders' }] });
+				).toMatchObject({ kind: 'pending_approval', records: [{ model: 'orders' }] });
 				expect(view.rows()).toMatchObject([
 					{
 						title: 'held',

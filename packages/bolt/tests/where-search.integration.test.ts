@@ -22,13 +22,13 @@ const manifest = Result.getOrThrow(
 		models: {
 			sites: {
 				description: 'A site',
-				label: 'name',
+				record_label: 'record.name',
 				fields: { name: { kind: 'text' }, address: { kind: 'text' } },
 				search: { text: ['name', 'address'] }
 			},
 			jobs: {
 				description: 'A job',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, notes: { kind: 'text', optional: true } },
 				search: {
 					text: ['title', 'notes', 'site'],

@@ -13,14 +13,14 @@ export const AUDIT_CATEGORIES = [
 export const AUDIT_STATUSES = [
 	'prepared',
 	'committed',
-	'pendingApproval',
+	'pending_approval',
 	'refused',
 	'conflict',
 	'failed',
 	'unknown'
 ] as const;
 /** The existing native actor families, projected without credentials or session data. */
-export const AUDIT_ACTOR_KINDS = ['member', 'envoy', 'visitor', 'apiKey', 'system'] as const;
+export const AUDIT_ACTOR_KINDS = ['member', 'envoy', 'visitor', 'api_key', 'system'] as const;
 
 /** A stable actor identity and its optional display label at the time of the event. */
 export const AuditActor = Schema.Struct({

@@ -498,7 +498,7 @@ const whereChips = (where: unknown): string[] =>
 		if (key === 'not') return [`not (${whereChips(value).join(', ')})`];
 		if (key === '$search') return [`"${operand(value)}"`];
 		return Object.entries(obj(value)).map(([op, given]) =>
-			op === 'isNull'
+			op === 'is_null'
 				? `${key} ${given === true ? 'is empty' : 'is set'}`
 				: Object.hasOwn(WHERE_OPS, op)
 					? `${key} ${WHERE_OPS[op]} ${operand(given)}`
@@ -512,7 +512,7 @@ export function readChips(layer: unknown): string[] {
 	return [
 		...whereChips(o['where']),
 		...(typeof o['search'] === 'string' ? [`"${o['search']}"`] : []),
-		...[o['orderBy']]
+		...[o['order_by']]
 			.flat()
 			.flatMap((by) =>
 				typeof by === 'string'

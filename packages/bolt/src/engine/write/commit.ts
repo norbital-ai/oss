@@ -114,7 +114,7 @@ export const actorId = (a: EngineActor): string | null =>
 				: null;
 /** History's actor (rule 17): `<kind>:<id>`. */
 export const actorRef = (a: EngineActor): string =>
-	`${a.kind}:${a.kind === 'member' ? a.id : a.kind === 'system' ? a.run : a.kind === 'apiKey' ? a.key : a.kind === 'visitor' ? a.visitor : a.sender}`;
+	`${a.kind}:${a.kind === 'member' ? a.id : a.kind === 'system' ? a.run : a.kind === 'api_key' ? a.key : a.kind === 'visitor' ? a.visitor : a.sender}`;
 
 const RETURNING = (
 	table: string,
@@ -599,11 +599,11 @@ export function compileCommit(m: EngineManifest, cat: Catalog, x: Commit): reado
 		`jsonb_build_object('kind', 'committed', 'output', ${c.p(JSON.stringify(x.output))}::jsonb, 'records', ${records}${x.unchanged === undefined ? '' : `, 'unchanged', ${c.p(JSON.stringify(x.unchanged))}::jsonb`})`;
 	const outcome =
 		x.resubmit?.pending === true
-			? `jsonb_build_object('kind', 'pendingApproval', 'requestId', ${c.p(x.resubmit.request)}::text, 'records', ${records})`
+			? `jsonb_build_object('kind', 'pending_approval', 'requestId', ${c.p(x.resubmit.request)}::text, 'records', ${records})`
 			: x.approval === undefined
 				? commitOutcome()
 				: `CASE WHEN ${hit === null ? 'false' : `EXISTS (SELECT 1 FROM ${hit})`} THEN ${commitOutcome()}
-		ELSE jsonb_build_object('kind', 'pendingApproval', 'requestId', ${c.p(x.approval.requestId)}::text, 'records', ${records}) END`;
+		ELSE jsonb_build_object('kind', 'pending_approval', 'requestId', ${c.p(x.approval.requestId)}::text, 'records', ${records}) END`;
 	const result = answer(c, x.key, x.digest, outcome);
 	const tables = affectedTables(m, cat, x.writes);
 	c.cte(
@@ -889,7 +889,7 @@ export const committed: (
 			discard: true
 		});
 	}
-	if (outcome?.kind === 'pendingApproval')
+	if (outcome?.kind === 'pending_approval')
 		live.syncChanged('approval_request', [outcome.requestId]);
 	return live.publish(answer.captured);
 });

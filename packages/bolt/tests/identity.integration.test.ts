@@ -426,7 +426,7 @@ layer(IdentityFixtureLive)((it) => {
 					invited = s.user;
 					const rep = yield* as(invited);
 					expect(rep.policies).toEqual(['sales']);
-					expect(rep.actor).toMatchObject({ kind: 'member', teamPath: ['Sales'], admin: false });
+					expect(rep.actor).toMatchObject({ kind: 'member', team_path: ['Sales'], admin: false });
 					expect(yield* inspectInvitation(h, id)).toMatchObject({ status: 'accepted' });
 					expect(yield* Effect.flip(invite(h, m, rep, { email: 'y@acme.example' }))).toMatchObject({
 						code: 'forbidden'
@@ -486,7 +486,7 @@ layer(IdentityFixtureLive)((it) => {
 					);
 					const after = yield* released.member(db, invited);
 					expect(after?.key).not.toBe(before.key);
-					expect(after?.actor).toMatchObject({ teamPath: ['Sales', 'Company'], teams: ['Sales'] });
+					expect(after?.actor).toMatchObject({ team_path: ['Sales', 'Company'], teams: ['Sales'] });
 					expect(after?.policies).toEqual(['sales']);
 					expect(yield* Effect.flip(assignTeam(h, m, boss, invited, 'sales'))).toMatchObject({
 						code: 'notFound'
@@ -548,13 +548,13 @@ layer(IdentityFixtureLive)((it) => {
 					expect(yield* Effect.flip(issueKey(h, m, boss, 'forged', 'ghost'))).toMatchObject({
 						code: 'notFound'
 					});
-					expect((yield* authorities.apiKey(db, k.id))?.policies).toEqual(['finance']);
+					expect((yield* authorities.api_key(db, k.id))?.policies).toEqual(['finance']);
 					const r = yield* rotateKey(h, boss, k.id);
 					expect(yield* authenticateKey(h, k.key)).toBeNull();
 					expect(yield* authenticateKey(h, r.key)).toBe(k.id);
 					yield* revokeKey(h, boss, k.id);
 					expect(yield* authenticateKey(h, r.key)).toBeNull();
-					expect(yield* authorities.apiKey(db, k.id)).toBeNull();
+					expect(yield* authorities.api_key(db, k.id)).toBeNull();
 				})
 		);
 

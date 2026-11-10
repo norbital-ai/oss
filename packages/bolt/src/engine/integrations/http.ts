@@ -202,8 +202,8 @@ const token = (
 					? Effect.fail(unavailable(`${name} is not set`))
 					: Effect.succeed(value);
 			});
-		const clientId = yield* secret(client.client),
-			clientSecret = yield* secret(client.secret);
+		const client_id = yield* secret(client.client),
+			client_secret = yield* secret(client.secret);
 		const response = yield* send(
 			client.token,
 			'POST',
@@ -211,8 +211,8 @@ const token = (
 			new URLSearchParams({
 				grant_type: 'refresh_token',
 				refresh_token: refresh,
-				client_id: clientId,
-				client_secret: clientSecret
+				client_id: client_id,
+				client_secret: client_secret
 			}).toString()
 		);
 		const raw = Schema.decodeUnknownOption(Schema.fromJsonString(TokenResponse))(response.text);

@@ -89,7 +89,7 @@
 					values,
 					act,
 					{
-						pendingApproval: t('pendingApproval'),
+						pending_approval: t('pending_approval'),
 						conflict: t('conflict'),
 						unknown: t('unknown'),
 						running: t('running')

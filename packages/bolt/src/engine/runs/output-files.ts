@@ -1,6 +1,7 @@
+import { item_kind } from '@norbital-ai/std/kind';
 import { Array as EffectArray, Option, Predicate, Schema } from 'effect';
 import { BUILTIN_FIELDS } from '../../decl/builtin-fields.ts';
-import type { OutputKind } from '../../decl/fields.ts';
+import type { OutputKind } from '@norbital-ai/std/kind';
 import type { Json } from '../../decl/values.ts';
 import type { EngineManifest } from '../manifest.ts';
 
@@ -29,6 +30,11 @@ export function outputFiles(
 		aliases: ReadonlySet<string> = new Set()
 	): void => {
 		if (kind === undefined || value == null) return;
+		if (kind.many === true) {
+			if (EffectArray.isArray<typeof value>(value))
+				for (const item of value) visit(item_kind(kind), item, aliases);
+			return;
+		}
 		switch (kind.kind) {
 			case 'row':
 				if (Predicate.isObject(value) && !EffectArray.isArray<typeof value>(value))
@@ -36,7 +42,7 @@ export function outputFiles(
 						visit(field, value[name], aliases);
 				break;
 			case 'file': {
-				const values = kind.multiple
+				const values = kind.many
 					? EffectArray.isArray<typeof value>(value)
 						? value
 						: []
@@ -64,10 +70,6 @@ export function outputFiles(
 			}
 			case 'json':
 				visit(kind.shape, value, aliases);
-				break;
-			case 'list':
-				if (EffectArray.isArray<typeof value>(value))
-					for (const item of value) visit(kind.of, item, aliases);
 				break;
 			case 'record':
 				if (Predicate.isObject(value))

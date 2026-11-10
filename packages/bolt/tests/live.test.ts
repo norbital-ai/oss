@@ -61,7 +61,7 @@ const member = (id: string): EngineActor => ({
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null
 });
@@ -497,7 +497,7 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 		$t = (h: number) => `2026-09-25T0${h}:00:00.000Z`;
 	const newest = {
 		all: true,
-		orderBy: { created_at: 'desc' },
+		order_by: { created_at: 'desc' },
 		select: { title: true, created_at: true }
 	};
 
@@ -737,7 +737,11 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 	const O = (n: number) => `0199a000-0000-7000-8000-00000000000${n}`;
 	const row = (n: number, over: { [k: string]: Json } = {}) =>
 		order({ id: O(n), title: `t${n}`, customer: 'c1', ...over });
-	const byCustomer = { select: { title: true }, all: true, orderBy: { customer: { name: 'asc' } } };
+	const byCustomer = {
+		select: { title: true },
+		all: true,
+		order_by: { customer: { name: 'asc' } }
+	};
 	const two = page({ id: O(1), title: 't1' }, { id: O(2), title: 't2' });
 	const after = Effect.fn('Test.after')(function* (
 		commit: readonly Captured[],
@@ -905,14 +909,14 @@ describe('protocol/wire (rule 32)', () => {
 		} as const;
 		expect([
 			statusOf({ kind: 'committed', output: null, records: [] }),
-			statusOf({ kind: 'pendingApproval', requestId: 'r', records: [] }),
+			statusOf({ kind: 'pending_approval', requestId: 'r', records: [] }),
 			statusOf({ kind: 'conflict', records: [] }),
 			statusOf({ kind: 'unknown', invocation: 'i' }),
 			statusOf(refused),
 			statusOf({ ...refused, code: 'forbidden' }),
 			statusOf({ ...refused, code: 'rateLimited' })
 		]).toEqual([200, 202, 409, 504, 422, 403, 429]);
-		expect(redact(refused, { kind: 'apiKey', key: 'k' })).toEqual({
+		expect(redact(refused, { kind: 'api_key', key: 'k' })).toEqual({
 			kind: 'refused',
 			code: 'unique',
 			message: 'unique',

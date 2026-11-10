@@ -31,7 +31,7 @@ describe('rule 11a: one invalid row per shape', () => {
 		['orders', 'empty one-relation is', { account: { is: {} } }],
 		['orders', 'not: {}', { not: {} }],
 		['orders', 'empty and element', { and: [{}] }],
-		['orders', 'isNull not a boolean', { note: { isNull: 'yes' } }],
+		['orders', 'is_null not a boolean', { note: { is_null: 'yes' } }],
 		['orders', 'isEmpty not a boolean', { tags: { isEmpty: 'x' } }],
 		['orders', 'eq: null', { note: { eq: null } }],
 		['orders', 'decimal literal of the wrong type', { total: { eq: 'abc' } }],
@@ -109,7 +109,7 @@ describe('rule 11a: one invalid row per shape', () => {
 			)
 		).toThrow(/where\.orders\.some\.lines\.every\.amount\.gt/);
 	});
-	it('a bare value is eq, a list in and null isNull, as a person writes it; a bad value is still refused', () => {
+	it('a bare value is eq, a list in and null is_null, as a person writes it; a bad value is still refused', () => {
 		expect(storeSync(where(cat, 'orders', { status: 'open' }))).toEqual(
 			storeSync(where(cat, 'orders', { status: { eq: 'open' } }))
 		);
@@ -117,7 +117,7 @@ describe('rule 11a: one invalid row per shape', () => {
 			storeSync(where(cat, 'orders', { status: { in: ['open'] } }))
 		);
 		expect(storeSync(where(cat, 'orders', { note: null }))).toEqual(
-			storeSync(where(cat, 'orders', { note: { isNull: true } }))
+			storeSync(where(cat, 'orders', { note: { is_null: true } }))
 		);
 		expect(code(() => storeSync(where(cat, 'orders', { status: 'bogus' })))).toBe('invalid');
 		const account = '0199a000-0000-4000-8000-0000000000a1';
@@ -138,7 +138,7 @@ describe('one wire literal per kind', () => {
 		models: {
 			clock: {
 				description: 'Clock intervals',
-				label: 'at',
+				record_label: 'record.at',
 				fields: {
 					at: { kind: 'instant' },
 					slot: { kind: 'period', of: 'instant' }
@@ -338,11 +338,11 @@ describe('P34: the widened language', () => {
 		).toBe('invalid'); // three hops
 	});
 	it("rule 14: a related key compiles to a subselect only through a layer the caller's output reads, else invalidInput", () => {
-		const sql = (orderBy: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
+		const sql = (order_by: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
 			storeSync(
 				compile(
 					cat,
-					storeSync(read(cat, 'orders', { limit: 5, orderBy })),
+					storeSync(read(cat, 'orders', { limit: 5, order_by })),
 					readOptions(reader, bindings)
 				)
 			);
@@ -352,11 +352,11 @@ describe('P34: the widened language', () => {
 		expect(code(() => sql({ account: { secret: 'asc' } }))).toBe('ok');
 		// the `brief` output's account layer omits `secret`: no ordering by it
 		const brief = storeSync(catalogFor(cat, 'orders', 'brief'));
-		const asClerk = (orderBy: unknown) =>
+		const asClerk = (order_by: unknown) =>
 			storeSync(
 				compile(
 					brief,
-					{ ...storeSync(read(brief, 'orders', { limit: 5, orderBy })), output: 'brief' },
+					{ ...storeSync(read(brief, 'orders', { limit: 5, order_by })), output: 'brief' },
 					readOptions({ as: 'caller', authority: clerk }, bindings)
 				)
 			);
@@ -394,16 +394,16 @@ describe('bolt.decode (rule 11a in the browser, rule 16b)', () => {
 		const out = storeSync(
 			decodeView(cat, 'orders', {
 				where: { status: { eq: 'open' }, qty: {}, lines: { some: { amount: { gt: 'x' } } } },
-				orderBy: ['placed', 'tags', 'placed', { total: 'desc' }]
+				order_by: ['placed', 'tags', 'placed', { total: 'desc' }]
 			})
 		);
 		expect(out.where).toEqual({ status: { eq: 'open' } });
-		expect(out.orderBy).toEqual(['placed', { total: 'desc' }]);
+		expect(out.order_by).toEqual(['placed', { total: 'desc' }]);
 		expect(out.dropped.map((d) => d.path)).toEqual([
 			'where.qty',
 			'where.lines',
-			'orderBy[1]',
-			'orderBy[2]'
+			'order_by[1]',
+			'order_by[2]'
 		]);
 	});
 	it.effect(
@@ -419,7 +419,7 @@ describe('bolt.decode (rule 11a in the browser, rule 16b)', () => {
 				const out = bolt.decode('accounts', {
 					where: {
 						name: { like: 'a%' },
-						bogus: { isNull: true },
+						bogus: { is_null: true },
 						orders: { some: { status: { eq: 'open' } } }
 					}
 				});

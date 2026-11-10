@@ -11,3 +11,7 @@
 
 - Read kiosk declarations from manifest apps whose `shell` is `kiosk`. Keep serving their existing route namespace with the new shell and release.
 - Session authentication now reads the active session from the database on each request so revocation applies across activations. Account for this in the host's request and database-wake measurements.
+
+- Update host and browser boundary decoders for `many`, `ref`, `order_by`, `as_of`, `on_conflict`, `pending_approval`, `request_changes`, `team_path`, `api_key`, `client_id` and `client_secret`. Activate the matching engine, shell and manifest together.
+- Apply the standalone or scoped audit `0004_authoring_names.sql` through the privileged migration owner during cutover. It locks the event table and rewrites only the root status and actor-kind fields before restoring immutability. Rehearse against a copied audit database and verify payload text and trigger enforcement.
+- Include generated system record-label columns, rebuilt JSON shape checks and any former JSONB list-to-`text[]` conversions in the reviewed tenant schema migration.

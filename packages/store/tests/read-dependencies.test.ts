@@ -57,7 +57,7 @@ describe('compiler read dependencies', () => {
 							{ entries: { some: { amount: { gt: 0 } } } }
 						]
 					},
-					orderBy: { upper_code: 'asc' },
+					order_by: { upper_code: 'asc' },
 					firstPer: ['code']
 				});
 				const result = yield* compile(cat, query);

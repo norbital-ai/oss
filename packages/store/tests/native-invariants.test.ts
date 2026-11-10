@@ -216,7 +216,7 @@ const stateDeclaration = schema({
 			title: { kind: 'text' },
 			note: { kind: 'text', optional: true },
 			none: { kind: 'text', optional: true },
-			labels: { kind: 'list', of: { kind: 'text' }, default: [] },
+			labels: { kind: 'text', many: true, default: [] },
 			party: { kind: 'ref', to: ['person', 'company'], optional: true },
 			status: {
 				kind: 'state',
@@ -342,13 +342,13 @@ it.effect(
 			for (const text of [
 				"UPDATE ticket SET title='blocked',note='rolled back' WHERE id='ticket'",
 				"UPDATE ticket SET status='draft',title='blocked' WHERE id='ticket'",
-				"UPDATE ticket SET labels='[\"blocked\"]'::jsonb WHERE id='ticket'",
+				"UPDATE ticket SET labels=ARRAY['blocked']::text[] WHERE id='ticket'",
 				"UPDATE ticket SET party__person=NULL,party__company='c' WHERE id='ticket'"
 			])
 				yield* rejected(pg, text, '23514');
 			yield* script(
 				pg,
-				"UPDATE ticket SET title='Original',labels='[]'::jsonb,note='allowed',status='review' WHERE id='ticket'"
+				"UPDATE ticket SET title='Original',labels=ARRAY[]::text[],note='allowed',status='review' WHERE id='ticket'"
 			);
 			expect(
 				yield* query(

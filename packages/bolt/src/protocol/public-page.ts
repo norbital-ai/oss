@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import type { Kind, OutputKind } from '@norbital-ai/std/kind';
+import { KindSchema, type OutputKind } from '@norbital-ai/std/kind';
 import type { Json } from '../decl/values.ts';
 import type { WireRead } from './wire.ts';
 import type { ShellBoot } from '../shell/nav.ts';
@@ -8,6 +8,10 @@ const optionalString = Schema.optionalKey(Schema.String);
 const strings = Schema.Array(Schema.String);
 const trueKey = Schema.optionalKey(Schema.Literal(true));
 const common = {
+	many: trueKey,
+	min_items: Schema.optionalKey(Schema.Number),
+	max_items: Schema.optionalKey(Schema.Number),
+	key: optionalString,
 	optional: trueKey,
 	default: Schema.optionalKey(Schema.Json),
 	unique: trueKey,
@@ -15,145 +19,15 @@ const common = {
 	help: optionalString,
 	hidden: trueKey
 };
-const range = { min: Schema.optionalKey(Schema.Number), max: Schema.optionalKey(Schema.Number) };
-const datePrecision = Schema.Literals(['year', 'month', 'week', 'day']);
-const precision = Schema.Literals(['year', 'month', 'week', 'day', 'hour', 'minute']);
 const predicate = Schema.Record(Schema.String, Schema.Json);
+const kind = KindSchema;
 const fields = () => Schema.Record(Schema.String, kind);
-const kind: Schema.Codec<Kind, Json> = Schema.suspend(() =>
-	Schema.Union([
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('text'),
-			format: Schema.optionalKey(
-				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
-			),
-			max: Schema.optionalKey(Schema.Number),
-			many: trueKey
-		}),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('int') }),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('number') }),
-		Schema.Struct({
-			...common,
-			...range,
-			kind: Schema.Literal('decimal'),
-			scale: Schema.Number,
-			precision: Schema.optionalKey(Schema.Number)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('money'),
-			currency: optionalString,
-			scale: Schema.optionalKey(Schema.Number)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('currency') }),
-		Schema.Struct({ ...common, kind: Schema.Literal('bool') }),
-		Schema.Struct({ ...common, kind: Schema.Literal('duration') }),
-		Schema.Struct({ ...common, kind: Schema.Literal('point') }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('date'),
-			precision: Schema.optionalKey(datePrecision)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('instant'),
-			precision: Schema.optionalKey(precision)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('time'),
-			precision: Schema.optionalKey(Schema.Literals(['hour', 'minute']))
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('period'),
-			of: Schema.Literal('date'),
-			precision: Schema.optionalKey(datePrecision)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('period'),
-			of: Schema.Literal('instant'),
-			precision: Schema.optionalKey(precision)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('enum'), values: strings, many: trueKey }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('state'),
-			initial: Schema.String,
-			states: Schema.Record(
-				Schema.String,
-				Schema.Struct({
-					to: Schema.optionalKey(strings),
-					edit: Schema.optionalKey(Schema.Union([Schema.Literals(['all', 'none']), strings]))
-				})
-			)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('seq'),
-			pattern: optionalString,
-			per: Schema.optionalKey(strings)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('sum'),
-			of: Schema.String,
-			where: Schema.optionalKey(predicate),
-			money: Schema.optionalKey(Schema.Struct({ currency: optionalString }))
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('count'),
-			of: Schema.String,
-			where: Schema.optionalKey(predicate)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('json'), shape: Schema.optionalKey(kind) }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('file'),
-			accept: strings,
-			max: Schema.String,
-			multiple: trueKey
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('vector'),
-			dim: Schema.Number,
-			metric: Schema.Literals(['l2', 'cosine', 'ip'])
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('custom'), of: Schema.String, many: trueKey }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('id'),
-			of: Schema.String,
-			where: Schema.optionalKey(predicate)
-		}),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('list'), of: kind }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('object'),
-			fields: fields(),
-			rest: Schema.optionalKey(kind)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('union'),
-			by: Schema.String,
-			arms: Schema.Record(Schema.String, fields())
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('union'), of: Schema.Array(kind) }),
-		Schema.Struct({ ...common, kind: Schema.Literal('record'), of: kind })
-	])
-);
 /** Metadata codecs are shared by browser-catalog emission and public hydration. */
 export const FieldsSchema = fields();
 export const OutputKindSchema: Schema.Codec<OutputKind, Json> = Schema.suspend(() =>
 	Schema.Union([
 		kind,
 		Schema.Struct({ ...common, kind: Schema.Literal('row'), of: Schema.String }),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('list'), of: OutputKindSchema }),
 		Schema.Struct({
 			...common,
 			kind: Schema.Literal('object'),

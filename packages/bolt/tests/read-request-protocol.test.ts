@@ -106,7 +106,7 @@ describe('native /q read requests', () => {
 				{ 'accounts.secret': {} }, // a path the root does not declare
 				{ 'orders.lines.order.account.orders.lines': {} }, // a sixth level
 				{ 'accounts.orders': { after: 'cursor' } }, // a cursor below a root
-				{ 'accounts.orders': { asOf: '2026-09-01T00:00:00.000Z' } } // as-of below a root
+				{ 'accounts.orders': { as_of: '2026-09-01T00:00:00.000Z' } } // as-of below a root
 			];
 			for (const body of refused) {
 				const result = yield* Effect.result(
@@ -165,11 +165,11 @@ describe('decodeReadRequest and planReadRequest', () => {
 	});
 	it('takes an empty history options object as options, not as an at value', () => {
 		const cat = catalogOf(manifest);
-		expect(
-			Result.getOrThrow(
-				decodeRead(cat, 'history', ['accounts', 'account-a', {}])
-			)
-		).toEqual({ kind: 'history', model: 'accounts', id: 'account-a' });
+		expect(Result.getOrThrow(decodeRead(cat, 'history', ['accounts', 'account-a', {}]))).toEqual({
+			kind: 'history',
+			model: 'accounts',
+			id: 'account-a'
+		});
 		expect(
 			Result.getOrThrow(
 				decodeRead(cat, 'history', ['accounts', 'account-a', { at: { revision: 2 } }])
@@ -177,9 +177,7 @@ describe('decodeReadRequest and planReadRequest', () => {
 		).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
 		// an older page may still pass the at value itself
 		expect(
-			Result.getOrThrow(
-				decodeRead(cat, 'history', ['accounts', 'account-a', { revision: 2 }])
-			)
+			Result.getOrThrow(decodeRead(cat, 'history', ['accounts', 'account-a', { revision: 2 }]))
 		).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
 	});
 	it('refuses a function value: a read request is JSON only', () => {

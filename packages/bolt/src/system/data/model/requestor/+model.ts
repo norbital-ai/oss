@@ -3,7 +3,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('requestor', {
 	description: 'The member who requested an approval.',
-	label: 'user_id',
+	record_label: 'record.user_id',
 	fields: {
 		user_id: { kind: 'text' },
 		approval_request_id: { kind: 'ref', to: 'approval_request' }

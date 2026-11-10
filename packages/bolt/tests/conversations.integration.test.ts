@@ -27,7 +27,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			sent_emails: {
 				description: 'A customer notice',
-				label: 'subject',
+				record_label: 'record.subject',
 				fields: {
 					to: { kind: 'text' },
 					subject: { kind: 'text' },
@@ -46,7 +46,7 @@ const manifest = Result.getOrThrow(
 			},
 			supplier_mail: {
 				description: 'A supplier mail',
-				label: 'subject',
+				record_label: 'record.subject',
 				key: ['inbox', 'message_id'],
 				fields: { message_id: { kind: 'text' }, subject: { kind: 'text' }, files: { kind: 'json' } }
 			}

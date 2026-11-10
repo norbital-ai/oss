@@ -30,6 +30,7 @@ const { default: RecordShell } = await import('../src/record/RecordShell.svelte'
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' }, crew: { kind: 'text', optional: true } },
 		update: { columns: ['title', 'crew'] }
@@ -104,7 +105,7 @@ async function fake(
 	const fixture = await viewFixture({
 		get: (c, id, layers, options) => {
 			// a past revision is read as of the instant its history entry was written
-			const revision = HISTORY.find((entry) => entry.at === options?.asOf)?.revision;
+			const revision = HISTORY.find((entry) => entry.at === options?.as_of)?.revision;
 			calls.gets.push({
 				c,
 				id,
@@ -140,7 +141,7 @@ async function fake(
 							fields: { title: { kind: 'text' }, crew: { kind: 'text', optional: true } },
 							values,
 							compatible: values,
-							uncompatible: []
+							incompatible: []
 						};
 			}
 			calls.history++;
@@ -252,7 +253,9 @@ it.live("an authored title names the sheet instead of the record's label", () =>
 );
 it.live('the record heading uses its id when no label is declared', () =>
 	browser(async () => {
-		const { target } = await show(LIVE, { jobs: { ...catalog.jobs, label: [] } });
+		const { target } = await show(LIVE, {
+			jobs: { ...catalog.jobs, record_label: undefined, label: [] }
+		});
 		assert.match(target.textContent ?? '', /j1/);
 	})
 );
@@ -314,7 +317,7 @@ const backToCurrent = async () => {
 const edit = (t: ParentNode) =>
 	[...t.querySelectorAll<HTMLButtonElement>('button')].find((b) => textOf(b).trim() === 'Edit');
 
-it.live('history renders old field labels and values with an uncompatible indicator', () =>
+it.live('history renders old field labels and values with an incompatible indicator', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() =>
 			show(LIVE, catalog, undefined, undefined, [], (_model, _id, options) =>
@@ -331,10 +334,10 @@ it.live('history renders old field labels and values with an uncompatible indica
 							},
 							values: { old_title: 'Old paint', retired: 'Original value' },
 							compatible: { title: 'Old paint' },
-							uncompatible: ['retired']
+							incompatible: ['retired']
 						}
 					: HISTORY.map((entry) =>
-							entry.revision === 2 ? { ...entry, uncompatible: ['retired'], valid: false } : entry
+							entry.revision === 2 ? { ...entry, incompatible: ['retired'], valid: false } : entry
 						)
 			)
 		);
@@ -351,8 +354,8 @@ it.live('history renders old field labels and values with an uncompatible indica
 		const retired = element<HTMLElement>(v.target, '[data-history-field=retired]');
 		assert.match(textOf(retired), /Original value/);
 		assert.equal(
-			textOf(element<HTMLElement>(retired, '[data-history-uncompatible]')).trim(),
-			'uncompatible'
+			textOf(element<HTMLElement>(retired, '[data-history-incompatible]')).trim(),
+			'incompatible'
 		);
 		assert.equal(v.target.querySelector('[data-field=title]'), null);
 	})
@@ -470,6 +473,7 @@ it.live(
 // A record's fields are the author's: an omitted field or relation stays out of the read view and the edit form.
 const deals = {
 	deals: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -480,7 +484,7 @@ const deals = {
 		layers: ['client'],
 		update: { columns: ['title', 'kind', 'channel'] }
 	},
-	clients: { label: ['name'], fields: { name: { kind: 'text' } } }
+	clients: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 } satisfies NonNullable<KindsHost['catalog']>;
 const DEAL = { id: 'd1', revision: 1, title: 'Build', kind: 'sow', channel: 'mail', client: 'c1' };
 async function mountDeal(fixture: Extract<ViewPart, { part: 'record' }>) {
@@ -542,7 +546,7 @@ it.live(
 			const { bolt, script, setCapabilities } = yield* browser(() => fake(current));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
+				c === 'jobs' && options?.as_of === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
@@ -656,6 +660,7 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 				catalog: {
 					...catalog,
 					activities: {
+						record_label: 'record.title',
 						label: ['title'],
 						fields: { title: { kind: 'text' } }
 					}
@@ -678,13 +683,11 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 		yield* browser(() => settle());
 		element<HTMLElement>(target, '[data-timeline-trigger]').click();
 		yield* browser(() => settle());
-		assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT });
+		assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT, fields: ['title'] });
 		const events = element<HTMLElement>(document, '[data-record-history-events]');
 		assert.match(textOf(events), /Customer call/);
 		assert.match(textOf(events), /Ada/);
-		const relatedEvents = events.querySelectorAll<HTMLElement>(
-			'[data-history-model="activities"]'
-		);
+		const relatedEvents = events.querySelectorAll<HTMLElement>('[data-history-model="activities"]');
 		assert.equal(relatedEvents.length, 1, 'a related no-op save stays out of the timeline');
 		const [firstEvent, secondEvent] = events.querySelectorAll<HTMLElement>('[data-history-model]');
 		assert.equal(required(firstEvent).dataset.historyModel, 'jobs');
@@ -754,7 +757,9 @@ it.live('an edit survives closing its record: it reopens as a draft, and Cancel 
 			)
 		).click();
 		yield* browser(async () => {
-			await vi.waitFor(() => assert.ok(document.querySelector('[data-confirm-dialog][data-state=open]')));
+			await vi.waitFor(() =>
+				assert.ok(document.querySelector('[data-confirm-dialog][data-state=open]'))
+			);
 			element<HTMLButtonElement>(document, '[data-confirm-accept]').click();
 			await settle();
 		});
@@ -825,7 +830,7 @@ it.live(
 			const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(current));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
+				c === 'jobs' && options?.as_of === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
@@ -926,7 +931,7 @@ it.live(
 					catalog,
 					(callable, input, options) => {
 						v.calls.acts.push({ callable, input, options });
-						return { kind: 'pendingApproval', requestId: 'approval1', records: [] };
+						return { kind: 'pending_approval', requestId: 'approval1', records: [] };
 					},
 					async () => proposal
 				)
@@ -965,7 +970,7 @@ it.live(
 			setCapabilities(() => new Promise((resolve) => answers.push(resolve)));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
+				c === 'jobs' && options?.as_of === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
@@ -1009,7 +1014,7 @@ it.live('a routed create settles pending approval and opens the record it commit
 		script.act = (callable) => {
 			acts.push(callable);
 			return {
-				kind: 'pendingApproval',
+				kind: 'pending_approval',
 				requestId: 'r1',
 				records: [{ model: 'jobs', id: 'candidate', revision: 1 }]
 			};

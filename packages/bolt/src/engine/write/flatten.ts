@@ -211,11 +211,13 @@ export class Flattener {
 				? this.m.customFields[spec.of]?.['shape']
 				: spec?.kind === 'json'
 					? spec.shape
-					: spec?.kind === 'list' || spec?.kind === 'object'
+					: spec?.many === true || spec?.kind === 'object'
 						? spec
 						: undefined;
 		if (!isInputKind(shape)) return undefined;
-		return spec?.kind === 'custom' && spec.many ? { kind: 'list', of: shape } : shape;
+		return spec?.kind === 'custom' && spec.many
+			? { kind: 'json', shape: shape, many: true }
+			: shape;
 	}
 	private refsOf(model: string, values: Record<string, Json>): Item['refs'] {
 		const info = this.model(model);
@@ -255,10 +257,11 @@ export class Flattener {
 		value: Json | undefined,
 		path: InputPath,
 		parent?: Item['parent'],
-		upsert?: { on: readonly string[]; onConflict: 'update' | 'keep' },
+		upsert?: { on: readonly string[]; on_conflict: 'update' | 'keep' },
 		named?: string
 	): void {
-		const attachLayers = parent === undefined ? this.m.exposures[model]?.create?.attaches : undefined;
+		const attachLayers =
+			parent === undefined ? this.m.exposures[model]?.create?.attaches : undefined;
 		let input = value;
 		let attached: Json | undefined;
 		if (attachLayers !== undefined && Predicate.isObject(value)) {
@@ -286,7 +289,7 @@ export class Flattener {
 						op: 'upsert',
 						values: d.values,
 						on: upsert.on,
-						onConflict: upsert.onConflict
+						on_conflict: upsert.on_conflict
 					};
 		this.items.push({
 			change,
@@ -427,7 +430,7 @@ export class Flattener {
 			values,
 			at,
 			parent,
-			{ on: ['id'], onConflict: wrapped && v['onConflictDoUpdate'] === false ? 'keep' : 'update' },
+			{ on: ['id'], on_conflict: wrapped && v['onConflictDoUpdate'] === false ? 'keep' : 'update' },
 			id
 		);
 	}
@@ -534,6 +537,10 @@ export function decodeValue(
 	shape?: InputSpec[string]
 ): string | null {
 	if (v === null) return null;
+	if (spec?.many === true && spec.kind !== 'text' && spec.kind !== 'enum')
+		return Result.isSuccess(Schema.decodeUnknownResult(inputSchema(spec))(v))
+			? null
+			: 'expected the declared field shape';
 	const str = typeof v === 'string';
 	switch (f.kind) {
 		case 'text':
@@ -556,7 +563,6 @@ export function decodeValue(
 			if (spec?.kind !== 'state') return 'expected the declared state';
 			return str && Object.hasOwn(spec.states, v) ? null : `'${String(v)}' is not a state`;
 		case 'int':
-		case 'duration':
 			return Number.isSafeInteger(v) ? null : 'expected a whole number';
 		// D6: an authored literal (decimal text or a number) or the wire's `{ $dec }`
 		case 'decimal':
@@ -614,9 +620,8 @@ export function decodeValue(
 				? null
 				: `expected ${f.dim ?? 'a list of'} finite numbers`;
 		// a declared `shape` is the value's input kind (§3.3.2), decoded as a typed input is, excess keys refused
-		case 'list':
 		case 'object': {
-			if (spec?.kind !== 'list' && spec?.kind !== 'object')
+			if (spec?.many !== true && spec?.kind !== 'object')
 				return 'expected the declared field shape';
 			return Result.isSuccess(Schema.decodeUnknownResult(inputSchema(spec))(v))
 				? null

@@ -6,7 +6,7 @@ import { model } from '../../../../decl/model.ts';
 export default model('sys_notification', {
 	description:
 		'A notification: its recipient, title, body, attachments and link, and when its member read it.',
-	label: 'title',
+	record_label: 'record.title',
 	fields: {
 		recipient: { kind: 'json' },
 		title: { kind: 'text' },
@@ -20,8 +20,8 @@ export default model('sys_notification', {
 		read_at: { kind: 'instant', optional: true }
 	},
 	table: {
-		primary: 'text',
-		indexes: [{ on: ['member', 'at'], where: { member: { isNull: false } } }]
+		primary: 'text'
 	},
-	outputs: { default: { fields: 'all' } }
+	outputs: { default: { fields: 'all' } },
+	indexes: { by_member_at: { on: ['member', 'at'], where: { member: { is_null: false } } } }
 });

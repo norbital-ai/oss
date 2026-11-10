@@ -53,6 +53,7 @@ const { default: Table } = await import('../src/table/Table.svelte');
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -77,6 +78,7 @@ const catalog = {
 		many: ['lines']
 	},
 	accounts: {
+		record_label: 'record.name',
 		label: ['name'],
 		search: ['name'],
 		semantic: true,
@@ -89,7 +91,7 @@ const catalog = {
 		fields: { status: { kind: 'enum', values: ['paid', 'unpaid'] } },
 		relations: { account: { targets: ['accounts'], inverse: 'invoices' } }
 	},
-	sys_user: { label: ['name'], fields: { name: { kind: 'text' } } },
+	sys_user: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
 	job_lines: {
 		label: [],
 		fields: { qty: { kind: 'int' }, amount: { kind: 'money' } },
@@ -241,7 +243,7 @@ it.effect(
 				cond('status', 'in', { list: ['scheduled', 'done'] }),
 				cond('assignee', 'eq', { lit: 'u1' }),
 				cond('assignee', 'eq', { var: 'requestor.id' }),
-				cond('assignee', 'isNull'),
+				cond('assignee', 'is_null'),
 				cond('account.owner.name', 'like', { lit: 'bo' }),
 				cond('subject:accounts', 'in', { list: ['a1', 'a2'] }),
 				cond('scheduled_on', 'during', {
@@ -333,7 +335,7 @@ it.effect(
 				{ status: { eq: 'nope' } },
 				{ status: {} },
 				{ not: {} },
-				{ hours: { isNull: 'yes' } }
+				{ hours: { is_null: 'yes' } }
 			];
 			for (const bad of invalid)
 				assert.equal(fromWhere(catalog, 'jobs', bad), null, JSON.stringify(bad));
@@ -363,7 +365,10 @@ it.effect(
 	() =>
 		Effect.sync(() => {
 			const unaudited = sortable({ ...catalog.jobs, audit: false }, true, catalog);
-			assert.ok(!unaudited.includes('updated_at'), 'a model with no audit columns has none to sort by');
+			assert.ok(
+				!unaudited.includes('updated_at'),
+				'a model with no audit columns has none to sort by'
+			);
 			const s = sortable(catalog.jobs, true, catalog);
 			assert.ok(s.includes('account.name') && s.includes('assignee.name'), s.join());
 			assert.ok(!s.includes('account.owner'), 'a target FK is no sort key'); // it would order by an id
@@ -445,14 +450,14 @@ it.effect("a condition's operators are the catalogue's, else its kind's", () =>
 	Effect.sync(() => {
 		const ops = (path: string) =>
 			operatorsFor([], [], path, required(resolve(catalog, 'jobs', path))).map((o) => o.op);
-		assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'nin', 'isNull', 'notNull']);
+		assert.deepEqual(ops('assignee'), ['eq', 'ne', 'in', 'nin', 'is_null', 'notNull']);
 		assert.deepEqual(ops('window'), [
 			'contains',
 			'overlaps',
 			'within',
 			'startsWithin',
 			'endsWithin',
-			'isNull',
+			'is_null',
 			'notNull'
 		]);
 		assert.deepEqual(ops('tags'), ['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
@@ -889,7 +894,7 @@ it.live(
 			const bounds = JSON.stringify(s.last().where);
 			assert.match(bounds, /"status":\{"eq":"done"\}/);
 			assert.doesNotMatch(bounds, /bogus|abc/);
-			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
+			assert.deepEqual(s.last().order_by, [{ hours: 'desc' }]);
 
 			assert.equal(document.querySelectorAll<HTMLElement>('[data-view-notice]').length, 1);
 			assert.equal(document.querySelector('[data-read=error]'), null);
@@ -975,14 +980,16 @@ it.effect(
 // ── lists: relation labels in the same read, the default and a custom cell, lanes that load as they scroll ──
 const relCatalog: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' }, done: { kind: 'bool' } },
 		relations: { account: { targets: ['accounts'] } },
 		many: ['lines'],
 		layers: ['account', 'lines']
 	},
-	accounts: { label: ['name'], fields: { name: { kind: 'text' } } },
+	accounts: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
 	job_lines: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: { name: { kind: 'text' } },
 		relations: { job: { targets: ['jobs'], inverse: 'lines' } }
@@ -1177,7 +1184,7 @@ it.live(
 					semantic: true,
 					indexes: {
 						near: { description: 'Jobs near these hours', input: { hours: { kind: 'number' } } },
-						pdq: { description: 'Raw', input: { vector: { kind: 'list', of: { kind: 'number' } } } }
+						pdq: { description: 'Raw', input: { vector: { kind: 'number', many: true } } }
 					}
 				}
 			};
@@ -1305,7 +1312,7 @@ it.live(
 					semantic: true,
 					indexes: {
 						near: { description: 'Jobs near these hours', input: { hours: { kind: 'number' } } },
-						pdq: { description: 'Raw', input: { vector: { kind: 'list', of: { kind: 'number' } } } }
+						pdq: { description: 'Raw', input: { vector: { kind: 'number', many: true } } }
 					}
 				}
 			};
@@ -1462,7 +1469,7 @@ it.live(
 											{ account: { is: { name: { like: '%acme%' } } } }
 										]
 									},
-									orderBy: { hours: 'desc' }
+									order_by: { hours: 'desc' }
 								})
 				})
 			);
@@ -1518,7 +1525,7 @@ it.live(
 					}
 				]
 			});
-			assert.deepEqual(s.last().orderBy, [{ hours: 'desc' }]);
+			assert.deepEqual(s.last().order_by, [{ hours: 'desc' }]);
 			const prefilter = element<HTMLElement>(document, '[data-author-where]');
 			assert.match(textOf(prefilter), /Prefilter · read only/);
 			assert.equal(prefilter.querySelector('button, input, select, textarea'), null);
@@ -1744,9 +1751,9 @@ it.live(
 							fields: [
 								...offers('jobs'),
 								field('window', 'contains', 'period'),
-								field('meta', 'isNull', 'json'),
-								field('facts', 'isNull', 'json'),
-								field('face', 'isNull', 'vector'),
+								field('meta', 'is_null', 'json'),
+								field('facts', 'is_null', 'json'),
+								field('face', 'is_null', 'vector'),
 								field('$search', 'search', 'text'),
 								field('$similar', 'similar', 'text')
 							]

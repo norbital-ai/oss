@@ -1,3 +1,4 @@
+import { item_kind } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { Array as Arr, Schema } from 'effect';
 import { valueObject, type Kind, type Value } from './kind.js';
@@ -340,19 +341,19 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 			...(rest === undefined ? {} : { additionalProperties: kindJsonSchema(rest) })
 		};
 	};
+	if (kind.many === true)
+		return {
+			...common,
+			type: 'array',
+			items: kindJsonSchema(item_kind(kind)),
+			minItems: kind.min_items,
+			maxItems: kind.max_items
+		};
 	switch (kind.kind) {
 		case 'object':
 			return object(kind.fields, kind.rest);
 		case 'record':
 			return { ...common, type: 'object', additionalProperties: kindJsonSchema(kind.of) };
-		case 'list':
-			return {
-				...common,
-				type: 'array',
-				items: kindJsonSchema(kind.of),
-				minItems: kind.min,
-				maxItems: kind.max
-			};
 		case 'json': {
 			const shape = kind.shape === undefined ? undefined : kindJsonSchema(kind.shape);
 			return shape === undefined || typeof shape === 'boolean' ? common : { ...shape, ...common };
@@ -399,8 +400,6 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 			};
 		case 'count':
 			return { ...common, type: 'integer' };
-		case 'duration':
-			return { ...common, type: 'integer', format: 'duration' };
 		case 'money':
 			return { ...common, type: 'number', format: 'money' };
 		case 'sum':
@@ -437,7 +436,7 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 				required: ['lat', 'lng']
 			};
 		case 'file':
-			return kind.multiple
+			return kind.many
 				? { ...common, type: 'array', items: { type: 'object' } }
 				: { ...common, type: 'object' };
 		case 'custom': {
@@ -459,7 +458,6 @@ export function kindJsonSchema(kind: Kind): JsonSchema {
 		case 'currency':
 			return { ...common, type: 'string', format: 'currency' };
 		case 'seq':
-		case 'id':
 			return { ...common, type: 'string' };
 	}
 }

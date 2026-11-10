@@ -29,7 +29,7 @@ const manifest: EngineManifest = {
 	models: {
 		orders: {
 			description: 'Order',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		}
 	},
@@ -75,7 +75,7 @@ const bindings = { now: NOW, today: TODAY, tz: 'UTC' };
 const rows = (sql: string) =>
 	Effect.map(db.read([{ text: sql, params: [] }]), (rows) => rows[0]?.rows ?? []);
 const pending = (outcome: Outcome) => {
-	if (outcome.kind !== 'pendingApproval') throw new Error(JSON.stringify(outcome));
+	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
 	return outcome.requestId;
 };
 const submit = Effect.fn('Test.submitAtomicBatch')(function* () {
@@ -140,7 +140,7 @@ it.effect(
 		Effect.gen(function* () {
 			const result = yield* submit();
 			const id = pending(result.outcome);
-			expect(result.outcome.kind === 'pendingApproval' ? result.outcome.records : []).toHaveLength(
+			expect(result.outcome.kind === 'pending_approval' ? result.outcome.records : []).toHaveLength(
 				2
 			);
 			expect(yield* rows('SELECT note FROM orders ORDER BY title')).toEqual([

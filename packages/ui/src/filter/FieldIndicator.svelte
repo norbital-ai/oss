@@ -24,13 +24,13 @@
 			field = { name: 'fieldTime', label: msg(bolt, 'view.type.time', 'Time field') };
 		else if (kind === 'bool')
 			field = { name: 'fieldBool', label: msg(bolt, 'view.type.bool', 'Yes/no field') };
-		else if (kind === 'json' || kind === 'object' || kind === 'list' || kind === 'custom')
+		else if (kind === 'json' || kind === 'object' || kind === 'custom')
 			field = { name: 'fieldObject', label: msg(bolt, 'view.type.structured', 'Structured field') };
 		else if (kind === 'enum' || kind === 'state' || kind === 'currency')
 			field = { name: 'fieldChoice', label: msg(bolt, 'view.type.choice', 'Choice field') };
 		else if (
 			kind !== undefined &&
-			['int', 'number', 'decimal', 'money', 'sum', 'count', 'duration'].includes(kind)
+			['int', 'number', 'decimal', 'money', 'sum', 'count'].includes(kind)
 		)
 			field = { name: 'fieldNumber', label: msg(bolt, 'view.type.number', 'Number field') };
 		else field = { name: 'fieldText', label: msg(bolt, 'view.type.text', 'Text field') };

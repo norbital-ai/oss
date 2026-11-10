@@ -214,6 +214,15 @@ const leaves = (
 const assignedValue = (b: Build, f: FieldInfo, column: string, v: Json): Fx<string> => {
 	const C = `a.${q(column)}`;
 	if (!isChange(v)) return Effect.succeed(incomingValue(f, column));
+	if (f.many === true) {
+		const held = `coalesce(${C}, ARRAY[]::text[])`;
+		if ('$append' in v) return Effect.succeed(`${held} || ${b.bind(v.$append, 'text[]')}`);
+		if ('$remove' in v)
+			return Effect.succeed(
+				`ARRAY(SELECT e FROM unnest(${held}) WITH ORDINALITY x(e, n) WHERE NOT e = ANY(${b.bind(v.$remove, 'text[]')}) ORDER BY n)`
+			);
+		return invalid(`'${f.name}' admits append or remove, not a patch`);
+	}
 	if (f.pg !== 'jsonb') return invalid(`'${f.name}' is no inline value; set it whole`);
 	if ('$patch' in v)
 		return Effect.succeed(

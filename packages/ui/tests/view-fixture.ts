@@ -47,11 +47,11 @@ export const ReadOptions = Schema.Struct({
 	fields: Schema.optionalKey(Schema.Array(Schema.String)),
 	layers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-	orderBy: Schema.optionalKey(Schema.Json),
+	order_by: Schema.optionalKey(Schema.Json),
 	by: Schema.optionalKey(Schema.Json),
 	limit: Schema.optionalKey(Schema.Number),
 	after: Schema.optionalKey(Schema.String),
-	asOf: Schema.optionalKey(Schema.String),
+	as_of: Schema.optionalKey(Schema.String),
 	search: Schema.optionalKey(Schema.Json)
 });
 export type ReadOptions = typeof ReadOptions.Type;
@@ -65,7 +65,7 @@ export type ViewScript = {
 		model: string,
 		id: string,
 		layers?: Readonly<Record<string, Json>>,
-		options?: { asOf?: string; fields?: readonly string[] }
+		options?: { as_of?: string; fields?: readonly string[] }
 	): ReadReply;
 	aggregate(model: string, options: ReadOptions): ReadReply;
 	history(model: string, id: string, options?: Readonly<Record<string, Json>>): ReadReply;
@@ -135,7 +135,7 @@ export async function viewFixture(extra: Partial<ViewScript> = {}) {
 				continue;
 			}
 			const row = await script.get(root, id, layers, {
-				...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+				...(input.as_of === undefined ? {} : { as_of: input.as_of }),
 				...(input.fields === undefined ? {} : { fields: input.fields })
 			});
 			if (row instanceof Response) return row;

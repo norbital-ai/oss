@@ -220,7 +220,13 @@ it.live('a read request source shows its root and reads exactly the request it w
 			target,
 			props: {
 				bolt,
-				catalog: { stock: { label: ['name'], fields: { name: { kind: 'text' } } } },
+				catalog: {
+					stock: {
+						record_label: 'record.name',
+						label: ['name'],
+						fields: { name: { kind: 'text' } }
+					}
+				},
 				part: 'table',
 				view: Table,
 				props: {

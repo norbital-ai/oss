@@ -11,7 +11,7 @@ declare module '../../src/index.ts' {
 			orders_submit: {
 				spec: {
 					description: 'Submit this order';
-					input: { target: { kind: 'id'; of: 'orders' } };
+					input: { target: { kind: 'ref'; to: 'orders' } };
 					policies: readonly ['sales_rep'];
 				};
 			};
@@ -19,7 +19,7 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Set a note on many orders';
 					input: {
-						ids: { kind: 'list'; of: { kind: 'id'; of: 'orders' } };
+						ids: { kind: 'ref'; to: 'orders'; readonly many: true };
 						note: { kind: 'text' };
 					};
 					output: { kind: 'int' };
@@ -76,10 +76,7 @@ declare module '../../src/index.ts' {
 					description: 'Chase an order three days after it is placed';
 					policies: readonly ['sales_rep'];
 					input: {
-						ids: {
-							kind: 'list';
-							of: { kind: 'id'; of: 'orders' };
-						};
+						ids: { kind: 'ref'; to: 'orders'; readonly many: true };
 					};
 					retry: {
 						attempts: 3;
@@ -96,8 +93,8 @@ declare module '../../src/index.ts' {
 					policies: readonly ['sales_rep'];
 					input: {
 						order: {
-							kind: 'id';
-							of: 'orders';
+							kind: 'ref';
+							to: 'orders';
 						};
 					};
 					output: {
@@ -286,8 +283,8 @@ declare module '../../src/index.ts' {
 						};
 						context: {
 							notice: {
-								kind: 'id';
-								of: 'notices';
+								kind: 'ref';
+								to: 'notices';
 							};
 						};
 						read: true;
@@ -521,7 +518,7 @@ declare module '../../src/index.ts' {
 		models: {
 			customers: {
 				description: 'Buyers';
-				label: 'name';
+				record_label: 'record.name';
 				computed: {
 					name_upper: {
 						kind: 'text';
@@ -600,8 +597,8 @@ declare module '../../src/index.ts' {
 			};
 			orders: {
 				description: 'Sales orders';
-				label: readonly ['number', 'customer'];
-				index: readonly ['customer', 'due'];
+				record_label: "[record.number, record.customer].filter(x, x != null && x != '').join(' · ')";
+				indexes: readonly [{ on: readonly ['customer'] }, { on: readonly ['due'] }];
 				computed: {
 					due_soon: {
 						kind: 'date';
@@ -618,7 +615,7 @@ declare module '../../src/index.ts' {
 				check: {
 					has_customer: {
 						customer: {
-							isNull: false;
+							is_null: false;
 						};
 					};
 				};
@@ -698,7 +695,7 @@ declare module '../../src/index.ts' {
 			};
 			order_lines: {
 				description: 'Lines of an order';
-				label: 'item';
+				record_label: 'record.item';
 				computed: {
 					amount: {
 						kind: 'money';
@@ -734,7 +731,7 @@ declare module '../../src/index.ts' {
 			};
 			notices: {
 				description: 'Supplier notices mirrored from the inbox';
-				label: 'subject';
+				record_label: 'record.subject';
 				key: readonly ['inbox', 'message_id'];
 				fields: {
 					message_id: {
@@ -758,7 +755,7 @@ declare module '../../src/index.ts' {
 			};
 			notice_notes: {
 				description: 'What we add about a notice';
-				label: 'notice';
+				record_label: 'record.notice';
 				unique: readonly [
 					{
 						fields: readonly ['notice'];
@@ -772,7 +769,7 @@ declare module '../../src/index.ts' {
 			};
 			sites: {
 				description: 'Customer sites';
-				label: 'name';
+				record_label: 'record.name';
 				noOverlap: readonly [
 					{
 						key: readonly ['name'];
@@ -806,31 +803,29 @@ declare module '../../src/index.ts' {
 						optional: true;
 					};
 					slot: {
-						kind: 'duration';
+						kind: 'int';
 						default: '30min';
 					};
 					photos: {
 						kind: 'file';
 						accept: readonly ['image/*'];
 						max: '5MiB';
-						multiple: true;
+						many: true;
 						optional: true;
 					};
 					checklist: {
 						kind: 'json';
 						shape: {
-							kind: 'list';
-							of: {
-								kind: 'object';
-								fields: {
-									item: {
-										kind: 'text';
-									};
-									done: {
-										kind: 'bool';
-									};
+							kind: 'object';
+							fields: {
+								item: {
+									kind: 'text';
+								};
+								done: {
+									kind: 'bool';
 								};
 							};
+							readonly many: true;
 						};
 					};
 					rating: {
@@ -847,7 +842,7 @@ declare module '../../src/index.ts' {
 			};
 			products: {
 				description: 'Products from the ledger';
-				label: 'name';
+				record_label: 'record.name';
 				key: readonly ['source', 'external_code'];
 				fields: {
 					external_code: {
@@ -874,7 +869,7 @@ declare module '../../src/index.ts' {
 			};
 			entries: {
 				description: "Calendar entries mirrored from members' calendars";
-				label: 'subject';
+				record_label: 'record.subject';
 				key: readonly ['account', 'calendar_id', 'external_id'];
 				fields: {
 					calendar_id: {
@@ -1066,23 +1061,23 @@ declare module '../../src/index.ts' {
 		};
 		secrets: {
 			ERP_URL: {
-				label: 'ERP base URL';
+				record_label: 'record.ERP base URL';
 			};
 			ERP_TOKEN: {
-				label: 'ERP API token';
+				record_label: 'record.ERP API token';
 			};
 			MCP_URL: {
-				label: 'Docs MCP server';
+				record_label: 'record.Docs MCP server';
 			};
 			HOOK_SECRET: {
-				label: 'Webhook signing secret';
+				record_label: 'record.Webhook signing secret';
 				description: 'Signs inbound webhooks.';
 			};
 			CALENDAR_CLIENT: {
-				label: 'Calendar OAuth client';
+				record_label: 'record.Calendar OAuth client';
 			};
 			CALENDAR_SECRET: {
-				label: 'Calendar OAuth secret';
+				record_label: 'record.Calendar OAuth secret';
 			};
 		};
 		skills: {

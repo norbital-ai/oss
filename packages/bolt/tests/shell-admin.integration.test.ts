@@ -13,7 +13,11 @@ const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en', apps: ['sales'] },
 		models: {
-			openings: { description: 'Roles', label: 'title', fields: { title: { kind: 'text' } } }
+			openings: {
+				description: 'Roles',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: { openings: { outputs: { default: { openings: { fields: 'all' } } } } },

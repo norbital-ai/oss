@@ -51,15 +51,9 @@
 	const LABEL: { readonly [D in Decision['decision']]: string } = {
 		approve: 'Approve',
 		reject: 'Reject',
-		requestChanges: 'Request changes',
-		withdraw: 'Withdraw'
+		request_changes: 'Request changes'
 	};
-	const ORDER: readonly Decision['decision'][] = [
-		'approve',
-		'reject',
-		'requestChanges',
-		'withdraw'
-	];
+	const ORDER: readonly Decision['decision'][] = ['approve', 'reject', 'request_changes'];
 	const decide = Effect.fn('Inbox.decide')(function* (
 		r: InboxRequest,
 		move: Decision,

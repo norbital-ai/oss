@@ -8,7 +8,7 @@ Read-only to workspace code: `id`, `revision` (an update carries the revision it
 
 Always on. One revision per committed change with changed fields, actor, time, cause (`direct`, `cascade`, `derived`, `seed`, `erased`, `restored`) and an approval's `request`. Pruned to about 256 revisions per row.
 
-- Read a past state: `bolt.history(model, id, { at })`, `at` one of `{ instant }` or `{ revision }`. With layers: take its instant, then a root `asOf`. Server contexts use `asOf`; there is no `ctx.history`.
+- Read a past state: `bolt.history(model, id, { at })`, `at` one of `{ instant }` or `{ revision }`. With layers: take its instant, then a root `as_of`. Server contexts use `as_of`; there is no `ctx.history`.
 - A revision shows the root fields of the read's output, scoped by the reader's current read grant (the record's own `where`). Losing access to the row loses its history, even if the reader saw it before. A deleted record's history stays visible to `read: true` holders and administrators until pruned or erased.
 - Restore: `bolt.restore.preview` then `bolt.restore.run(model, id, revision, currentRevision)`. It is a guarded update of writable fields appending a revision. It never rewinds the database or restores deleted records, owned children or derived fields.
 - History is evidence, not a rewind. A rejection appends `restored` revisions. Finished requests are never pruned.
@@ -28,5 +28,5 @@ Operational events are the workspace's runtime log, in the host's log store, not
 ## Live data
 
 - The browser holds open reads in memory only. The host pushes a new answer when a commit changes one.
-- Writes paint optimistically. `committed` keeps the paint; `ActRefused` or a conflict rolls it back; `pendingApproval` keeps it, held by the request.
+- Writes paint optimistically. `committed` keeps the paint; `ActRefused` or a conflict rolls it back; `pending_approval` keeps it, held by the request.
 - Approval participation lends no ordinary read or write permission.

@@ -1,10 +1,8 @@
 // Wire values → what a statement binds: decimals as their text, periods as range literals, points as `(lng,lat)`,
-// durations as seconds. Shared by the read and write compilers and the DDL.
+// shared by the read and write compilers and the DDL.
 import { Predicate } from 'effect';
-import { duration_seconds } from '@norbital-ai/std/date';
 import type { Json } from '../values.ts';
 import type { FieldInfo } from '../catalog.ts';
-
 
 /**
  * Wire decimals (`$dec`) → their text, which Postgres casts per column; dates and instants are ISO strings. With the
@@ -45,9 +43,8 @@ export const jsonPath = (path: readonly string[]): string =>
 	`'{${path.map((s) => `"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll("'", "''")}"`).join(',')}}'`;
 
 /** Normalize numeric wire values at comparison/SQL boundaries; dates stay ISO strings. */
-export function comparable(v: Json | undefined, f?: FieldInfo): Json {
-	const seconds = f?.kind === 'duration' && typeof v === 'string' ? duration_seconds(v) : undefined;
-	return seconds ?? databaseValue(v ?? null);
+export function comparable(v: Json | undefined): Json {
+	return databaseValue(v ?? null);
 }
 
 /** A period argument whose ends cross (a dynamic end past the other): matches nothing. */

@@ -1,5 +1,5 @@
 import { Predicate } from 'effect';
-import { formatValue as show, recordText } from '../kinds/kind.js';
+import { recordText } from '../kinds/kind.js';
 import type { ModelExposure } from '../kinds/context.js';
 import type { Row, Values } from '../model/types.js';
 import { READ_LIMIT, requestJson, type Layer, type Request } from '../read/request.js';
@@ -120,7 +120,6 @@ export function unref(
 	of: string,
 	refs: readonly string[],
 	rows: readonly Row[],
-	locale?: string,
 	all?: boolean
 ): readonly Row[];
 export function unref(
@@ -128,7 +127,6 @@ export function unref(
 	of: string,
 	refs: readonly string[],
 	rows: readonly Values[],
-	locale?: string,
 	all?: boolean
 ): readonly Values[];
 export function unref(
@@ -136,7 +134,6 @@ export function unref(
 	of: string,
 	refs: readonly string[],
 	rows: readonly Values[],
-	locale = 'en',
 	all = false
 ): readonly Values[] {
 	const rels = refs.filter(
@@ -146,14 +143,7 @@ export function unref(
 	const text = (rel: string, t: Values) => {
 		const target = cat?.[of]?.relations?.[rel]?.targets[0] ?? manyTarget(cat, of, rel);
 		const exposure = target === undefined ? undefined : cat?.[target];
-		return (
-			(exposure?.record_label !== undefined
-				? recordText(exposure, t, { locale })
-				: refLabel(cat, of, rel)
-						.map((l) => show(t[l] ?? null, locale))
-						.filter(Boolean)
-						.join(' · ')) || '—'
-		);
+		return recordText(exposure, t) || '—';
 	};
 	return rows.map((r) => {
 		const refs: { [rel: string]: Ref } = {};

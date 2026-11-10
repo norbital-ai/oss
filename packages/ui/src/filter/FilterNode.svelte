@@ -92,7 +92,7 @@
 					? msg(bolt, 'view.scope.every', 'Every record in')
 					: msg(bolt, `view.q.${q}`, QUANT_LABEL[q]);
 
-	const NO_VALUE: readonly Op[] = ['isNull', 'notNull', 'isEmpty', 'notEmpty'];
+	const NO_VALUE: readonly Op[] = ['is_null', 'notNull', 'isEmpty', 'notEmpty'];
 	const OPERAND_LABEL = { lit: 'a value', var: 'a variable', field: 'a field' } as const;
 	const QUANTS: readonly Quant[] = ['some', 'none', 'every', 'count', 'sum', 'min', 'max', 'avg'];
 

@@ -136,7 +136,7 @@ A related-record grid with explicit child operations, original revisions and par
 	let linkBusy = $state(false);
 	let active = true;
 	const text = {
-		pendingApproval: msg(bolt, 'form.pendingApproval', 'Pending approval'),
+		pending_approval: msg(bolt, 'form.pending_approval', 'Pending approval'),
 		conflict: msg(bolt, 'form.conflict', 'The record changed. Review your draft and try again.'),
 		unknown: msg(bolt, 'form.unknown', 'The outcome is unknown. Retry to check the same request.'),
 		running: msg(bolt, 'form.running', 'Still working: this continues in the background.')
@@ -259,8 +259,8 @@ A related-record grid with explicit child operations, original revisions and par
 				noticeError =
 					outcome.kind === 'refused' || outcome.kind === 'conflict' || outcome.kind === 'unknown';
 				notice =
-					outcome.kind === 'pendingApproval'
-						? text.pendingApproval
+					outcome.kind === 'pending_approval'
+						? text.pending_approval
 						: outcome.kind === 'refused'
 							? outcome.message
 							: outcome.kind === 'committed'
@@ -439,7 +439,7 @@ A related-record grid with explicit child operations, original revisions and par
 		);
 		onDestroy(
 			owner.beforeOutcome((outcome) => {
-				if (outcome.kind === 'committed' || outcome.kind === 'pendingApproval') {
+				if (outcome.kind === 'committed' || outcome.kind === 'pending_approval') {
 					for (const entry of drafts.values()) entry.form.accept(outcome);
 					reset();
 				}
@@ -462,7 +462,7 @@ A related-record grid with explicit child operations, original revisions and par
 			drafts.set(key, entry);
 			if (save === 'independent')
 				entry.form.onOutcome((outcome) => {
-					if (outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+					if (outcome.kind === 'committed' || outcome.kind === 'pending_approval')
 						drafts.delete(key);
 				});
 		}
@@ -493,9 +493,9 @@ A related-record grid with explicit child operations, original revisions and par
 				Effect.tap((outcome) =>
 					Effect.sync(() => {
 						if (outcome.kind === 'committed') drafts.set(key, { ...entry, removed: action });
-						else if (outcome.kind === 'pendingApproval' || outcome.kind === 'running') {
+						else if (outcome.kind === 'pending_approval' || outcome.kind === 'running') {
 							noticeError = false;
-							notice = outcome.kind === 'running' ? text.running : text.pendingApproval;
+							notice = outcome.kind === 'running' ? text.running : text.pending_approval;
 						} else {
 							noticeError = true;
 							notice = outcome.kind === 'refused' ? outcome.message : text.conflict;
@@ -588,7 +588,7 @@ A related-record grid with explicit child operations, original revisions and par
 							observed: { [selected]: row['revision'] }
 						})
 					);
-					if (outcome.kind !== 'committed' && outcome.kind !== 'pendingApproval')
+					if (outcome.kind !== 'committed' && outcome.kind !== 'pending_approval')
 						notice =
 							outcome.kind === 'refused'
 								? outcome.message
@@ -710,7 +710,13 @@ A related-record grid with explicit child operations, original revisions and par
 					: { ...column, cell: column.cell ?? cell }
 			),
 			...(save === 'independent'
-				? [{ field: '__operations', label: msg(bolt, 'child.actions', 'Actions'), cell: operations }]
+				? [
+						{
+							field: '__operations',
+							label: msg(bolt, 'child.actions', 'Actions'),
+							cell: operations
+						}
+					]
 				: [])
 		]}
 	/>

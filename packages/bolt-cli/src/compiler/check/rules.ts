@@ -17,12 +17,7 @@ import {
 } from '@norbital-ai/bolt/tooling';
 import { type IntegrationSpec } from '@norbital-ai/bolt';
 import { clockDefault } from '@norbital-ai/std/vars';
-import {
-	labelExpression,
-	labelPaths,
-	recordLabelSpec,
-	recordLabelExpression
-} from '@norbital-ai/std/label';
+import { labelExpression, labelPaths } from '@norbital-ai/std/label';
 
 export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);
@@ -254,7 +249,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				);
 		}
 		// a label is what a person reads for the row: an id or a foreign key would show as a uuid
-		const identifier = recordLabelExpression(spec) ?? recordLabelSpec(spec);
+		const identifier = spec.record_label;
 		if (typeof identifier === 'string') {
 			const program = labelExpression(identifier);
 			if ('error' in program) at('model/label', 'model', model, program.error);
@@ -292,7 +287,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				const target = m.models[to] ?? SYSTEM.models[to];
 				return (
 					target === undefined ||
-					(recordLabelExpression(target) === undefined && !(target.search?.text.length ?? 0))
+					(target.record_label === undefined && !(target.search?.text.length ?? 0))
 				);
 			});
 			if (silent !== undefined)
@@ -821,7 +816,7 @@ function visitorShape(
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			for (const [output, read] of grantedOutputs(g)) {
 				const fields = outputFields(m, c, output);
-				const label = labelPaths(recordLabelSpec(m.models[c] ?? {})).map(
+				const label = labelPaths(m.models[c]?.record_label).map(
 					(path) => path.split('.')[0] ?? path
 				);
 				if (fields === undefined)

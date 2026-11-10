@@ -21,7 +21,7 @@ const manifest: EngineManifest = {
 	models: {
 		contacts: {
 			description: 'Contacts',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		}
 	},

@@ -37,7 +37,7 @@ act.many([
 	{
 		callable: 'orders.upsert',
 		input: [{ id, note: 'retained' }],
-		onConflict: 'keep',
+		on_conflict: 'keep',
 		observed: { [id]: 1 }
 	},
 	{
@@ -50,7 +50,7 @@ act.checked([
 	{
 		callable: 'orders.upsert',
 		input: [{ id, note: 'retained' }],
-		onConflict: 'update',
+		on_conflict: 'update',
 		observed: { [id]: 1 }
 	}
 ]);
@@ -65,4 +65,4 @@ act.many([{ callable: 'orders.update', input: [{ target: id, set: { note: 'x' } 
 act.checked([{ callable: 'orders.delete', input: [{ target: id }], observed: { [id]: '1' } }]);
 // @ts-expect-error conflict policies apply only to upserts, never deletes
 // prettier-ignore
-act.many([{ callable: 'orders.delete', input: [{ target: id }], onConflict: 'keep' }]);
+act.many([{ callable: 'orders.delete', input: [{ target: id }], on_conflict: 'keep' }]);

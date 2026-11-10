@@ -28,7 +28,7 @@ const manifest: EngineManifest = {
 		// no `read`: stored, and a layer of orders, never a root
 		parties: {
 			description: 'A party',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				code: { kind: 'text' },
@@ -37,7 +37,7 @@ const manifest: EngineManifest = {
 		},
 		orders: {
 			description: 'An order',
-			label: 'number',
+			record_label: 'record.number',
 			fields: {
 				number: { kind: 'text' },
 				region: { kind: 'enum', values: ['north', 'south'] },
@@ -46,7 +46,7 @@ const manifest: EngineManifest = {
 		},
 		order_lines: {
 			description: 'A line',
-			label: 'product',
+			record_label: 'record.product',
 			fields: {
 				product: { kind: 'text' },
 				quantity: { kind: 'int' },
@@ -177,14 +177,14 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 		run(
 			Effect.gen(function* () {
 				const { rep } = yield* setup;
-				const all = dynamicRead({ orders: { orderBy: 'number' } });
+				const all = dynamicRead({ orders: { order_by: 'number' } });
 				expect(ids((yield* rep.query(all)).orders?.rows ?? [])).toEqual([N1, N2]);
 				const south = dynamicRead({ orders: { where: { region: { eq: 'south' } } } });
 				expect((yield* rep.query(south)).orders?.rows).toEqual([]);
 				const either = dynamicRead({
 					orders: {
 						where: { or: [{ region: { eq: 'south' } }, { region: { eq: 'north' } }] },
-						orderBy: 'number'
+						order_by: 'number'
 					}
 				});
 				expect(ids((yield* rep.query(either)).orders?.rows ?? [])).toEqual([N1, N2]);
@@ -235,7 +235,7 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 				Effect.gen(function* () {
 					const { rep } = yield* setup;
 					// the policy's `orders.lines` where (cost > 0) drops free lines, never the order that holds them
-					const lines = dynamicRead({ orders: { orderBy: 'number' }, 'orders.lines': {} });
+					const lines = dynamicRead({ orders: { order_by: 'number' }, 'orders.lines': {} });
 					expect(
 						((yield* rep.query(lines)).orders?.rows ?? []).map((o) => [
 							o['id'],
@@ -247,7 +247,7 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 					]);
 					// a user layer where narrows the policy's further, still per layer
 					const narrower = dynamicRead({
-						orders: { orderBy: 'number' },
+						orders: { order_by: 'number' },
 						'orders.lines': { where: { quantity: { gt: 2 } } }
 					});
 					expect(
@@ -260,7 +260,7 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 						[N2, []]
 					]);
 					const ref = dynamicRead({
-						orders: { orderBy: 'number', fields: ['number', 'party'] },
+						orders: { order_by: 'number', fields: ['number', 'party'] },
 						'orders.party': { where: { code: { eq: 'ZZ' } } }
 					});
 					expect((yield* rep.query(ref)).orders?.rows).toMatchObject([
@@ -295,7 +295,7 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 						code: 'forbidden'
 					});
 					// the brief rows are the partner's grant's: the northern orders only
-					const all = dynamicRead({ orders: { output: 'brief', orderBy: 'number' } });
+					const all = dynamicRead({ orders: { output: 'brief', order_by: 'number' } });
 					expect(ids((yield* partner.query(all)).orders?.rows ?? [])).toEqual([N1, N2]);
 					// a caller reading `default` reads the credit limit
 					expect(
@@ -320,7 +320,7 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 						{ orders: { nope: 1 } },
 						{ orders: {}, 'orders.customer': {} },
 						{ 'orders.lines.order.lines.order.lines': {} },
-						{ orders: {}, 'orders.lines': { asOf: '2026-01-01T00:00:00Z' } }
+						{ orders: {}, 'orders.lines': { as_of: '2026-01-01T00:00:00Z' } }
 					])
 						expect(yield* Effect.flip(raw(route, rep.authority, request))).toMatchObject({
 							_tag: 'ReadFailed'
@@ -379,7 +379,7 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 					yield* act(route, t, rep.authority, 'orders.create', [
 						{ number: 'BIG-1', region: 'north', lines: [{ product: 'a', quantity: 1 }] }
 					])
-				).toMatchObject({ kind: 'pendingApproval', requestId: expect.any(String) });
+				).toMatchObject({ kind: 'pending_approval', requestId: expect.any(String) });
 				const plain = yield* act(route, t, rep.authority, 'orders.create', [
 					{ number: 'SMALL', region: 'north', lines: [{ product: 'a', quantity: 1 }] }
 				]);

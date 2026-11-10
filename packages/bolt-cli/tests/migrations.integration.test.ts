@@ -38,7 +38,13 @@ import { HistorySnapshotSchema } from '../../bolt/src/protocol/record-contracts.
 
 const initial: EngineManifest = {
 	...manifest,
-	models: { entry: { description: 'An entry', label: 'name', fields: { name: { kind: 'text' } } } },
+	models: {
+		entry: {
+			description: 'An entry',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		}
+	},
 	relationships: {},
 	exposures: { entry: { outputs: { default: { entry: { fields: 'all' } } } } },
 	policies: {}
@@ -48,7 +54,7 @@ const extended: EngineManifest = {
 	models: {
 		entry: {
 			description: 'An entry',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				note: { kind: 'text', optional: true }
@@ -134,43 +140,48 @@ describe('committed workspace migrations', () => {
 			})
 		).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('verify refuses a proof older than the runtime functions; build then generates them', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const fs = yield* FileSystem.FileSystem;
-				const directory = yield* root;
-				const source = join(directory, 'migrations');
-				const legacy = yield* generate(
-					null,
-					migrationSchema(initial),
-					{ number: 1, name: 'initial' },
-					legacyAudit
-				);
-				// the proof an earlier Bolt committed: the legacy prefix replayed as it stands
-				const db = PgliteDb.make(yield* TestDb.open()),
-					inspect = { text: INTROSPECT, params: [] },
-					empty = migrationLines(yield* db.rows(IntrospectRow, inspect), true, true);
-				yield* db.write({ text: executable(legacy.file), params: [] });
-				const lines = migrationLines(yield* db.rows(IntrospectRow, inspect), true, true),
-					definitions = { '': empty, [legacy.file.name]: lines };
-				yield* fs.makeDirectory(source, { recursive: true });
-				yield* fs.writeFileString(join(source, legacy.file.name), legacy.file.sql);
-				yield* fs.writeFileString(join(source, 'snapshot.json'), legacy.snapshot);
-				yield* fs.writeFileString(join(source, 'physical.json'), physicalDefinitionsOf(definitions));
-				yield* fs.writeFileString(
-					join(source, 'migrations.lock.json'),
-					lockOf(legacy.snapshot, [legacy.file], {
-						physical: { '': physicalHash(empty), [legacy.file.name]: physicalHash(lines) }
-					})
-				);
-				const names = Effect.map(readMigrations(source), ({ files }) => files.map((f) => f.name));
-				const refused = yield* prepareMigrations(directory, initial, 'verify').pipe(Effect.flip);
-				expect(refused.message).toContain('run bolt build');
-				yield* prepareMigrations(directory, initial, 'generate');
-				expect(yield* names).toEqual([legacy.file.name, '0002_runtime_functions.sql']);
-				yield* prepareMigrations(directory, initial, 'verify');
-			})
-		).pipe(Effect.provide(NodeServices.layer))
+	it.live(
+		'verify refuses a proof older than the runtime functions; build then generates them',
+		() =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const fs = yield* FileSystem.FileSystem;
+					const directory = yield* root;
+					const source = join(directory, 'migrations');
+					const legacy = yield* generate(
+						null,
+						migrationSchema(initial),
+						{ number: 1, name: 'initial' },
+						legacyAudit
+					);
+					// the proof an earlier Bolt committed: the legacy prefix replayed as it stands
+					const db = PgliteDb.make(yield* TestDb.open()),
+						inspect = { text: INTROSPECT, params: [] },
+						empty = migrationLines(yield* db.rows(IntrospectRow, inspect), true, true);
+					yield* db.write({ text: executable(legacy.file), params: [] });
+					const lines = migrationLines(yield* db.rows(IntrospectRow, inspect), true, true),
+						definitions = { '': empty, [legacy.file.name]: lines };
+					yield* fs.makeDirectory(source, { recursive: true });
+					yield* fs.writeFileString(join(source, legacy.file.name), legacy.file.sql);
+					yield* fs.writeFileString(join(source, 'snapshot.json'), legacy.snapshot);
+					yield* fs.writeFileString(
+						join(source, 'physical.json'),
+						physicalDefinitionsOf(definitions)
+					);
+					yield* fs.writeFileString(
+						join(source, 'migrations.lock.json'),
+						lockOf(legacy.snapshot, [legacy.file], {
+							physical: { '': physicalHash(empty), [legacy.file.name]: physicalHash(lines) }
+						})
+					);
+					const names = Effect.map(readMigrations(source), ({ files }) => files.map((f) => f.name));
+					const refused = yield* prepareMigrations(directory, initial, 'verify').pipe(Effect.flip);
+					expect(refused.message).toContain('run bolt build');
+					yield* prepareMigrations(directory, initial, 'generate');
+					expect(yield* names).toEqual([legacy.file.name, '0002_runtime_functions.sql']);
+					yield* prepareMigrations(directory, initial, 'verify');
+				})
+			).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live(
 		'appends schema versions in sequential SQL without changing applied migration files',
@@ -194,7 +205,7 @@ describe('committed workspace migrations', () => {
 						models: {
 							entry: {
 								description: 'Entry',
-								label: 'title',
+								record_label: 'record.title',
 								fields: { title: { kind: 'text', was: 'name', label: 'Renamed title' } }
 							}
 						},
@@ -242,7 +253,7 @@ describe('committed workspace migrations', () => {
 					models: {
 						entry: {
 							description: 'An entry',
-							label: 'name',
+							record_label: 'record.name',
 							fields: { name: { kind: 'text' }, minor: { kind: 'int' } }
 						}
 					}
@@ -252,7 +263,7 @@ describe('committed workspace migrations', () => {
 					models: {
 						entry: {
 							description: 'An entry',
-							label: 'name',
+							record_label: 'record.name',
 							fields: {
 								name: { kind: 'text' },
 								minor: { kind: 'int' },

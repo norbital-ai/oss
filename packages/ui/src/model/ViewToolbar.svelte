@@ -253,8 +253,8 @@
 			? Object.keys(catalog[source]?.fields ?? {}).map((f) =>
 					pathLabel(catalog, source, f, humanize)
 				)
-			// `$label` is the record's generated label, which its own fields already name
-			: lexicalFields
+			: // `$label` is the record's generated label, which its own fields already name
+				lexicalFields
 					.filter((s) => !s.startsWith('$'))
 					.map((s) => pathLabel(catalog, model, s, humanize))
 	);
@@ -649,12 +649,12 @@
 					)
 				);
 	};
-	const ok = (o: Outcome) => o.kind === 'committed' || o.kind === 'pendingApproval';
+	const ok = (o: Outcome) => o.kind === 'committed' || o.kind === 'pending_approval';
 	const isOutcome = (v: unknown): v is Outcome =>
 		typeof v === 'object' &&
 		v !== null &&
 		'kind' in v &&
-		['committed', 'pendingApproval', 'refused', 'conflict', 'unknown', 'running'].includes(
+		['committed', 'pending_approval', 'refused', 'conflict', 'unknown', 'running'].includes(
 			String(v.kind)
 		);
 	const isRun = (value: unknown): value is RunHandle =>
@@ -904,7 +904,7 @@
 											const first = kept[0];
 											if (first === undefined)
 												return (
-													outcomes.find((o) => o.kind === 'pendingApproval') ?? {
+													outcomes.find((o) => o.kind === 'pending_approval') ?? {
 														kind: 'committed',
 														output: null,
 														records: []
@@ -963,14 +963,7 @@
 	function exportCsv() {
 		return Effect.gen(function* () {
 			if (exporter === undefined) return;
-			const rows = unref(
-				kinds.catalog,
-				model,
-				exporter.fields,
-				yield* exporter.read(),
-				bolt.locale,
-				true
-			);
+			const rows = unref(kinds.catalog, model, exporter.fields, yield* exporter.read(), true);
 			const cell = (s: string) => (/[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s);
 			const kindOf = (f: string) =>
 				exporter.kinds?.[f] ?? (kinds.catalog?.[model] ?? catalog[source])?.fields[f];

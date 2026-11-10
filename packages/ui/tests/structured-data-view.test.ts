@@ -133,11 +133,9 @@ it.live(
 	() =>
 		browser(async () => {
 			const kind: Kind = {
-				kind: 'list',
-				of: {
-					kind: 'object',
-					fields: { name: { kind: 'text' }, range: { kind: 'period', of: 'date' } }
-				}
+				kind: 'object',
+				fields: { name: { kind: 'text' }, range: { kind: 'period', of: 'date' } },
+				many: true
 			};
 			const initial = [{ name: 'A', range: { from: '2018-04-09', to: null } }];
 			const { target } = await show({ kind, initial, mode: 'edit' });
@@ -214,7 +212,7 @@ it.live('an object schema near a datatype shape stays a plain object', () =>
 it.live('lists of native date ranges retain one native Value column and editor', () =>
 	browser(async () => {
 		const { target } = await show({
-			kind: { kind: 'list', of: { kind: 'period', of: 'date' } },
+			kind: { kind: 'period', of: 'date', many: true },
 			initial: [{ from: '2026-10-01', to: '2026-10-31' }],
 			mode: 'edit'
 		});
@@ -225,7 +223,7 @@ it.live('lists of native date ranges retain one native Value column and editor',
 		);
 		assert.equal(table.querySelectorAll('[data-period-input]').length, 1);
 		const view = await show({
-			kind: { kind: 'list', of: { kind: 'period', of: 'date' } },
+			kind: { kind: 'period', of: 'date', many: true },
 			initial: [{ from: '2026-01-01', to: '2026-02-01' }]
 		});
 		assert.equal(view.target.querySelector('.cm-editor'), null);
@@ -297,7 +295,7 @@ it.live(
 			);
 			assert.deepEqual(direct.changes.at(-1), { count: null });
 			const list = await show({
-				kind: { kind: 'list', of: native },
+				kind: { kind: 'json', shape: native, many: true },
 				initial: [{ count: 3 }],
 				mode: 'edit'
 			});
@@ -494,14 +492,12 @@ it.live(
 		browser(async () => {
 			const union = await show({
 				kind: {
-					kind: 'list',
-					of: {
-						kind: 'union',
-						by: 'basis',
-						arms: {
-							employee: { code: { kind: 'text' }, secret: { kind: 'text', hidden: true } }
-						}
-					}
+					kind: 'union',
+					by: 'basis',
+					arms: {
+						employee: { code: { kind: 'text' }, secret: { kind: 'text', hidden: true } }
+					},
+					many: true
 				},
 				initial: [{ basis: 'employee', code: 'Visible union item', secret: 'private union item' }]
 			});

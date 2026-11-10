@@ -1113,9 +1113,9 @@ export const RunsLive = Layer.effect(
 									...(call.options?.observed === undefined
 										? {}
 										: { observed: call.options.observed }),
-									...(call.options?.onConflict === undefined
+									...(call.options?.on_conflict === undefined
 										? {}
-										: { onConflict: call.options.onConflict })
+										: { on_conflict: call.options.on_conflict })
 								});
 								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
 								return { ok: true, value: result.outcome };
@@ -1149,7 +1149,7 @@ export const RunsLive = Layer.effect(
 										verb: act.callable.verb,
 										input: act.input,
 										...(act.observed === undefined ? {} : { observed: act.observed }),
-										...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
+										...(act.on_conflict === undefined ? {} : { on_conflict: act.on_conflict })
 									});
 								}
 								const key = keyOf('acts', 'acts', encodeWire(acts));

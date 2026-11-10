@@ -116,7 +116,7 @@ export type InputPath = readonly (string | number)[];
 /** One write per row (rule 21); relation actions are already flattened (`link`/`unlink` are FK updates). */
 export type Change = { model: string; id: string; path: InputPath } & (
 	| { op: 'create'; values: RowData }
-	| { op: 'upsert'; values: RowData; on: readonly string[]; onConflict: 'update' | 'keep' }
+	| { op: 'upsert'; values: RowData; on: readonly string[]; on_conflict: 'update' | 'keep' }
 	/** `revision` is the one the caller observed (rule 25); `null` writes blind. */
 	| { op: 'update'; set: RowData; revision: number | null }
 	| { op: 'delete'; revision: number | null }
@@ -156,7 +156,7 @@ export type Outcome =
 			/** An act that wrote no row: the records already holding every supplied value (after callbacks). */
 			unchanged?: readonly { model: string; id: string }[];
 	  }
-	| { kind: 'pendingApproval'; requestId: string; records: Written }
+	| { kind: 'pending_approval'; requestId: string; records: Written }
 	| Refused
 	| {
 			kind: 'conflict';
@@ -177,7 +177,7 @@ export type MemberActor = {
 	phone: string | null;
 	external: boolean;
 	teams: readonly string[];
-	teamPath: readonly string[];
+	team_path: readonly string[];
 	admin: boolean;
 	party: { model: string; id: string } | null;
 };
@@ -200,7 +200,7 @@ export type EngineActor =
 	 * cookie holds (`requestor.id`, its own rows' owner); absent, `visitor` is a per-request id that owns nothing.
 	 */
 	| { kind: 'visitor'; app: string; visitor: string; anonymous?: true }
-	| { kind: 'apiKey'; key: string }
+	| { kind: 'api_key'; key: string }
 	/**
 	 * The reserved system identity: an automation's or platform run's work, or a remote sync's read page for the
 	 * instance it runs for (`'<model>.sync.<sync>'`). Its `requestor.*` operands name no person.

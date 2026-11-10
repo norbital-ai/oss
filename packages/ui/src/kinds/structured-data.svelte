@@ -4,6 +4,7 @@ One compact schema, value, editor and inline comparison. Record lists use the mo
 leaf values retain the workspace's native kinds, custom renderers and inherited controls.
 -->
 <script lang="ts" module>
+	import { item_kind } from '@norbital-ai/std/kind';
 	import type { Value, Kind } from './kind.js';
 	import type { JsonSchema } from './json-schema.js';
 	import type { ArrayKeys } from './structured-data.js';
@@ -70,6 +71,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const pointer = (path: string, key: string | number) =>
 		`${path}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
 	const shape = (kind: Kind | undefined, value: Value | undefined): Kind | undefined => {
+		if (kind?.many === true) return kind;
 		if (kind?.kind === 'json') return kind.shape ? shape(kind.shape, value) : undefined;
 		if (kind?.kind === 'union' && 'arms' in kind) {
 			const object = dataEntries(value);
@@ -101,7 +103,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		if (planned !== kind && planned?.kind === 'custom') return visible(value, planned, host);
 		if (Array.isArray(value))
 			return value.map((item) =>
-				visible(item, planned?.kind === 'list' ? planned.of : undefined, host)
+				visible(item, planned?.many === true ? item_kind(planned) : undefined, host)
 			);
 		const entries = dataEntries(value);
 		if (!entries) return value;
@@ -297,7 +299,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			if (
 				previousKind.kind === 'custom'
 					? !!fieldEntry(previousKind, host)
-					: !['object', 'list', 'record', 'json', 'union'].includes(previousKind.kind)
+					: previousKind.many !== true &&
+						!['object', 'record', 'json', 'union'].includes(previousKind.kind)
 			)
 				return;
 		}
@@ -329,9 +332,9 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			(newShape === 'scalar' || (currentMode !== 'diff' && next === undefined))
 		)
 			return;
+		if (planned.many === true) return newShape === 'object' ? undefined : 'array';
 		if (planned.kind === 'object' || planned.kind === 'record')
 			return newShape === 'array' ? undefined : 'object';
-		if (planned.kind === 'list') return newShape === 'object' ? undefined : 'array';
 		if (!['json', 'custom', 'union'].includes(planned.kind)) return;
 		const actual = newShape ?? oldShape;
 		if (actual === 'object' || actual === 'array') return actual;
@@ -422,7 +425,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		value.length > 0 &&
 		value.every((item) => item === null || typeof item !== 'object' || item instanceof Decimal);
 	const previousList = $derived<readonly Value[]>(Array.isArray(before) ? before : []);
-	const itemKind = $derived(kind?.kind === 'list' ? kind.of : undefined);
+	const itemKind = $derived(kind?.many === true ? item_kind(kind) : undefined);
 	const itemSchema = $derived(
 		spec.items ??
 			(itemKind
@@ -435,7 +438,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			? pairDataRows(
 					previousList,
 					list,
-					arrayKeys?.[path] ?? (kind?.kind === 'list' ? kind.key : undefined)
+					arrayKeys?.[path] ?? (kind?.many === true ? kind.key : undefined)
 				)
 			: list.map((item, index) => ({
 					before: undefined,
@@ -530,8 +533,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 					: undefined;
 	};
 	const bounds = $derived({
-		min: spec.minItems ?? (kind?.kind === 'list' ? (kind.min ?? 0) : 0),
-		max: spec.maxItems ?? (kind?.kind === 'list' ? kind.max : undefined)
+		min: spec.minItems ?? (kind?.many === true ? (kind.min_items ?? 0) : 0),
+		max: spec.maxItems ?? (kind?.many === true ? kind.max_items : undefined)
 	});
 	const changed = $derived(currentMode === 'diff' && !dataEqual(before, value));
 	const leafKind = $derived.by((): Kind => {
@@ -539,7 +542,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		if (
 			plan.kind !== 'json' &&
 			plan.kind !== 'object' &&
-			plan.kind !== 'list' &&
+			plan.many !== true &&
 			plan.kind !== 'record' &&
 			plan.kind !== 'union' &&
 			(plan.kind !== 'custom' || native !== undefined)
@@ -547,7 +550,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			return plan;
 		if (held instanceof Decimal) return { kind: 'decimal', scale: held.scale };
 		const inferred = inferKind(held ?? null);
-		return ['object', 'list', 'record', 'union'].includes(inferred.kind)
+		return inferred.many === true || ['object', 'record', 'union'].includes(inferred.kind)
 			? { kind: 'json' }
 			: inferred;
 	});
@@ -737,7 +740,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		{@const cellKind = nativeKind ?? jsonSchemaKind(child)}
 		{@const complex =
 			recordList &&
-			(['object', 'list', 'record', 'union', 'json'].includes(cellKind.kind) ||
+			(cellKind.many === true ||
+				['object', 'record', 'union', 'json'].includes(cellKind.kind) ||
 				(cellKind.kind === 'custom' && !fieldEntry(cellKind, host))) &&
 			(dataEntries(next) !== undefined ||
 				(Array.isArray(next) && !(currentMode === 'view' && scalarList(next))))}
@@ -1083,7 +1087,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		>
 	{:else if enumLike(held)}
 		<Badge variant="outline" class="font-medium" data-enum-value={held}>{held}</Badge>
-	{:else if (dataEntries(held) || Array.isArray(held)) && ['json', 'custom', 'object', 'list', 'record', 'union'].includes(declared.kind)}
+	{:else if (dataEntries(held) || Array.isArray(held)) && (declared.many === true || ['json', 'custom', 'object', 'record', 'union'].includes(declared.kind))}
 		{#if depth >= 24}<CodeEditor
 				language="json"
 				readonly
@@ -1104,7 +1108,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				{frame}
 			/>{/if}
 	{:else}<Show
-			kind={['json', 'custom', 'object', 'list', 'record', 'union'].includes(nativeKind.kind)
+			kind={nativeKind.many === true ||
+			['json', 'custom', 'object', 'record', 'union'].includes(nativeKind.kind)
 				? inferKind(held)
 				: nativeKind}
 			value={held}

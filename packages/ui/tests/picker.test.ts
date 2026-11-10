@@ -53,7 +53,13 @@ test('a failed picker read does not claim there are no options', async () => {
 						code: 'connectionLost'
 					})
 				),
-			catalog: { companies: { label: ['name'], fields: { name: { kind: 'text' } } } },
+			catalog: {
+				companies: {
+					record_label: 'record.name',
+					label: ['name'],
+					fields: { name: { kind: 'text' } }
+				}
+			},
 			part: 'picker',
 			view: Picker,
 			props: { of: 'companies', value: null, onChange: () => {} }

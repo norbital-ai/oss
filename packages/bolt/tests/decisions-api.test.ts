@@ -101,7 +101,7 @@ const ask = (transport: typeof fetch) =>
 		{
 			url: 'https://decisions.test/api/alpha/decisions',
 			model: 'vendor/model',
-			apiKey: 'k',
+			api_key: 'k',
 			timeoutMillis: 150
 		},
 		{ fetch: transport }
@@ -114,7 +114,7 @@ describe('the Decisions API sys_1 client', () => {
 			const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
 			const input = { ...request, state: ['message m0: attached image', image] };
 			const result = yield* decisionsSystem1(
-				{ url: 'https://decisions.test', model: 'jev', apiKey: 'k' },
+				{ url: 'https://decisions.test', model: 'jev', api_key: 'k' },
 				{ fetch: transport }
 			).ask(input);
 			const body = Schema.decodeUnknownSync(
@@ -144,7 +144,7 @@ describe('the Decisions API sys_1 client', () => {
 		Effect.gen(function* () {
 			const { seen, transport } = fake('ok');
 			const adapter = decisionsSystem1(
-				{ url: 'https://decisions.test', model: 'jev', apiKey: 'k' },
+				{ url: 'https://decisions.test', model: 'jev', api_key: 'k' },
 				{ fetch: transport }
 			);
 			for (const url of [
@@ -171,7 +171,7 @@ describe('the Decisions API sys_1 client', () => {
 				});
 			};
 			const adapter = decisionsSystem1(
-				{ format: 'openai', url: 'https://openai.test/v1/decisions', model: 'luna', apiKey: 'k' },
+				{ format: 'openai', url: 'https://openai.test/v1/decisions', model: 'luna', api_key: 'k' },
 				{ fetch: transport }
 			);
 			yield* adapter.ask({
@@ -243,7 +243,7 @@ describe('the Decisions API sys_1 client', () => {
 			const { provider: _, ...rest } = answerBody('ok');
 			const transport: typeof fetch = async () => Response.json(rest);
 			const r = yield* decisionsSystem1(
-				{ url: 'https://decisions.test/api/alpha/decisions', model: 'vendor/model', apiKey: 'k' },
+				{ url: 'https://decisions.test/api/alpha/decisions', model: 'vendor/model', api_key: 'k' },
 				{ fetch: transport }
 			).ask(request);
 			expect(r.provider).toBe('vendor/model');
@@ -272,7 +272,7 @@ describe('the Decisions API sys_1 client', () => {
 				};
 				const { seen, transport } = fake('ok');
 				const result = yield* decisionsSystem1(
-					{ url: 'https://decisions.test/', model: 'jev', apiKey: 'k' },
+					{ url: 'https://decisions.test/', model: 'jev', api_key: 'k' },
 					{ fetch: transport }
 				).ask(structured);
 				expect(seen).toHaveLength(1);
@@ -412,7 +412,7 @@ describe('the Decisions API sys_1 client', () => {
 					format: 'openai',
 					url: 'https://openai.test/v1/decisions',
 					model: 'decision-model',
-					apiKey: 'k'
+					api_key: 'k'
 				},
 				{ fetch: transport }
 			);

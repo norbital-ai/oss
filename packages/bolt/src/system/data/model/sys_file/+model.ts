@@ -4,7 +4,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_file', {
 	description: 'A stored file: its name, type, size, digest and the field it was uploaded to.',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		mime: { kind: 'text' },

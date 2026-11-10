@@ -22,7 +22,7 @@ it('the toolbar controls edit a saved filter inside a form without changing the 
 				...fixture.bolt,
 				options: () => Effect.succeed({ fields }),
 				describe: () =>
-					Effect.succeed({ where: { name: { eq: 'After' } }, orderBy: { name: 'asc' } })
+					Effect.succeed({ where: { name: { eq: 'After' } }, order_by: { name: 'asc' } })
 			}
 		}
 	});
@@ -33,7 +33,7 @@ it('the toolbar controls edit a saved filter inside a form without changing the 
 		await page.getByRole('button', { name: 'Apply filter and sort' }).click();
 		await expect
 			.poll(() => document.querySelector('[data-saved-filter]')?.textContent)
-			.toBe(JSON.stringify({ where: { name: { eq: 'After' } }, orderBy: [{ name: 'asc' }] }));
+			.toBe(JSON.stringify({ where: { name: { eq: 'After' } }, order_by: [{ name: 'asc' }] }));
 		expect(document.querySelectorAll('form').length).toBe(1);
 		expect(document.querySelector('[data-submitted]')?.textContent).toBe('0');
 		expect(location.href).toBe(url);
@@ -89,7 +89,7 @@ it('saved event filters edit hidden bindings and empty relations with the table 
 		{
 			model: 'entry',
 			initial: {
-				where: { payslip_id: { isNull: true }, employment_id: { eq: { var: 'ctx.event.row.id' } } }
+				where: { payslip_id: { is_null: true }, employment_id: { eq: { var: 'ctx.event.row.id' } } }
 			},
 			paths: ['payslip_id', 'employment_id']
 		}
@@ -125,7 +125,7 @@ it('saved event filters edit hidden bindings and empty relations with the table 
 							.click();
 						await expect
 							.poll(() => document.querySelector('output[data-saved-filter]')?.textContent)
-							.toContain('"isNull":false');
+							.toContain('"is_null":false');
 						expect(document.querySelector('output[data-saved-filter]')?.textContent).toContain(
 							'ctx.event.row.id'
 						);

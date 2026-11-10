@@ -4,7 +4,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_invitation', {
 	description: 'An invitation to join the workspace.',
-	label: 'email',
+	record_label: 'record.email',
 	fields: {
 		email: { kind: 'text', optional: true },
 		/** A mobile number in international form. */
@@ -21,8 +21,9 @@ export default model('sys_invitation', {
 		revision: { kind: 'int', default: 1 }
 	},
 	constraints: {
-		addressed: { check: { or: [{ email: { isNull: false } }, { phone: { isNull: false } }] } }
+		addressed: { check: { or: [{ email: { is_null: false } }, { phone: { is_null: false } }] } }
 	},
-	table: { primary: 'text', indexes: [{ on: [{ lower: 'email' }] }, { on: ['phone'] }] },
-	outputs: { default: { fields: 'all' } }
+	table: { primary: 'text' },
+	outputs: { default: { fields: 'all' } },
+	indexes: { by_expression: { on: [{ lower: 'email' }] }, by_phone: { on: ['phone'] } }
 });

@@ -130,7 +130,7 @@ model('entries', {
 });
 model('orders', {
 	description: m.orders.spec.description,
-	label: m.orders.spec.label,
+	record_label: m.orders.spec.record_label,
 	fields: m.orders.spec.fields,
 	outputs: { default: { fields: 'all' } },
 	syncs: {

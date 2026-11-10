@@ -1,5 +1,5 @@
 // Type corpus for gaps found migrating real templates (CTX-TYPES): query refusal and search indexes, `ctx.act` upsert with
-// `onConflict`, transform-filled create fields, custom `default`/`many`, untagged unions. Each `@ts-expect-error` is a
+// `on_conflict`, transform-filled create fields, custom `default`/`many`, untagged unions. Each `@ts-expect-error` is a
 // planted mistake.
 import { Effect } from 'effect';
 import { automation, custom_field, model } from '../../src/index.ts';
@@ -17,11 +17,13 @@ const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
-		const near = yield* ctx.query({ orders: {
-			search: { by_colour: { lab: [1, 2, 3] } },
-			limit: 3,
-			fields: ['note']
-		} });
+		const near = yield* ctx.query({
+			orders: {
+				search: { by_colour: { lab: [1, 2, 3] } },
+				limit: 3,
+				fields: ['note']
+			}
+		});
 		const d: number = near.orders.rows[0]!.$distance;
 		const n: string | null = near.orders.rows[0]!.note;
 		void d;
@@ -37,14 +39,13 @@ is<Eq<'refuse' extends keyof AutomationCtx ? 1 : 0, 1>>();
 automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* ctx.refuse('Choose an existing orders record.');
-		yield* ctx.act(
-			'orders.update',
-			[{ target: target.id, set: { note: 'observed' } }],
-			{ observed: { [target.id]: target.revision } }
-		);
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		yield* ctx.act('orders.update', [{ target: target.id, set: { note: 'observed' } }], {
+			observed: { [target.id]: target.revision }
+		});
 		yield* ctx.act(
 			'orders.update',
 			[{ target: target.id, set: { note: 'invalid' } }],
@@ -54,7 +55,7 @@ automation({
 	}
 });
 
-// (2) upsert from an automation takes onConflict
+// (2) upsert from an automation takes on_conflict
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
@@ -65,13 +66,13 @@ automation({
 		const notice = notices.notices.rows[0],
 			note = notes.notice_notes.rows[0];
 		if (notice !== undefined)
-			yield* ctx.act(
-				'notice_notes.upsert',
-				[{ notice: notice.id, note: 'x' }],
-				{ onConflict: 'update' }
-			);
+			yield* ctx.act('notice_notes.upsert', [{ notice: notice.id, note: 'x' }], {
+				on_conflict: 'update'
+			});
 		if (note !== undefined)
-			yield* ctx.act('notice_notes.upsert', [{ id: note.id, note: 'y' }], { onConflict: 'update' });
+			yield* ctx.act('notice_notes.upsert', [{ id: note.id, note: 'y' }], {
+				on_conflict: 'update'
+			});
 		return 1;
 	}
 });
@@ -81,7 +82,7 @@ automation({
 		const notices = yield* ctx.query({ notices: { fields: ['id'] } });
 		const notice = notices.notices.rows[0];
 		if (notice !== undefined)
-			// @ts-expect-error U1 upsert without onConflict (rule 28)
+			// @ts-expect-error U1 upsert without on_conflict (rule 28)
 			yield* ctx.act('notice_notes.upsert', [{ notice: notice.id, note: 'x' }]);
 		return 1;
 	}
@@ -105,7 +106,7 @@ automation({
 // (5) a custom field takes a default and `many`
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	fields: {
 		a: { kind: 'text' },
 		r: { kind: 'custom', of: 'rating', default: { score: 3 } },
@@ -120,7 +121,7 @@ is<
 >();
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error K1 a custom default of the wrong shape
 	fields: { a: { kind: 'text' }, r: { kind: 'custom', of: 'rating', default: { score: 'high' } } }
 });

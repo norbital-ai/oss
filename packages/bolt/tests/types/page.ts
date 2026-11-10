@@ -24,11 +24,11 @@ const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 declare const order: Id<'orders'>, customer: Id<'customers'>, since: PlainDate;
 
 // ── reads: one read request (a layer map) per read ──
-ctx.query({ orders: { where: { status: { eq: 'draft' } }, orderBy: { due: 'asc' }, limit: 10 } });
+ctx.query({ orders: { where: { status: { eq: 'draft' } }, order_by: { due: 'asc' }, limit: 10 } });
 // @ts-expect-error P1 an unknown field in where
 ctx.query({ orders: { where: { nope: { eq: 'draft' } }, limit: 10 } });
 // @ts-expect-error P2 an unknown sort key
-ctx.query({ orders: { orderBy: { nope: 'asc' }, limit: 10 } });
+ctx.query({ orders: { order_by: { nope: 'asc' }, limit: 10 } });
 // @ts-expect-error P3 an unknown root
 ctx.query({ orderz: { limit: 10 } });
 // @ts-expect-error P4 the single-model `query(model, args)` form is gone
@@ -114,7 +114,11 @@ ctx.act('orders.create', [{ customer, note: 'x' }]).pipe(
 // an import is one act: its rows and how it meets the stored rows its key matches
 declare const notice: Id<'notices'>;
 ctx
-	.act('notice_notes.import', { rows: [{ notice, note: 'x' }], onConflict: 'update', dryRun: true })
+	.act('notice_notes.import', {
+		rows: [{ notice, note: 'x' }],
+		on_conflict: 'update',
+		dryRun: true
+	})
 	.pipe(
 		Effect.map((o) => {
 			if (o.kind === 'committed') is<Eq<typeof o.output, ActOutput<'notice_notes.import'>>>();

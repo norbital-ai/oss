@@ -14,7 +14,11 @@ const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			notes: { description: 'A note', label: 'title', fields: { title: { kind: 'text' } } }
+			notes: {
+				description: 'A note',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {
@@ -300,8 +304,16 @@ const runs = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			notes: { description: 'A note', label: 'title', fields: { title: { kind: 'text' } } },
-			logs: { description: 'A log line', label: 'title', fields: { title: { kind: 'text' } } }
+			notes: {
+				description: 'A note',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			},
+			logs: {
+				description: 'A log line',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {

@@ -9,13 +9,13 @@ export const manifest = {
 	models: {
 		customers: {
 			description: 'A customer',
-			label: 'name',
+			record_label: 'record.name',
 			unique: [{ fields: ['name'] }],
 			fields: { name: { kind: 'text' }, blocked: { kind: 'bool', default: false } }
 		},
 		orders: {
 			description: 'An order',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				region: { kind: 'enum', values: ['north', 'south'] },
@@ -42,7 +42,7 @@ export const manifest = {
 		},
 		lines: {
 			description: 'A line',
-			label: 'label',
+			record_label: 'record.label',
 			fields: { label: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } }
 		}
 	},

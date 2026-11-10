@@ -1,5 +1,5 @@
 // The view popover's state for a `Table` or `Board` (rule 16b): filter rows and sort keys, read strictly from the URL
-// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`orderBy` a read sends. A relative condition
+// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`order_by` a read sends. A relative condition
 // ("this month") stays relative in the rows and the URL; the read gets its literal at the page's day clock, so it rolls
 // over at midnight in the workspace zone. The condition catalogue (`filter.options`) is the same one a description is
 // offered; the builder renders it, never an operator table of its own.
@@ -60,9 +60,9 @@ export function viewState(
 	 * clause instead of letting an unchecked predicate reach the read. */
 	function decode(
 		c: string,
-		q: { where?: Json; orderBy?: Json }
+		q: { where?: Json; order_by?: Json }
 	): {
-		readonly orderBy?: Json;
+		readonly order_by?: Json;
 		readonly dropped: readonly { path: string; message: string }[];
 	} | null {
 		if (bolt?.decode === undefined || c.startsWith('$')) return null;
@@ -96,10 +96,10 @@ export function viewState(
 			else if (fromUrl) dropped++;
 		}
 		let text = url.order ?? '';
-		const d = text === '' ? null : decode(c, { orderBy: orderOf(parseOrder(text, null).keys) });
+		const d = text === '' ? null : decode(c, { order_by: orderOf(parseOrder(text, null).keys) });
 		if (d !== null) {
 			dropped += d.dropped.length;
-			text = orderText(orderKeys(d.orderBy));
+			text = orderText(orderKeys(d.order_by));
 		}
 		const order = parseOrder(
 			text,
@@ -252,10 +252,10 @@ export function viewState(
 							fromWhere(o.catalog(), o.model(), clause)
 						);
 						const keys =
-							result.orderBy === undefined
+							result.order_by === undefined
 								? null
 								: parseOrder(
-										orderText(orderKeys(result.orderBy)),
+										orderText(orderKeys(result.order_by)),
 										sortable(o.catalog()[o.model()], !o.model().startsWith('$'), o.catalog())
 									);
 						if (parts.some((part) => part === null) || (keys !== null && keys.dropped > 0))

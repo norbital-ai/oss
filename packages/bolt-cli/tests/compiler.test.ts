@@ -43,7 +43,7 @@ describe('next compiler: discover', () => {
 						write(
 							`src/data/model/${folder}/+model.ts`,
 							`export default { name: '${folder.split('/').at(-1)}', spec: {
-							description: 'Nested model', label: 'name', fields: { name: { kind: 'text' } }, outputs: { default: { fields: 'all' } }
+							description: 'Nested model', record_label: 'record.name', fields: { name: { kind: 'text' } }, outputs: { default: { fields: 'all' } }
 						} };`
 						);
 					const representation =
@@ -412,7 +412,7 @@ describe('next compiler: load', () => {
 				write(
 					'src/data/model/entries/+model.ts',
 					`export default { name: 'entries', spec: {
-					description: 'Ledger entries', label: 'code', key: ['source', 'code'],
+					description: 'Ledger entries', record_label: 'record.code', key: ['source', 'code'],
 					fields: { code: { kind: 'text' }, source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'books' } } } },
 					outputs: { default: { fields: 'all' } }, syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
 				} };`
@@ -661,7 +661,7 @@ describe('next compiler: datatypes named in a seeded JSON Schema', () => {
 				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
 				write(
 					'src/data/model/forms/+model.ts',
-					"export default { name: 'forms', spec: { description: 'Forms', label: 'name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, outputs: { default: { fields: 'all' } } } };"
+					"export default { name: 'forms', spec: { description: 'Forms', record_label: 'record.name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, outputs: { default: { fields: 'all' } } } };"
 				);
 				write('seed/public/forms.json', JSON.stringify([{ id: 'f1', name: 'one', schema }]));
 				const found = yield* discover(root),

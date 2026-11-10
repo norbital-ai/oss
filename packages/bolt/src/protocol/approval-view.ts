@@ -13,7 +13,7 @@ export const ApprovalLogFields = {
 		'request',
 		'approve',
 		'reject',
-		'requestChanges',
+		'request_changes',
 		'resubmit',
 		'supersede'
 	]),
@@ -72,7 +72,7 @@ export const ApprovalViewSchema = Schema.Struct({
 	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String, op: Operation })),
 	moves: Schema.Array(
 		Schema.Struct({
-			decision: Schema.Literals(['approve', 'reject', 'requestChanges']),
+			decision: Schema.Literals(['approve', 'reject', 'request_changes']),
 			reason: Schema.Literals(['required', 'optional'])
 		})
 	),

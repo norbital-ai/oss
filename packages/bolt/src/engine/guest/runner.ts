@@ -79,7 +79,7 @@ const Options = Schema.Struct({
 	key: Schema.optionalKey(Schema.String),
 	once: Schema.optionalKey(Schema.String),
 	observed: Schema.optionalKey(Observed),
-	onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
+	on_conflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
 });
 const argsOf = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.Json)));
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) =>
@@ -148,7 +148,7 @@ const lower = (
 							callable: Schema.String,
 							input: Schema.Json,
 							observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
-							onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
+							on_conflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
 						})
 					),
 					args[0]
@@ -170,7 +170,7 @@ const lower = (
 								callable: name,
 								input: act.input,
 								...(act.observed === undefined ? {} : { observed: act.observed }),
-								...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
+								...(act.on_conflict === undefined ? {} : { on_conflict: act.on_conflict })
 							};
 						})
 					)

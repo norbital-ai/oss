@@ -15,10 +15,14 @@ const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			notes: { description: 'A note', label: 'title', fields: { title: { kind: 'text' } } },
+			notes: {
+				description: 'A note',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			},
 			docs: {
 				description: 'A document',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					file: { kind: 'file', accept: ['text/*'], max: '8MiB', optional: true }
@@ -26,7 +30,7 @@ const manifest = Result.getOrThrow(
 			},
 			secrets: {
 				description: 'Hidden',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					file: { kind: 'file', accept: ['text/*'], max: '1MiB', optional: true }

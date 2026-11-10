@@ -154,12 +154,12 @@ const decode = <A>(schema: Schema.Codec<A, unknown>, body: unknown) =>
 function settled(
 	outcome: ActOutcome
 ): Effect.Effect<
-	Extract<ActOutcome, { kind: 'committed' | 'pendingApproval' | 'running' }>,
+	Extract<ActOutcome, { kind: 'committed' | 'pending_approval' | 'running' }>,
 	ActRefused | ActConflict | ActUnknown
 > {
 	switch (outcome.kind) {
 		case 'committed':
-		case 'pendingApproval':
+		case 'pending_approval':
 		case 'running':
 			return Effect.succeed(outcome);
 		case 'refused':
@@ -684,7 +684,7 @@ export const createBolt = (config: BoltConfig) =>
 						: { kind: 'refused' as const, code, message: refusal.value.error.message };
 				}
 				const reply = yield* decode(ActReply, response.body);
-				if (reply.outcome.kind === 'committed' || reply.outcome.kind === 'pendingApproval')
+				if (reply.outcome.kind === 'committed' || reply.outcome.kind === 'pending_approval')
 					yield* caughtUp(reply.v, initiatingFiber);
 				return reply.outcome.kind === 'committed'
 					? { ...reply.outcome, output: typed(reply.outcome.output) }
@@ -807,7 +807,7 @@ export const createBolt = (config: BoltConfig) =>
 					null,
 					'Record permissions could not be loaded.'
 				).pipe(Effect.map((answer) => answer?.value ?? null)),
-			decode(model: string, view: { where?: Json; orderBy?: Json }) {
+			decode(model: string, view: { where?: Json; order_by?: Json }) {
 				if (config.catalog === undefined)
 					throw new Error('This client has no catalog to decode against.');
 				return storeSync(decodeView((decoder ??= browserCatalog(config.catalog)), model, view));
@@ -838,7 +838,7 @@ export const createBolt = (config: BoltConfig) =>
 										? decode(
 												Schema.Struct({
 													where: Schema.optionalKey(Schema.Json),
-													orderBy: Schema.optionalKey(Schema.Json)
+													order_by: Schema.optionalKey(Schema.Json)
 												}),
 												outcome.output
 											)
@@ -964,10 +964,7 @@ export const createBolt = (config: BoltConfig) =>
 			approvals: {
 				decide: (
 					requestId: string,
-					decision: {
-						decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw';
-						reason?: string;
-					}
+					decision: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
 				) => act('approvals.decide', { requestId, ...decision }),
 				get: (requestId: string) =>
 					getValue(

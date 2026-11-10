@@ -58,7 +58,7 @@
 		members = $derived(data.members),
 		bundles = $derived(data.bundles),
 		cache = $derived(data.cache);
-	const shownMembers = $derived(filterMembers(members ?? [], userSearch, userStatus, data.asOf));
+	const shownMembers = $derived(filterMembers(members ?? [], userSearch, userStatus, data.as_of));
 	const cacheByPath = $derived(new Map((cache?.assets ?? []).map((asset) => [asset.path, asset])));
 	const shownAssets = $derived(
 		(bundles?.assets ?? []).filter(
@@ -118,7 +118,7 @@
 	const when = (value: string | null) =>
 		value === null ? t('Not recorded') : new Date(value).toLocaleString(host.locale);
 	const online = (value: string | null) =>
-		value !== null && Date.parse(value) > Date.parse(data.asOf) - 300000;
+		value !== null && Date.parse(value) > Date.parse(data.as_of) - 300000;
 	const bytes = (value: number | null) => formatMetricValue('bytes', value, host.locale);
 	const TABS = {
 		bundle: { title: 'Bundle', icon: 'lucide:package' },

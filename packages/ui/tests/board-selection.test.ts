@@ -28,6 +28,7 @@ const { default: Board } = await import('../src/board/Board.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },

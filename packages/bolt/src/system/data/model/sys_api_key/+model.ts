@@ -4,7 +4,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_api_key', {
 	description: 'An API key: its name, lookup prefix and the hash of its secret.',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		prefix: { kind: 'text', unique: true },

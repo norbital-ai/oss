@@ -16,6 +16,7 @@ const { default: RecordShell } = await import('../src/record/RecordShell.svelte'
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text', help: 'The role’s public name.' },
@@ -35,9 +36,10 @@ const catalog = {
 				optional: true,
 				fields: {
 					rules: {
-						kind: 'list',
-						label: 'Rates',
-						of: { kind: 'object', fields: { a: { kind: 'text' }, b: { kind: 'text' } } }
+						kind: 'object',
+						fields: { a: { kind: 'text' }, b: { kind: 'text' } },
+						many: true,
+						label: 'Rates'
 					}
 				}
 			}

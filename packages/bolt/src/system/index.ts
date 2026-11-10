@@ -82,37 +82,29 @@ export type SystemNames = {
 				step_names: {
 					kind: 'json';
 					shape: {
-						kind: 'list';
-						of: {
-							kind: 'text';
-						};
+						kind: 'text';
+						many: true;
 					};
 				};
 				approver_teams: {
 					kind: 'json';
 					shape: {
-						kind: 'list';
-						of: {
-							kind: 'text';
-						};
+						kind: 'text';
+						many: true;
 					};
 				};
 				approver_users: {
 					kind: 'json';
 					shape: {
-						kind: 'list';
-						of: {
-							kind: 'text';
-						};
+						kind: 'text';
+						many: true;
 					};
 				};
 				superseder_teams: {
 					kind: 'json';
 					shape: {
-						kind: 'list';
-						of: {
-							kind: 'text';
-						};
+						kind: 'text';
+						many: true;
 					};
 				};
 				closed_at: {
@@ -137,7 +129,7 @@ export type SystemNames = {
 		};
 		requestor: {
 			description: 'The member who requested an approval.';
-			label: 'user_id';
+			record_label: 'record.user_id';
 			table: {
 				primary: 'text';
 			};
@@ -149,7 +141,7 @@ export type SystemNames = {
 		};
 		sys_api_key: {
 			description: 'An API key: its name, lookup prefix and the hash of its secret.';
-			label: 'name';
+			record_label: 'record.name';
 			table: {
 				primary: 'text';
 			};
@@ -191,7 +183,7 @@ export type SystemNames = {
 		};
 		sys_challenge: {
 			description: 'A sign-in code sent to an address, awaiting its entry.';
-			label: 'address_mac';
+			record_label: 'record.address_mac';
 			table: {
 				primary: {
 					field: 'address_mac';
@@ -215,7 +207,7 @@ export type SystemNames = {
 		};
 		sys_config: {
 			description: 'An engine setting by key.';
-			label: 'key';
+			record_label: 'record.key';
 			table: {
 				primary: {
 					field: 'key';
@@ -232,7 +224,7 @@ export type SystemNames = {
 		};
 		sys_conversation: {
 			description: "A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.";
-			label: 'title';
+			record_label: 'record.title';
 			table: {
 				primary: 'text';
 			};
@@ -321,7 +313,7 @@ export type SystemNames = {
 		};
 		sys_envoy: {
 			description: 'An envoy: the agent that answers outside senders on its connected channels.';
-			label: 'name';
+			record_label: 'record.name';
 			table: {
 				primary: 'uuid';
 			};
@@ -387,7 +379,7 @@ export type SystemNames = {
 		};
 		sys_file: {
 			description: 'A stored file: its name, type, size, digest and the field it was uploaded to.';
-			label: 'name';
+			record_label: 'record.name';
 			table: {
 				primary: 'text';
 			};
@@ -433,19 +425,9 @@ export type SystemNames = {
 		};
 		sys_inbox: {
 			description: "A webhook delivery received for an integration instance, awaiting its sync's read.";
-			label: 'delivery';
+			record_label: 'record.delivery';
 			table: {
 				primary: 'uuid';
-				indexes: readonly [
-					{
-						on: readonly ['sync', 'instance', 'received_at'];
-						where: {
-							consumed_at: {
-								isNull: true;
-							};
-						};
-					}
-				];
 			};
 			unique: readonly [
 				{
@@ -476,10 +458,20 @@ export type SystemNames = {
 					optional: true;
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly ['sync', 'instance', 'received_at'];
+					where: {
+						consumed_at: {
+							is_null: true;
+						};
+					};
+				}
+			];
 		};
 		sys_integration: {
 			description: 'An integration instance: one external account of one integration definition.';
-			label: 'name';
+			record_label: 'record.name';
 			table: {
 				primary: 'text';
 			};
@@ -489,7 +481,7 @@ export type SystemNames = {
 					name: 'one_per_member';
 					where: {
 						owner: {
-							isNull: false;
+							is_null: false;
 						};
 					};
 				}
@@ -537,33 +529,21 @@ export type SystemNames = {
 		};
 		sys_invitation: {
 			description: 'An invitation to join the workspace.';
-			label: 'email';
+			record_label: 'record.email';
 			table: {
 				primary: 'text';
-				indexes: readonly [
-					{
-						on: readonly [
-							{
-								lower: 'email';
-							}
-						];
-					},
-					{
-						on: readonly ['phone'];
-					}
-				];
 			};
 			check: {
 				addressed: {
 					or: readonly [
 						{
 							email: {
-								isNull: false;
+								is_null: false;
 							};
 						},
 						{
 							phone: {
-								isNull: false;
+								is_null: false;
 							};
 						}
 					];
@@ -607,40 +587,25 @@ export type SystemNames = {
 					default: 1;
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly [
+						{
+							lower: 'email';
+						}
+					];
+				},
+				{
+					on: readonly ['phone'];
+				}
+			];
 		};
 		sys_message: {
 			description: 'A message in a conversation: a transcript step, a queued input, or an integration message in or out.';
-			label: 'preview';
-			index: readonly [readonly ['conversation', 'seq'], readonly ['integration', 'provider_id']];
+			record_label: 'record.preview';
 			table: {
 				primary: 'text';
 				identity: 'seq';
-				indexes: readonly [
-					{
-						on: readonly ['conversation'];
-						where: {
-							state: {
-								eq: 'queued';
-							};
-						};
-					},
-					{
-						on: readonly ['conversation'];
-						where: {
-							state: {
-								eq: 'pending';
-							};
-						};
-					},
-					{
-						on: readonly ['seq'];
-						where: {
-							status: {
-								in: readonly ['queued', 'sending'];
-							};
-						};
-					}
-				];
 			};
 			fields: {
 				created_at: {
@@ -813,22 +778,44 @@ export type SystemNames = {
 					optional: true;
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly ['conversation', 'seq'];
+				},
+				{
+					on: readonly ['integration', 'provider_id'];
+				},
+				{
+					on: readonly ['conversation'];
+					where: {
+						state: {
+							eq: 'queued';
+						};
+					};
+				},
+				{
+					on: readonly ['conversation'];
+					where: {
+						state: {
+							eq: 'pending';
+						};
+					};
+				},
+				{
+					on: readonly ['seq'];
+					where: {
+						status: {
+							in: readonly ['queued', 'sending'];
+						};
+					};
+				}
+			];
 		};
 		sys_notification: {
 			description: 'A notification: its recipient, title, body, attachments and link, and when its member read it.';
-			label: 'title';
+			record_label: 'record.title';
 			table: {
 				primary: 'text';
-				indexes: readonly [
-					{
-						on: readonly ['member', 'at'];
-						where: {
-							member: {
-								isNull: false;
-							};
-						};
-					}
-				];
 			};
 			fields: {
 				recipient: {
@@ -866,39 +853,23 @@ export type SystemNames = {
 					optional: true;
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly ['member', 'at'];
+					where: {
+						member: {
+							is_null: false;
+						};
+					};
+				}
+			];
 		};
 		sys_outbox: {
 			description: 'A record change waiting to be written to another system by a sync.';
-			label: 'key';
+			record_label: 'record.key';
 			table: {
 				primary: 'uuid';
 				identity: 'seq';
-				indexes: readonly [
-					{
-						on: readonly ['next_attempt_at'];
-						where: {
-							status: {
-								eq: 'queued';
-							};
-						};
-					},
-					{
-						on: readonly ['sync', 'record', 'seq'];
-						where: {
-							status: {
-								in: readonly ['queued', 'sending'];
-							};
-						};
-					},
-					{
-						on: readonly ['sync'];
-						where: {
-							status: {
-								eq: 'dead';
-							};
-						};
-					}
-				];
 			};
 			unique: readonly [
 				{
@@ -942,10 +913,8 @@ export type SystemNames = {
 					kind: 'json';
 					default: readonly [];
 					shape: {
-						kind: 'list';
-						of: {
-							kind: 'text';
-						};
+						kind: 'text';
+						many: true;
 					};
 				};
 				key: {
@@ -988,22 +957,38 @@ export type SystemNames = {
 					kind: 'instant';
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly ['next_attempt_at'];
+					where: {
+						status: {
+							eq: 'queued';
+						};
+					};
+				},
+				{
+					on: readonly ['sync', 'record', 'seq'];
+					where: {
+						status: {
+							in: readonly ['queued', 'sending'];
+						};
+					};
+				},
+				{
+					on: readonly ['sync'];
+					where: {
+						status: {
+							eq: 'dead';
+						};
+					};
+				}
+			];
 		};
 		sys_run: {
 			description: 'An automation run: queued, running or finished, with its input, progress and results.';
-			label: 'automation';
+			record_label: 'record.automation';
 			table: {
 				primary: 'text';
-				indexes: readonly [
-					{
-						on: readonly ['due_at'];
-						where: {
-							state: {
-								eq: 'queued';
-							};
-						};
-					}
-				];
 			};
 			fields: {
 				automation: {
@@ -1079,10 +1064,20 @@ export type SystemNames = {
 					optional: true;
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly ['due_at'];
+					where: {
+						state: {
+							eq: 'queued';
+						};
+					};
+				}
+			];
 		};
 		sys_session: {
 			description: 'A signed-in session of a member.';
-			label: 'via';
+			record_label: 'record.via';
 			table: {
 				primary: 'text';
 			};
@@ -1112,7 +1107,7 @@ export type SystemNames = {
 		};
 		sys_sync: {
 			description: "A remote sync's read cursor and health for one integration instance and partition.";
-			label: 'sync';
+			record_label: 'record.sync';
 			table: {
 				primary: 'uuid';
 			};
@@ -1176,8 +1171,7 @@ export type SystemNames = {
 		};
 		sys_sync_row: {
 			description: "A remote sync's mapping of one remote row to its record.";
-			label: 'remote_id';
-			index: readonly [readonly ['sync', 'instance', 'partition', 'cycle']];
+			record_label: 'record.remote_id';
 			table: {
 				primary: 'uuid';
 			};
@@ -1217,51 +1211,17 @@ export type SystemNames = {
 					optional: true;
 				};
 			};
+			indexes: readonly [
+				{
+					on: readonly ['sync', 'instance', 'partition', 'cycle'];
+				}
+			];
 		};
 		sys_user: {
 			description: 'A member of the workspace: staff or an external party contact.';
 			record_label: 'record.name';
-			computed: {
-				party_id: {
-					kind: 'text';
-					expr: {
-						jsonText: readonly [
-							{
-								field: 'party';
-							},
-							'id'
-						];
-					};
-				};
-				phone_key: {
-					kind: 'text';
-					expr: {
-						regexReplace: readonly [
-							{
-								field: 'phone';
-							},
-							'\\D',
-							''
-						];
-					};
-				};
-			};
 			table: {
 				primary: 'text';
-				indexes: readonly [
-					{
-						on: readonly [
-							{
-								lower: 'email';
-							}
-						];
-						unique: true;
-					},
-					{
-						on: readonly ['phone_key'];
-						unique: true;
-					}
-				];
 			};
 			check: {
 				admin_staff: {
@@ -1337,6 +1297,45 @@ export type SystemNames = {
 					optional: true;
 				};
 			};
+			computed: {
+				party_id: {
+					kind: 'text';
+					expr: {
+						jsonText: readonly [
+							{
+								field: 'party';
+							},
+							'id'
+						];
+					};
+				};
+				phone_key: {
+					kind: 'text';
+					expr: {
+						regexReplace: readonly [
+							{
+								field: 'phone';
+							},
+							'\\D',
+							''
+						];
+					};
+				};
+			};
+			indexes: readonly [
+				{
+					on: readonly [
+						{
+							lower: 'email';
+						}
+					];
+					unique: true;
+				},
+				{
+					on: readonly ['phone_key'];
+					unique: true;
+				}
+			];
 			search: {
 				text: readonly ['name', 'email'];
 			};

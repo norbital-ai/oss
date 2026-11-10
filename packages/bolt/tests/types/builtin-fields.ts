@@ -38,7 +38,7 @@ is<
 
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	fields: {
 		a: { kind: 'text' },
 		mobile: { kind: 'custom', of: 'phone', optional: true },
@@ -48,19 +48,19 @@ model('probe', {
 });
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error B1 a misspelt built-in
 	fields: { a: { kind: 'text' }, m: { kind: 'custom', of: 'phnoe' } }
 });
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error B2 a misspelt workspace custom field
 	fields: { a: { kind: 'text' }, r: { kind: 'custom', of: 'ratng' } }
 });
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error B3 a built-in's default of the wrong type
 	fields: { a: { kind: 'text' }, m: { kind: 'custom', of: 'phone', default: 65 } }
 });

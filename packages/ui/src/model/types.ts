@@ -19,7 +19,7 @@ type Loose = {
 			record: Row;
 			insert: { readonly [field: string]: Json };
 			where: { readonly [key: string]: Json };
-			orderBy: OrderBy;
+			order_by: OrderBy;
 		};
 	};
 	actions: { [a: string]: Values };
@@ -27,7 +27,7 @@ type Loose = {
 };
 type Shape = {
 	models: {
-		[c: string]: { row: Values; record: Values; insert: Values; where: unknown; orderBy: unknown };
+		[c: string]: { row: Values; record: Values; insert: Values; where: unknown; order_by: unknown };
 	};
 	actions: { [a: string]: unknown };
 	automations: { [a: string]: Values };
@@ -63,8 +63,8 @@ export type WhereOf<C> = C extends keyof Models
 	? Models[C]['where']
 	: Loose['models'][string]['where'];
 export type OrderByOf<C> = C extends keyof Models
-	? Models[C]['orderBy']
-	: Loose['models'][string]['orderBy'];
+	? Models[C]['order_by']
+	: Loose['models'][string]['order_by'];
 export type FieldOf<C> = C extends unknown ? keyof RowOf<C> & string : never;
 export type RecordFieldOf<C> = C extends unknown ? keyof RecordOf<C> & string : never;
 export type IdOf<C> = C extends unknown

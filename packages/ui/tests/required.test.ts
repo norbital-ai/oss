@@ -12,6 +12,7 @@ const { default: Harness } = await import('./required-harness.svelte');
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -31,8 +32,8 @@ const catalog = {
 			columns: ['title', 'notes', 'status', 'urgent', 'customer_id', 'owner_id', 'code']
 		}
 	},
-	customers: { label: ['name'], fields: { name: { kind: 'text' } } },
-	owners: { label: ['name'], fields: { name: { kind: 'text' } } }
+	customers: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
+	owners: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 } satisfies NonNullable<KindsHost['catalog']>;
 const settle = async () => {
 	for (let i = 0; i < 5; i++) {

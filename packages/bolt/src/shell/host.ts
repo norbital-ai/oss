@@ -537,7 +537,7 @@ const makeShell = Effect.gen(function* () {
 		const bearer = /^Bearer (nbk_\S+)$/.exec(getHeader(request, 'authorization') ?? '')?.[1];
 		if (bearer !== undefined) {
 			const key = yield* authenticateKey(h, bearer);
-			const a = key === null ? null : yield* authorities.apiKey(h.db, key);
+			const a = key === null ? null : yield* authorities.api_key(h.db, key);
 			return { authority: a, real: a, token: null, preview: null };
 		}
 		const s = yield* signedIn(request),

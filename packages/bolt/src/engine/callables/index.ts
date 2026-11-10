@@ -71,7 +71,7 @@ type ActsRequest = Caller & {
 		verb: Verb;
 		input: Json;
 		observed?: Readonly<Record<string, number>> | undefined;
-		onConflict?: 'update' | 'keep' | undefined;
+		on_conflict?: 'update' | 'keep' | undefined;
 	}[];
 	key: string;
 	issuedAt: string;
@@ -230,7 +230,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 		input: Json,
 		c: Caller,
 		rec: Recorder,
-		onConflict?: 'update' | 'keep',
+		on_conflict?: 'update' | 'keep',
 		batch?: { db: TenantDbShape; into: (planned: Recorder['commits'][number]) => void }
 	): Effect.fn.Return<Outcome, import('../errors.ts').EngineError> {
 		let planned: Planned | undefined;
@@ -247,7 +247,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 				readGuards: c.readGuards,
 				bindings: c.bindings,
 				invocationId: c.invocationId,
-				onConflict,
+				on_conflict,
 				mode: {
 					_tag: 'Record',
 					pending: rec.pending,
@@ -268,7 +268,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			}
 		);
 		// The recorder already simulates successful writes until its outer statement; a routed one too (it commits there).
-		if (result.outcome.kind === 'pendingApproval' && planned !== undefined)
+		if (result.outcome.kind === 'pending_approval' && planned !== undefined)
 			return {
 				kind: 'committed',
 				output: planned.commit.output,
@@ -293,14 +293,14 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			encodeWire(r.acts),
 			Effect.fn('Callables.body')(function* (rec) {
 				const invalid = r.acts.findIndex((act) =>
-					act.verb === 'upsert' ? act.onConflict === undefined : act.onConflict !== undefined
+					act.verb === 'upsert' ? act.on_conflict === undefined : act.on_conflict !== undefined
 				);
 				if (invalid >= 0)
 					return {
 						outcome: refused(
 							'invalidInput',
-							'A batch upsert requires onConflict; other verbs do not take it.',
-							`${invalid}.onConflict`
+							'A batch upsert requires on_conflict; other verbs do not take it.',
+							`${invalid}.on_conflict`
 						),
 						guest: false
 					};
@@ -316,7 +316,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 							a.input,
 							{ ...r, observed: a.observed, invocationId: `${r.invocationId}/${i}` },
 							rec,
-							a.onConflict,
+							a.on_conflict,
 							{
 								db,
 								into: (p) => {
@@ -518,7 +518,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					captured: answer.captured,
 					v,
 					...(answer.read_guards_applied === true &&
-					(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+					(outcome.kind === 'committed' || outcome.kind === 'pending_approval')
 						? { readGuardsConsumed: true as const }
 						: {})
 				};
@@ -669,11 +669,11 @@ export function admitVisitor(auth: Authority, s: Surface): Refused | null {
 export function forActor(
 	o: Outcome,
 	actor: EngineActor
-): Outcome | { kind: 'pendingApproval'; records: import('../contracts.ts').Written } {
-	if (o.kind === 'refused' && (actor.kind === 'envoy' || actor.kind === 'apiKey'))
+): Outcome | { kind: 'pending_approval'; records: import('../contracts.ts').Written } {
+	if (o.kind === 'refused' && (actor.kind === 'envoy' || actor.kind === 'api_key'))
 		return { kind: 'refused', code: o.code, message: o.code };
-	if (o.kind === 'pendingApproval' && actor.kind === 'visitor')
-		return { kind: 'pendingApproval', records: o.records };
+	if (o.kind === 'pending_approval' && actor.kind === 'visitor')
+		return { kind: 'pending_approval', records: o.records };
 	return o;
 }
 

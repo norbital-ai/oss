@@ -75,7 +75,7 @@ Optionally declare `record_label` as a pure CEL expression over `record`:
 
 ```ts
 record_label: "record.code + ' · ' + record.name",
-search: { text: ['email'] } // additional search terms; the identifier is indexed automatically
+indexes: { find: { text: ['email'] } } // additional terms beside the identifier
 ```
 
 This is the default identifier for `RecordShell` titles, the primary text column and compact
@@ -85,22 +85,22 @@ the default. Declare the identifier once instead of reconstructing it in each re
 Field captions continue to use ordinary `label` text.
 
 Omitting it is valid: no identifier column or automatic label index is created. Record views, lists, pickers and references use the record id (UUID) as their identifier;
-approvals use the target record UUID from the existing reference. Explicit `search.text` indexes still work
+approvals use the target record UUID from the existing reference. Explicit text indexes still work
 without a label. With neither a label nor a text index, record search is unavailable and Find
 explains that no search index is declared. Model discovery itself remains available.
 
 Use own stored fields, sequences, computed fields, or nested values inside an inline field.
 For optional values use a conditional, such as `record.name != null ? record.name : 'Unnamed'`;
-use `string(record.quantity)` to include a number. Cross-record lookups, clocks and requestor
-variables are excluded: a persisted identifier must depend only on its record. Related records
-render their own identifiers through the normal relation controls. `bolt check` reports invalid
+use `string(record.quantity)` to include a number. A label may also read a to-one relation's fields one hop deep when the default output exposes them.
+Clocks and requestor variables are excluded. Relation-dependent labels resolve with their related
+rows through the normal read path. `bolt check` reports invalid
 CEL, unsupported operators and unknown fields at the declaring model.
 
 The compiler creates an engine-owned generated text column, `bolt_record_label`, and includes
 its value in the GIN-backed `bolt_search` document. No duplicate field or explicit label search
 index is needed. Sequence and computed values are available before it is calculated; inserts,
 updates, imports and restores recalculate it. Changing the expression generates a migration that
-rebuilds stored identifiers and their search document for existing rows. `search.text` adds other
+rebuilds stored identifiers and their search document for existing rows. Text indexes add other
 fields, while semantic and custom indexes keep their existing roles.
 
 Approval requests reuse their existing `collection_name` and `record_id` reference. Search joins
@@ -111,10 +111,8 @@ The target's row grants and readable label dependencies apply, including named-o
 A missing, inaccessible or unlabelled target uses its existing record UUID as the fallback. The approval
 model has its own text index for that model name.
 
-Read outputs must expose the fields used by the expression. A restricted output neither receives
-an identifier derived from hidden fields nor matches their terms in search. Legacy model `label`
-field names/lists remain compatible and normalize to the same calculation for workspace models;
-new declarations should use `record_label`. This is model metadata, not a writable data field.
+Read outputs must expose the fields used by the expression. A restricted output uses the record
+id when it hides a label dependency. `record_label` is model metadata.
 
 ## Output trees and write layers
 

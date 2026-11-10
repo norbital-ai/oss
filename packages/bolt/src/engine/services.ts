@@ -115,7 +115,7 @@ export type ActMode =
 	| { readonly _tag: 'Direct' }
 	/**
 	 * A remote sync's read page (B6): one act on the sync's own model, judged by no grant. The input is `verb: 'upsert'`,
-	 * `onConflict: 'update'`, rows `{ id, ...fields }`: every row names its id (the id map's record, or one minted
+	 * `on_conflict: 'update'`, rows `{ id, ...fields }`: every row names its id (the id map's record, or one minted
 	 * replay-stably for a new remote record), and an id with no stored row is CREATED with that id (this mode only). The
 	 * model's `create.transform` / `update.transform` run on the split, `delete.check` on `deletes`; per-state `edit` never
 	 * refuses it (rule 41).
@@ -156,7 +156,7 @@ export type ActRequest = {
 	/** Rule 25: the revision the caller last read of each row its input names. */
 	readonly observed?: { readonly [id: string]: number } | undefined;
 	/** Rule 28: required on `upsert`. */
-	readonly onConflict?: 'update' | 'keep' | undefined;
+	readonly on_conflict?: 'update' | 'keep' | undefined;
 	/** Rule 38: the persisted buckets this act charges. */
 	readonly rate?: readonly RateCharge[] | undefined;
 	/** A per-record restore (`history.restore`): the record's revision is recorded as restored from `revision`. */
@@ -202,7 +202,7 @@ export type ActsRequest = CallerContext & {
 		readonly verb: Verb;
 		readonly input: Json;
 		readonly observed?: Readonly<Record<string, number>> | undefined;
-		readonly onConflict?: 'update' | 'keep' | undefined;
+		readonly on_conflict?: 'update' | 'keep' | undefined;
 	}[];
 	readonly key: string;
 	readonly issuedAt: string;
@@ -242,10 +242,9 @@ export type ApprovalFilter = {
 export type Readable = (model: string, id: string) => Effect.Effect<boolean, EngineError>;
 export type ApprovalsShape = {
 	/**
-	 * One decision on a request (`bolt.approvals.decide`): `approve`, `reject` or `requestChanges` (a reason required for
-	 * the last two); a superseder's `approve` supersedes (reason required); `withdraw` is the requester's (a member, or
-	 * a run of the automation that asked). `resubmit` is never decided here: it is the requester's save
-	 * (`ApprovalHook.resubmit`).
+	 * One decision on a request (`bolt.approvals.decide`): `approve`, `reject` or `request_changes` (a reason required for
+	 * the last two); a superseder's `approve` supersedes (reason required). `resubmit` is never decided here: it is the
+	 * requester's save (`ApprovalHook.resubmit`).
 	 */
 	readonly decide: (input: DecideInput) => Effect.Effect<Decision, EngineError>;
 	readonly view: (
@@ -652,7 +651,7 @@ export type FacilityCall =
 export type ActOptions = {
 	readonly key?: string | undefined;
 	readonly once?: string | undefined;
-	readonly onConflict?: 'update' | 'keep' | undefined;
+	readonly on_conflict?: 'update' | 'keep' | undefined;
 	readonly observed?: { readonly [id: string]: number } | undefined;
 };
 /** A guest request to the host, decoded once at the crossing (M2); calls issued before the microtask queue drains cross together (rule 12). */
@@ -673,7 +672,7 @@ export type CrossCall =
 				readonly callable: Callable;
 				readonly input: Json;
 				readonly observed?: Readonly<Record<string, number>> | undefined;
-				readonly onConflict?: 'update' | 'keep' | undefined;
+				readonly on_conflict?: 'update' | 'keep' | undefined;
 			}[];
 	  }
 	| {

@@ -156,13 +156,11 @@ export const PG: Record<string, string> = {
 	date: 'date',
 	instant: 'timestamptz',
 	time: 'time',
-	duration: 'int',
 	enum: 'text',
 	state: 'text',
 	sum: 'numeric',
 	count: 'int',
 	json: 'jsonb',
-	list: 'jsonb',
 	object: 'jsonb',
 	file: 'jsonb',
 	point: 'point',
@@ -171,6 +169,7 @@ export const PG: Record<string, string> = {
 };
 /** A stored field's column type; inline unions and records live inside a shaped json value. */
 export function colType(k: FieldSpec): string | undefined {
+	if (k.many === true && k.kind !== 'text' && k.kind !== 'enum') return 'jsonb';
 	if (k.kind === 'int' && k.storage === 'int64') return 'bigint';
 	if (k.kind === 'period') return k.of === 'date' ? 'daterange' : 'tstzrange';
 	if (k.kind === 'vector') return `vector(${k.dim})`;
@@ -226,7 +225,7 @@ const fkType = Effect.fnUntraced(function* (s: SchemaSpec, target: string, key: 
 function relations(s: SchemaSpec): Effect.Effect<Rel[], StoreError> {
 	const refs = Object.entries(s.tables).flatMap(([model, t]) =>
 		Object.entries(t.fields).flatMap(([field, k]) =>
-			k.kind === 'ref' ? [{ model, field, spec: k }] : []
+			k.kind === 'ref' && k.many !== true ? [{ model, field, spec: k }] : []
 		)
 	);
 	return Effect.forEach(refs, ({ model, field, spec }) =>
@@ -259,7 +258,7 @@ const tables = Effect.fnUntraced(function* (s: SchemaSpec, rels: readonly Rel[])
 		const cols = new Map<string, Col>();
 		const fieldCols = new Map<string, readonly string[]>();
 		for (const [name, kind] of Object.entries(spec.fields)) {
-			if (kind.kind === 'ref') continue;
+			if (kind.kind === 'ref' && kind.many !== true) continue;
 			cols.set(name, {
 				name: yield* ident(name),
 				type: yield* typeOf(kind, `${model}.${name}`),
@@ -287,7 +286,7 @@ const tables = Effect.fnUntraced(function* (s: SchemaSpec, rels: readonly Rel[])
 		if (!ReadonlyArray.isArray<TableSpec['key']>(spec.key)) {
 			const [id] = yield* keyOf(spec);
 			fieldCols.set('id', ['id']);
-			cols.set('id', { name: 'id', type: id?.type ?? 'uuid', kind: 'id', optional: false });
+			cols.set('id', { name: 'id', type: id?.type ?? 'uuid', kind: 'ref', optional: false });
 		}
 		if (spec.audit === true)
 			for (const a of ['revision', 'created_at', 'created_by', 'updated_at', 'updated_by']) {
@@ -343,7 +342,7 @@ const defaultSql = Effect.fnUntraced(function* (
 			return `((now()${clock.interval}) at time zone ${lit(tz)})::date`;
 		if (
 			(text === 'requestor.id' || text === 'requestor.party') &&
-			(!native || k.kind === 'ref' || k.kind === 'id' || k.kind === 'text')
+			(!native || k.kind === 'ref' || k.kind === 'text')
 		)
 			return null;
 	}
@@ -394,7 +393,6 @@ const KIND_OF: Record<string, Kind> = {
 	currency: 'text',
 	int: 'int',
 	count: 'int',
-	duration: 'int',
 	decimal: 'decimal',
 	money: 'decimal',
 	sum: 'decimal',
@@ -860,7 +858,7 @@ const objectsWithSearch = (searchDefinitions: typeof searchFunctions) =>
 
 			// stored fields
 			for (const [name, k] of Object.entries(t.spec.fields)) {
-				if (keyNames.includes(name) || k.kind === 'ref') continue;
+				if (keyNames.includes(name) || (k.kind === 'ref' && k.many !== true)) continue;
 				const c = t.cols.get(name);
 				if (c === undefined) return yield* fail(`${t.model}: unknown field '${name}'`);
 				const C = q(name);
@@ -1462,6 +1460,10 @@ const kindCheck = (
 		return Effect.succeed(
 			`(${C} is null or store_json_valid(${C}, ${lit(canonical(k))}::jsonb) is true)`
 		);
+	if (k.many === true && k.kind !== 'text' && k.kind !== 'enum')
+		return Effect.succeed(
+			`jsonb_typeof(${C}) = 'array'${k.kind === 'file' ? ` and jsonb_array_length(${C}) <= 20` : ''}`
+		);
 	const parts: string[] = [];
 	switch (k.kind) {
 		case 'text':
@@ -1538,9 +1540,6 @@ const kindCheck = (
 		case 'currency':
 			parts.push(`${C} ~ '^[A-Z]{3}$'`);
 			break;
-		case 'duration':
-			parts.push(`${C} >= 0`);
-			break;
 		case 'date':
 		case 'instant':
 			if (native) parts.push(`isfinite(${C})`);
@@ -1566,15 +1565,12 @@ const kindCheck = (
 		case 'seq':
 			if (k.pattern === undefined) parts.push(`${C} >= 1`);
 			break;
-		case 'list':
-			parts.push(`jsonb_typeof(${C}) = 'array'`);
-			break;
 		case 'object':
 			parts.push(`jsonb_typeof(${C}) = 'object'`);
 			break;
 		case 'file':
 			parts.push(
-				k.multiple === true
+				k.many === true
 					? `jsonb_typeof(${C}) = 'array' and jsonb_array_length(${C}) <= 20`
 					: `jsonb_typeof(${C}) = 'object'`
 			);

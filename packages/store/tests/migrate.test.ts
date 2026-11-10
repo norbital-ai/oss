@@ -503,7 +503,7 @@ describe('editable migration files', () => {
 				const pg = yield* database;
 				const shapes: readonly { shape: FieldSpec; valid: unknown; invalid: unknown }[] = [
 					{
-						shape: { kind: 'list', of: { kind: 'int' } },
+						shape: { kind: 'int', many: true },
 						valid: [1, 2],
 						invalid: { not: 'a list' }
 					},

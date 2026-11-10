@@ -54,13 +54,7 @@ reason and confirm.
 		}).format(new Date(value));
 	const who = (p: { ref: string; name: string | null }) => p.name ?? p.ref.replace(/^[a-z]+:/i, '');
 	const OPEN = new Set(['Pending', 'ChangesRequested']);
-	const DECISIVE = new Set<Entry['move']>([
-		'approve',
-		'reject',
-		'requestChanges',
-		'supersede',
-		'withdraw'
-	]);
+	const DECISIVE = new Set<Entry['move']>(['approve', 'reject', 'request_changes', 'supersede']);
 
 	// oldest first: a request's number is its place in the record's history
 	const ordered = $derived([...requests].sort((a, b) => a.at.localeCompare(b.at)));
@@ -76,7 +70,7 @@ reason and confirm.
 		request: 'Requested',
 		approve: 'Approved',
 		reject: 'Rejected',
-		requestChanges: 'Requested changes',
+		request_changes: 'Requested changes',
 		resubmit: 'Resubmitted',
 		supersede: 'Superseded',
 		withdraw: 'Withdrew'
@@ -84,8 +78,7 @@ reason and confirm.
 	const DECISION_TEXT: Readonly<Record<Move['decision'], string>> = {
 		approve: 'Approve',
 		reject: 'Reject',
-		requestChanges: 'Request changes',
-		withdraw: 'Withdraw'
+		request_changes: 'Request changes'
 	};
 	const LOOK_TEXT: Readonly<Record<Look, string>> = {
 		done: 'Done',
@@ -150,8 +143,8 @@ reason and confirm.
 	};
 	const glyph = (look: Look): GlyphName | null =>
 		look === 'done' ? 'check' : look === 'changes' ? 'alert' : look === 'rejected' ? 'x' : null;
-	const DECISIONS = ['approve', 'reject', 'requestChanges', 'withdraw'] as const;
-	/** The viewer's decisions in the form's order: Approve, Reject, Request changes, Withdraw. */
+	const DECISIONS = ['approve', 'reject', 'request_changes'] as const;
+	/** The viewer's decisions in the form's order: Approve, Reject, Request changes. */
 	const decisions = (v: ApprovalView) =>
 		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
 	const changedText = (v: ApprovalView, e: Entry) =>

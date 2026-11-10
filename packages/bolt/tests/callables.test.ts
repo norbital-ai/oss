@@ -24,7 +24,7 @@ describe('decodeInput', () => {
 		expect(
 			decodeInput(
 				{
-					payload: { kind: 'json', shape: { kind: 'list', of: { kind: 'id', of: 'customers' } } },
+					payload: { kind: 'json', shape: { kind: 'ref', to: 'customers', many: true } },
 					opaque: { kind: 'json' }
 				},
 				{ payload: [ID], opaque: { customer: ID } }
@@ -38,7 +38,7 @@ describe('decodeInput', () => {
 					customers: {
 						kind: 'object',
 						fields: { label: { kind: 'text' } },
-						rest: { kind: 'id', of: 'customers' }
+						rest: { kind: 'ref', to: 'customers' }
 					}
 				},
 				{ customers: { label: 'Team', lead: ID } }
@@ -50,8 +50,8 @@ describe('decodeInput', () => {
 			title: { kind: 'text', max: 3 },
 			n: { kind: 'int', min: 1 },
 			when: { kind: 'date', optional: true },
-			tags: { kind: 'list', of: { kind: 'enum', values: ['a', 'b'] } },
-			who: { kind: 'id', of: 'customers' },
+			tags: { kind: 'enum', values: ['a', 'b'], many: true },
+			who: { kind: 'ref', to: 'customers' },
 			shape: { kind: 'union', by: 'type', arms: { box: { side: { kind: 'number' } } } }
 		} as const;
 		expect(
@@ -69,7 +69,7 @@ describe('decodeInput', () => {
 				n: 0,
 				when: '2026-9-1',
 				tags: ['c'],
-				who: 'x',
+				who: 42,
 				shape: { type: 'ball' },
 				extra: 1
 			}).problems.map((p) => p.path)
@@ -83,17 +83,18 @@ describe('decodeInput', () => {
 		]);
 	});
 	it('admits nullable values inside lists, records and union arms without admitting null required values', () => {
-		const optionalId = { kind: 'id', of: 'customers', optional: true } as const;
+		const optionalId = { kind: 'ref', to: 'customers', optional: true } as const;
 		const spec = {
-			list: { kind: 'list', of: optionalId },
+			list: { kind: 'json', shape: optionalId, many: true },
 			record: { kind: 'record', of: optionalId },
 			union: { kind: 'union', of: [{ kind: 'int' }, optionalId] },
 			tagged: { kind: 'union', by: 'type', arms: { ref: { who: optionalId } } },
 			taggedList: {
-				kind: 'list',
-				of: { kind: 'union', by: 'type', optional: true, arms: { ref: { who: optionalId } } }
+				kind: 'json',
+				shape: { kind: 'union', by: 'type', optional: true, arms: { ref: { who: optionalId } } },
+				many: true
 			},
-			required: { kind: 'list', of: { kind: 'text' } }
+			required: { kind: 'text', many: true }
 		} as const;
 		expect(
 			decodeInput(spec, {
@@ -113,7 +114,10 @@ describe('decodeInput', () => {
 			]
 		});
 		expect(
-			decodeInput({ list: { kind: 'list', of: spec.union } }, { list: [null, 1, ID] })
+			decodeInput(
+				{ list: { kind: 'json', shape: spec.union, many: true } },
+				{ list: [null, 1, ID] }
+			)
 		).toEqual({
 			problems: [],
 			refs: [{ model: 'customers', id: ID, field: 'list.2' }]

@@ -167,7 +167,7 @@ policy({ description: 'x', grants: { sites: { outputs: { default: true } } } });
 policy({ description: 'x', grants: { orders: { outputs: { logistics: { customer: { where: { tier: { eq: 'gold' } } } } } } } });
 // @ts-expect-error A2f a history-enabled output grants its model-defined shape
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { outputs: { default: { history: true, where: { note: { isNull: true } }, fields: ['note'] } } } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: { history: true, where: { note: { is_null: true } }, fields: ['note'] } } } } });
 // @ts-expect-error A2g an identity grant names no fields beside its read
 // prettier-ignore
 policy({ description: 'x', grants: { sys_user: { outputs: { default: true }, fields: ['name'] } } });
@@ -193,7 +193,7 @@ policy({ description: 'x', grants: { orders: { outputs: { default: true }, updat
 policy({ description: 'x', grants: { orders: { update: { previous: { status: { eq: 'draft' } } } } } });
 // @ts-expect-error A6b a write `where` is gone: the check reads what it needs
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { where: { note: { isNull: true } } } } } });
+policy({ description: 'x', grants: { orders: { create: { where: { note: { is_null: true } } } } } });
 // @ts-expect-error A7 `via` is gone: a child is a layer of its root (decision 3)
 // prettier-ignore
 policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
@@ -344,7 +344,7 @@ const member: Actor = {
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: ['sales'],
+	team_path: ['sales'],
 	admin: false,
 	party: null
 };
@@ -383,7 +383,7 @@ void synced;
 void automationRun;
 // @ts-expect-error A41 a non-string team display path
 // prettier-ignore
-const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], teamPath: [42], admin: false, party: null };
+const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], team_path: [42], admin: false, party: null };
 // @ts-expect-error A42 an undeclared envoy
 // prettier-ignore
 const a2: Actor = { kind: 'envoy', envoy: 'dsk', instance: 'whatsapp' as Id<'sys_integration'>, sender: 'x', member: null };

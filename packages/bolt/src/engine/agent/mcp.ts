@@ -70,9 +70,9 @@ export const mcpSessions = Effect.fn('Mcp.sessions')(function* (
 				? Result.fail(unavailableError(server, `${spec.auth.bearer} is not set`))
 				: Result.succeed({ url, headers: {}, auth: { bearer } });
 		}
-		const { clientId, clientSecret, scopes } = spec.auth.oauth;
-		const id = yield* secret(clientId),
-			sec = clientSecret === undefined ? undefined : yield* secret(clientSecret);
+		const { client_id, client_secret, scopes } = spec.auth.oauth;
+		const id = yield* secret(client_id),
+			sec = client_secret === undefined ? undefined : yield* secret(client_secret);
 		return id === undefined || sec === undefined
 			? Result.fail(unavailableError(server, 'the OAuth client credentials are not set'))
 			: Result.succeed({

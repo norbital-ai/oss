@@ -29,7 +29,7 @@ const before: EngineManifest = {
 	models: {
 		documents: {
 			description: 'Documents',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text', label: 'Original title' },
 				quantity: { kind: 'text', optional: true },
@@ -51,7 +51,7 @@ const after: EngineManifest = {
 		articles: {
 			description: 'Articles',
 			was: 'documents',
-			label: 'heading',
+			record_label: 'record.heading',
 			fields: {
 				heading: { kind: 'text', was: 'title', label: 'Current heading' },
 				quantity: { kind: 'int', optional: true },
@@ -116,7 +116,7 @@ describe('versioned record history', () => {
 						models: {
 							items: {
 								description: 'Item',
-								label: 'title',
+								record_label: 'record.title',
 								fields: { title: { kind: 'text' }, price: { kind: 'money' } }
 							}
 						},
@@ -149,7 +149,7 @@ describe('versioned record history', () => {
 						)
 					);
 					expect(snapshot.fields.price).toMatchObject({ kind: 'money', currency: 'USD' });
-					expect(snapshot.uncompatible).toContain('price');
+					expect(snapshot.incompatible).toContain('price');
 					expect(snapshot.compatible).not.toHaveProperty('price');
 				})
 			).pipe(Effect.provide(Pristine.layer))
@@ -269,7 +269,7 @@ describe('versioned record history', () => {
 					models: {
 						items: {
 							description: 'Item',
-							label: 'title',
+							record_label: 'record.title',
 							fields: {
 								title: { kind: 'text' },
 								amount: { kind: 'decimal', scale: 4 },
@@ -296,7 +296,7 @@ describe('versioned record history', () => {
 					models: {
 						items: {
 							description: 'Item',
-							label: 'title',
+							record_label: 'record.title',
 							fields: {
 								title: { kind: 'text' },
 								total: { kind: 'decimal', scale: 4, was: 'amount' },
@@ -337,7 +337,7 @@ describe('versioned record history', () => {
 					location: { lng: 103.8, lat: 1.3 },
 					span: { from: '2026-01-01', to: '2026-01-31' }
 				});
-				expect(snapshot.uncompatible).toEqual([]);
+				expect(snapshot.incompatible).toEqual([]);
 				const restored = yield* restoreRecord(
 					{ manifest: current, db },
 					(request) => act({ manifest: current, db }, request),
@@ -517,7 +517,7 @@ describe('versioned record history', () => {
 				for (const field of ['quantity', 'removed', 'secret']) {
 					expect(snapshot.values).not.toHaveProperty(field);
 					expect(snapshot.fields).not.toHaveProperty(field);
-					expect(snapshot.uncompatible).not.toContain(field);
+					expect(snapshot.incompatible).not.toContain(field);
 				}
 			})
 		).pipe(Effect.provide(Pristine.layer))
@@ -594,7 +594,7 @@ describe('versioned record history', () => {
 					});
 					expect(snapshot.fields.title?.label).toBe('Original title');
 					expect(snapshot.compatible).toMatchObject({ heading: 'Original', quantity: 42 });
-					expect(snapshot.uncompatible).toContain('removed');
+					expect(snapshot.incompatible).toContain('removed');
 					const preview = yield* restorePreview(
 						{ manifest: after, db },
 						{ model: 'articles', record: ID, revision: 1 },
@@ -609,7 +609,7 @@ describe('versioned record history', () => {
 						])
 					);
 					expect(preview.preview.skipped).toContainEqual(
-						expect.objectContaining({ field: 'removed', reason: 'uncompatible' })
+						expect.objectContaining({ field: 'removed', reason: 'incompatible' })
 					);
 					const restored = yield* restoreRecord(
 						{ manifest: after, db },
@@ -639,7 +639,7 @@ describe('versioned record history', () => {
 				})
 			).pipe(Effect.provide(Pristine.layer))
 	);
-	it.live('marks unconvertible values and a dropped/re-added field uncompatible', () =>
+	it.live('marks unconvertible values and a dropped/re-added field incompatible', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
@@ -674,7 +674,7 @@ describe('versioned record history', () => {
 						bindings
 					)
 				);
-				expect(snapshot.uncompatible).toEqual(expect.arrayContaining(['quantity', 'removed']));
+				expect(snapshot.incompatible).toEqual(expect.arrayContaining(['quantity', 'removed']));
 				expect(snapshot.compatible).not.toHaveProperty('removed');
 				expect(snapshot.compatible).not.toHaveProperty('quantity');
 				expect(snapshot.values.removed).toBe('Old meaning');
@@ -682,7 +682,7 @@ describe('versioned record history', () => {
 					Schema.Array(
 						Schema.Struct({
 							valid: Schema.Boolean,
-							uncompatible: Schema.Array(Schema.String)
+							incompatible: Schema.Array(Schema.String)
 						})
 					)
 				)(
@@ -696,7 +696,7 @@ describe('versioned record history', () => {
 				);
 				expect(listed.at(-1)).toMatchObject({
 					valid: false,
-					uncompatible: expect.arrayContaining(['quantity', 'removed'])
+					incompatible: expect.arrayContaining(['quantity', 'removed'])
 				});
 			})
 		).pipe(Effect.provide(Pristine.layer))

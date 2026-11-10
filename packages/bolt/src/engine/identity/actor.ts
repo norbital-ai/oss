@@ -176,7 +176,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					phone: u.phone,
 					external: u.kind === 'external',
 					teams: team === null ? [] : [team],
-					teamPath: team === null ? [] : path(graph, team),
+					team_path: team === null ? [] : path(graph, team),
 					// an administrator has the workspace's full authority; a rule 39 preview clears it
 					admin: !preview && u.admin && u.kind === 'staff',
 					party: u.party === null ? null : { model: u.party.model, id: u.party.id }
@@ -220,7 +220,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					...previewer,
 					external: false,
 					teams: [team],
-					teamPath: path(graph, team),
+					team_path: path(graph, team),
 					admin: false,
 					party: null
 				};
@@ -232,7 +232,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 		);
 	}
 	/** An API key selects a source team; the secret never supplies policies. */
-	apiKey(db: TenantDb, keyId: string) {
+	api_key(db: TenantDb, keyId: string) {
 		return Effect.gen(
 			function* (this: Authorities) {
 				const [keys] = yield* db.read([
@@ -249,8 +249,8 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 					policies =
 						team === undefined || !Object.hasOwn(graph, team) ? [] : (graph[team]?.policies ?? []);
 				return this.compile(
-					{ actor: { kind: 'apiKey', key: k['id'] }, admin: false, policies },
-					`apiKey:${k['id']}:${k['revision']}`
+					{ actor: { kind: 'api_key', key: k['id'] }, admin: false, policies },
+					`api_key:${k['id']}:${k['revision']}`
 				);
 			}.bind(this)
 		);

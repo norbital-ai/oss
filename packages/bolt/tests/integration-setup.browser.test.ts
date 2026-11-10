@@ -27,7 +27,7 @@ it('the shared instance setup renders and pairs in Chromium without server-only 
 				setup: {
 					kind: 'form',
 					steps: [],
-					fields: [{ name: 'apiKey', label: 'API key', secret: true }]
+					fields: [{ name: 'api_key', label: 'API key', secret: true }]
 				}
 			}
 		]

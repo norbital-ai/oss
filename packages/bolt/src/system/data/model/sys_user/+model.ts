@@ -26,22 +26,22 @@ export default model('sys_user', {
 		revision: { kind: 'int', default: 1 },
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		/** Their last visit of their own, to the hour; an impersonator or an agent is not them. */
-		last_seen: { kind: 'instant', optional: true }
+		last_seen: { kind: 'instant', optional: true },
+		party_id: { kind: 'text', computed: { jsonText: [{ field: 'party' }, 'id'] } },
+		phone_key: { kind: 'text', computed: { regexReplace: [{ field: 'phone' }, '\\D', ''] } }
 	},
-	computed: {
-		party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },
-		phone_key: { kind: 'text', expr: { regexReplace: [{ field: 'phone' }, '\\D', ''] } }
-	},
+
 	constraints: {
 		admin_staff: { check: { or: [{ admin: { eq: false } }, { kind: { eq: 'staff' } }] } }
 	},
 	table: {
-		primary: 'text',
-		indexes: [
-			{ on: [{ lower: 'email' }], unique: true },
-			{ on: ['phone_key'], unique: true }
-		]
+		primary: 'text'
 	},
-	search: { text: ['name', 'email'] },
-	outputs: { default: { fields: 'all' }, directory: { fields: ['name'] } }
+
+	outputs: { default: { fields: 'all' }, directory: { fields: ['name'] } },
+	indexes: {
+		by_expression: { on: [{ lower: 'email' }], unique: true },
+		by_phone_key: { on: ['phone_key'], unique: true },
+		find: { text: ['name', 'email'] }
+	}
 });

@@ -62,7 +62,7 @@ const base: EngineManifest = {
 	models: {
 		quotes: {
 			description: 'A quote',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				status: { kind: 'enum', values: ['draft', 'sent'], default: 'draft' }
@@ -141,16 +141,14 @@ const base: EngineManifest = {
 			input: {
 				model: { kind: 'text' },
 				rows: {
-					kind: 'list',
-					of: {
-						kind: 'object',
-						fields: {
-							id: { kind: 'text' },
-							title: { kind: 'text' },
-							status: { kind: 'text' },
-							note: { kind: 'text' }
-						}
-					}
+					kind: 'object',
+					fields: {
+						id: { kind: 'text' },
+						title: { kind: 'text' },
+						status: { kind: 'text' },
+						note: { kind: 'text' }
+					},
+					many: true
 				}
 			},
 			policies: ['limited']
@@ -462,7 +460,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 			phone: null,
 			external: false,
 			teams: [],
-			teamPath: [],
+			team_path: [],
 			admin: true,
 			party: null
 		},
@@ -535,7 +533,7 @@ const member = (policies: string[]): Holder => ({
 		phone: null,
 		external: false,
 		teams: [],
-		teamPath: [],
+		team_path: [],
 		admin: false,
 		party: null
 	},

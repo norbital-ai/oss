@@ -19,7 +19,7 @@ const manifest = {
 	models: {
 		quotes: {
 			description: 'A quote',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				status: { kind: 'enum', values: ['draft', 'sent'], default: 'draft' }
@@ -45,7 +45,7 @@ const manifest = {
 	automations: {
 		remind: {
 			description: 'Send an hour after creation',
-			input: { ids: { kind: 'list', of: { kind: 'id', of: 'quotes' } } },
+			input: { ids: { kind: 'ref', to: 'quotes', many: true } },
 			policies: ['ops']
 		}
 	},

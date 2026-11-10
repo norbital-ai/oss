@@ -64,7 +64,7 @@ describe('runtime declarations', () => {
 					with: 'file',
 					parser: ['csv'],
 					schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-					context: { notice: { kind: 'id', of: 'notices' } },
+					context: { notice: { kind: 'ref', to: 'notices' } },
 					read,
 					write
 				}

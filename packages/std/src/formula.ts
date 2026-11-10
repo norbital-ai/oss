@@ -8,6 +8,7 @@ import { children } from './cel-ast.ts';
 import * as Result from 'effect/Result';
 import { Decimal } from './decimal.ts';
 import { PlainDate } from './date.ts';
+import * as Predicate from 'effect/Predicate';
 import type { Json } from './wire.ts';
 
 type Scalar =
@@ -22,41 +23,39 @@ type Scalar =
 	| 'time'
 	| 'enum'
 	| 'currency'
-	| 'duration'
 	| 'count'
 	| 'sum';
 /** A root's kind: the field-kind literals of §3.3.2 that a formula can read. */
-type Kind =
+type Kind = { readonly many?: true } & (
 	| { readonly kind: Scalar; readonly optional?: true; readonly values?: readonly string[] }
-	| { readonly kind: 'list'; readonly of: Kind; readonly optional?: true }
 	| { readonly kind: 'record'; readonly of: Kind; readonly optional?: true }
 	| {
 			readonly kind: 'object';
 			readonly fields: { readonly [name: string]: Kind };
 			readonly optional?: true;
 	  }
-	| { readonly kind: 'json'; readonly optional?: true };
+	| { readonly kind: 'json'; readonly optional?: true }
+);
 type Roots = { readonly [name: string]: Kind };
 type Mode = 'decimal' | 'float';
 type Fn = { readonly signature: string; readonly fn: (...args: never[]) => unknown };
 
 type Num<M extends Mode> = M extends 'float' ? number : Decimal;
-type In<K> = K extends { optional: true } ? In0<K> | null : In0<K>;
-type In0<K> = K extends { kind: 'list'; of: infer O }
-	? readonly In<O>[]
-	: K extends { kind: 'record'; of: infer O }
-		? { readonly [key: string]: In<O> }
-		: K extends { kind: 'object'; fields: infer F }
-			? { readonly [N in keyof F]: In<F[N]> }
-			: K extends { kind: 'decimal' | 'money' | 'sum' }
-				? Decimal | number | string
-				: K extends { kind: 'int' | 'number' | 'duration' | 'count' }
-					? number
-					: K extends { kind: 'bool' }
-						? boolean
-						: K extends { kind: 'json' }
-							? unknown
-							: string;
+type InValue<K> = K extends { many: true } ? readonly In0<K>[] : In0<K>;
+type In<K> = K extends { optional: true } ? InValue<K> | null : InValue<K>;
+type In0<K> = K extends { kind: 'record'; of: infer O }
+	? { readonly [key: string]: In<O> }
+	: K extends { kind: 'object'; fields: infer F }
+		? { readonly [N in keyof F]: In<F[N]> }
+		: K extends { kind: 'decimal' | 'money' | 'sum' }
+			? Decimal | number | string
+			: K extends { kind: 'int' | 'number' | 'count' }
+				? number
+				: K extends { kind: 'bool' }
+					? boolean
+					: K extends { kind: 'json' }
+						? unknown
+						: string;
 type ValuesOf<R extends Roots> = { readonly [N in keyof R]: In<R[N]> };
 
 /** The type a compiled formula must produce. */
@@ -92,14 +91,14 @@ type Compiled<R extends Roots, M extends Mode, T extends FormulaResult> = {
 };
 
 const DIV_SCALE = 12; // ponytail: `/` on decimals rounds to 12 places half-up; a formula needing more calls round() itself
-const NUMERIC = new Set<string>(['int', 'decimal', 'money', 'number', 'duration', 'count', 'sum']);
+const NUMERIC = new Set<string>(['int', 'decimal', 'money', 'number', 'count', 'sum']);
 const EXACT = new Set<string>(['decimal', 'money', 'sum']);
 const internals = new WeakMap<object, { env: Environment; cache: Map<string, ParseResult> }>();
 /** A null literal is a dyn value for checking, then evaluates to null; cel-js 8 rejects it beside a concrete branch. */
 const NULL_ROOT = '__cel_null';
 
 function celType(k: Kind, mode: Mode): string {
-	if (k.kind === 'list') return 'list<dyn>';
+	if (k.many === true) return 'list<dyn>';
 	if (k.kind === 'record' || k.kind === 'object') return 'map<string, dyn>';
 	if (k.kind === 'json') return 'dyn';
 	if (k.kind === 'bool') return 'bool';
@@ -185,7 +184,9 @@ export function context<
 	const numbers = (opts.numbers ?? 'decimal') as M;
 	const env = new Environment({ homogeneousAggregateLiterals: false });
 	arithmetic(env, numbers);
-	const allRoots = { ...roots, [NULL_ROOT]: { kind: 'json' as const } } as R & { readonly __cel_null: Kind };
+	const allRoots = { ...roots, [NULL_ROOT]: { kind: 'json' as const } } as R & {
+		readonly __cel_null: Kind;
+	};
 	for (const [name, k] of Object.entries(allRoots)) env.registerVariable(name, celType(k, numbers));
 	for (const { signature, fn } of Object.values(opts.functions ?? {}))
 		env.registerFunction(signature, (...args: unknown[]) =>
@@ -288,18 +289,20 @@ export function compile<R extends Roots, M extends Mode, T extends FormulaResult
 
 function input(k: Kind, v: unknown, mode: Mode): unknown {
 	if (v === null || v === undefined) return null;
+	if (k.many === true) {
+		const { many: _many, optional: _optional, ...item } = k;
+		return Array.isArray(v) ? v.map((value) => input(item, value, mode)) : v;
+	}
 	switch (k.kind) {
-		case 'list':
-			return (v as readonly unknown[]).map((x) => input(k.of, x, mode));
 		case 'record':
 			return Object.fromEntries(
-				Object.entries(v as object).map(([n, x]) => [n, input(k.of, x, mode)])
+				Object.entries(Predicate.isObject(v) ? v : {}).map(([n, x]) => [n, input(k.of, x, mode)])
 			);
 		case 'object':
 			return Object.fromEntries(
 				Object.entries(k.fields).map(([n, f]) => [
 					n,
-					input(f, (v as Record<string, unknown>)[n], mode)
+					input(f, Predicate.isObject(v) ? v[n] : undefined, mode)
 				])
 			);
 		case 'json':

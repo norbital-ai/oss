@@ -5,7 +5,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_sync', {
 	description: "A remote sync's read cursor and health for one integration instance and partition.",
-	label: 'sync',
+	record_label: 'record.sync',
 	fields: {
 		/** `'<model>.sync.<sync>'`. */
 		sync: { kind: 'text' },

@@ -9,7 +9,7 @@ const m: EngineManifest = {
 	models: {
 		payslips: {
 			description: '',
-			label: 'number',
+			record_label: 'record.number',
 			key: ['number'],
 			fields: {
 				number: { kind: 'text' },
@@ -30,7 +30,7 @@ const m: EngineManifest = {
 		},
 		lines: {
 			description: '',
-			label: 'amount',
+			record_label: 'record.amount',
 			fields: { amount: { kind: 'money' }, memo: { kind: 'text' }, kept: { kind: 'bool' } }
 		}
 	},
@@ -56,7 +56,7 @@ const member = {
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: true,
 	party: null
 } as const;

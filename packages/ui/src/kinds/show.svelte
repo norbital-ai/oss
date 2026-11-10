@@ -97,10 +97,12 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 
 {#if v === null || (readonly && Arr.isArray<Value>(v) && v.length === 0)}
 	<span {id} class={cn('text-muted-foreground', className)}>{t('none')}</span>
-{:else if readonly && (relation !== undefined || kind.kind === 'id')}
+{:else if readonly && (relation !== undefined || kind.kind === 'ref')}
 	{@const arc = arcOf(v)}
 	<Picker
-		of={arc?.model ?? relation?.targets[0] ?? (kind.kind === 'id' ? kind.of : '')}
+		of={arc?.model ??
+			relation?.targets[0] ??
+			(kind.kind === 'ref' && typeof kind.to === 'string' ? kind.to : '')}
 		value={arc?.id ?? String(v)}
 		onChange={() => {}}
 		{id}
@@ -173,7 +175,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		{id}
 		class={className}
 	/>
-{:else if ((kind.kind === 'object' || kind.kind === 'record') && object !== null) || (kind.kind === 'list' && Arr.isArray<Value>(v))}
+{:else if ((kind.kind === 'object' || kind.kind === 'record') && object !== null) || (kind.many === true && Arr.isArray<Value>(v))}
 	<div {id} class={cn('min-w-0', className)}>
 		<StructuredData {kind} value={v} mode="view" {name} {row} />
 	</div>

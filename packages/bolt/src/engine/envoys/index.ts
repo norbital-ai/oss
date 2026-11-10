@@ -4,7 +4,7 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
 // `envoy` actor on that instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
 // crash between ingest and admission loses no turn. Admission reads the instance and the envoy's spec as they are now
-// (fail closed on either) and decides the row once: email is always addressed, a group follows `groupMessages` (the rest
+// (fail closed on either) and decides the row once: email is always addressed, a group follows `group_messages` (the rest
 // is ambient history `read_messages` reads), triage may hold it. The sender is matched to an active member by the handle
 // the definition's conversation carries (`senders.ts`) under both audiences. A `private` envoy admits no unknown sender:
 // it gets one fixed notice (`envoys.unrecognised`, default 1 per 15 minutes per sender) in their own DM, never into a
@@ -218,7 +218,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		};
 	});
 	const decide = Effect.fn('Agents.decide')(function* (envoy: string, spec: EnvoySpec, a: Arrived) {
-		const groups = spec.groupMessages ?? 'mention_or_reply';
+		const groups = spec.group_messages ?? 'mention_or_reply';
 		if (a.group && groups === 'disabled') return 'ignored';
 		const trigger = a.invocation === 'mention' || a.invocation === 'reply';
 		// rule 60: a message that arrives while the turn runs is steering — queued at once, claimed at its next step,

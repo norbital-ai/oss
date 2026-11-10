@@ -23,7 +23,7 @@ import { databaseValue } from '@norbital-ai/store';
 export type ImportPlan = {
 	rows: readonly Json[];
 	/** Required on a keyed model; `refuse` refuses a row already on file. */
-	onConflict?: 'update' | 'keep' | 'refuse';
+	on_conflict?: 'update' | 'keep' | 'refuse';
 	/** `skip` only updates rows already on file (enrichment). */
 	onMissing?: 'create' | 'skip';
 	dryRun?: true;
@@ -44,7 +44,7 @@ const bad = (message: string, field?: string): Outcome => ({
 	message,
 	...(field === undefined ? {} : { field })
 });
-/** Decodes `{ rows, onConflict?, onMissing?, prune?, dryRun? }` (final-models §2.4). */
+/** Decodes `{ rows, on_conflict?, onMissing?, prune?, dryRun? }` (final-models §2.4). */
 export function importPlan(
 	m: EngineManifest,
 	model: string,
@@ -52,8 +52,8 @@ export function importPlan(
 	key: readonly string[]
 ): ImportPlan | Outcome {
 	if (!Predicate.isObject(input) || !EffectArray.isArray<Json | undefined>(input['rows']))
-		return bad('an import is { rows, onConflict?, onMissing?, prune?, dryRun? }');
-	const { rows, onConflict, onMissing, prune, dryRun, ...rest } = input;
+		return bad('an import is { rows, on_conflict?, onMissing?, prune?, dryRun? }');
+	const { rows, on_conflict, onMissing, prune, dryRun, ...rest } = input;
 	const extra = Object.keys(rest)[0];
 	if (extra !== undefined) return bad(`'${extra}' is not an import option`, extra);
 	if (rows.length > LIMITS.act.rows)
@@ -64,11 +64,11 @@ export function importPlan(
 		};
 	if (
 		key.length === 0 &&
-		(onConflict !== undefined || onMissing !== undefined || prune !== undefined)
+		(on_conflict !== undefined || onMissing !== undefined || prune !== undefined)
 	)
-		return bad(`${model} has no key: onConflict, onMissing and prune need one`);
-	if (key.length > 0 && !['update', 'keep', 'refuse'].includes(onConflict as string))
-		return bad('onConflict is required: update, keep or refuse', 'onConflict');
+		return bad(`${model} has no key: on_conflict, onMissing and prune need one`);
+	if (key.length > 0 && !['update', 'keep', 'refuse'].includes(on_conflict as string))
+		return bad('on_conflict is required: update, keep or refuse', 'on_conflict');
 	if (onMissing !== undefined && onMissing !== 'create' && onMissing !== 'skip')
 		return bad('onMissing is create or skip', 'onMissing');
 	if (dryRun !== undefined && dryRun !== true) return bad('dryRun is true', 'dryRun');
@@ -90,7 +90,9 @@ export function importPlan(
 	}
 	return {
 		rows,
-		...(onConflict === undefined ? {} : { onConflict: onConflict as 'update' | 'keep' | 'refuse' }),
+		...(on_conflict === undefined
+			? {}
+			: { on_conflict: on_conflict as 'update' | 'keep' | 'refuse' }),
 		...(onMissing === undefined ? {} : { onMissing }),
 		...(dryRun === true ? { dryRun } : {}),
 		...(where === undefined

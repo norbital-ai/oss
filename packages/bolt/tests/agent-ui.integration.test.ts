@@ -30,7 +30,11 @@ const manifest = Result.getOrThrow(
 			ai: { models: ['fast'], default: 'fast' }
 		},
 		models: {
-			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
+			quotes: {
+				description: 'A quote',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {

@@ -57,7 +57,7 @@ describe('bolt check', () => {
 		const valid = {
 			description: 'Read a document',
 			policies: ['treasury'],
-			input: { document: { kind: 'id', of: 'documents' } }
+			input: { document: { kind: 'ref', to: 'documents' } }
 		};
 		const inspect = (input: unknown) =>
 			checkRules(
@@ -71,10 +71,10 @@ describe('bolt check', () => {
 				{ automations: ['read_advice'] },
 				(_role, name) => name
 			).filter((finding) => finding.code === 'automation/input');
-		expect(inspect({ document: { kind: 'id' } })).toEqual([
+		expect(inspect({ document: { kind: 'ref' } })).toEqual([
 			expect.objectContaining({
 				path: 'read_advice',
-				message: expect.stringContaining('["document"]["of"]')
+				message: expect.stringContaining('["document"]["to"]')
 			})
 		]);
 		expect(inspect(valid.input)).toEqual([]);
@@ -89,7 +89,8 @@ describe('bolt check', () => {
 					models: {
 						lines: {
 							description: 'lines',
-							label: ['order', 'title'],
+							record_label:
+								"[record.order != null ? string(record.order) : '', record.title != null ? string(record.title) : ''].filter(part, part != '').join(' · ')",
 							fields: {
 								title: { kind: 'text' },
 								shipped_on: { kind: 'instant' },
@@ -98,10 +99,10 @@ describe('bolt check', () => {
 								born_on: { kind: 'date' }
 							}
 						},
-						orders: { description: 'orders', label: 'id', fields: {} },
+						orders: { description: 'orders', record_label: 'record.id', fields: {} },
 						notes: {
 							description: 'notes',
-							label: 'code',
+							record_label: 'record.code',
 							fields: {},
 							computed: { code: { kind: 'text', expr: { field: 'id' } } }
 						}
@@ -130,7 +131,7 @@ describe('bolt check', () => {
 			models: {
 				tasks: {
 					description: 'tasks',
-					label: 'title',
+					record_label: 'record.title',
 					fields: {
 						title: { kind: 'text' },
 						due_on: { kind: 'date', default: { today: '' } },
@@ -155,7 +156,7 @@ describe('bolt check', () => {
 			models: {
 				trials: {
 					description: 'trials',
-					label: 'name',
+					record_label: 'record.name',
 					fields: { name: { kind: 'text' }, lab: { kind: 'vector', dim: 3, metric: 'l2' } },
 					search: {
 						text: ['name'],
@@ -181,8 +182,16 @@ describe('bolt check', () => {
 		const m: EngineManifest = {
 			...emptyManifest,
 			models: {
-				customers: { description: 'c', label: 'name', fields: { name: { kind: 'text' } } },
-				events: { description: 'e', label: 'title', fields: { title: { kind: 'text' } } }
+				customers: {
+					description: 'c',
+					record_label: 'record.name',
+					fields: { name: { kind: 'text' } }
+				},
+				events: {
+					description: 'e',
+					record_label: 'record.title',
+					fields: { title: { kind: 'text' } }
+				}
 			},
 			relationships: {
 				'events.calendar': {
@@ -195,7 +204,7 @@ describe('bolt check', () => {
 				calendar: {
 					description: 'Calendars',
 					driver: 'calendar',
-					configuration: { calendars: { kind: 'list', of: { kind: 'text' } } }
+					configuration: { calendars: { kind: 'text', many: true } }
 				}
 			},
 			connections: {
@@ -280,7 +289,7 @@ describe('bolt check', () => {
 			models: {
 				items: {
 					description: 'items',
-					label: 'name',
+					record_label: 'record.name',
 					fields: { name: { kind: 'text' }, cost: { kind: 'int' } }
 				}
 			},

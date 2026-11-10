@@ -16,8 +16,16 @@ import { uuidv7 } from '../src/protocol/wire.ts';
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		orders: { description: 'An order', label: 'title', fields: { title: { kind: 'text' } } },
-		notes: { description: 'A note', label: 'text', fields: { text: { kind: 'text' } } }
+		orders: {
+			description: 'An order',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
+		notes: {
+			description: 'A note',
+			record_label: 'record.text',
+			fields: { text: { kind: 'text' } }
+		}
 	},
 	relationships: { 'notes.order': { to: 'orders', inverse: 'notes' } },
 	exposures: {
@@ -162,7 +170,7 @@ describe('a read request (`bolt.query({ … })`)', () => {
 			...manifest.models,
 			orders: {
 				description: 'An order',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 			}
 		},
@@ -188,7 +196,7 @@ describe('a read request (`bolt.query({ … })`)', () => {
 		needs: []
 	} satisfies EngineManifest;
 	const request = {
-		orders: { fields: ['title'], orderBy: [{ title: 'asc' }] },
+		orders: { fields: ['title'], order_by: [{ title: 'asc' }] },
 		'orders.notes': { fields: ['text'] },
 		notes: { where: { text: { eq: 'b' } } }
 	};

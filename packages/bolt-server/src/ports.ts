@@ -256,7 +256,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 							? { format: 'openai' as const }
 							: {}),
 						model: config.sys1 ?? '',
-						apiKey: endpoints.sys1.credential ?? ''
+						api_key: endpoints.sys1.credential ?? ''
 					},
 					{ httpClient: client }
 				)

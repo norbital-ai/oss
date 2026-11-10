@@ -25,7 +25,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			docs: {
 				description: 'A doc',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, body: { kind: 'text', optional: true } },
 				search: { text: ['title'], semantic: { fields: ['title'], model: 'small', dim: 3 } }
 			}

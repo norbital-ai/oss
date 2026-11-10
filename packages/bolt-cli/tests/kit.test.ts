@@ -9,7 +9,11 @@ const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
+			customers: {
+				description: 'A customer',
+				record_label: 'record.name',
+				fields: { name: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {

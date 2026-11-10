@@ -52,7 +52,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	);
 	const t = uiText();
 	const refs = $derived(((v) => (Arr.isArray(v) ? v : [v]).filter(isFile))(value));
-	const max = $derived(kind.multiple ? MAX_FILES : 1);
+	const max = $derived(kind.many ? MAX_FILES : 1);
 	let pending = $state<PendingFile[]>([]);
 	let problems = $state<string[]>([]);
 	watch(
@@ -112,13 +112,13 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 				(ref): ref is FileRef => ref !== null
 			);
 			const first = done[0];
-			if (first !== undefined) onChange(kind.multiple ? [...refs, ...done] : first);
+			if (first !== undefined) onChange(kind.many ? [...refs, ...done] : first);
 		});
 	const retry = (p: PendingFile) =>
 		Effect.gen(function* () {
 			pending = pending.map((x) => (x.key === p.key ? { key: x.key, file: x.file } : x));
 			const ref = yield* upload(p);
-			if (ref !== null) onChange(kind.multiple ? [...refs, ref] : ref);
+			if (ref !== null) onChange(kind.many ? [...refs, ref] : ref);
 		});
 	const launch = (work: Effect.Effect<void>) => {
 		if (uploads !== undefined) fork(FiberSet.run(uploads, form?.track(work) ?? work));
@@ -126,8 +126,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	const start = (files: readonly File[]) => {
 		if (files.length > 0) launch(add(files));
 	};
-	const remove = (ref: FileRef) =>
-		onChange(kind.multiple ? refs.filter((r) => r.id !== ref.id) : null);
+	const remove = (ref: FileRef) => onChange(kind.many ? refs.filter((r) => r.id !== ref.id) : null);
 	const size = $derived(kind.max.replace('iB', 'B'));
 	const typeNames: Record<string, string> = {
 		'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
@@ -148,11 +147,11 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 					.join(', ')
 	);
 	const hintId = $props.id();
-	const label = $derived(kind.multiple ? t('addFiles') : t('addFile'));
+	const label = $derived(kind.many ? t('addFiles') : t('addFile'));
 	const hint = $derived(
 		[
-			kind.multiple ? t('upToFiles').replace('{n}', String(MAX_FILES)) : '',
-			kind.multiple ? t('sizeEach').replace('{size}', size) : size,
+			kind.many ? t('upToFiles').replace('{n}', String(MAX_FILES)) : '',
+			kind.many ? t('sizeEach').replace('{size}', size) : size,
 			types
 		]
 			.filter(Boolean)
@@ -210,7 +209,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 						type="file"
 						class="sr-only"
 						accept={kind.accept.join(',')}
-						multiple={kind.multiple}
+						multiple={kind.many}
 						aria-describedby={hintId}
 						onchange={(e) => {
 							start([...(e.currentTarget.files ?? [])]);

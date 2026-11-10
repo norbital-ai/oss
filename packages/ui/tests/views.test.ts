@@ -55,7 +55,7 @@ it('reads own nested CEL label dependencies and uses each target’s own label f
 		customer: { id: 'c1', code: 'C1', name: 'Acme' }
 	};
 	assert.equal(recordText(cat.orders, row), 'Q7 · Acme');
-	assert.equal(recordText({ fields: {}, label: [] }, row), 'o1');
+	assert.equal(recordText({}, row), 'o1');
 	assert.equal(
 		refOf(required(unref(cat, 'orders', ['customer'], [row])[0]), 'customer')?.text,
 		'C1 — Acme'
@@ -188,8 +188,13 @@ it.effect('range and count', () =>
 it.effect("a view's read names each root's view output unless it names one", () =>
 	Effect.sync(() => {
 		const catalog = {
-			people: { label: ['name'], fields: { name: { kind: 'text' } }, output: 'directory' },
-			jobs: { label: ['title'], fields: { title: { kind: 'text' } } }
+			people: {
+				record_label: 'record.name',
+				label: ['name'],
+				fields: { name: { kind: 'text' } },
+				output: 'directory'
+			},
+			jobs: { record_label: 'record.title', label: ['title'], fields: { title: { kind: 'text' } } }
 		} satisfies NonNullable<KindsHost['catalog']>;
 		assert.deepEqual(
 			withOutputs(
@@ -275,6 +280,7 @@ it.effect('Rows ignores reordered object keys while preserving decimal and array
 it.effect('a list read names its light fields and FKs, plus any heavy column', () =>
 	Effect.sync(() => {
 		const ex: NonNullable<KindsHost['catalog']>[string] = {
+			record_label: 'record.name',
 			label: ['name'],
 			fields: {
 				name: { kind: 'text' },
@@ -302,12 +308,15 @@ it.effect('a FK column reads its target label in the page read and shows it besi
 	Effect.sync(() => {
 		const cat: NonNullable<KindsHost['catalog']> = {
 			orders: {
+				record_label: 'record.no',
 				label: ['no'],
 				fields: { no: { kind: 'text' }, customer: { kind: 'text' }, spec: { kind: 'json' } },
 				relations: { customer: { targets: ['customers'] }, arc: { targets: ['a', 'b'] } },
 				layers: ['customer']
 			},
 			customers: {
+				record_label:
+					"[record.name != null ? string(record.name) : '', record.code != null ? string(record.code) : '', record.secret != null ? string(record.secret) : ''].filter(part, part != '').join(' · ')",
 				label: ['name', 'code', 'secret'],
 				fields: { name: { kind: 'text' }, code: { kind: 'text' } }
 			}
@@ -341,7 +350,7 @@ it.effect('a FK column reads its target label in the page read and shows it besi
 		const a = required(projected[0]),
 			b = required(projected[1]);
 		assert.equal(a.customer, 'c1');
-		assert.deepEqual(refOf(a, 'customer'), { of: 'customers', text: 'Acme · A1' });
+		assert.deepEqual(refOf(a, 'customer'), { of: 'customers', text: 'c1' });
 		assert.equal(b.customer, null);
 		assert.equal(refOf(b, 'customer'), undefined);
 	})
@@ -593,7 +602,7 @@ it.live(
 					restoredFrom: 1,
 					approval: { request: 'r1', state: 'Rejected' },
 					changed: { status: 'done', updated_at: 'x', revision: 2 },
-					uncompatible: ['price'],
+					incompatible: ['price'],
 					valid: false
 				},
 				{

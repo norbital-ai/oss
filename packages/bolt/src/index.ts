@@ -193,7 +193,6 @@ export type {
 	RequestId,
 	Point,
 	RecordRef,
-	Seconds,
 	Size,
 	Rate,
 	Vector

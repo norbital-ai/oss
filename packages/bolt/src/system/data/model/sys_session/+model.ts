@@ -3,7 +3,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_session', {
 	description: 'A signed-in session of a member.',
-	label: 'via',
+	record_label: 'record.via',
 	fields: {
 		token_hash: { kind: 'text', unique: true },
 		/** The member signed in; the session is deleted with them. */

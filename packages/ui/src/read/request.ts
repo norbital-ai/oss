@@ -10,7 +10,7 @@ export const READ_LIMIT = 10_000;
 export type Layer = {
 	readonly where?: Json | undefined;
 	readonly fields?: readonly string[] | undefined;
-	readonly orderBy?: Json | undefined;
+	readonly order_by?: Json | undefined;
 	readonly limit?: number | undefined;
 	readonly after?: string | undefined;
 	readonly search?: Json | undefined;

@@ -110,7 +110,7 @@ export interface PageBolt {
 	 * @see Query
 	 * @example
 	 * const orders = bolt.query({
-	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total', 'party'], orderBy: 'due_on', limit: 100 },
+	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total', 'party'], order_by: 'due_on', limit: 100 },
 	 * 	'orders.party': { fields: ['name'] },
 	 * 	'orders.lines': { fields: ['quantity', 'net'] }
 	 * });
@@ -146,12 +146,12 @@ export interface PageBolt {
 	/**
 	 * Runs a generated model write as the viewer. Input is a batch derived from that verb's exposure.
 	 * Execute the returned Effect through the mounted page runtime (`run`, `fork` or `attach` from `@norbital-ai/ui/effect`).
-	 * A `pendingApproval` receipt is successful submission, not final approval; `running` is followed through the run ledger.
+	 * A `pending_approval` receipt is successful submission, not final approval; `running` is followed through the run ledger.
 	 * Refusal, conflict and uncertain settlement fail with `ActRefused`, `ActConflict` and `ActUnknown` respectively.
 	 * @param callable A generated model verb, such as `orders.create`; automations use run.
 	 * @param input The verb's ActInput batch, with branded target ids for updates and deletes.
 	 * @param options Optional idempotency keys and observed revisions.
-	 * @returns A PageAct Effect with the committed, pendingApproval or running receipt.
+	 * @returns A PageAct Effect with the committed, pending_approval or running receipt.
 	 * @see ActInput
 	 * @see PageAct
 	 */
@@ -184,16 +184,12 @@ export interface PageBolt {
 	approvals: {
 		/**
 		 * Decides the request's current step as the viewer: `approve` (a superseder's approve supersedes, reason
-		 * required), `reject` (rolls the held change back), or `requestChanges` (the requester edits and saves to
-		 * resubmit); `reason` is required for the last two. `withdraw` is the requester's own: it takes their open
-		 * request back, restoring the record as a rejection does. Offer what the view's `moves` lists.
+		 * required), `reject` (rolls the held change back), or `request_changes` (the requester edits and saves to
+		 * resubmit); `reason` is required for the last two.
 		 */
 		decide(
 			id: RequestId,
-			decision: {
-				decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw';
-				reason?: string;
-			}
+			decision: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
 		): PageAct<undefined>;
 		/** One request's view (its steps, timeline and the viewer's moves); `null` when not visible. */
 		get(id: RequestId): PageCall<ApprovalView | null, TransportFailed | ProtocolFailed>;

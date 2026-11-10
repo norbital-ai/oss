@@ -1,5 +1,5 @@
 <script lang="ts">
-	// A kind typed as text (int, number, decimal, duration, text): the value changes only when the text parses, so a
+	// A kind typed as text (int, number, decimal, text): the value changes only when the text parses, so a
 	// half-typed "1." never reaches the draft as a wrong number, and a parse problem shows under the box.
 	import { KINDS } from './registry.js';
 	import Input from '../primitives/input/input.svelte';
@@ -23,8 +23,7 @@
 		placeholder?: string;
 	} = $props();
 
-	const shown = (v: Value) =>
-		kind.kind === 'duration' ? format(kind, v) : v === null ? '' : String(v);
+	const shown = (v: Value) => (v === null ? '' : String(v));
 	let text = $state('');
 	let problem = $state<string | null>(null);
 	let last: Value | undefined;
@@ -36,7 +35,7 @@
 			last = value;
 		}
 	});
-	const numeric = $derived(KINDS[kind.kind].numeric && kind.kind !== 'duration');
+	const numeric = $derived(KINDS[kind.kind].numeric);
 	function input(next: string) {
 		text = next;
 		const p = parse(kind, next);

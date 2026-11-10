@@ -15,8 +15,6 @@ export type RecordRef<T extends string = string> = {
 }[T];
 /** A `time` field's value: a validated time-of-day string. */
 export type PlainTime = string & { readonly [brand]: 'PlainTime' };
-/** A `duration` field's value: whole seconds. */
-export type Seconds = number & { readonly [brand]: 'Seconds' };
 /** A `period` of dates: `from` and `to` inclusive; `to: null` is open-ended. */
 export type DatePeriod = { readonly from: PlainDate; readonly to: PlainDate | null };
 /** A `period` of instants: `start` inclusive, `end` exclusive; `end: null` is open-ended. */

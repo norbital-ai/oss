@@ -35,7 +35,7 @@ const m: EngineManifest = {
 	models: {
 		orders: {
 			description: '',
-			label: 'region',
+			record_label: 'record.region',
 			fields: {
 				status: state,
 				region: { kind: 'text' },
@@ -43,10 +43,10 @@ const m: EngineManifest = {
 				note: { kind: 'text', optional: true }
 			}
 		},
-		lines: { description: '', label: 'qty', fields: { qty: { kind: 'int' } } },
+		lines: { description: '', record_label: 'record.qty', fields: { qty: { kind: 'int' } } },
 		employees: {
 			description: '',
-			label: 'face',
+			record_label: 'record.face',
 			fields: {
 				face: { kind: 'enum', values: ['NONE', 'PENDING', 'APPROVED'] },
 				checked_at: { kind: 'instant', optional: true }
@@ -148,7 +148,7 @@ const member = (over: Partial<Extract<EngineActor, { kind: 'member' }>> = {}): E
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null,
 	...over

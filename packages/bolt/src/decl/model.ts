@@ -1,8 +1,8 @@
-// `model(name, spec)` (§1, §2): one entity in `src/data/model/<name>/+model.ts`: what it stores (fields, `ref` fields,
+// A model declaration (§1, §2): one entity in `src/data/model/<name>/+model.ts`: what it stores (fields, `ref` fields,
 // keys, checks, computed fields, search), what callers see and send (`outputs`, `create`, `update`, `delete`), and its code
 // (write callbacks, search indexes, `notify`, syncs), every callback inside the literal. The data part is
 // checked against the literal itself; each body is typed from the generated names by the model's `name`, never from the
-// literal, so no type reads its own file. Cross-model names (an inverse, a roll-up, a FK in `label`) are checked by `Verify`.
+// literal, so no type reads its own file. Cross-model names (an inverse, a roll-up, a FK in `record_label`) are checked by `Verify`.
 // `splitModel` turns a literal into the engine's three manifest parts: storage, relationships, exposure; `layerModels`
 // resolves each declared layer path (`'orders.lines.product'`) to the model behind it.
 import type { CatalogExposure } from '@norbital-ai/store';
@@ -53,6 +53,11 @@ import type { StaticWhere, Where } from './where.ts';
 
 /** The kinds a computed field's expression may produce. */
 export type ComputedKind = 'text' | 'int' | 'decimal' | 'money' | 'bool' | 'date' | 'instant';
+type ComputedField = {
+	readonly kind: ComputedKind;
+	readonly computed: Expr;
+	readonly scale?: number;
+};
 type Unit = 'day' | 'week' | 'month' | 'quarter' | 'year';
 type E = Expr;
 /** A computed expression: an operator tree over the model's own fields (§3.3.2, rule 3). */
@@ -500,7 +505,7 @@ type OwnOps<F, K> = {
 	ne?: OwnVal<F, K>;
 	in?: readonly Literal<K>[];
 	nin?: readonly Literal<K>[];
-	isNull?: boolean;
+	is_null?: boolean;
 	lt?: OwnVal<F, K>;
 	lte?: OwnVal<F, K>;
 	gt?: OwnVal<F, K>;
@@ -523,13 +528,37 @@ type ComputedSpec<F, C, Keys, Combined = F & C> = {
 				: never
 			: never;
 };
-type FieldsIn<M> = M extends { fields: unknown } ? M['fields'] : {};
-type ComputedIn<M> = M extends { computed: unknown } ? M['computed'] : {};
+type DeclaredFields<M> = M extends { fields: infer F } ? F : {};
+type FieldsIn<M> = {
+	[
+		P in keyof DeclaredFields<M> as DeclaredFields<M>[P] extends { computed: unknown } ? never : P
+	]: DeclaredFields<M>[P];
+};
+type ComputedIn<M> = {
+	[
+		P in keyof DeclaredFields<M> as DeclaredFields<M>[P] extends { computed: unknown } ? P : never
+	]: DeclaredFields<M>[P] extends { kind: infer K; computed: infer X }
+		? { kind: K; expr: X } & (DeclaredFields<M>[P] extends { scale: infer S } ? { scale: S } : {})
+		: never;
+};
+type ComputedFields<F, C, Keys, Rules = ComputedSpec<F, C, Keys>> = {
+	[P in keyof Rules]: Rules[P] extends { expr: infer X }
+		? Omit<Rules[P], 'expr'> & { computed: X }
+		: Rules[P];
+};
 /** The literal's stored fields without its refs: what kinds, defaults and own-row predicates are checked against. */
-type OwnFields<F> = { [P in keyof F as F[P] extends { kind: 'ref' } ? never : P]: F[P] };
+type OwnFields<F> = {
+	[
+		P in keyof F as F[P] extends { kind: 'ref'; many: true }
+			? P
+			: F[P] extends { kind: 'ref' }
+				? never
+				: P
+	]: F[P];
+};
 
 // ── ref fields ──
-type GrantKey = 'read' | 'history' | 'create' | 'update' | 'delete' | 'moves';
+type GrantKey = 'outputs' | 'create' | 'update' | 'delete';
 // A second inverse of one name on one target is `Verify`'s (`DuplicateInverse`): a pairwise check here cost O(n²).
 type InverseSpec<I, T> = I extends GrantKey
 	? `error: inverse '${I}' is a grant key`
@@ -541,6 +570,9 @@ type InverseSpec<I, T> = I extends GrantKey
 				: string
 		: string;
 interface RefFor<R, T = TargetsOf<R>> {
+	many?: true;
+	min_items?: number;
+	max_items?: number;
 	kind: 'ref';
 	to: TargetName | readonly [TargetName, TargetName, ...TargetName[]];
 	inverse?: R extends { inverse: infer I } ? InverseSpec<I, T> : string;
@@ -567,6 +599,9 @@ interface RefFor<R, T = TargetsOf<R>> {
  * arc), optionally named back from the target as the many-relation `inverse`. A many-to-many is a model with two refs.
  */
 export type RefField = {
+	many?: true;
+	min_items?: number;
+	max_items?: number;
 	kind: 'ref';
 	/** The target model, or two or more for an arc (the value is then a `RecordRef`). */
 	to: string | readonly string[];
@@ -575,7 +610,7 @@ export type RefField = {
 	optional?: true;
 	/** Composition: the child is written through its parent's write layers and deleted with it; its key never changes (rule 41). */
 	owned?: true;
-	/** What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear the ref (`setNull`). */
+	/** What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear the ref (`set_null`). */
 	on_delete?: 'restrict' | 'cascade' | 'set_null';
 	/** Which target rows the ref may name: a static predicate over the target's own fields (`{ integration: { eq } }` for an instance). */
 	where?: object;
@@ -683,12 +718,52 @@ type ConstraintFor<Rule, F, All> = Rule extends { unique: infer Columns }
 type InputPart<X> = X extends { input: unknown } ? ValidInputs<X['input']> : never;
 type Candidates = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 type Metric = 'l2' | 'cosine' | 'ip';
-type IndexesFor<F, X> = {
-	[I in keyof X]: I extends 'semantic'
-		? "error: 'semantic' is search.semantic's name"
-		: IndexFor<F, X[I]>;
+type SemanticIndex = { fields: readonly string[]; model: EmbeddingModelName; dim: number };
+type NativeIndex = {
+	on: readonly (string | { lower: string })[];
+	unique?: true;
+	where?: object;
 };
-interface IndexFor<F, X> {
+type CustomIndex = {
+	description: string;
+	dim: number;
+	metric: Metric;
+	vector: unknown;
+	input: InputFields;
+	probe: unknown;
+	rerank?: unknown;
+	candidates?: Candidates;
+};
+type IndexLiteral =
+	NativeIndex | { text: readonly string[] } | { semantic: SemanticIndex } | CustomIndex;
+type IndexedColumns<F, On> = {
+	[I in keyof On]: On[I] extends { lower: unknown }
+		? { lower: OfKind<F, { kind: 'text' }> }
+		: ColRef<F, On[I]>;
+};
+type IndexesFor<F, X> = {
+	[I in keyof X]: X[I] extends { on: infer On }
+		? { on: IndexedColumns<F, On>; unique?: true; where?: OwnWhere<F> }
+		: X[I] extends { text: unknown }
+			? {
+					text: readonly (
+						| OfKind<F, { kind: 'text' | 'enum' } | { kind: 'seq'; pattern: string }>
+						| OfKind<F, { kind: 'ref' }>
+					)[];
+				}
+			: X[I] extends { semantic: unknown }
+				? {
+						semantic: {
+							fields: readonly OfKind<F, { kind: 'text' | 'file' }>[];
+							model: EmbeddingModelName;
+							dim: number;
+						};
+					}
+				: I extends 'semantic'
+					? "error: 'semantic' is reserved for semantic search"
+					: CustomIndexFor<F, X[I]>;
+};
+interface CustomIndexFor<F, X> {
 	description: string;
 	dim: number;
 	metric: Metric;
@@ -734,41 +809,21 @@ interface ModelFor<
 	icon?: IconName;
 	/** Optional pure CEL identifier over `record`; shared by record views, live approval references and automatic text search. */
 	record_label?: string;
-	label?: string | readonly string[];
 	fields: {
 		[P in keyof F]: P extends ReservedKeys
 			? `error: '${P & string}' is a system column`
 			: F[P] extends { kind: 'ref' }
 				? RefFor<F[P]>
 				: ValidField<F[P], Own>;
-	};
+	} & ComputedFields<Own, C, keyof F | SystemColumn>;
 	key?: S extends { key: infer L } ? ColRefs<F & CK, L> : never;
-	index?: readonly (string | readonly string[])[];
 	constraints?: {
 		[R in keyof Part<S, 'constraints'>]: ConstraintFor<Part<S, 'constraints'>[R], F & CK, All>;
 	};
-	computed?: ComputedSpec<Own, C, keyof F | SystemColumn>;
-	search?: {
-		/** Text, enum and patterned seq fields; a link here also finds the row by the linked record's own search text. */
-		text: readonly (
-			| OfKind<All, { kind: 'text' | 'enum' } | { kind: 'seq'; pattern: string }>
-			| OfKind<F, { kind: 'ref' }>
-		)[]; // hook:reads — a patterned seq is text
-		semantic?: {
-			fields: readonly OfKind<Own, { kind: 'text' | 'file' }>[];
-			model: EmbeddingModelName;
-			dim: number;
-		};
-		indexes?: S extends { search: { indexes: infer X } } ? IndexesFor<Own, X> : never;
-	};
+	indexes?: IndexesFor<F & CK, Part<S, 'indexes'>>;
 	table?: {
 		primary: 'text' | 'uuid' | 'identity' | { field: keyof Own & string };
 		identity?: OfKind<Own, { kind: 'int' }>;
-		indexes?: readonly {
-			on: readonly ((keyof (F & CK) & string) | { lower: OfKind<Own, { kind: 'text' }> })[];
-			unique?: true;
-			where?: OwnWhere<All>;
-		}[];
 	};
 	outputs?: OutputsFor<Part<S, 'outputs'>, F, C>;
 	create?: Exposed<S, CreateFor<K, S, F>>;
@@ -782,10 +837,7 @@ interface ModelFor<
 }
 
 // ── bodies: typed from the generated names by the model's name, never from the literal ──
-type IndexMetadata = Pick<
-	NonNullable<NonNullable<ModelLiteral['search']>['indexes']>[string],
-	'description' | 'dim' | 'metric' | 'input' | 'candidates'
->;
+type IndexMetadata = Pick<CustomIndex, 'description' | 'dim' | 'metric' | 'input' | 'candidates'>;
 interface IndexBodies<K, Q> extends IndexMetadata {
 	/** Pure: the row's vector, `null` to leave it out of the index; or the name of a `vector` field an automation fills. */
 	vector?: ((row: StoredRow<K>) => Vector | null) | string;
@@ -816,7 +868,7 @@ interface BodiesFor<K> {
 		 * approval resubmit (the requester's save) and a per-record restore; a link or unlink of a child (an update of that
 		 * child); and a child updated through its parent's write layers, after the parent's own callback. Receives `{ before, set }`
 		 * per row (the stored row and the change) and returns the sets to write, in order, or refuses. Seed packs and
-		 * derived roll-ups do not run it; nor does an upsert that keeps a matched row (`onConflict: 'keep'`).
+		 * derived roll-ups do not run it; nor does an upsert that keeps a matched row (`on_conflict: 'keep'`).
 		 */
 		transform?: (
 			changes: readonly { readonly before: StoredRow<K>; readonly set: UpdateTransformSet<K> }[],
@@ -858,7 +910,7 @@ interface BodiesFor<K> {
 		/** The deleted rows as they were stored. */
 		deleted?: (rows: readonly Row<K>[], ctx: EffectCtx) => BodyReturn<void>;
 	};
-	search?: { indexes?: { [I in IndexName<K>]?: IndexBodies<K, InputOf<IndexInput<K, I>>> } };
+	indexes?: { [I in IndexName<K>]?: IndexBodies<K, InputOf<IndexInput<K, I>>> };
 	syncs?: { [Sy in SyncName<K>]?: FileSync<K, Sy> | RemoteSync<K, Sy> };
 }
 
@@ -885,36 +937,16 @@ export type ModelLiteral = {
 	 * If omitted, consumers use the record id (UUID); text search still needs explicit `search.text`.
 	 */
 	record_label?: string;
-	/** @deprecated Use `record_label`. Existing field names/lists remain readable; field captions still use `label`. */
-	label?: string | readonly string[];
+
 	/** The stored fields, `ref` fields included. Every row also carries the system columns (see `ModelSpec.fields`). */
-	fields: { readonly [name: string]: FieldKind | RefField };
+	fields: {
+		readonly [name: string]: Exclude<FieldKind, { kind: 'ref' }> | RefField | ComputedField;
+	};
 	key?: readonly string[];
-	index?: readonly (string | readonly string[])[];
 	/** Named unique, check, period exclusion and write-lock rules. */
 	constraints?: Readonly<Record<string, Constraint>>;
-	computed?: { readonly [name: string]: { kind: ComputedKind; scale?: number; expr: Expr } };
-	/**
-	 * Every kind of search: the search box over `text` fields, `semantic` meaning the platform embeds, and custom `indexes`
-	 * over any vector computed from the row (searched with `query(m, { search: { <index>: input } })`). An index's `dim`
-	 * is at most 2,000 (`bolt check`) and its name is never `semantic`.
-	 */
-	search?: {
-		text: readonly string[];
-		semantic?: { fields: readonly string[]; model: EmbeddingModelName; dim: number };
-		indexes?: {
-			readonly [index: string]: {
-				description: string;
-				dim: number;
-				metric: Metric;
-				vector: unknown;
-				input: InputFields;
-				probe: unknown;
-				rerank?: unknown;
-				candidates?: Candidates;
-			};
-		};
-	};
+	/** Named physical, text, semantic and custom-vector indexes. */
+	indexes?: Readonly<Record<string, IndexLiteral>>;
 	table?: TableSpec;
 	/** A default read output and optional named outputs. A policy grants an output and scopes its rows. */
 	outputs?: { readonly default: ReadOutput; readonly [output: string]: ReadOutput };
@@ -964,12 +996,6 @@ export type TableSpec = {
 	primary: 'text' | 'uuid' | 'identity' | { field: string };
 	/** An `int` field the database numbers (`bigint generated by default as identity`): a transcript's order. */
 	identity?: string;
-	/** Indexes over fields or a text field lowercased, optionally unique and partial (`where`). */
-	indexes?: readonly {
-		on: readonly (string | { lower: string })[];
-		unique?: true;
-		where?: object;
-	}[];
 };
 /**
  * One custom search index as the engine keeps it: a hidden vector column (`dim`, `metric`) with an HNSW index, filled by
@@ -995,8 +1021,7 @@ export type ModelSpec = {
 	icon?: IconName;
 	/** Optional pure CEL identifier over `record`, shared by clients and live approval references; automatically indexed when declared. */
 	record_label?: string;
-	/** @deprecated The former record label fields; `record_label` takes precedence. */
-	label?: string | readonly string[];
+
 	/**
 	 * The stored fields. Every row also carries the system columns `id revision created_at created_by
 	 * updated_at updated_by`, which are not field names: `revision` is the row version every update checks (rule 25), so a
@@ -1007,8 +1032,8 @@ export type ModelSpec = {
 	key?: readonly string[];
 	/** Unique field sets, optionally partial (`where`). */
 	unique?: readonly { fields: readonly string[]; where?: object; name?: string }[];
-	/** Extra indexes: a field or a field list each. */
-	index?: readonly (string | readonly string[])[];
+	/** Physical indexes lowered from the named author declarations. */
+	indexes?: readonly NativeIndex[];
 	/** Named row checks: a `Where` every row must match. */
 	check?: { readonly [name: string]: object };
 	/** Matching rows cannot be deleted. Updates may change only fields excepted by every matching rule. */
@@ -1124,11 +1149,22 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
 			})
 		),
 		// pure: stored as authored, called without a ctx
-		indexes: mapValues(m.search?.indexes ?? {}, (x) => ({
-			...(isBody(x.vector) ? { vector: x.vector } : {}),
-			...(isBody(x.probe) ? { probe: x.probe } : {}),
-			...(isBody(x.rerank) ? { rerank: x.rerank } : {})
-		})),
+		indexes: Object.fromEntries(
+			Object.entries(m.indexes ?? {}).flatMap(([name, x]) =>
+				'vector' in x
+					? [
+							[
+								name,
+								{
+									...(isBody(x.vector) ? { vector: x.vector } : {}),
+									...(isBody(x.probe) ? { probe: x.probe } : {}),
+									...(isBody(x.rerank) ? { rerank: x.rerank } : {})
+								}
+							]
+						]
+					: []
+			)
+		),
 		syncs: mapValues(m.syncs ?? {}, (x) => {
 			const read = guest(x.read),
 				write = guest(x.write);
@@ -1205,13 +1241,22 @@ export type ModelParts = {
  * a body (a function or the check serializer's `true`) becomes its marker.
  */
 export function splitModel(name: string, literal: ModelLiteral): ModelParts {
+	if (Object.hasOwn(literal, 'label')) throw new Error("model '" + name + "': use record_label");
+	if (Object.hasOwn(literal, 'computed'))
+		throw new Error("model '" + name + "': declare computed on its field");
+	if (
+		Object.hasOwn(literal, 'index') ||
+		Object.hasOwn(literal, 'search') ||
+		Object.hasOwn(literal.table ?? {}, 'indexes')
+	)
+		throw new Error("model '" + name + "': declare named indexes");
 	for (const key of ['unique', 'check', 'noOverlap', 'locked'])
 		if (Object.hasOwn(literal, key))
 			throw new Error(`model '${name}': declare '${key}' in constraints`);
 	const {
 		fields,
 		constraints,
-		search,
+		indexes,
 		outputs,
 		create,
 		update,
@@ -1223,10 +1268,27 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 		...storage
 	} = literal;
 	const own: { [field: string]: FieldKind } = {};
+	const computed: Record<string, NonNullable<ModelSpec['computed']>[string]> = {};
 	const relationships: { [key: string]: RelationshipSpec } = {};
 	for (const [field, kind] of Object.entries(fields)) {
-		if (kind.kind !== 'ref') own[field] = kind;
-		else {
+		if ('computed' in kind)
+			computed[field] = {
+				kind: kind.kind,
+				expr: kind.computed,
+				...(kind.scale === undefined ? {} : { scale: kind.scale })
+			};
+		else if (kind.kind !== 'ref') own[field] = kind;
+		else if (kind.many === true) {
+			const { on_delete, owned, inverse, where, ...value } = kind;
+			if (on_delete !== undefined || owned === true || inverse !== undefined)
+				throw new Error(`'${name}.${field}': many references are inline values`);
+			own[field] = {
+				...value,
+				...(where === undefined
+					? {}
+					: { where: Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(where) })
+			};
+		} else {
 			if (Object.hasOwn(kind, 'onDelete')) throw new Error(`'${name}.${field}' uses on_delete`);
 			const { kind: _ref, on_delete, ...relationship } = kind;
 			relationships[`${name}.${field}`] = {
@@ -1262,29 +1324,43 @@ export function splitModel(name: string, literal: ModelLiteral): ModelParts {
 		if (noOverlap.length > 0) rules.noOverlap = noOverlap;
 		if (Object.keys(locks).length > 0) rules.locks = locks;
 	}
+	const physical: NativeIndex[] = [];
+	const text = new Set<string>();
+	let semantic: SemanticIndex | undefined;
+	const searches: Record<string, SearchIndexSpec> = {};
+	for (const [index, entry] of Object.entries(indexes ?? {})) {
+		if ('on' in entry) physical.push(entry);
+		else if ('text' in entry) for (const field of entry.text) text.add(field);
+		else if ('semantic' in entry) {
+			if (semantic !== undefined) throw new Error(name + ': declare one semantic index');
+			semantic = entry.semantic;
+		} else {
+			if (index === 'semantic')
+				throw new Error(name + ": 'semantic' is reserved for semantic search");
+			searches[index] = {
+				description: entry.description,
+				dim: entry.dim,
+				metric: entry.metric,
+				input: entry.input,
+				...(typeof entry.vector === 'string' ? { field: entry.vector } : {}),
+				...(entry.candidates === undefined ? {} : { candidates: entry.candidates }),
+				...(entry.rerank === undefined ? {} : { rerank: true })
+			};
+		}
+	}
 	const stored: ModelSpec = {
 		...storage,
 		...rules,
 		fields: own,
-		...(search === undefined
+		...(Object.keys(computed).length === 0 ? {} : { computed }),
+		...(physical.length === 0 ? {} : { indexes: physical }),
+		...(text.size === 0 && semantic === undefined && Object.keys(searches).length === 0
 			? {}
 			: {
 					search: {
-						text: search.text,
-						...(search.semantic === undefined ? {} : { semantic: search.semantic }),
-						...(search.indexes === undefined
-							? {}
-							: {
-									indexes: mapValues(search.indexes, (x): SearchIndexSpec => ({
-										description: x.description,
-										dim: x.dim,
-										metric: x.metric,
-										input: x.input,
-										...(typeof x.vector === 'string' ? { field: x.vector } : {}),
-										...(x.candidates === undefined ? {} : { candidates: x.candidates }),
-										...(x.rerank === undefined ? {} : { rerank: true })
-									}))
-								})
+						text: [...text],
+						...(semantic === undefined ? {} : { semantic }),
+						...(Object.keys(searches).length === 0 ? {} : { indexes: searches })
 					}
 				})
 	};

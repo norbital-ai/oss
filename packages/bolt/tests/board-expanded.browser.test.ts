@@ -39,6 +39,7 @@ it('expanding a lane leaves hints closed and keeps its search keyboard-accessibl
 			bolt: fixture.bolt,
 			catalog: {
 				jobs: {
+					record_label: 'record.title',
 					label: ['title'],
 					search: ['title'],
 					fields: {

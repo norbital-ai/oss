@@ -170,12 +170,12 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 	if (then === null) return refused('notFound', `Revision ${revision} is not readable to you.`);
 	const changes: RestorePreview['changes'][number][] = [],
 		skipped: RestorePreview['skipped'][number][] = [];
-	for (const field of snapshot.uncompatible) {
+	for (const field of snapshot.incompatible) {
 		// A current narrow output must not reveal an old value the caller cannot read.
 		if (authority !== null && !Object.hasOwn(visibleSnapshot.values, field)) continue;
 		skipped.push({
 			field,
-			reason: 'uncompatible',
+			reason: 'incompatible',
 			current: live[field] ?? null,
 			restored: snapshot.values[field] ?? null
 		});

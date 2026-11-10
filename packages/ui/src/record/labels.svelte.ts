@@ -35,7 +35,7 @@ export function recordLabels(
 						Effect.sync(() =>
 							known.set(
 								key,
-								recordText(catalog()?.[target], row ?? {}, { locale: bolt.locale }) ||
+								recordText(catalog()?.[target], row ?? {}) ||
 									msg(bolt, 'view.unnamed', 'an unnamed {what}', {
 										what: label(bolt, target).toLowerCase()
 									})

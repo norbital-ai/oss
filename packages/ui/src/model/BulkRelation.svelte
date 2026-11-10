@@ -143,7 +143,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 				<label class="text-meta" for={`${id}-${op}`}>{opText(op)}</label>
 				{#each value[op] as chosen (chosen)}
 					<div class="flex min-w-0 items-center gap-2">
-						<Show kind={{ kind: 'id', of: child.model }} value={chosen} readonly />
+						<Show kind={{ kind: 'ref', to: child.model }} value={chosen} readonly />
 						<Button
 							type="button"
 							variant="ghost"

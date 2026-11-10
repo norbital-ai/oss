@@ -19,7 +19,9 @@ const manifest: EngineManifest = {
 	apps: {},
 	customFields: {},
 	agent: { skills: {} },
-	policies: { operator: { description: 'Run reports', grants: {}, capabilities: { automations: ['report'] } } },
+	policies: {
+		operator: { description: 'Run reports', grants: {}, capabilities: { automations: ['report'] } }
+	},
 	automations: {
 		report: { description: 'Generate a report', policies: ['operator'] },
 		private_pipeline: { description: 'Private process', policies: ['operator'] }
@@ -32,7 +34,7 @@ const actor: EngineActor = {
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null
 };

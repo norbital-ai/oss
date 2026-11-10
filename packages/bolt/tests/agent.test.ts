@@ -470,18 +470,16 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		kind: 'object',
 		fields: {
 			leave: {
-				kind: 'list',
-				key: 'code',
-				of: {
-					kind: 'object',
-					fields: {
-						code: { kind: 'text' },
-						days: { kind: 'int' },
-						note: { kind: 'text', optional: true }
-					}
-				}
+				kind: 'object',
+				fields: {
+					code: { kind: 'text' },
+					days: { kind: 'int' },
+					note: { kind: 'text', optional: true }
+				},
+				many: true,
+				key: 'code'
 			},
-			tags: { kind: 'list', of: { kind: 'text' } }
+			tags: { kind: 'text', many: true }
 		}
 	} as const;
 
@@ -571,11 +569,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						ok: { kind: 'bool' },
 						pct: { kind: 'number', min: 0, max: 100 },
 						parts: {
-							kind: 'list',
-							of: {
-								kind: 'object',
-								fields: { n: { kind: 'int' }, flags: { kind: 'list', of: { kind: 'bool' } } }
-							}
+							kind: 'object',
+							fields: { n: { kind: 'int' }, flags: { kind: 'bool', many: true } },
+							many: true
 						}
 					}
 				};
@@ -762,9 +758,10 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			kind: 'object',
 			fields: {
 				list: {
-					kind: 'list',
-					key: 'code',
-					of: { kind: 'object', fields: { code: { kind: 'text' }, n: { kind: 'int' } } }
+					kind: 'object',
+					fields: { code: { kind: 'text' }, n: { kind: 'int' } },
+					many: true,
+					key: 'code'
 				}
 			},
 			rest: { kind: 'json' }
@@ -1520,15 +1517,13 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					kind: 'object',
 					fields: {
 						coverage: {
-							kind: 'list',
-							key: 'area',
-							of: {
-								kind: 'object',
-								fields: {
-									area: { kind: 'text' },
-									status: { kind: 'enum', values: ['pending', 'done'] }
-								}
-							}
+							kind: 'object',
+							fields: {
+								area: { kind: 'text' },
+								status: { kind: 'enum', values: ['pending', 'done'] }
+							},
+							many: true,
+							key: 'area'
 						}
 					}
 				};

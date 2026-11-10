@@ -82,8 +82,9 @@ it.live(
 						name: { kind: 'text' },
 						secret: { kind: 'text', hidden: true },
 						rows: {
-							kind: 'list',
-							of: { kind: 'object', fields: { code: { kind: 'text' }, paid: { kind: 'bool' } } }
+							kind: 'object',
+							fields: { code: { kind: 'text' }, paid: { kind: 'bool' } },
+							many: true
 						}
 					}
 				},

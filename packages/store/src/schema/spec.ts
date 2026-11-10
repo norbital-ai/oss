@@ -4,98 +4,19 @@
 // `SchemaSpec` checks that every name a relation or an index uses exists.
 import { Predicate, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
-import type { Kind } from '@norbital-ai/std/kind';
+import { KindSchema, type Kind } from '@norbital-ai/std/kind';
 
+export const FieldSpec = KindSchema;
 const Bool = Schema.optionalKey(Schema.Literal(true));
 const Num = Schema.optionalKey(Schema.Number);
 const Str = Schema.optionalKey(Schema.String);
 const Strings = Schema.Array(Schema.String);
-/** A where literal inside a declaration: an object here, decoded against the table by the where decoder when used. */
+const Fields = Schema.Record(Schema.String, KindSchema);
+export type FieldSpec = Kind;
+export type FieldKind = Kind['kind'];
 export const WhereLiteral = Schema.declare((u: unknown): u is object => Predicate.isObject(u), {
 	identifier: 'WhereLiteral'
 });
-const DatePrecision = Schema.Literals(['year', 'month', 'week', 'day']);
-const Precision = Schema.Literals(['year', 'month', 'week', 'day', 'hour', 'minute']);
-/** What every kind takes: `was` names the field it renames (a migration hint). */
-const common = {
-	optional: Bool,
-	default: Schema.optionalKey(Schema.Json),
-	unique: Bool,
-	label: Str,
-	help: Str,
-	hidden: Bool,
-	was: Str,
-	storage: Schema.optionalKey(Schema.Literal('int64'))
-};
-
-/** One field's kind: std's kind language (`@norbital-ai/std/kind`), `was` naming the field it renames. */
-export type FieldSpec = Kind & { readonly storage?: 'int64' };
-export type FieldKind = FieldSpec['kind'];
-const arm = <K extends string, F extends Schema.Struct.Fields>(kind: K, fields: F) =>
-	Schema.Struct({ kind: Schema.Literal(kind), ...common, ...fields });
-const Nested = Schema.suspend((): Schema.Codec<FieldSpec> => FieldSpec);
-const Fields = Schema.Record(Schema.String, Nested);
-const ARMS = [
-	arm('text', {
-		format: Schema.optionalKey(
-			Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
-		),
-		max: Num,
-		many: Bool
-	}),
-	arm('int', { min: Num, max: Num }),
-	arm('number', { min: Num, max: Num }),
-	arm('decimal', { scale: Schema.Number, precision: Num, min: Num, max: Num }),
-	arm('money', { currency: Str, scale: Num }),
-	arm('currency', {}),
-	arm('bool', {}),
-	arm('duration', {}),
-	arm('point', {}),
-	arm('date', { precision: Schema.optionalKey(DatePrecision) }),
-	arm('instant', { precision: Schema.optionalKey(Precision) }),
-	arm('time', { precision: Schema.optionalKey(Schema.Literals(['hour', 'minute'])) }),
-	arm('period', { of: Schema.Literal('date'), precision: Schema.optionalKey(DatePrecision) }),
-	arm('period', { of: Schema.Literal('instant'), precision: Schema.optionalKey(Precision) }),
-	arm('enum', { values: Strings, many: Bool }),
-	arm('state', {
-		initial: Schema.String,
-		states: Schema.Record(
-			Schema.String,
-			Schema.Struct({
-				to: Schema.optionalKey(Strings),
-				edit: Schema.optionalKey(Schema.Union([Schema.Literals(['all', 'none']), Strings]))
-			})
-		)
-	}),
-	arm('seq', { pattern: Str, per: Schema.optionalKey(Strings) }),
-	arm('sum', {
-		of: Schema.String,
-		where: Schema.optionalKey(WhereLiteral),
-		money: Schema.optionalKey(Schema.Struct({ currency: Str }))
-	}),
-	arm('count', { of: Schema.String, where: Schema.optionalKey(WhereLiteral) }),
-	arm('json', { shape: Schema.optionalKey(Nested) }),
-	arm('file', { accept: Strings, max: Schema.String, multiple: Bool }),
-	arm('vector', { dim: Schema.Number, metric: Schema.Literals(['l2', 'cosine', 'ip']) }),
-	arm('custom', { of: Schema.String, many: Bool }),
-	arm('ref', {
-		to: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
-		inverse: Str,
-		owned: Bool,
-		onDelete: Schema.optionalKey(Schema.Literals(['restrict', 'cascade', 'setNull'])),
-		where: Schema.optionalKey(WhereLiteral)
-	}),
-	arm('id', {
-		of: Schema.String,
-		where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
-	}),
-	arm('list', { of: Nested, min: Num, max: Num, key: Str }),
-	arm('object', { fields: Fields, rest: Schema.optionalKey(Nested) }),
-	arm('union', { by: Schema.String, arms: Schema.Record(Schema.String, Fields) }),
-	arm('union', { of: Schema.Array(Nested) }),
-	arm('record', { of: Nested })
-] as const;
-export const FieldSpec: Schema.Codec<FieldSpec> = Schema.Union(ARMS);
 
 /** The kinds a computed field's expression may produce. */
 export const COMPUTED_KINDS = [
@@ -311,7 +232,7 @@ type SchemaFields = typeof SchemaFields.Type;
 const targetsOf = (r: RefSpec): readonly string[] => (typeof r.to === 'string' ? [r.to] : r.to);
 const refsOf = (spec: TableSpec): [string, RefSpec][] =>
 	Object.entries(spec.fields).flatMap(([f, k]): [string, RefSpec][] =>
-		k.kind === 'ref' ? [[f, k]] : []
+		k.kind === 'ref' && k.many !== true ? [[f, k]] : []
 	);
 /** Declaration references checked against their tables and states: the first fault, or none. */
 function dangling(s: SchemaFields): string | undefined {

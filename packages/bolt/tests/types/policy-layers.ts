@@ -98,7 +98,7 @@ policy({
 policy({
 	description: 'x',
 	// @ts-expect-error a layer filter on a field of another layer (`note` is the root's)
-	grants: { orders: { outputs: { default: { customer: { where: { note: { isNull: true } } } } } } }
+	grants: { orders: { outputs: { default: { customer: { where: { note: { is_null: true } } } } } } }
 });
 policy({
 	description: 'x',

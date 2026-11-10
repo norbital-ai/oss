@@ -24,7 +24,7 @@
 		dot,
 		count,
 		where,
-		orderBy,
+		order_by,
 		search = '',
 		pageSize,
 		viewKey,
@@ -40,7 +40,7 @@
 		count: number | null;
 		/** The lane's condition under the board's scope: never widened here. */
 		where: Json | undefined;
-		orderBy: Json | undefined;
+		order_by: Json | undefined;
 		/** The board's search, the box's starting text. */
 		search?: string;
 		pageSize: number;
@@ -80,7 +80,7 @@
 		{ lazy: true }
 	);
 	const scope = $derived(and(where, view.where));
-	const order = $derived(view.order.length > 0 ? orderOf(view.order) : orderBy);
+	const order = $derived(view.order.length > 0 ? orderOf(view.order) : order_by);
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col bg-muted/70 dark:bg-muted/40">
@@ -117,7 +117,7 @@
 				{card}
 				lane={label}
 				where={scope}
-				orderBy={order}
+				order_by={order}
 				search={searched || undefined}
 				{pageSize}
 				{selectable}

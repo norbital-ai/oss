@@ -5,7 +5,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_envoy', {
 	description: 'An envoy: the agent that answers outside senders on its connected channels.',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		audience: { kind: 'enum', values: ['private', 'public'], default: 'private' },

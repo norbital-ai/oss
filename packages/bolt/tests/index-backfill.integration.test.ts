@@ -12,7 +12,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			swatches: {
 				description: 'A swatch',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, r: { kind: 'int' } },
 				search: {
 					text: ['title'],

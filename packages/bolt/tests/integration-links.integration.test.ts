@@ -105,10 +105,10 @@ const manifest = {
 		erp: {
 			description: 'The ERP',
 			driver: 'http',
-			credential: { apiKey: { kind: 'text', label: 'API key' } },
+			credential: { api_key: { kind: 'text', label: 'API key' } },
 			http: {
 				baseUrl: 'https://erp.example/api',
-				auth: { header: { name: 'x-api-key', value: 'apiKey' } }
+				auth: { header: { name: 'x-api-key', value: 'api_key' } }
 			}
 		},
 		cal
@@ -920,7 +920,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							}
 						};
 						const links = yield* host([http]);
-						yield* links.pair('erp9', { apiKey: 'k' });
+						yield* links.pair('erp9', { api_key: 'k' });
 						const calls = yield* Effect.all(
 							[links.port.request('erp9', 'first'), links.port.request('erp9', 'second')],
 							{ concurrency: 'unbounded', mode: 'result' }
@@ -934,7 +934,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						const won = successful.success;
 						expect(yield* sealed('erp9')).toEqual({
 							provider: 'http',
-							credential: { apiKey: 'k' },
+							credential: { api_key: 'k' },
 							token: won
 						});
 						// the losing call replaced nothing: the instance still answers

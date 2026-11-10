@@ -10,6 +10,7 @@ import './support/shell.css';
 
 const catalog = {
 	customers: {
+		record_label: 'record.name',
 		label: ['name'],
 		search: ['name', 'code'],
 		output: 'directory',
@@ -18,7 +19,7 @@ const catalog = {
 			code: { kind: 'text' as const }
 		}
 	},
-	notes: { label: ['name'], fields: {} }
+	notes: { record_label: 'record.name', label: ['name'], fields: {} }
 };
 
 const nav = [
@@ -122,7 +123,9 @@ it('Find requires an explicit model, explains search fields and explains unindex
 		expect(document.getElementById('shell-finder-scope-description')?.textContent).toContain(
 			'Search by Customer name, code.'
 		);
-		expect(requests).toEqual([{ customers: { search: 'Acme', limit: 8, output: 'directory' } }]);
+		expect(requests).toEqual([
+			{ customers: { search: 'Acme', limit: 8, output: 'directory', fields: ['name'] } }
+		]);
 		await search.fill('/notes Acme');
 		await expect.element(search).toBeEnabled();
 		await expect.element(page.getByText(/Search is not enabled for this model/)).toBeVisible();
@@ -211,7 +214,9 @@ it('Norbius slash and @ share scopes, skip unavailable models and insert scoped 
 		await expect.poll(() => selected()?.textContent?.trim()).toBe('Acme');
 		await userEvent.keyboard('{Enter}');
 		await expect.element(input).toHaveValue('[@Acme](customers/c1) ');
-		expect(requests).toEqual([{ customers: { search: 'Acme', limit: 8, output: 'directory' } }]);
+		expect(requests).toEqual([
+			{ customers: { search: 'Acme', limit: 8, output: 'directory', fields: ['name'] } }
+		]);
 		await input.fill('@sales');
 		await userEvent.keyboard('{Enter}');
 		await expect.element(input).toHaveValue('[@Sales](/app/sales) ');
@@ -231,7 +236,7 @@ it('Norbius slash and @ share scopes, skip unavailable models and insert scoped 
 		await userEvent.keyboard('{Enter}');
 		await expect.element(input).toHaveValue('[@Acme](customers/c1) ');
 		expect(requests.at(-1)).toEqual({
-			customers: { search: 'Acme & Sons', limit: 8, output: 'directory' }
+			customers: { search: 'Acme & Sons', limit: 8, output: 'directory', fields: ['name'] }
 		});
 	} finally {
 		await unmount(view);

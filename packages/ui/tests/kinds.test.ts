@@ -17,7 +17,7 @@ test('native values keep exact decimals, native ISO dates and nested values', ()
 	assert.equal(k.formatValue([Decimal.of('1')]), '1');
 	const kind = {
 		kind: 'object',
-		fields: { amounts: { kind: 'list', of: { kind: 'decimal', scale: 2 } } }
+		fields: { amounts: { kind: 'decimal', scale: 2, many: true } }
 	} as const;
 	const values = { amounts: [amount] };
 	assert.equal(k.problems(kind, values).size, 0);
@@ -32,7 +32,7 @@ test('kind matrix: picker and view sortability share the canonical traits', () =
 	const fields = {
 		title: { kind: 'text' },
 		tags: { kind: 'text', many: true },
-		list: { kind: 'list', of: { kind: 'text' } },
+		list: { kind: 'text', many: true },
 		object: { kind: 'object', fields: {} },
 		amount: { kind: 'decimal', scale: 2 }
 	} satisfies Record<string, Kind>;
@@ -41,7 +41,7 @@ test('kind matrix: picker and view sortability share the canonical traits', () =
 	for (const [name, kind] of Object.entries(fields)) {
 		assert.equal(offered.includes(name), sortable(kind));
 		assert.deepEqual(
-			k.pickerRead(exposure, [name], { limit: 20 }, '').orderBy,
+			k.pickerRead(exposure, [name], { limit: 20 }, '').order_by,
 			sortable(kind) ? { [name]: 'asc' } : undefined
 		);
 	}
@@ -95,10 +95,10 @@ test('typed text parses per kind with decode wording', () => {
 	assert.deepEqual(k.parse({ kind: 'decimal', scale: 2 }, '1.234'), {
 		error: 'at most 2 decimal places'
 	});
-	assert.deepEqual(k.parse({ kind: 'duration' }, '1h 30m'), { value: 5400 });
-	assert.deepEqual(k.parse({ kind: 'duration' }, '90'), { value: 5400 });
-	assert.deepEqual(k.parse({ kind: 'duration' }, 'soon'), {
-		error: 'expected a duration like 1h 30m'
+	assert.deepEqual(k.parse({ kind: 'int' }, '1h 30m'), { error: 'expected an integer' });
+	assert.deepEqual(k.parse({ kind: 'int' }, '90'), { value: 90 });
+	assert.deepEqual(k.parse({ kind: 'int' }, 'soon'), {
+		error: 'expected an integer'
 	});
 	assert.deepEqual(k.parse({ kind: 'text' }, '  '), { value: null });
 	assert.equal(k.formatDuration(5400), '1h 30m');
@@ -144,11 +144,9 @@ test('structured problems carry decode paths; unions check the chosen arm', () =
 		kind: 'object',
 		fields: {
 			lines: {
-				kind: 'list',
-				of: {
-					kind: 'object',
-					fields: { amount: { kind: 'decimal', scale: 2 }, note: { kind: 'text', optional: true } }
-				}
+				kind: 'object',
+				fields: { amount: { kind: 'decimal', scale: 2 }, note: { kind: 'text', optional: true } },
+				many: true
 			},
 			basis: {
 				kind: 'union',
@@ -178,7 +176,7 @@ test('initial values: literal defaults, state initial, empty structures; clock d
 	assert.deepEqual(
 		k.initial({
 			kind: 'object',
-			fields: { a: { kind: 'bool' }, b: { kind: 'list', of: { kind: 'text' } } }
+			fields: { a: { kind: 'bool' }, b: { kind: 'text', many: true } }
 		}),
 		{ a: false, b: [] }
 	);
@@ -212,6 +210,8 @@ test('display text: dates never shift', () => {
 
 test('a picker searches on the server, patterned seq labels included, and sorts by its label unless told otherwise', () => {
 	const target = {
+		record_label:
+			"[record.code != null ? string(record.code) : '', record.name != null ? string(record.name) : ''].filter(part, part != '').join(' · ')",
 		label: ['code', 'name'],
 		fields: {
 			code: { kind: 'seq', pattern: 'P-{0000}' },
@@ -222,13 +222,13 @@ test('a picker searches on the server, patterned seq labels included, and sorts 
 	assert.deepEqual(k.pickerRead(target, ['code', 'name'], { limit: 20 }, ''), {
 		fields: ['code', 'name'],
 		limit: 20,
-		orderBy: { code: 'asc' }
+		order_by: { code: 'asc' }
 	});
 	assert.deepEqual(
 		k.pickerRead(
 			target,
 			['code', 'name'],
-			{ where: { active: { eq: true } }, orderBy: { name: 'desc' }, limit: 20 },
+			{ where: { active: { eq: true } }, order_by: { name: 'desc' }, limit: 20 },
 			' P-00_1 '
 		).where,
 		{
@@ -246,7 +246,7 @@ test('a picker searches on the server, patterned seq labels included, and sorts 
 		limit: 20,
 		search: 'acme'
 	});
-	assert.deepEqual(k.pickerRead(indexed, ['name'], { limit: 20 }, '').orderBy, { name: 'asc' });
+	assert.deepEqual(k.pickerRead(indexed, ['name'], { limit: 20 }, '').order_by, { name: 'asc' });
 });
 
 test('precision: a year, month or week snaps to its first day (weeks from Monday); a period end to its last', async () => {

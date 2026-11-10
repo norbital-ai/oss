@@ -13,15 +13,27 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } },
+		quotes: {
+			description: 'A quote',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
 		products: {
 			description: 'An ERP product',
-			label: 'name',
+			record_label: 'record.name',
 			key: ['source', 'code'],
 			fields: { code: { kind: 'text' }, name: { kind: 'text' } }
 		},
-		chats: { description: 'A chat line', label: 'text', fields: { text: { kind: 'text' } } },
-		entries: { description: 'An entry', label: 'text', fields: { text: { kind: 'text' } } }
+		chats: {
+			description: 'A chat line',
+			record_label: 'record.text',
+			fields: { text: { kind: 'text' } }
+		},
+		entries: {
+			description: 'An entry',
+			record_label: 'record.text',
+			fields: { text: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }

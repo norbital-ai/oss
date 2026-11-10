@@ -86,7 +86,7 @@ export type Usage = {
 export type ToolCall = Types.Mutable<typeof ToolCallSchema.Type>;
 /** Rule 59: one per write outcome of a turn. */
 export type Receipt = {
-	outcome: 'committed' | 'pendingApproval';
+	outcome: 'committed' | 'pending_approval';
 	callable: string;
 	records: readonly { model: string; id: string }[];
 	requestId?: string;
@@ -111,7 +111,7 @@ const ToolCallSchema = Schema.Struct({
 	invalid: Schema.optionalKey(Schema.String)
 });
 const ReceiptSchema = Schema.Struct({
-	outcome: Schema.Literals(['committed', 'pendingApproval']),
+	outcome: Schema.Literals(['committed', 'pending_approval']),
 	callable: Schema.String,
 	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })),
 	requestId: Schema.optionalKey(Schema.String)

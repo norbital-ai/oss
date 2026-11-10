@@ -14,7 +14,7 @@ const manifest = {
 		// one schema for every case: each workspace below loads the same checkpoint
 		customers: {
 			description: 'A customer',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				balance: { kind: 'decimal', scale: 2, optional: true },
@@ -123,7 +123,7 @@ it.live(
 				{
 					callable: 'customers.upsert',
 					input: [{ id: record.id, name: 'Batch' }],
-					onConflict: 'update'
+					on_conflict: 'update'
 				},
 				{ callable: 'customers.create', input: [{ name: 'Other' }] }
 			]);
@@ -222,7 +222,7 @@ it.live(
 			);
 			const t = Context.get(context, TestWorkspace);
 			const nativeRow = Schema.Struct({
-				id: Schema.toType(inputSchema({ kind: 'id', of: 'customers' })),
+				id: Schema.toType(inputSchema({ kind: 'ref', to: 'customers' })),
 				balance: Schema.toType(inputSchema({ kind: 'decimal', scale: 2 })),
 				document: Schema.Struct({ note: Schema.String })
 			});

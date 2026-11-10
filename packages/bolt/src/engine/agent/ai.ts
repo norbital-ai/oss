@@ -4,6 +4,7 @@
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
 // The agent's turn loop and an inference reach it as an Effect `LanguageModel` (P7, `generate`): one `generateText` with
 // tool-call resolution disabled is one `modelCall`, its tools a `Toolkit`, the AI port's ABI unchanged beneath it.
+import { item_kind } from '@norbital-ai/std/kind';
 import {
 	Cause,
 	Clock,
@@ -547,7 +548,7 @@ const EditOp = Schema.Struct({
 });
 /** The empty answer a structured inference starts from, by the output's kind. */
 const emptyOf = (k: Kind): Json =>
-	k.kind === 'list'
+	k.many === true
 		? []
 		: k.kind === 'object' || k.kind === 'record' || k.kind === 'json'
 			? {}
@@ -619,7 +620,7 @@ export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Json
 		if (seg === undefined) return target(current, k, keyed);
 		const here = pointer(segs.slice(0, i)) || '/';
 		const holder =
-			current ?? (op.remove === true ? fail(`nothing is at ${here}`) : k.kind === 'list' ? [] : {});
+			current ?? (op.remove === true ? fail(`nothing is at ${here}`) : k.many === true ? [] : {});
 		const child =
 			childKind(k, seg, holder) ??
 			fail(`${pointer(segs.slice(0, i + 1))} is not part of the output`);
@@ -651,6 +652,18 @@ export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Json
 
 /** A declared output kind (§3.3.2) as the JSON Schema the provider constrains its answer by. */
 function jsonSchemaOf(k: Kind): Json {
+	if (k.many === true) {
+		const key = keyOf(k);
+		return {
+			type: 'array',
+			items: jsonSchemaOf(item_kind(k)),
+			...(key === undefined
+				? {}
+				: {
+						description: `Keyed by "${key}": an item's path is …/<its ${key}>, never its index.`
+					})
+		};
+	}
 	switch (k.kind) {
 		case 'text':
 			return { type: 'string', ...(k['max'] === undefined ? {} : { maxLength: Number(k['max']) }) };
@@ -669,22 +682,10 @@ function jsonSchemaOf(k: Kind): Json {
 			return { type: 'string', format: 'date-time' };
 		case 'enum':
 			return { enum: [...k.values] };
-		case 'id':
-			return { type: 'string', format: 'uuid' };
+		case 'ref':
+			return typeof k.to === 'string' ? { type: 'string' } : { type: 'object' };
 		case 'vector':
 			return { type: 'array', items: { type: 'number' } };
-		case 'list': {
-			const key = keyOf(k);
-			return {
-				type: 'array',
-				items: jsonSchemaOf(k.of),
-				...(key === undefined
-					? {}
-					: {
-							description: `Keyed by "${key}": an item's path is …/<its ${key}>, never its index.`
-						})
-			};
-		}
 		case 'record':
 			return { type: 'object', additionalProperties: jsonSchemaOf(k.of) };
 		case 'object': {
@@ -834,6 +835,10 @@ const NUMERAL = /^-?\d+(\.\d+)?$/;
 /** A model's quoted scalar (`"true"`, `"95"`) read as the kind's own value; anything else is left for the decode to refuse. */
 function unquoted(kind: Kind, value: Json): Json {
 	if (value === null) return value;
+	if (kind.many === true)
+		return EffectArray.isArray<typeof value>(value)
+			? value.map((item) => unquoted(item_kind(kind), item))
+			: value;
 	switch (kind.kind) {
 		case 'bool': {
 			const t = typeof value === 'string' ? value.trim().toLowerCase() : undefined;
@@ -842,14 +847,9 @@ function unquoted(kind: Kind, value: Json): Json {
 		case 'int':
 		case 'number':
 		case 'count':
-		case 'duration':
 			return typeof value === 'string' && NUMERAL.test(value.trim()) ? Number(value.trim()) : value;
 		case 'json':
 			return kind.shape === undefined ? value : unquoted(kind.shape, value);
-		case 'list':
-			return EffectArray.isArray<typeof value>(value)
-				? value.map((item) => unquoted(kind.of, item))
-				: value;
 		case 'record':
 		case 'object':
 		case 'union': {

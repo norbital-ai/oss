@@ -55,7 +55,6 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 	money: [[{ kind: 'money', currency: 'SGD' }, decimalIn]],
 	sum: [[{ kind: 'sum', of: 'lines.amount' }, decimalIn]],
 	count: [[{ kind: 'count', of: 'lines' }, fc.nat()]],
-	duration: [[{ kind: 'duration' }, fc.integer()]],
 	currency: [[{ kind: 'currency' }, fc.constantFrom('SGD', 'USD', 'JPY')]],
 	bool: [[{ kind: 'bool' }, fc.boolean()]],
 	date: [[{ kind: 'date' }, day]],
@@ -109,6 +108,11 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 		[{ kind: 'seq' }, fc.nat()]
 	],
 	json: [
+		[
+			{ kind: 'decimal', scale: 2, many: true, max_items: 5 },
+			fc.array(decimalIn, { maxLength: 5 })
+		],
+
 		[{ kind: 'json' }, json],
 		[
 			{
@@ -130,7 +134,7 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 			)
 		],
 		[
-			{ kind: 'file', accept: ['image/*'], max: '1MiB', multiple: true },
+			{ kind: 'file', accept: ['image/*'], max: '1MiB', many: true },
 			fc.array(fc.record({ id: fc.uuid(), name: fc.string(), mime: fc.constant('image/png') }))
 		]
 	],
@@ -139,18 +143,11 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 		[{ kind: 'vector', dim: 3, metric: 'cosine' }, fc.array(finite, { minLength: 3, maxLength: 3 })]
 	],
 	custom: [[{ kind: 'custom', of: 'money' }, json]],
-	id: [[{ kind: 'id', of: 'orders' }, fc.uuid()]],
 	ref: [
 		[{ kind: 'ref', to: 'orders' }, fc.string()],
 		[
 			{ kind: 'ref', to: ['orders', 'quotes'] },
 			fc.record({ model: fc.constantFrom('orders', 'quotes'), id: fc.string() })
-		]
-	],
-	list: [
-		[
-			{ kind: 'list', of: { kind: 'decimal', scale: 2 }, max: 5 },
-			fc.array(decimalIn, { maxLength: 5 })
 		]
 	],
 	object: [
@@ -195,9 +192,8 @@ const CASES: { readonly [K in FieldKind]: readonly (readonly [Kind, fc.Arbitrary
 };
 
 describe('std/kind', () => {
-	it('the primitive ID codec preserves the kind decoder values and refusals', () => {
+	it('the primitive ID codec accepts UUIDs and rejects other values', () => {
 		const primitive = Schema.decodeUnknownResult(IdValue);
-		const kind = { kind: 'id', of: 'orders' } as const;
 		const cases: readonly (readonly [unknown, boolean])[] = [
 			['12345678-1234-1234-1234-123456789abc', true],
 			['ABCDEF12-ABCD-ABCD-ABCD-ABCDEF123456', true],
@@ -216,19 +212,17 @@ describe('std/kind', () => {
 		];
 		for (const [value, accepted] of cases) {
 			const actual = primitive(value);
-			const catalogue = decode(kind, value);
 			assert.equal(Result.isSuccess(actual), accepted);
-			assert.equal(actual._tag, catalogue._tag);
-			if (Result.isSuccess(actual)) assert.deepEqual(Result.getOrThrow(catalogue), actual.success);
-			else {
-				assert.ok(Result.isFailure(catalogue));
-				assert.equal(String(actual.failure), String(catalogue.failure));
-			}
 		}
 	});
 
+	it('reference inputs accept target key strings', () => {
+		for (const id of ['o-1', '12345678-1234-1234-1234-123456789abc'])
+			assert.equal(wire({ kind: 'ref', to: 'orders' }, id), id);
+	});
+
 	it('canonicalises negative zero through scalar, point and vector JSON codecs', () => {
-		for (const kind of ['int', 'number', 'duration'] as const)
+		for (const kind of ['int', 'number'] as const)
 			assert.equal(Object.is(wire({ kind }, -0), 0), true);
 		assert.equal(Object.is(wire({ kind: 'count', of: 'orders' }, -0), 0), true);
 		assert.deepEqual(wire({ kind: 'point' }, { lat: -0, lng: -0 }), { lat: 0, lng: 0 });
@@ -290,35 +284,26 @@ describe('std/kind', () => {
 		refused({ kind: 'enum', values: ['a'] }, 'b');
 		refused({ kind: 'state', initial: 'a', states: { a: {} } }, 'b');
 		refused({ kind: 'vector', dim: 2, metric: 'l2' }, [1, 2, 3]);
-		refused({ kind: 'id', of: 'orders' }, 'o-1');
-		refused({ kind: 'list', of: { kind: 'int' }, max: 1 }, [1, 2]);
+		refused({ kind: 'ref', to: 'orders' }, 42);
+		refused({ kind: 'int', many: true, max_items: 1 }, [1, 2]);
 		refused({ kind: 'object', fields: { a: { kind: 'text' } } }, {});
 		refused({ kind: 'object', fields: { a: { kind: 'text' } } }, { a: null });
 		refused({ kind: 'union', by: 'type', arms: { cash: {} } }, { type: 'card' });
 		refused({ kind: 'text' }, null);
 	});
 
-	it('states each trait once, duration numeric', () => {
+	it('states each kind trait once', () => {
 		const having = (t: 'numeric' | 'ordered' | 'summable' | 'sortable') =>
 			Object.entries(KIND)
 				.filter(([, e]) => e.traits[t])
 				.map(([k]) => k)
 				.sort();
-		assert.deepEqual(having('numeric'), [
-			'count',
-			'decimal',
-			'duration',
-			'int',
-			'money',
-			'number',
-			'sum'
-		]);
+		assert.deepEqual(having('numeric'), ['count', 'decimal', 'int', 'money', 'number', 'sum']);
 		assert.deepEqual(having('summable'), having('numeric'));
 		assert.deepEqual(having('ordered'), [
 			'count',
 			'date',
 			'decimal',
-			'duration',
 			'instant',
 			'int',
 			'money',
@@ -331,12 +316,12 @@ describe('std/kind', () => {
 			Object.keys(KIND)
 				.filter((k) => !KIND[k as FieldKind].traits.sortable)
 				.sort(),
-			['custom', 'file', 'json', 'list', 'object', 'period', 'point', 'record', 'union', 'vector']
+			['custom', 'file', 'json', 'object', 'period', 'point', 'record', 'union', 'vector']
 		);
 	});
 
 	it('memoises per spec object', () => {
-		const spec: Kind = { kind: 'list', of: { kind: 'int' } };
+		const spec: Kind = { kind: 'int', many: true };
 		assert.equal(inputSchema(spec), inputSchema(spec));
 	});
 });

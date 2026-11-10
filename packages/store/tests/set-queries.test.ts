@@ -112,7 +112,7 @@ it.effect(
 			yield* execute(
 				yield* db.delete('artifact', {
 					where: { tenant: { eq: 'acme' } },
-					keep: { orderBy: [{ at: 'desc' }, 'commit'], limit: 1 }
+					keep: { order_by: [{ at: 'desc' }, 'commit'], limit: 1 }
 				})
 			);
 			yield* execute(yield* db.create('pin', { tenant: 'acme', commit: '3' }));

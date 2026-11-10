@@ -3,7 +3,7 @@
 // written by the approvals engine. At most one open request per record: the lock refuses a second.
 import { model } from '../../../../decl/model.ts';
 
-const names = { kind: 'json', shape: { kind: 'list', of: { kind: 'text' } } } as const;
+const names = { kind: 'json', shape: { kind: 'text', many: true } } as const;
 
 export default model('approval_request', {
 	description:
@@ -39,6 +39,7 @@ export default model('approval_request', {
 	},
 	table: { primary: 'uuid' },
 	// Target labels are searched through the existing model/id reference by the query catalogue.
-	search: { text: ['collection_name'] },
-	outputs: { default: { fields: 'all' } }
+
+	outputs: { default: { fields: 'all' } },
+	indexes: { find: { text: ['collection_name'] } }
 });

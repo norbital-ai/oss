@@ -23,7 +23,7 @@
 				"values": [
 					"prepared",
 					"committed",
-					"pendingApproval",
+					"pending_approval",
 					"refused",
 					"conflict",
 					"failed",
@@ -39,7 +39,7 @@
 					"member",
 					"envoy",
 					"visitor",
-					"apiKey",
+					"api_key",
 					"system"
 				]
 			}

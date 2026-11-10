@@ -73,11 +73,11 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 				expect(branchAuthority?.policies).toEqual([]);
 				expect(branchAuthority?.actor).toMatchObject({
 					teams: ['branch-id'],
-					teamPath: ['Sales', 'Sales']
+					team_path: ['Sales', 'Sales']
 				});
 				expect((yield* authorities.member(t.db, impostor.id))?.actor).toMatchObject({
 					teams: [],
-					teamPath: []
+					team_path: []
 				});
 				const previewer = t.as(t.admin).authority.actor;
 				if (previewer.kind !== 'member') throw new Error('admin must be a member');
@@ -98,7 +98,7 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 					(yield* new Authorities(removed, 'removed').member(t.db, sales.id))?.actor
 				).toMatchObject({
 					teams: [],
-					teamPath: []
+					team_path: []
 				});
 				const member = t.member(['sales'], { teams: ['sales-id'] });
 				expect((yield* authorities.member(t.db, member.id))?.actor).toMatchObject({
@@ -136,12 +136,12 @@ layer(TestWorkspace.layer({ manifest: source }))('source-owned teams', (it) => {
 				code: 'notFound'
 			});
 			const key = yield* issueKey(h, t.manifest, admin, 'Catalogue', 'viewer-id');
-			expect((yield* authorities.apiKey(t.db, key.id))?.policies).toEqual(['viewer']);
+			expect((yield* authorities.api_key(t.db, key.id))?.policies).toEqual(['viewer']);
 			expect(
 				(yield* new Authorities(
 					{ ...t.manifest, teams: { ...source.teams, 'viewer-id': [] } },
 					'revoked'
-				).apiKey(t.db, key.id))?.policies
+				).api_key(t.db, key.id))?.policies
 			).toEqual([]);
 		})
 	);

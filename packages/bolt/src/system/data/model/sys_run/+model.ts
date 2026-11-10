@@ -6,7 +6,7 @@ import { model } from '../../../../decl/model.ts';
 export default model('sys_run', {
 	description:
 		'An automation run: queued, running or finished, with its input, progress and results.',
-	label: 'automation',
+	record_label: 'record.automation',
 	fields: {
 		automation: { kind: 'text' },
 		input: { kind: 'json' },
@@ -29,6 +29,7 @@ export default model('sys_run', {
 		// who or what started an automation run (`RunTrigger`); never its authority
 		trigger: { kind: 'json', optional: true }
 	},
-	table: { primary: 'text', indexes: [{ on: ['due_at'], where: { state: { eq: 'queued' } } }] },
-	outputs: { default: { fields: 'all' } }
+	table: { primary: 'text' },
+	outputs: { default: { fields: 'all' } },
+	indexes: { by_due_at: { on: ['due_at'], where: { state: { eq: 'queued' } } } }
 });

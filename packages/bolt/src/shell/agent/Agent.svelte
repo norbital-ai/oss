@@ -2681,7 +2681,7 @@
 												</p>{/if}
 											{#each receiptsOf(row) as r, i (i)}
 												<p class="text-xs text-muted-foreground" data-receipt>
-													{r.outcome === 'pendingApproval' ? t('Awaiting approval') : t('Done')}: {r.callable}
+													{r.outcome === 'pending_approval' ? t('Awaiting approval') : t('Done')}: {r.callable}
 												</p>
 											{/each}
 										</li>

@@ -34,7 +34,7 @@ export type RecordCapabilities = {
 };
 /** Why a past value is not written back by a per-record restore. */
 export type RestoreSkip =
-	'deletedTarget' | 'readOnly' | 'noGrant' | 'stateLocked' | 'definitionChanged' | 'uncompatible';
+	'deletedTarget' | 'readOnly' | 'noGrant' | 'stateLocked' | 'definitionChanged' | 'incompatible';
 /**
  * `history.preview`: what restoring past `revision` would write over the live record (`live`), field by field, and
  * what it leaves alone and why. `approval`: that field's write routes to an approval rather than committing.
@@ -57,4 +57,6 @@ export type RecordView<C extends string = string> =
 	| { model: C; mode: 'view' | 'edit'; record: RecordOf<C>; capabilities?: RecordCapabilities }
 	| { model: C; mode: 'create'; values: Partial<InsertOf<C>> };
 /** A model's `+representation.svelte`, loaded on first use. */
-export type RepresentationLoader = () => Promise<{ default: Component<{ view: RecordView; ctx: ViewBolt }> }>;
+export type RepresentationLoader = () => Promise<{
+	default: Component<{ view: RecordView; ctx: ViewBolt }>;
+}>;

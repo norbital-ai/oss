@@ -37,7 +37,7 @@ Your capabilities are exactly the tools offered in this conversation; each descr
 
 ## Writes
 
-- `act` runs unelevated. A held write answers `pendingApproval`: committed, locked, rolled back on rejection. Name the source team the approval names.
+- `act` runs unelevated. A held write answers `pending_approval`: committed, locked, rolled back on rejection. Name the source team the approval names.
 - A record under approval refuses with `locked`: report who may change it.
 - A permission failure is about the subject's access, not the platform.
 

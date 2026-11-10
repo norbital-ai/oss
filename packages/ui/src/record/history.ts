@@ -41,7 +41,7 @@ export function checkpoints(history: readonly HistoryEntry[]): Checkpoint[] {
 			actor: entry.actor,
 			restoredFrom: entry.restoredFrom,
 			approval: entry.approval,
-			valid: entry.valid ?? (entry.uncompatible?.length ?? 0) === 0,
+			valid: entry.valid ?? (entry.incompatible?.length ?? 0) === 0,
 			fields: Object.entries(entry.changed)
 				.filter(([field]) => !BOOKKEEPING.has(field))
 				.map(([field]) => field)
@@ -60,8 +60,8 @@ export function skipText(bolt: Pick<ViewBolt, 't'>, reason: string): string {
 		case 'stateLocked':
 			return msg(bolt, 'record.restoreSkip.stateLocked', 'This state change is not allowed');
 		case 'definitionChanged':
-		case 'uncompatible':
-			return msg(bolt, 'record.restoreSkip.uncompatible', 'uncompatible');
+		case 'incompatible':
+			return msg(bolt, 'record.restoreSkip.incompatible', 'incompatible');
 		default:
 			return humanize(reason);
 	}

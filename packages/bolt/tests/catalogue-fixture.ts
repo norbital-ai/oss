@@ -9,7 +9,7 @@ export const manifest = Result.getOrThrow(
 		models: {
 			products: {
 				description: 'A product',
-				label: 'name',
+				record_label: 'record.name',
 				key: ['external_code'],
 				fields: {
 					external_code: { kind: 'text' },

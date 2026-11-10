@@ -65,7 +65,7 @@ describe('engine/write decode and flatten', () => {
 											of: {
 												kind: 'object',
 												fields: {
-													target: { kind: 'id', of: 'tags', optional: true }
+													target: { kind: 'ref', to: 'tags', optional: true }
 												}
 											}
 										}

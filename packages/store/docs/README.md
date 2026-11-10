@@ -58,7 +58,7 @@ the same query language. A polymorphic ref stores one nullable foreign-key colum
 each target's own `select` and `with`, and the result discriminates them by `model`.
 
 `store.read` accepts `firstPer: ['group_column']` to select one matching row per group. Group columns lead
-the result order; `orderBy` chooses the row within each group, with primary keys breaking ties. PostgreSQL
+the result order; `order_by` chooses the row within each group, with primary keys breaking ties. PostgreSQL
 selects each group's first row before applying the cursor, so older rows cannot reappear on later pages.
 Filtering, projections, relation bounds and page byte limits still apply. Group columns must be sortable
 and readable; this option cannot be combined with search ranking.

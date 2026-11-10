@@ -10,7 +10,7 @@ export const slice = (): SchemaSlice => ({
 		{
 			customers: {
 				description: 'customers',
-				label: 'name',
+				record_label: 'record.name',
 				fields: {
 					name: { kind: 'text', max: 20 },
 					email: { kind: 'text', format: 'email', optional: true, unique: true },
@@ -26,7 +26,7 @@ export const slice = (): SchemaSlice => ({
 			},
 			orders: {
 				description: 'orders',
-				label: 'code',
+				record_label: 'record.code',
 				fields: {
 					code: { kind: 'seq', pattern: 'SO-{yyyy}-{0000}' },
 					status: {
@@ -73,7 +73,7 @@ export const slice = (): SchemaSlice => ({
 			},
 			terms: {
 				description: 'terms',
-				label: 'grade',
+				record_label: 'record.grade',
 				fields: {
 					grade: { kind: 'text', optional: true },
 					period: { kind: 'period', of: 'date' },
@@ -85,7 +85,11 @@ export const slice = (): SchemaSlice => ({
 					{ fields: ['grade'], where: { scope: { eq: 'x' } }, name: 'one_x_grade' }
 				]
 			},
-			notes: { description: 'notes', label: 'body', fields: { body: { kind: 'text' } } }
+			notes: {
+				description: 'notes',
+				record_label: 'record.body',
+				fields: { body: { kind: 'text' } }
+			}
 		},
 		{
 			'orders.customer': { to: 'customers', inverse: 'orders', owned: true },

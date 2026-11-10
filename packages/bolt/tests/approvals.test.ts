@@ -21,7 +21,7 @@ const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' 
 	phone: null,
 	external: false,
 	teams: [team],
-	teamPath: [team],
+	team_path: [team],
 	admin: false,
 	party: null
 });
@@ -118,7 +118,7 @@ describe('approval flows', () => {
 		expect(
 			canApprove(request, {
 				...as('other', 'staff'),
-				actor: { ...actor('other', 'staff'), teamPath: ['leadership', 'staff'] }
+				actor: { ...actor('other', 'staff'), team_path: ['leadership', 'staff'] }
 			})
 		).toBe(false);
 	});
@@ -208,7 +208,7 @@ describe('approval flows', () => {
 		expect(decisionsFor('Pending', roles)).toEqual([
 			{ decision: 'approve', reason: 'required' },
 			{ decision: 'reject', reason: 'required' },
-			{ decision: 'requestChanges', reason: 'required' }
+			{ decision: 'request_changes', reason: 'required' }
 		]);
 		expect(transition(request, 2, 'supersede', roles, '')).toMatchObject({ refused: 'reason' });
 	});
@@ -245,7 +245,7 @@ describe('approval flows', () => {
 	});
 	it('rejects terminal moves and requires reasons for rejection or requested changes', () => {
 		const roles = new Set(['approver'] as const);
-		for (const move of ['reject', 'requestChanges'] as const)
+		for (const move of ['reject', 'request_changes'] as const)
 			expect(transition(request, 2, move, roles, '')).toMatchObject({ refused: 'reason' });
 		expect(transition({ state: 'Approved', step: 1 }, 2, 'reject', roles, 'No')).toMatchObject({
 			refused: 'invalidMove'

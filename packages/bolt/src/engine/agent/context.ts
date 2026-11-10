@@ -385,7 +385,7 @@ function identity(a: Authority, source: boolean): string {
 	const x = a.actor;
 	const who =
 		x.kind === 'member'
-			? `${x.email ?? x.id} (member id ${x.id})${x.teamPath.length > 0 ? `, team ${x.teamPath.join(' › ')}` : ''}${x.external ? ', external' : ''}`
+			? `${x.email ?? x.id} (member id ${x.id})${x.team_path.length > 0 ? `, team ${x.team_path.join(' › ')}` : ''}${x.external ? ', external' : ''}`
 			: x.kind === 'envoy'
 				? `envoy ${x.envoy} on ${x.instance}, for the sender of the newest message`
 				: x.kind;

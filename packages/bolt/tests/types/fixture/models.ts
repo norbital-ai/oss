@@ -7,7 +7,7 @@ import type { Finding, Notice, SyncRow } from '../../../src/index.ts';
 
 export const customers = model('customers', {
 	description: 'Buyers',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		email: { kind: 'text', format: 'email', optional: true },
@@ -19,16 +19,14 @@ export const customers = model('customers', {
 			to: 'sys_integration',
 			optional: true,
 			where: { integration: { eq: 'whatsapp' } }
-		}
+		},
+		name_upper: { kind: 'text', computed: { upper: { field: 'name' } } },
+		email_lower: { kind: 'text', computed: { lower: { field: 'email' } } },
+		email_label: { kind: 'text', computed: { concat: [{ field: 'email' }, ' contact'] } },
+		email_default: { kind: 'text', computed: { coalesce: [{ field: 'email' }, 'unknown'] } },
+		email_chain: { kind: 'text', computed: { upper: { field: 'email_lower' } } }
 	},
-	computed: {
-		name_upper: { kind: 'text', expr: { upper: { field: 'name' } } },
-		email_lower: { kind: 'text', expr: { lower: { field: 'email' } } },
-		email_label: { kind: 'text', expr: { concat: [{ field: 'email' }, ' contact'] } },
-		email_default: { kind: 'text', expr: { coalesce: [{ field: 'email' }, 'unknown'] } },
-		email_chain: { kind: 'text', expr: { upper: { field: 'email_lower' } } }
-	},
-	search: { text: ['name'] },
+
 	outputs: { default: { fields: 'all' }, directory: { fields: ['name', 'tier'] } },
 	create: {
 		columns: { customers: ['name', 'email', 'tier'] },
@@ -49,11 +47,9 @@ export const customers = model('customers', {
 					path: 'customers',
 					query: { since: String(cursor ?? '') },
 					output: {
-						kind: 'list',
-						of: {
-							kind: 'object',
-							fields: { id: { kind: 'text' }, name: { kind: 'text' }, updated: { kind: 'text' } }
-						}
+						kind: 'object',
+						fields: { id: { kind: 'text' }, name: { kind: 'text' }, updated: { kind: 'text' } },
+						many: true
 					}
 				});
 				return {
@@ -73,12 +69,14 @@ export const customers = model('customers', {
 				return { $id: sent.id, $version: sent.updated };
 			}
 		}
-	}
+	},
+	indexes: { find: { text: ['name'] } }
 });
 
 export const orders = model('orders', {
 	description: 'Sales orders',
-	label: ['number', 'customer'],
+	record_label:
+		"[record.number != null ? string(record.number) : '', record.customer != null ? string(record.customer) : ''].filter(part, part != '').join(' · ')",
 	fields: {
 		number: { kind: 'seq', pattern: 'SO-{0000}' },
 		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
@@ -103,27 +101,12 @@ export const orders = model('orders', {
 		placed_at: { kind: 'instant', optional: true },
 		total: { kind: 'sum', of: 'lines.amount', where: { qty: { gt: 0 } } },
 		line_count: { kind: 'count', of: 'lines' },
-		colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true }
+		colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true },
+		due_soon: { kind: 'date', computed: { plusDays: [{ field: 'due' }, -7] } }
 	},
-	index: ['customer', 'due'],
-	computed: { due_soon: { kind: 'date', expr: { plusDays: [{ field: 'due' }, -7] } } },
-	constraints: { has_customer: { check: { customer: { isNull: false } } } },
-	search: {
-		text: ['note'],
-		indexes: {
-			by_colour: {
-				description: 'Orders of a similar colour',
-				dim: 3,
-				metric: 'l2',
-				vector: 'colour',
-				input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
-				candidates: 4,
-				probe: (q) => ({ vector: q.lab, where: { status: { eq: 'ordered' } } }),
-				rerank: (q, row) =>
-					Array.isArray(row.colour) ? row.colour.length - q.lab.length : undefined
-			}
-		}
-	},
+
+	constraints: { has_customer: { check: { customer: { is_null: false } } } },
+
 	outputs: {
 		default: { fields: 'all', customer: { fields: ['name', 'tier'] }, lines: { fields: 'all' } },
 		logistics: { fields: ['number', 'status', 'customer'], lines: { fields: ['item', 'qty'] } }
@@ -181,7 +164,7 @@ export const orders = model('orders', {
 	effect: {
 		created: function* (rows, ctx) {
 			const first: string | undefined = rows[0]?.number;
-			const actor: 'member' | 'envoy' | 'visitor' | 'apiKey' | 'system' = ctx.actor.kind;
+			const actor: 'member' | 'envoy' | 'visitor' | 'api_key' | 'system' = ctx.actor.kind;
 			if (first !== undefined && actor === 'member') yield* ctx.schedule('nightly', {});
 		},
 		updated: function* (changes, ctx) {
@@ -267,30 +250,44 @@ export const orders = model('orders', {
 				return open.orders.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
 			}
 		}
+	},
+	indexes: {
+		by_customer: { on: ['customer'] },
+		by_due: { on: ['due'] },
+		find: { text: ['note'] },
+		by_colour: {
+			description: 'Orders of a similar colour',
+			dim: 3,
+			metric: 'l2',
+			vector: 'colour',
+			input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
+			candidates: 4,
+			probe: (q) => ({ vector: q.lab, where: { status: { eq: 'ordered' } } }),
+			rerank: (q, row) => (Array.isArray(row.colour) ? row.colour.length - q.lab.length : undefined)
+		}
 	}
 });
 
 export const order_lines = model('order_lines', {
 	description: 'Lines of an order',
-	label: 'item',
+	record_label: 'record.item',
 	fields: {
 		order: { kind: 'ref', to: 'orders', inverse: 'lines', owned: true },
 		item: { kind: 'text' },
 		qty: { kind: 'decimal', scale: 3 },
-		price: { kind: 'money' }
-	},
-	computed: {
+		price: { kind: 'money' },
 		amount: {
 			kind: 'money',
-			expr: { round: [{ times: [{ field: 'price' }, { field: 'qty' }] }, 2] }
+			computed: { round: [{ times: [{ field: 'price' }, { field: 'qty' }] }, 2] }
 		}
 	},
+
 	outputs: { default: { fields: 'all' } }
 });
 
 export const notices = model('notices', {
 	description: 'Supplier notices mirrored from the inbox',
-	label: 'subject',
+	record_label: 'record.subject',
 	key: ['inbox', 'message_id'],
 	fields: {
 		inbox: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'support_mail' } } },
@@ -298,10 +295,7 @@ export const notices = model('notices', {
 		subject: { kind: 'text' },
 		received_at: { kind: 'instant' }
 	},
-	search: {
-		text: ['subject'],
-		semantic: { fields: ['subject'], model: 'text_small', dim: 1536 }
-	},
+
 	outputs: { default: { fields: 'all' } },
 	syncs: {
 		// one way in: the mailbox's messages are its deliveries
@@ -327,12 +321,16 @@ export const notices = model('notices', {
 				};
 			}
 		}
+	},
+	indexes: {
+		find: { text: ['subject'] },
+		semantic: { semantic: { fields: ['subject'], model: 'text_small', dim: 1536 } }
 	}
 });
 
 export const notice_notes = model('notice_notes', {
 	description: 'What we add about a notice',
-	label: 'notice',
+	record_label: 'record.notice',
 	fields: {
 		notice: { kind: 'ref', to: 'notices', inverse: 'notes', owned: true },
 		integration: { kind: 'ref', to: 'sys_integration', optional: true },
@@ -346,7 +344,7 @@ export const notice_notes = model('notice_notes', {
 
 export const sites = model('sites', {
 	description: 'Customer sites',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text', max: 120 },
 		customer: {
@@ -362,13 +360,14 @@ export const sites = model('sites', {
 		location: { kind: 'point', optional: true },
 		open: { kind: 'period', of: 'date' },
 		opens_at: { kind: 'time', optional: true },
-		slot: { kind: 'duration', default: '30min' },
-		photos: { kind: 'file', accept: ['image/*'], max: '5MiB', multiple: true, optional: true },
+		slot: { kind: 'int', default: 1800 },
+		photos: { kind: 'file', accept: ['image/*'], max: '5MiB', many: true, optional: true },
 		checklist: {
 			kind: 'json',
 			shape: {
-				kind: 'list',
-				of: { kind: 'object', fields: { item: { kind: 'text' }, done: { kind: 'bool' } } }
+				kind: 'object',
+				fields: { item: { kind: 'text' }, done: { kind: 'bool' } },
+				many: true
 			}
 		},
 		rating: { kind: 'custom', of: 'rating', optional: true },
@@ -376,7 +375,7 @@ export const sites = model('sites', {
 	},
 	constraints: {
 		no_overlapping_sites: { no_overlap: 'open', per: ['name'] },
-		zoned: { locked: { zone: { isNull: false } } }
+		zoned: { locked: { zone: { is_null: false } } }
 	},
 	outputs: {
 		default: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] },
@@ -387,7 +386,7 @@ export const sites = model('sites', {
 
 export const products = model('products', {
 	description: 'Products from the ledger',
-	label: 'name',
+	record_label: 'record.name',
 	key: ['source', 'external_code'],
 	fields: {
 		source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'kingdee' } } },
@@ -425,7 +424,7 @@ export const products = model('products', {
 
 export const entries = model('entries', {
 	description: "Calendar entries mirrored from members' calendars",
-	label: 'subject',
+	record_label: 'record.subject',
 	key: ['account', 'calendar_id', 'external_id'],
 	fields: {
 		account: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'calendar' } } },
@@ -472,7 +471,7 @@ export const rating = custom_field({
  */
 export const base = {
 	description: 'x',
-	label: 'note',
+	record_label: 'record.note',
 	fields: { note: { kind: 'text', optional: true } },
 	outputs: { default: { fields: 'all' } }
 } as const;

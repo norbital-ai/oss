@@ -54,7 +54,7 @@ type Family<K> = K extends { kind: NumKind }
 			? 'text'
 			: K extends { kind: 'seq' }
 				? 'num'
-				: K extends { kind: 'id'; of: infer T }
+				: K extends { kind: 'ref'; to: infer T }
 					? `id:${T & string}`
 					: K extends { kind: infer X extends string }
 						? X
@@ -68,7 +68,7 @@ type NumericKind<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
 	: K extends { kind: 'int' | 'number' | 'count' }
 		? { kind: 'number' }
 		: K;
-type Ordered = { kind: NumKind | 'date' | 'instant' | 'time' | 'duration' | 'text' | 'seq' };
+type Ordered = { kind: NumKind | 'date' | 'instant' | 'time' | 'text' | 'seq' };
 
 // Operands a value position admits, by kind; S = static (check, unique, ref `where`): values and fields only.
 type Dyn<K, S> = S extends true
@@ -77,13 +77,13 @@ type Dyn<K, S> = S extends true
 		| (K extends { kind: 'text'; format: 'phone' } ? { var: 'requestor.phone' } : never)
 		/** The anonymous identity (`__Secure-bolt-visitor`): guest-owned rows on a text field, scoped per browser. */
 		| (K extends { kind: 'text' } ? { var: 'requestor.visitor' } : never)
-		| (K extends { kind: 'id'; of: 'sys_user' } ? { var: 'requestor.id' } : never)
+		| (K extends { kind: 'ref'; to: 'sys_user' } ? { var: 'requestor.id' } : never)
 		/** The instance an envoy turn arrived on, or a sync body runs for; null for every other requestor. */
-		| (K extends { kind: 'id'; of: 'sys_integration' } ? { var: 'requestor.instance' } : never)
-		| (K extends { kind: 'id' } ? { var: 'requestor.party' } : never);
+		| (K extends { kind: 'ref'; to: 'sys_integration' } ? { var: 'requestor.instance' } : never)
+		| (K extends { kind: 'ref' } ? { var: 'requestor.party' } : never);
 type DynList<K, S> = S extends true
 	? never
-	: | (K extends { kind: 'id' } ? { var: `requestor.scopes.${PolicyName}` } : never)
+	: | (K extends { kind: 'ref' } ? { var: `requestor.scopes.${PolicyName}` } : never)
 		| (K extends { kind: 'text'; format: 'team' }
 				? { var: 'requestor.teams' | 'requestor.teamTree' }
 				: never);
@@ -97,7 +97,7 @@ type ScalarOps<M, K, S> = {
 	ne?: Val<M, K, S>;
 	in?: readonly Literal<K>[] | DynList<K, S>;
 	nin?: readonly Literal<K>[] | DynList<K, S>;
-	isNull?: boolean;
+	is_null?: boolean;
 } & (K extends Ordered
 	? { lt?: Val<M, K, S>; lte?: Val<M, K, S>; gt?: Val<M, K, S>; gte?: Val<M, K, S> }
 	: {}) &
@@ -124,22 +124,22 @@ export type Ops<M, K, S = false> = K extends { kind: 'text' | 'enum'; many: true
 					contains?: PeriodLit<K> | Dyn<{ kind: K extends { of: 'date' } ? 'date' : 'instant' }, S>;
 					overlaps?: PeriodArg<K, S>;
 					within?: PeriodArg<K, S>;
-					isNull?: boolean;
+					is_null?: boolean;
 				}
 			: K extends { kind: 'point' }
-				? { near?: readonly [Point, number]; within?: Shape; isNull?: boolean }
+				? { near?: readonly [Point, number]; within?: Shape; is_null?: boolean }
 				: K extends { kind: 'json' }
 					? {
-							isNull?: boolean;
+							is_null?: boolean;
 							contains?: Json;
 							/** A json list with no items (or null); `false`: a non-empty list. */ isEmpty?: boolean;
 						}
 					: K extends { kind: 'file' | 'vector' | 'custom' }
-						? { isNull?: boolean }
+						? { is_null?: boolean }
 						: ScalarOps<M, NumericKind<K>, S>
 		: ScalarOps<M, NumericKind<K>, S>;
 
-type IdOps<T extends string, S> = ScalarOps<never, { kind: 'id'; of: T }, S>;
+type IdOps<T extends string, S> = ScalarOps<never, { kind: 'ref'; to: T }, S>;
 
 // X = exposure: a model name (its root layer), a layer path (`'orders.lines'`: that layer's fields), or 'model' for
 // an unexposed model-level predicate; O = the root's read output. A hop crosses only a layer X declares in O and lands
@@ -164,8 +164,8 @@ type OneRelWhere<M, R, X, O> = [RefWhere<M, R, X, O>] extends [never]
 		| (R extends Crossable<M, X, R, O> ? { is: Next<OneTarget<M, R>, X, R, O> } : never)
 	: RefWhere<M, R, X, O>;
 type CmpOps<V> = { eq?: V; ne?: V; lt?: V; lte?: V; gt?: V; gte?: V };
-type Summable = { kind: 'int' | 'decimal' | 'money' | 'duration' };
-/** Child fields a child aggregate may name: `sum`/`avg` numeric or duration, `min`/`max` also dates and instants. */
+type Summable = { kind: 'int' | 'decimal' | 'money' };
+/** Child fields a child aggregate may name: `sum`/`avg` numeric, `min`/`max` also dates and instants. */
 type AggOf<T, X, K, O> = {
 	[P in Visible<T, X, keyof Columns<T> & string, O>]: Columns<T>[P] extends K
 		? { of: P } & CmpOps<Literal<Columns<T>[P]>>

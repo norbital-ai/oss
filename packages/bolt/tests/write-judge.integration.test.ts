@@ -18,7 +18,7 @@ const m = Result.getOrThrow(
 		models: {
 			orders: {
 				description: '',
-				label: 'region',
+				record_label: 'record.region',
 				fields: {
 					region: { kind: 'text' },
 					amount: { kind: 'decimal', scale: 2 },
@@ -27,7 +27,7 @@ const m = Result.getOrThrow(
 			},
 			employees: {
 				description: '',
-				label: 'face',
+				record_label: 'record.face',
 				fields: {
 					face: { kind: 'enum', values: ['NONE', 'PENDING', 'APPROVED'] },
 					checked_at: { kind: 'instant', optional: true }
@@ -223,7 +223,7 @@ describe('engine/write: columns, then one check over the stored and the written 
 					kind: 'committed'
 				});
 				expect(yield* update('orders', north, { note: 'w' }, as(['routed']))).toMatchObject({
-					kind: 'pendingApproval'
+					kind: 'pending_approval'
 				});
 				expect(yield* update('orders', north, { amount: '5' }, rep)).toMatchObject({
 					kind: 'refused',

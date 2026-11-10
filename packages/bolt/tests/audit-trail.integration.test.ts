@@ -14,7 +14,13 @@ import { manifest as base } from './write-fixture.ts';
 
 const manifest: EngineManifest = {
 	...base,
-	models: { items: { description: 'Item', label: 'title', fields: { title: { kind: 'text' } } } },
+	models: {
+		items: {
+			description: 'Item',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		}
+	},
 	relationships: {},
 	exposures: {
 		items: {

@@ -40,11 +40,12 @@ export const shop = schema({
 					floor: { kind: 'int', optional: true }
 				}
 			},
-			labels: { kind: 'list', of: { kind: 'text' }, default: [] },
+			labels: { kind: 'text', many: true, default: [] },
 			events: {
-				kind: 'list',
-				default: [],
-				of: { kind: 'object', fields: { at: { kind: 'instant' }, what: { kind: 'text' } } }
+				kind: 'object',
+				fields: { at: { kind: 'instant' }, what: { kind: 'text' } },
+				many: true,
+				default: []
 			}
 		},
 		through: { tags: { table: 'order_tag', from: 'order', to: 'tag' } },

@@ -12,11 +12,31 @@ import { manifest as base } from './write-fixture.ts';
 const manifest: EngineManifest = {
 	...base,
 	models: {
-		roots: { description: 'A root', label: 'name', fields: { name: { kind: 'text' } } },
-		archives: { description: 'An archive', label: 'name', fields: { name: { kind: 'text' } } },
-		branches: { description: 'A branch', label: 'name', fields: { name: { kind: 'text' } } },
-		leaves: { description: 'A leaf', label: 'name', fields: { name: { kind: 'text' } } },
-		watchers: { description: 'A watcher', label: 'name', fields: { name: { kind: 'text' } } }
+		roots: {
+			description: 'A root',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
+		archives: {
+			description: 'An archive',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
+		branches: {
+			description: 'A branch',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
+		leaves: {
+			description: 'A leaf',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
+		watchers: {
+			description: 'A watcher',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		'branches.root': { to: 'roots', onDelete: 'cascade' },
@@ -101,10 +121,10 @@ const fixture = Effect.gen(function* () {
 		approvals = Context.get(context, Approvals),
 		admin = t.as(t.admin).authority,
 		requester = t.as(
-			t.member(['requester'], { teams: ['requesters'], teamPath: ['requesters'] })
+			t.member(['requester'], { teams: ['requesters'], team_path: ['requesters'] })
 		).authority,
 		reviewer = t.as(
-			t.member(['reviewer'], { teams: ['reviewers'], teamPath: ['reviewers'] })
+			t.member(['reviewer'], { teams: ['reviewers'], team_path: ['reviewers'] })
 		).authority;
 	const act = (
 		model: Model,
@@ -237,7 +257,7 @@ describe('database-owned referential actions', () => {
 						[{ target: f.watcher, set: { name: 'Held watcher' } }],
 						f.requester
 					);
-					assert.ok(held.outcome.kind === 'pendingApproval');
+					assert.ok(held.outcome.kind === 'pending_approval');
 					const holding = yield* f.snapshot();
 					const refused = yield* Effect.result(f.t.db.write(f.rawDelete));
 					assert.ok(Result.isFailure(refused));
@@ -332,7 +352,7 @@ describe('database-owned referential actions', () => {
 					const key = randomUUID(),
 						input = [{ target: f.root }];
 					const first = yield* f.act('roots', 'delete', input, f.requester, key);
-					assert.ok(first.outcome.kind === 'pendingApproval');
+					assert.ok(first.outcome.kind === 'pending_approval');
 					const requestId = first.outcome.requestId;
 					yield* f.cleanJournal;
 					assert.deepEqual(yield* f.counts(), [{ roots: 0, branches: 0, leaves: 0, archives: 1 }]);

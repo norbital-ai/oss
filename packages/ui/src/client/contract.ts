@@ -29,7 +29,7 @@ export type HistoryEntry = {
 	readonly changed: Values;
 	readonly schemaVersion?: string | null;
 	readonly legacy?: boolean;
-	readonly uncompatible?: readonly string[];
+	readonly incompatible?: readonly string[];
 	/** Whether the whole revision still projects into today's representation. */
 	readonly valid?: boolean;
 };
@@ -45,7 +45,7 @@ export type HistorySnapshot = {
 	readonly fields: Readonly<Record<string, Kind>>;
 	readonly values: Values;
 	readonly compatible: Values;
-	readonly uncompatible: readonly string[];
+	readonly incompatible: readonly string[];
 };
 /**
  * A read (`query`, `aggregate`, `history`), as bolt's `Query<T>`: read in a component (`.current`, `.loading`, `.error`)
@@ -72,7 +72,7 @@ export type Outcome =
 			records: readonly { model: string; id: string; revision: number }[];
 	  }
 	| {
-			kind: 'pendingApproval';
+			kind: 'pending_approval';
 			requestId: string;
 			records: readonly { model: string; id: string; revision: number }[];
 	  }
@@ -85,7 +85,7 @@ export type Outcome =
 	/** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`runs`). */
 	| { kind: 'running'; run: string };
 /** Fields needed to present an outcome; actions may return any typed output. */
-export type ActSuccess = Extract<Outcome, { kind: 'committed' | 'pendingApproval' | 'running' }>;
+export type ActSuccess = Extract<Outcome, { kind: 'committed' | 'pending_approval' | 'running' }>;
 export type ActFailure = Error &
 	(
 		| {
@@ -125,8 +125,8 @@ export type RunRow = {
 	started?: string | null;
 };
 
-/** A decision on a request's current step (`approvals.decide`); a superseder's `approve` supersedes; `withdraw` is the requester's. */
-export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges' | 'withdraw';
+/** A decision on a request's current step (`approvals.decide`); a superseder's `approve` supersedes. */
+export type ApprovalDecision = 'approve' | 'reject' | 'request_changes';
 /** One step of a request's flow as it was snapshotted when the request opened (or was resubmitted): decided by any of its teams or users. */
 export type ApprovalStep = {
 	readonly name: string;
@@ -153,8 +153,7 @@ export type ApprovalView = {
 	requestor: ApprovalWho;
 	/** Every move, oldest first, each on the step it was taken at, with what a rollback did. */
 	log: readonly {
-		move:
-			'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede' | 'withdraw';
+		move: 'request' | 'approve' | 'reject' | 'request_changes' | 'resubmit' | 'supersede';
 		by: ApprovalWho;
 		at: string;
 		from: string | null;
@@ -190,7 +189,7 @@ export type RowApproval = {
  */
 export type ViewBolt = {
 	/**
-	 * One read request (`query({ <root>: { where?, fields?, orderBy?, limit?, after?, search? }, '<root>.<layer>': { … } })`),
+	 * One read request (`query({ <root>: { where?, fields?, order_by?, limit?, after?, search? }, '<root>.<layer>': { … } })`),
 	 * answered as a page per root; a declared layer nests under its relation in each row.
 	 */
 	query<T = QueryAnswer>(request: { readonly [path: string]: Json }): Query<T>;
@@ -234,8 +233,8 @@ export type ViewBolt = {
 	/** §3.5 rule 11a in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
 	decode?(
 		model: string,
-		q: { where?: Json; orderBy?: Json }
-	): { where: Json; orderBy?: Json; dropped: readonly { path: string; message: string }[] };
+		q: { where?: Json; order_by?: Json }
+	): { where: Json; order_by?: Json; dropped: readonly { path: string; message: string }[] };
 	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai` (P19); rejects when no filter could be built. */
 	describe?:
 		| ((
@@ -247,7 +246,7 @@ export type ViewBolt = {
 					kind: 'text' | 'number' | 'bool';
 					optional?: boolean;
 				}[]
-		  ) => Effect.Effect<{ where?: Json; orderBy?: Json }, Error>)
+		  ) => Effect.Effect<{ where?: Json; order_by?: Json }, Error>)
 		| undefined;
 	/** Rule 16b `filter.options`: the same condition catalogue a description is offered, so the builder renders exactly what it may author. */
 	options?(
@@ -260,7 +259,7 @@ export type ViewBolt = {
 		}[]
 	): Effect.Effect<{ fields: readonly Offer[] }, Error>;
 	approvals: {
-		/** Decides the request's current step; `reason` is required for `reject` and `requestChanges` (and a superseder's approve); the requester may `withdraw`. */
+		/** Decides the request's current step; `reason` is required for `reject` and `request_changes` (and a superseder's approve). */
 		decide(
 			requestId: string,
 			decision: { decision: ApprovalDecision; reason?: string }

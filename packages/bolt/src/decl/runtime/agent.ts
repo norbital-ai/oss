@@ -48,7 +48,7 @@ export type McpBase = {
 	/** A bearer token or OAuth client, by secret name. */
 	auth?:
 		| { bearer: string }
-		| { oauth: { clientId: string; clientSecret?: string; scopes?: readonly string[] } };
+		| { oauth: { client_id: string; client_secret?: string; scopes?: readonly string[] } };
 	/** An allowlist of the server's tools; absent = every tool it lists. */
 	tools?: readonly string[];
 };
@@ -59,7 +59,7 @@ export type McpSpec = {
 	url: SecretName;
 	auth?:
 		| { bearer: SecretName }
-		| { oauth: { clientId: SecretName; clientSecret?: SecretName; scopes?: readonly string[] } };
+		| { oauth: { client_id: SecretName; client_secret?: SecretName; scopes?: readonly string[] } };
 	/** An allowlist of the server's tools; absent = every tool it lists. */
 	tools?: readonly string[];
 };

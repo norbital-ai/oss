@@ -1,5 +1,12 @@
 // Typed input decoding and reference discovery share std/kind's one codec.
-import { inputSchema, type Fields, type Kind, type Value, type Where } from '@norbital-ai/std/kind';
+import {
+	item_kind,
+	inputSchema,
+	type Fields,
+	type Kind,
+	type Value,
+	type Where
+} from '@norbital-ai/std/kind';
 import { Array as EffectArray, Effect, Predicate, Result, Schema, SchemaIssue } from 'effect';
 import { exposureOf, defaultFields } from '@norbital-ai/store';
 import type { Json } from '../../decl/values.ts';
@@ -32,29 +39,28 @@ const format = SchemaIssue.makeFormatterStandardSchemaV1({
 /** A keyed list's items (`{ kind: 'list', key }`) each carry a distinct, non-empty key; offenders by path. */
 function keyProblems(kind: Kind, raw: unknown, at: string, out: Decoded['problems']): void {
 	const join = (k: string) => (at ? `${at}.${k}` : k);
+	if (kind.many === true) {
+		if (!EffectArray.isArray(raw)) return;
+		const key = 'key' in kind && typeof kind.key === 'string' ? kind.key : undefined;
+		const field = key !== undefined && kind.kind === 'object' ? kind.fields[key] : undefined;
+		const seen = new Set<string>();
+		raw.forEach((item, index) => {
+			keyProblems(item_kind(kind), item, join(String(index)), out);
+			if (key === undefined || !Predicate.isObject(item)) return;
+			const v = item[key];
+			const text =
+				typeof v === 'number' ? String(v) : typeof v === 'string' && v !== '' ? v : undefined;
+			// an absent required key is already the codec's `is required`
+			if (text === undefined) {
+				if (v !== undefined || field === undefined || field.optional === true)
+					out.push({ path: join(`${index}.${key}`), message: 'is required: it keys the list' });
+			} else if (seen.has(text))
+				out.push({ path: join(`${index}.${key}`), message: `repeats the key '${text}'` });
+			else seen.add(text);
+		});
+		return;
+	}
 	switch (kind.kind) {
-		case 'list': {
-			if (!EffectArray.isArray(raw)) return;
-			const key = 'key' in kind && typeof kind.key === 'string' ? kind.key : undefined;
-			const field =
-				key !== undefined && kind.of.kind === 'object' ? kind.of.fields[key] : undefined;
-			const seen = new Set<string>();
-			raw.forEach((item, index) => {
-				keyProblems(kind.of, item, join(String(index)), out);
-				if (key === undefined || !Predicate.isObject(item)) return;
-				const v = item[key];
-				const text =
-					typeof v === 'number' ? String(v) : typeof v === 'string' && v !== '' ? v : undefined;
-				// an absent required key is already the codec's `is required`
-				if (text === undefined) {
-					if (v !== undefined || field === undefined || field.optional === true)
-						out.push({ path: join(`${index}.${key}`), message: 'is required: it keys the list' });
-				} else if (seen.has(text))
-					out.push({ path: join(`${index}.${key}`), message: `repeats the key '${text}'` });
-				else seen.add(text);
-			});
-			return;
-		}
 		case 'record':
 			if (Predicate.isObject(raw))
 				for (const [key, item] of Object.entries(raw)) keyProblems(kind.of, item, join(key), out);
@@ -114,12 +120,11 @@ export function decodeInput(
 				}
 				const resolvedShape = expand(shape, path, new Set([...seen, kind.of]));
 				const resolved: Kind =
-					kind.many === true ? { kind: 'list', of: resolvedShape } : resolvedShape;
+					kind.many === true ? { ...resolvedShape, many: true } : resolvedShape;
 				const { optional: _optional, default: _default, ...body } = resolved;
 				const { kind: _kind, of: _of, many: _many, ...common } = kind;
 				return { ...body, ...common };
 			}
-			case 'list':
 			case 'record':
 				return { ...kind, of: expand(kind.of, path, seen) };
 			case 'object':
@@ -178,19 +183,36 @@ export function decodeInput(
 				if (shape !== undefined) visit(shape, value, at);
 				return;
 			}
-			case 'id':
-				if (typeof value === 'string')
+			case 'ref': {
+				const model =
+					typeof kind.to === 'string'
+						? kind.to
+						: Predicate.isObject(value) &&
+							  typeof value.model === 'string' &&
+							  kind.to.includes(value.model)
+							? value.model
+							: undefined;
+				const id =
+					typeof value === 'string'
+						? value
+						: Predicate.isObject(value) && typeof value.id === 'string'
+							? value.id
+							: undefined;
+				if (model !== undefined && id !== undefined)
 					refs.push({
-						model: kind.of,
-						id: value,
+						model,
+						id,
 						field: at,
-						...(kind.where === undefined ? {} : { where: kind.where })
+						...(kind.where === undefined
+							? {}
+							: {
+									where: Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
+										kind.where
+									)
+								})
 					});
 				return;
-			case 'list':
-				if (EffectArray.isArray<typeof value>(value))
-					value.forEach((item, index) => visit(kind.of, item, `${at}.${index}`));
-				return;
+			}
 			case 'record':
 				if (Predicate.isObject(value))
 					for (const [key, item] of Object.entries(value))
@@ -245,8 +267,8 @@ export function decodeInput(
 				visit(kind, decoded.success, at);
 				return;
 			}
-			if (kind.kind === 'list' && EffectArray.isArray(raw))
-				raw.forEach((item, index) => valid(kind.of, item, `${at}.${index}`));
+			if (kind.many === true && EffectArray.isArray(raw))
+				raw.forEach((item, index) => valid(item_kind(kind), item, `${at}.${index}`));
 			else if (kind.kind === 'record' && Predicate.isObject(raw))
 				for (const [key, item] of Object.entries(raw)) valid(kind.of, item, `${at}.${key}`);
 			else if (kind.kind === 'object' && Predicate.isObject(raw)) {
@@ -281,9 +303,9 @@ export function decodeInput(
 /** A declared output is decoded once at the guest boundary, including model rows and their native field values. */
 export function outputSchema(
 	manifest: import('../manifest.ts').EngineManifest,
-	output: import('../../decl/fields.ts').OutputKind
+	output: import('@norbital-ai/std/kind').OutputKind
 ): Schema.Decoder<Wired> {
-	const fields = (entries: Readonly<Record<string, import('../../decl/fields.ts').OutputKind>>) =>
+	const fields = (entries: Readonly<Record<string, import('@norbital-ai/std/kind').OutputKind>>) =>
 		Schema.Struct(
 			Object.fromEntries(
 				Object.entries(entries).map(
@@ -307,7 +329,7 @@ export function outputSchema(
 			const info = storeSync(exposureOf(catalog, output.of));
 			const identity = (name: string) =>
 				catalog.models.get(name)?.fields.get('id')?.pg === 'uuid'
-					? inputSchema({ kind: 'id', of: name })
+					? inputSchema({ kind: 'ref', to: name })
 					: Schema.String;
 			const columns: Record<
 				string,
@@ -368,14 +390,10 @@ export function outputSchema(
 			if (shape === undefined)
 				throw BoltError.make('badAnswer', 'guest', `Unknown custom field '${output.of}'.`);
 			codec = outputSchema(manifest, shape);
-			if (output.many) codec = Schema.Array(codec);
 			break;
 		}
 		case 'json':
 			codec = output.shape === undefined ? Schema.Json : outputSchema(manifest, output.shape);
-			break;
-		case 'list':
-			codec = Schema.Array(outputSchema(manifest, output.of));
 			break;
 		case 'record':
 			codec = Schema.Record(Schema.String, outputSchema(manifest, output.of));
@@ -403,11 +421,12 @@ export function outputSchema(
 		default:
 			return inputSchema(output);
 	}
+	if (output.many === true) codec = Schema.Array(codec);
 	return output.optional === true ? Schema.NullOr(codec) : codec;
 }
 export const decodeOutput = (
 	manifest: import('../manifest.ts').EngineManifest,
-	output: import('../../decl/fields.ts').OutputKind,
+	output: import('@norbital-ai/std/kind').OutputKind,
 	value: Json
 ): Effect.Effect<Json, BoltError> =>
 	Effect.try({

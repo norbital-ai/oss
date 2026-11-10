@@ -422,8 +422,8 @@ export type Integration<N extends string, S> = {
  * export default integration('crm', {
  * 	description: 'The CRM account.',
  * 	driver: 'http',
- * 	http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'apiKey' } },
- * 	credential: { apiKey: { kind: 'text', label: 'API key' }, signingSecret: { kind: 'text', label: 'Webhook signing secret' } },
+ * 	http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'api_key' } },
+ * 	credential: { api_key: { kind: 'text', label: 'API key' }, signingSecret: { kind: 'text', label: 'Webhook signing secret' } },
  * 	webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
  * 	rate: '10/s',
  * 	test: function* (ctx) {

@@ -106,7 +106,7 @@ describe('the session cookie', () => {
 							...manifest,
 							models: {
 								photos: {
-									label: 'title',
+									record_label: 'record.title',
 									fields: {
 										title: { kind: 'text' },
 										visible: { kind: 'bool' },

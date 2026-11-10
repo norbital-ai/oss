@@ -234,7 +234,7 @@ it.live(
 					models: {
 						photos: {
 							description: 'A photo',
-							label: 'name',
+							record_label: 'record.name',
 							fields: {
 								name: { kind: 'text' },
 								photo: { kind: 'file', accept: ['image/png'], max: '20MiB' }
@@ -302,7 +302,7 @@ it.live(
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const file = { kind: 'file', accept: ['*/*'], max: '20MiB', multiple: true } as const;
+				const file = { kind: 'file', accept: ['*/*'], max: '20MiB', many: true } as const;
 				const handover = {
 					...manifest,
 					policies: {
@@ -427,7 +427,7 @@ it.live("a file sync's upload keeps its dotted field: `<model>.$import.<sync>`",
 				models: {
 					documents: {
 						description: 'Documents',
-						label: 'title',
+						record_label: 'record.title',
 						fields: { title: { kind: 'text' } }
 					}
 				},

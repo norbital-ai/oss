@@ -268,7 +268,7 @@ export function makeRead(e: SyncEngine) {
 		const o = (yield* e.act({
 			model: s.model,
 			verb: 'upsert',
-			onConflict: 'update',
+			on_conflict: 'update',
 			input: upserts,
 			key,
 			issuedAt: b.now,

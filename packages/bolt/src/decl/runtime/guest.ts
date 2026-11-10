@@ -242,7 +242,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				request: cross('request', 'facility'),
 				web: { read: cross('web.read', 'facility') },
 				files: Object.fromEntries(
-					['meta', 'get', 'url', 'text', 'table', 'sheet', 'image', 'put'].map((name) => [
+					['meta', 'get', 'url', 'image', 'put'].map((name) => [
 						name,
 						cross(`files.${name}`, 'facility')
 					])

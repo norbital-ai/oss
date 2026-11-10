@@ -77,7 +77,7 @@ const member = (
 		admin: o.admin ?? false,
 		party: null,
 		teams: o.team === undefined ? [] : [o.team],
-		teamPath: o.team === undefined ? [] : [o.team]
+		team_path: o.team === undefined ? [] : [o.team]
 	},
 	admin: o.admin ?? false,
 	policies: [],
@@ -112,7 +112,7 @@ const manifest: EngineManifest = {
 	models: {
 		tasks: {
 			description: 'A task',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' } },
 			search: { text: ['title'] }
 		}
@@ -462,7 +462,7 @@ describe('fewer calls for the common paths', () => {
 						...manifest.models,
 						task_lines: {
 							description: 'An owned line',
-							label: 'value',
+							record_label: 'record.value',
 							fields: { value: { kind: 'text' } }
 						}
 					},
@@ -907,12 +907,12 @@ describe('fewer calls for the common paths', () => {
 				for (const option of [
 					'where',
 					'fields',
-					'orderBy',
+					'order_by',
 					'limit',
 					'after',
 					'search',
 					'aggregate',
-					'asOf'
+					'as_of'
 				])
 					expect(schema).toContain(`"${option}"`);
 			})
@@ -1382,7 +1382,7 @@ describe('describe_workspace', () => {
 		models: {
 			trial: {
 				description: 'a colour-matching attempt',
-				label: 'code',
+				record_label: 'record.code',
 				fields: {
 					code: { kind: 'text' },
 					status: {
@@ -1394,10 +1394,10 @@ describe('describe_workspace', () => {
 			},
 			trial_line: {
 				description: 'one measured value',
-				label: 'value',
+				record_label: 'record.value',
 				fields: { value: { kind: 'text' } }
 			},
-			secret: { description: 'hidden', label: 'x', fields: { x: { kind: 'text' } } }
+			secret: { description: 'hidden', record_label: 'record.x', fields: { x: { kind: 'text' } } }
 		},
 		relationships: { 'trial_line.trial': { to: 'trial', inverse: 'lines', owned: true } },
 		exposures: {
@@ -1505,7 +1505,7 @@ describe('describe_workspace', () => {
 				`model_${n}`,
 				{
 					description: `the ${n}th model of a large workspace`,
-					label: 'x',
+					record_label: 'record.x',
 					fields: { x: { kind: 'text' as const } }
 				}
 			])

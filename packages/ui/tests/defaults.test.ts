@@ -129,7 +129,7 @@ test('labels: a FK names its target, the catalog outranks a declared label, a mo
 	assert.equal(messages.singular({ t }, 'status'), 'Status');
 });
 
-test('a record title is its label fields by kind; a target without a readable label is a dash, never its id', () => {
+test('a record title follows its expression and falls back to the target id', () => {
 	const fields: Fields = {
 		code: { kind: 'text' },
 		due_on: { kind: 'date' },
@@ -146,11 +146,12 @@ test('a record title is its label fields by kind; a target without a readable la
 	);
 	const cat: NonNullable<KindsHost['catalog']> = {
 		jobs: {
+			record_label: 'record.title',
 			label: ['title'],
 			fields: { title: { kind: 'text' } },
 			relations: { account: { targets: ['accounts'] } }
 		},
-		accounts: { label: ['name'], fields: { name: { kind: 'text' } } }
+		accounts: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 	};
 	const [r] = relations.unref(
 		cat,
@@ -162,7 +163,7 @@ test('a record title is its label fields by kind; a target without a readable la
 	const refs = Schema.decodeUnknownSync(
 		Schema.Struct({ $refs: Schema.Record(Schema.String, Schema.Struct({ text: Schema.String })) })
 	)(r);
-	assert.equal(refs.$refs.account.text, '—');
+	assert.equal(refs.$refs.account.text, 'a1');
 });
 
 test('CSV cells: enum words, ISO dates and instants, relation labels', () => {
@@ -192,6 +193,8 @@ test('CSV cells: enum words, ISO dates and instants, relation labels', () => {
 
 test('search falls back to the label text fields', () => {
 	const target: NonNullable<KindsHost['catalog']>[string] = {
+		record_label:
+			"[record.code != null ? string(record.code) : '', record.name != null ? string(record.name) : ''].filter(part, part != '').join(' · ')",
 		label: ['code', 'name'],
 		fields: { code: { kind: 'seq' }, name: { kind: 'text' } }
 	};
@@ -269,6 +272,7 @@ const records = () => new URL(location.href).searchParams.getAll('record');
 
 const jobs: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -280,7 +284,7 @@ const jobs: NonNullable<KindsHost['catalog']> = {
 		relations: { account_id: { targets: ['accounts'], optional: true } },
 		update: { columns: ['title', 'status'] }
 	},
-	accounts: { label: ['name'], fields: { name: { kind: 'text' } } }
+	accounts: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 };
 const ROW = {
 	id: 'j1',
@@ -358,7 +362,11 @@ test("Table: search falls back to the label fields; the empty text keeps the lab
 		t: (key) => (key === 'models.sow_documents.label' ? 'SOW documents' : key)
 	});
 	const cat: NonNullable<KindsHost['catalog']> = {
-		sow_documents: { label: ['title'], fields: { title: { kind: 'text' } } }
+		sow_documents: {
+			record_label: 'record.title',
+			label: ['title'],
+			fields: { title: { kind: 'text' } }
+		}
 	};
 	const t = await show(
 		{ part: 'table', props: { of: 'sow_documents', columns: ['title'] } },
@@ -652,9 +660,13 @@ test('period labels retain month/year precision, including lists and open ends',
 		'October 2026 – …'
 	);
 	assert.equal(
-		k.format({ kind: 'list', of: month }, [{ from: '2026-10-01', to: '2026-10-31' }], {
-			locale: 'en-US'
-		}),
+		k.format(
+			{ kind: 'json', shape: month, many: true },
+			[{ from: '2026-10-01', to: '2026-10-31' }],
+			{
+				locale: 'en-US'
+			}
+		),
 		'October 2026'
 	);
 	assert.equal(

@@ -16,6 +16,11 @@ export type TimePrecision = 'hour' | 'minute';
 export type Precision = DatePrecision | TimePrecision;
 
 type Common = {
+	readonly storage?: 'int64';
+	readonly many?: true;
+	readonly min_items?: number;
+	readonly max_items?: number;
+	readonly key?: string;
 	readonly optional?: true;
 	readonly default?: Json;
 	readonly unique?: true;
@@ -41,7 +46,6 @@ export type Kind = Common &
 		| { readonly kind: 'money'; readonly currency?: string; readonly scale?: number }
 		| { readonly kind: 'currency' }
 		| { readonly kind: 'bool' }
-		| { readonly kind: 'duration' }
 		| { readonly kind: 'point' }
 		| { readonly kind: 'date'; readonly precision?: DatePrecision }
 		| { readonly kind: 'instant'; readonly precision?: Precision }
@@ -69,16 +73,15 @@ export type Kind = Common &
 		| {
 				readonly kind: 'sum';
 				readonly of: string;
-				readonly where?: object;
+				readonly where?: Where;
 				readonly money?: { readonly currency?: string };
 		  }
-		| { readonly kind: 'count'; readonly of: string; readonly where?: object }
+		| { readonly kind: 'count'; readonly of: string; readonly where?: Where }
 		| { readonly kind: 'json'; readonly shape?: Kind }
 		| {
 				readonly kind: 'file';
 				readonly accept: readonly string[];
 				readonly max: string;
-				readonly multiple?: true;
 		  }
 		| { readonly kind: 'vector'; readonly dim: number; readonly metric: 'l2' | 'cosine' | 'ip' }
 		| { readonly kind: 'custom'; readonly of: string; readonly many?: true }
@@ -89,10 +92,8 @@ export type Kind = Common &
 				readonly inverse?: string;
 				readonly owned?: true;
 				readonly onDelete?: 'restrict' | 'cascade' | 'setNull';
-				readonly where?: object;
+				readonly where?: Where;
 		  }
-		| { readonly kind: 'id'; readonly of: string; readonly where?: Where }
-		| ({ readonly kind: 'list'; readonly of: Kind; readonly key?: string } & Range)
 		| { readonly kind: 'object'; readonly fields: Fields; readonly rest?: Kind }
 		| {
 				readonly kind: 'union';
@@ -103,6 +104,95 @@ export type Kind = Common &
 		| { readonly kind: 'union'; readonly of: readonly Kind[] }
 		| { readonly kind: 'record'; readonly of: Kind }
 	);
+/** The shared recursive descriptor codec is inert until a boundary uses it. */
+export const KindSchema: Schema.Codec<Kind> = /* @__PURE__ */ (() => {
+	const Bool = Schema.optionalKey(Schema.Literal(true));
+	const Num = Schema.optionalKey(Schema.Number);
+	const Str = Schema.optionalKey(Schema.String);
+	const Strings = Schema.Array(Schema.String);
+	/** A where literal inside a declaration: an object here, decoded against the table by the where decoder when used. */
+	const WhereLiteral = Schema.Record(Schema.String, Schema.Json);
+	const DatePrecision = Schema.Literals(['year', 'month', 'week', 'day']);
+	const Precision = Schema.Literals(['year', 'month', 'week', 'day', 'hour', 'minute']);
+	/** What every kind takes: `was` names the field it renames (a migration hint). */
+	const common = {
+		many: Bool,
+		min_items: Num,
+		max_items: Num,
+		key: Str,
+		optional: Bool,
+		default: Schema.optionalKey(Schema.Json),
+		unique: Bool,
+		label: Str,
+		help: Str,
+		hidden: Bool,
+		was: Str,
+		storage: Schema.optionalKey(Schema.Literal('int64'))
+	};
+
+	/** One field's kind: std's kind language (`@norbital-ai/std/kind`), `was` naming the field it renames. */
+
+	const arm = <K extends string, F extends Schema.Struct.Fields>(kind: K, fields: F) =>
+		Schema.Struct({ kind: Schema.Literal(kind), ...common, ...fields });
+	const Nested = Schema.suspend((): Schema.Codec<Kind> => KindSchema);
+	const Fields = Schema.Record(Schema.String, Nested);
+	const ARMS = [
+		arm('text', {
+			format: Schema.optionalKey(
+				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
+			),
+			max: Num,
+			many: Bool
+		}),
+		arm('int', { min: Num, max: Num }),
+		arm('number', { min: Num, max: Num }),
+		arm('decimal', { scale: Schema.Number, precision: Num, min: Num, max: Num }),
+		arm('money', { currency: Str, scale: Num }),
+		arm('currency', {}),
+		arm('bool', {}),
+		arm('point', {}),
+		arm('date', { precision: Schema.optionalKey(DatePrecision) }),
+		arm('instant', { precision: Schema.optionalKey(Precision) }),
+		arm('time', { precision: Schema.optionalKey(Schema.Literals(['hour', 'minute'])) }),
+		arm('period', { of: Schema.Literal('date'), precision: Schema.optionalKey(DatePrecision) }),
+		arm('period', { of: Schema.Literal('instant'), precision: Schema.optionalKey(Precision) }),
+		arm('enum', { values: Strings, many: Bool }),
+		arm('state', {
+			initial: Schema.String,
+			states: Schema.Record(
+				Schema.String,
+				Schema.Struct({
+					to: Schema.optionalKey(Strings),
+					edit: Schema.optionalKey(Schema.Union([Schema.Literals(['all', 'none']), Strings]))
+				})
+			)
+		}),
+		arm('seq', { pattern: Str, per: Schema.optionalKey(Strings) }),
+		arm('sum', {
+			of: Schema.String,
+			where: Schema.optionalKey(WhereLiteral),
+			money: Schema.optionalKey(Schema.Struct({ currency: Str }))
+		}),
+		arm('count', { of: Schema.String, where: Schema.optionalKey(WhereLiteral) }),
+		arm('json', { shape: Schema.optionalKey(Nested) }),
+		arm('file', { accept: Strings, max: Schema.String }),
+		arm('vector', { dim: Schema.Number, metric: Schema.Literals(['l2', 'cosine', 'ip']) }),
+		arm('custom', { of: Schema.String, many: Bool }),
+		arm('ref', {
+			to: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+			inverse: Str,
+			owned: Bool,
+			onDelete: Schema.optionalKey(Schema.Literals(['restrict', 'cascade', 'setNull'])),
+			where: Schema.optionalKey(WhereLiteral)
+		}),
+		arm('object', { fields: Fields, rest: Schema.optionalKey(Nested) }),
+		arm('union', { by: Schema.String, arms: Schema.Record(Schema.String, Fields) }),
+		arm('union', { of: Schema.Array(Nested) }),
+		arm('record', { of: Nested })
+	] as const;
+	return Schema.Union(ARMS);
+})();
+
 /** Named kinds: an object's, an input's or a custom field's fields. */
 export type Fields = { readonly [name: string]: Kind };
 /** The name of a kind. */
@@ -115,12 +205,6 @@ export type OutputKind =
 	| (Common &
 			(
 				| { readonly kind: 'row'; readonly of: string }
-				| {
-						readonly kind: 'list';
-						readonly of: OutputKind;
-						readonly min?: number;
-						readonly max?: number;
-				  }
 				| {
 						readonly kind: 'object';
 						readonly fields: { readonly [name: string]: OutputKind };
@@ -305,7 +389,7 @@ const ORDERED: Traits = { numeric: false, ordered: true, summable: false, sortab
 const PLAIN: Traits = { numeric: false, ordered: false, summable: false, sortable: true };
 const OPAQUE: Traits = { numeric: false, ordered: false, summable: false, sortable: false };
 
-/** Every kind: its one-value codec (`many`, `multiple` and `optional` are `inputSchema`'s) and its traits. */
+/** Every kind: its one-value codec (`many` and `optional` are `inputSchema`'s) and its traits. */
 export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 	text: {
 		schema: (k) =>
@@ -329,8 +413,6 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 		schema: () => numeric(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 		traits: NUMBER
 	},
-	/** Whole seconds. */
-	duration: { schema: () => numeric(Schema.Int), traits: NUMBER },
 	currency: { schema: () => Schema.String, traits: PLAIN },
 	bool: { schema: () => Schema.Boolean, traits: PLAIN },
 	date: { schema: () => DateValue, traits: ORDERED },
@@ -344,10 +426,6 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 	enum: { schema: (k) => Schema.Literals(k.values), traits: PLAIN },
 	state: { schema: (k) => Schema.Literals(Object.keys(k.states)), traits: PLAIN },
 	seq: { schema: (k) => (k.pattern === undefined ? Schema.Int : Schema.String), traits: PLAIN },
-	id: {
-		schema: () => IdValue,
-		traits: PLAIN
-	},
 	json: {
 		schema: (k) => (k.shape === undefined ? Schema.Json : inputSchema(k.shape)),
 		traits: OPAQUE
@@ -382,17 +460,6 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 			),
 		traits: OPAQUE
 	},
-	list: {
-		schema: (k) =>
-			Schema.Array(inputSchema(k.of)).check(
-				Schema.makeFilter((xs) =>
-					(k.min === undefined || xs.length >= k.min) && (k.max === undefined || xs.length <= k.max)
-						? undefined
-						: 'has the wrong number of items'
-				)
-			),
-		traits: OPAQUE
-	},
 	object: { schema: (k) => fieldsSchema(k.fields, undefined, k.rest), traits: OPAQUE },
 	union: {
 		schema: (k) =>
@@ -408,10 +475,26 @@ export const KIND: { readonly [K in FieldKind]: Entry<K> } = {
 	record: { schema: (k) => Schema.Record(Schema.String, inputSchema(k.of)), traits: OPAQUE }
 };
 
+/** The element descriptor of a many-valued field, without its list-level options. */
+export function item_kind(kind: Kind): Kind;
+export function item_kind(kind: OutputKind): OutputKind;
+export function item_kind(kind: OutputKind): OutputKind {
+	const {
+		many: _many,
+		optional: _optional,
+		default: _default,
+		min_items: _min,
+		max_items: _max,
+		key: _key,
+		...item
+	} = kind;
+	return item;
+}
+
 const one = <K extends FieldKind>(kind: K, spec: KindOf<K>): KindCodec => KIND[kind].schema(spec);
 const memo = new WeakMap<Kind, KindCodec>();
 /**
- * The codec of one kind literal, memoised per spec object: `many` (text, enum, custom) and `multiple` (file) are lists of
+ * The codec of one kind literal, memoised per spec object: `many` holds a list of
  * the kind's values, `optional` admits null. An input's fields decode as `inputSchema({ kind: 'object', fields })`.
  */
 export function inputSchema(spec: Kind): KindCodec {
@@ -419,8 +502,15 @@ export function inputSchema(spec: Kind): KindCodec {
 	if (known !== undefined) return known;
 	const value = one(spec.kind, spec);
 	const listed: KindCodec =
-		('many' in spec && spec.many === true) || ('multiple' in spec && spec.multiple === true)
-			? Schema.Array(value)
+		spec.many === true
+			? Schema.Array(value).check(
+					Schema.makeFilter((items) =>
+						(spec.min_items === undefined || items.length >= spec.min_items) &&
+						(spec.max_items === undefined || items.length <= spec.max_items)
+							? undefined
+							: 'has the wrong number of items'
+					)
+				)
 			: value;
 	const codec: KindCodec = spec.optional === true ? Schema.NullOr(listed) : listed;
 	memo.set(spec, codec);
@@ -431,7 +521,6 @@ export function inputSchema(spec: Kind): KindCodec {
  * The datatypes a JSON Schema may name in `format` (JSON Schema's own annotation for a value's semantic type), each with
  * its exact JSON shape: the keys, value types (`type` and `format` of each key) and required keys a value of it has.
  * A renderer reads a schema naming one as that datatype; one matching a shape exactly, unnamed, is read as it too.
- * `duration` is the datatype only on a number: on a string, `format: 'duration'` is JSON Schema's ISO 8601 duration.
  */
 export type DatatypeShape =
 	| {
@@ -443,7 +532,7 @@ export type DatatypeShape =
 			readonly required: readonly string[];
 	  }
 	| {
-			readonly name: 'money' | 'duration' | 'currency';
+			readonly name: 'money' | 'currency';
 			readonly kind: Kind;
 			readonly type: readonly string[];
 	  };
@@ -474,7 +563,6 @@ export const DATATYPE_SHAPES: readonly DatatypeShape[] = [
 		required: ['lat', 'lng']
 	},
 	{ name: 'money', kind: { kind: 'money' }, type: ['number'] },
-	{ name: 'duration', kind: { kind: 'duration' }, type: ['integer'] },
 	{ name: 'currency', kind: { kind: 'currency' }, type: ['string'] }
 ];
 /** JSON Schema's own string formats and the text formats a renderer reads; any other `format` must name a datatype. */
@@ -564,9 +652,7 @@ export function datatypeIssues(schema: unknown, at = ''): string[] {
 	if (typeof format === 'string') {
 		const types = typesOf(schema);
 		const string = types.length > 0 && types.every((t) => t === 'string' || t === 'null');
-		const named = DATATYPE_SHAPES.filter(
-			(shape) => shape.name === format && !(string && format === 'duration')
-		);
+		const named = DATATYPE_SHAPES.filter((shape) => shape.name === format);
 		if (named.length === 0) {
 			if (!(string && STRING_FORMATS.has(format)))
 				issues.push(

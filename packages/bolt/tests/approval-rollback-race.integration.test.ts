@@ -20,7 +20,7 @@ const manifest: EngineManifest = {
 	models: {
 		documents: {
 			description: 'Documents',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' } }
 		}
 	},
@@ -53,7 +53,7 @@ const member = (id: string, team: string): Extract<EngineActor, { kind: 'member'
 	phone: null,
 	external: false,
 	teams: [team],
-	teamPath: [team],
+	team_path: [team],
 	admin: false,
 	party: null
 });
@@ -128,7 +128,7 @@ it.live('rejection conflicts when the record or approval changes before the deci
 				});
 			assert.deepEqual(yield* row(), [{ title: 'A', revision: 1 }]);
 			const provisional = yield* update('B', 1, requester);
-			assert.ok(provisional.outcome.kind === 'pendingApproval');
+			assert.ok(provisional.outcome.kind === 'pending_approval');
 			const requestId = provisional.outcome.requestId;
 			assert.deepEqual(yield* row(), [{ title: 'B', revision: 2 }]);
 			assert.equal((yield* update('A', 2, reviewer)).outcome.kind, 'committed');
@@ -166,7 +166,7 @@ it.live('rejection conflicts when the record or approval changes before the deci
 			assert.deepEqual(yield* request(), [{ state: 'Rejected', step: 0, moves: 2 }]);
 
 			const submitted = (yield* update('D', 5, requester)).outcome;
-			assert.ok(submitted.kind === 'pendingApproval');
+			assert.ok(submitted.kind === 'pending_approval');
 			const decision = {
 				requestId: submitted.requestId,
 				authority: reviewer,

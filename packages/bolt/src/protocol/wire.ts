@@ -92,7 +92,7 @@ export type {
 /** Rule 32: an outcome's status (200, 202, 409, 504, a refusal 400/403/404/429 or 422); 202 is two kinds, told apart by `kind`. */
 const OUTCOME_STATUS: { readonly [K in Exclude<ActOutcome['kind'], 'refused'>]: number } = {
 	committed: 200,
-	pendingApproval: 202,
+	pending_approval: 202,
 	running: 202,
 	conflict: 409,
 	unknown: 504
@@ -131,7 +131,7 @@ export const wireError = (e: unknown): { status: number; body: WireError } =>
 		: { status: 500, body: { error: { code: 'internal', message: 'The request failed.' } } };
 /** Rule 32: public and API-key actors receive codes only (and the structured `field`, `row` and `data`). */
 export function redact(o: ActOutcome, actor: EngineActor): ActOutcome {
-	return o.kind === 'refused' && (actor.kind === 'envoy' || actor.kind === 'apiKey')
+	return o.kind === 'refused' && (actor.kind === 'envoy' || actor.kind === 'api_key')
 		? {
 				kind: 'refused',
 				code: o.code,

@@ -7,7 +7,7 @@ export const STORE_LIMITS = {
 	pageBytes: 4 * MiB,
 	/** One statement binds at most this many parameters. */
 	statement: { params: 30_000 },
-	/** A `where`'s nesting (`and`/`or`/`not` and relation hops together), a list's items, an `orderBy`'s keys. */
+	/** A `where`'s nesting (`and`/`or`/`not` and relation hops together), a list's items, an `order_by`'s keys. */
 	where: { depth: 16, list: 1_000 },
 	orderKeys: 4
 } as const;

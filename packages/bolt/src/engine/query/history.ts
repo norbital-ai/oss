@@ -190,7 +190,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 				)
 				.map(([, value]) => [value.field, value.value])
 		);
-		const uncompatible = [...state].flatMap(([identity, value]) => {
+		const incompatible = [...state].flatMap(([identity, value]) => {
 			if (!visibleField(identity, value) || SYSTEM_HISTORY_FIELDS.has(value.field)) return [];
 			const field =
 				currentFields.get(identity) ?? (identity.startsWith('legacy:') ? value.field : undefined);
@@ -217,9 +217,9 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 			changed,
 			schemaVersion: version?.id ?? null,
 			legacy: meta['legacy'] === true || version === undefined,
-			uncompatible,
+			incompatible,
 			/** Whether the whole revision still projects into today's representation. */
-			valid: uncompatible.length === 0,
+			valid: incompatible.length === 0,
 			actor:
 				actor === null || colon < 0
 					? null
@@ -235,7 +235,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	const values: Record<string, Json> = { id, revision: last.revision };
 	const fields: Record<string, FieldSpec> = {};
 	const compatible: Record<string, Json> = { id, revision: last.revision };
-	const uncompatible: string[] = [];
+	const incompatible: string[] = [];
 	for (const [identity, value] of state) {
 		if (!visibleField(identity, value)) continue;
 		const original =
@@ -257,7 +257,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 			currentFields.get(identity) ?? (identity.startsWith('legacy:') ? value.field : undefined);
 		const kind = field === undefined ? undefined : currentKinds[field];
 		const converted = kind === undefined ? undefined : convert(value.value, oldKind, kind);
-		if (field === undefined || converted === undefined) uncompatible.push(original);
+		if (field === undefined || converted === undefined) incompatible.push(original);
 		else compatible[field] = converted;
 	}
 	if (read.view === true)
@@ -271,7 +271,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 			fields: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(canonical(fields)),
 			values,
 			compatible,
-			uncompatible
+			incompatible
 		};
 	return compatible;
 });

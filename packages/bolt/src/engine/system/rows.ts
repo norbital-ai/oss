@@ -14,10 +14,12 @@ type SystemModel = keyof Models & string;
 
 // ── a column's wire value: what `parse` makes of the Postgres type `schema/ddl.ts` gives the field ──
 type Wire<K> = K extends { many: true }
-	? readonly string[]
+	? K extends { kind: 'text' | 'enum' }
+		? readonly string[]
+		: Json
 	: K extends { kind: 'enum'; values: readonly (infer V)[] }
 		? V
-		: K extends { kind: 'int' | 'count' | 'duration' }
+		: K extends { kind: 'int' | 'count' }
 			? number
 			: K extends { kind: 'seq'; pattern: string }
 				? string
@@ -25,7 +27,7 @@ type Wire<K> = K extends { many: true }
 					? number
 					: K extends { kind: 'bool' }
 						? boolean
-						: K extends { kind: 'json' | 'file' | 'custom' | 'object' | 'list' }
+						: K extends { kind: 'json' | 'file' | 'custom' | 'object' }
 							? Json
 							: string;
 type Cell<K> = K extends { optional: true } ? Wire<K> | null : Wire<K>;
@@ -58,7 +60,6 @@ const WIRE = {
 	money: Schema.String,
 	currency: Schema.String,
 	bool: Schema.Boolean,
-	duration: Schema.Number,
 	date: Schema.String,
 	instant: Schema.String,
 	time: Schema.String,
@@ -70,15 +71,17 @@ const WIRE = {
 	count: Schema.Number,
 	json: Schema.Json,
 	object: Schema.Record(Schema.String, Schema.Json),
-	list: Schema.Array(Schema.Json),
 	file: Schema.Json,
 	point: Schema.String,
 	vector: Schema.String,
+	ref: Schema.Json,
 	custom: Schema.Json
 } satisfies { readonly [K in FieldKind['kind']]: Schema.Top };
 const wire = (k: FieldKind): Schema.Top =>
 	'many' in k && k.many === true
-		? Schema.Array(Schema.String)
+		? k.kind === 'text' || k.kind === 'enum'
+			? Schema.Array(Schema.String)
+			: Schema.Array(Schema.Json)
 		: k.kind === 'enum'
 			? Schema.Literals(k.values)
 			: k.kind === 'seq' && k.pattern !== undefined

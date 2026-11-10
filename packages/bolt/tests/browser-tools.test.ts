@@ -36,7 +36,7 @@ const member: EngineActor = {
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null
 };

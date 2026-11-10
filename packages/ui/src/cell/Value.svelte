@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { item_kind } from '@norbital-ai/std/kind';
 	import { formatValue as show, format, inferKind, currencyOf } from '../kinds/kind.js';
 	// One stored value, read-only: by its kind through the kit's `Show` when the catalog knows the field, else by shape
 	// (files open through `/files`, where the viewer's read grant decides; a mask shows locked).
@@ -105,7 +106,7 @@
 		if (Array.isArray(held)) {
 			if (held.length === 0) return 'Empty list';
 			if (depth >= 2) return `${held.length} items`;
-			const item = shape?.kind === 'list' ? shape.of : undefined;
+			const item = shape?.many === true ? item_kind(shape) : undefined;
 			return (
 				held
 					.slice(0, 2)

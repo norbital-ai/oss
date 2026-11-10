@@ -16,6 +16,7 @@ const { default: Representation } = await import('./packaging-representation.sve
 
 const catalog: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },

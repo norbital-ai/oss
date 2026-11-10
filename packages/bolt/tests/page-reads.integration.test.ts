@@ -16,7 +16,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			orders: {
 				description: 'An order',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					doc: { kind: 'json', optional: true },
@@ -89,7 +89,7 @@ const manifest = Result.getOrThrow(
 				description: 'A synthetic probe window',
 				shape: {
 					kind: 'object',
-					fields: { samples: { kind: 'list', of: { kind: 'number' }, min: 1, max: 2 } }
+					fields: { samples: { kind: 'number', many: true, min_items: 1, max_items: 2 } }
 				},
 				check: true
 			}
@@ -183,7 +183,7 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 			Effect.gen(function* () {
 				const { q } = yield* setup();
 				const r = yield* q([
-					{ m: 'query', a: [{ orders: { fields: ['title'], orderBy: 'title' } }] }
+					{ m: 'query', a: [{ orders: { fields: ['title'], order_by: 'title' } }] }
 				]);
 				expect(r.status).toBe(200);
 				const [answer] = answers(r.body);

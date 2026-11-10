@@ -28,7 +28,7 @@ export const auditActor = (actor: EngineActor): AuditActor => ({
 	id:
 		actor.kind === 'member'
 			? actor.id
-			: actor.kind === 'apiKey'
+			: actor.kind === 'api_key'
 				? actor.key
 				: actor.kind === 'system'
 					? actor.run
@@ -120,7 +120,7 @@ const statusOf = (value: unknown): AuditEvent['status'] => {
 	if (Predicate.hasProperty(result, 'kind')) {
 		if (
 			result.kind === 'committed' ||
-			result.kind === 'pendingApproval' ||
+			result.kind === 'pending_approval' ||
 			result.kind === 'refused' ||
 			result.kind === 'conflict' ||
 			result.kind === 'unknown'

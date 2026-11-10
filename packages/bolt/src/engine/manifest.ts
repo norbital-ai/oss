@@ -104,11 +104,14 @@ const part = <T extends object>(identifier: string) =>
 const parts = <T extends object>(identifier: string) =>
 	Schema.Record(Schema.String, part<T>(identifier));
 const ModelData = part<ModelSpec>('model').check(
-	Schema.makeFilter((model) =>
-		model.was === undefined || typeof model.was === 'string'
+	Schema.makeFilter((model) => {
+		if (Object.hasOwn(model, 'label')) return 'use record_label';
+		if (Object.hasOwn(model, 'index') || Object.hasOwn(model.table ?? {}, 'indexes'))
+			return 'use model indexes';
+		return model.was === undefined || typeof model.was === 'string'
 			? undefined
-			: 'was must be a previous model name'
-	)
+			: 'was must be a previous model name';
+	})
 );
 const ReadLayers = Schema.Record(
 	Schema.String,

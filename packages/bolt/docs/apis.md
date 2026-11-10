@@ -60,7 +60,7 @@ Reactive reads subscribe on first use, identical calls share a subscription, and
 leaving releases it after a 30 s grace. Outside reactive code, await reads once. `yield*` composes
 the same Query as an Effect. `aggregate` and `history` share those semantics. `query` takes only a
 read request: one record is `query({ orders: { where: { id: { eq: id } } } })`, a past state is
-`asOf` on the root (or `history(…, { at: { revision } })` for revisions), and an index search is
+`as_of` on the root (or `history(…, { at: { revision } })` for revisions), and an index search is
 `query({ trials: { search: { colour: input }, limit: 20 } })`, its rows carrying `$distance`.
 
 A read request is one JSON layer map, the same on a page (`ctx.query({...})`), in server code
@@ -68,8 +68,8 @@ A read request is one JSON layer map, the same on a page (`ctx.query({...})`), i
 key without a dot is a root (a model with `read`), at most once per request. A root reads one of its
 model's outputs (`output`, `default` when absent), which a held policy must grant; `'<root>.<rel>…'`
 is a layer of that output, and naming a deep path implies its parents. A layer takes `where`,
-`fields` (without it, every field the output's layer declares), `orderBy`, `limit`, `search` and `aggregate`;
-a root also takes `output`, `after` and `asOf`. `history(model, id, { output })` names one too. Unknown keys and options are refused. Every
+`fields` (without it, every field the output's layer declares), `order_by`, `limit`, `search` and `aggregate`;
+a root also takes `output`, `after` and `as_of`. `history(model, id, { output })` names one too. Unknown keys and options are refused. Every
 list (a root page, or a nested many-layer per parent row) defaults to `limit` 10,000 and the root's
 default order; the 4 MiB page budget still applies. The answer is a tree typed from the named
 layers: per root `{ rows, next, total }` (`total` counts every row the root matches under the same
@@ -94,17 +94,17 @@ as `ctx.act`. A generated write (`create`, `update`, `delete`, `upsert`) always 
 rows on every surface (pages, `ctx.act`, the HTTP act route, the agent's `act` tool and the test
 kit), so the model's write callback sees the whole batch; a single-row object is refused
 `invalidInput`. The agent's `act` takes one `{ callable, input }` per call; several different
-callables are separate calls. Success is `committed` or `pendingApproval`; the latter is a provisional write held
+callables are separate calls. Success is `committed` or `pending_approval`; the latter is a provisional write held
 by its request. Handle `ActRefused`, `ActConflict` and `ActUnknown` through the typed failure channel.
 Carry the observed revision when I/O separates a read from a write.
-A keyed model's `import` is one act taking `{ rows, onConflict, onMissing?, prune?, dryRun? }`: it matches rows by
+A keyed model's `import` is one act taking `{ rows, on_conflict, onMissing?, prune?, dryRun? }`: it matches rows by
 the key, runs the ordinary per-verb callbacks in one transaction and reports each row's resolution; `dryRun: true`
 runs them and writes nothing, so a page can show a file's refusals before writing it.
 Model writes expose only `create`, `update`, `delete` and keyed `upsert`. Use `ctx.act.many(...)`
 for independent writes that must commit together, and the model's write layers (nested child rows)
 for dependent creates.
 For a batch assembled at runtime (a rule engine's operations), `ctx.act.checked(...)` takes
-`{ callable, input, observed?, onConflict }` rows and runs the same native input decoding, guarded
+`{ callable, input, observed?, on_conflict }` rows and runs the same native input decoding, guarded
 writes and atomic batch as `many`; its outputs remain JSON. Prefer `many` when the inputs are
 statically typed.
 Business operations live in named automations with explicit typed inputs.

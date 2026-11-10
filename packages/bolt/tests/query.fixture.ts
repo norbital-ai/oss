@@ -22,7 +22,7 @@ export const manifest: EngineManifest = {
 		},
 		orders: {
 			...sys,
-			label: [],
+
 			fields: {
 				status: { kind: 'enum', values: ['open', 'closed', 'held'] },
 				total: { kind: 'decimal', scale: 2 },
@@ -54,10 +54,10 @@ export const manifest: EngineManifest = {
 		},
 		lines: {
 			...sys,
-			label: 'sku',
+			record_label: 'record.sku',
 			fields: { sku: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } }
 		},
-		notes: { ...sys, label: 'body', fields: { body: { kind: 'text' } } }
+		notes: { ...sys, record_label: 'record.body', fields: { body: { kind: 'text' } } }
 	},
 	relationships: {
 		'orders.account': { to: 'accounts', inverse: 'orders' },
@@ -169,7 +169,7 @@ export const rep: Authority = {
 		phone: null,
 		external: false,
 		teams: ['t1'],
-		teamPath: ['t1'],
+		team_path: ['t1'],
 		admin: false,
 		party: null
 	},

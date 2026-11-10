@@ -45,7 +45,7 @@ const setup = Effect.gen(function* () {
 			Effect.suspend(() => {
 				if (batch.rollback !== true) writes++;
 				return db.transaction(batch);
-			}),
+			})
 	});
 	const engine: WriteEngine = {
 		manifest,
@@ -144,7 +144,7 @@ describe('per-verb write callbacks', () => {
 					verb: 'import',
 					input: {
 						rows: [{ title: 'desk', note: 'changed' }, { title: 'new' }],
-						onConflict: 'update'
+						on_conflict: 'update'
 					}
 				});
 				ids(result);
@@ -159,7 +159,7 @@ describe('per-verb write callbacks', () => {
 				});
 				calls.length = 0;
 				ids(
-					yield* run({ verb: 'import', input: { rows: [{ title: 'desk' }], onConflict: 'keep' } })
+					yield* run({ verb: 'import', input: { rows: [{ title: 'desk' }], on_conflict: 'keep' } })
 				);
 				expect(calls).toEqual([]);
 			})
@@ -172,7 +172,7 @@ describe('per-verb write callbacks', () => {
 			const result = yield* run({
 				verb: 'upsert',
 				input: [{ id, title: 'remote' }],
-				onConflict: 'update',
+				on_conflict: 'update',
 				mode: {
 					_tag: 'Sync',
 					sync: 'orders.sync.remote',

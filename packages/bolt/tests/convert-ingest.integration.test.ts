@@ -18,7 +18,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			calls: {
 				description: 'A call',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, audio: { kind: 'file', accept: ['*/*'], max: '1MiB' } }
 			}
 		},

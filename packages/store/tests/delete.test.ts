@@ -138,7 +138,7 @@ for (const audited of [false, true]) {
 				expect(yield* execute(yield* db.get('grandchild', { id: 'grandchild' }))).toBeNull();
 				expect((yield* execute(yield* db.get('nullable', { id: 'nullable' })))?.parent).toBeNull();
 				expect(
-					(yield* execute(yield* db.read('parent', { orderBy: 'id', all: true }))).rows.map(
+					(yield* execute(yield* db.read('parent', { order_by: 'id', all: true }))).rows.map(
 						(row) => row.id
 					)
 				).toEqual(['default', 'kept', 'override', 'restricted']);

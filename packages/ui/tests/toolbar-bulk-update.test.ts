@@ -36,6 +36,7 @@ afterEach(async () => {
 
 const catalog: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text', default: 'Never replace untouched names' },
@@ -228,6 +229,7 @@ it.live(
 				selectionEnabled(
 					{},
 					{
+						record_label: 'record.locked',
 						label: ['locked'],
 						fields: { locked: { kind: 'text' }, secret: { kind: 'text', hidden: true } },
 						readonlyFields: { locked: 'syncOwned' },
@@ -241,6 +243,7 @@ it.live(
 
 const orders: NonNullable<KindsHost['catalog']> = {
 	orders: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -267,12 +270,13 @@ const orders: NonNullable<KindsHost['catalog']> = {
 		}
 	},
 	lines: {
+		record_label: 'record.sku',
 		label: ['sku'],
 		fields: { sku: { kind: 'text' } },
 		relations: { order: { targets: ['orders'], optional: true } }
 	},
-	jobs: { label: ['name'], fields: { name: { kind: 'text' } } },
-	people: { label: ['name'], fields: { name: { kind: 'text' } } }
+	jobs: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
+	people: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 };
 
 it('bulk edit offers a state by the states its edges reach, a polymorphic relation by every target, and many-relations by update.with', () => {
@@ -282,7 +286,7 @@ it('bulk edit offers a state by the states its edges reach, a polymorphic relati
 		[
 			['name', { kind: 'text' }],
 			['status', { kind: 'enum', values: ['sent', 'paid', 'void'] }],
-			['about', { kind: 'id', of: 'jobs', optional: true }]
+			['about', { kind: 'ref', to: 'jobs', optional: true }]
 		]
 	);
 	assert.deepEqual(fields.find((field) => field.name === 'about')?.relation?.targets, [
@@ -297,7 +301,11 @@ it('bulk edit offers a state by the states its edges reach, a polymorphic relati
 	assert.equal(
 		selectionEnabled(
 			{},
-			{ label: [], fields: {}, update: { columns: [], with: orders['orders']?.update?.with } }
+			{
+				label: [],
+				fields: {},
+				update: { columns: [], with: orders['orders']?.update?.with }
+			}
 		),
 		true
 	);

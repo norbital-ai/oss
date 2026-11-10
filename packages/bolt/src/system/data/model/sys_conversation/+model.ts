@@ -6,7 +6,7 @@ import { model } from '../../../../decl/model.ts';
 export default model('sys_conversation', {
 	description:
 		"A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.",
-	label: 'title',
+	record_label: 'record.title',
 	fields: {
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		title: { kind: 'text', optional: true },

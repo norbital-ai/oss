@@ -176,7 +176,7 @@ once; `yield*` composes it as an Effect. Identical reads share a subscription, r
 last reactive reader leaves. `aggregate` and `history` use the same live/once contract. Capture
 reactive inputs in `$derived`; use `ctx.clock('day' | 'minute' | 'hour')` for explicit time.
 The generated module also exposes `run`, `fork` and `attach` for mutations and mounted resources.
-An act succeeds with `committed` or `pendingApproval`; refusals, conflicts and unknown write
+An act succeeds with `committed` or `pending_approval`; refusals, conflicts and unknown write
 outcomes remain typed failures. See [the workspace contract](./workspace-contract.md) and
 [APIs and execution](./apis.md).
 
@@ -253,7 +253,7 @@ limited; run budgets bound them.
 ## Record history and restore
 
 Every committed write appends to `bolt_history`: one revision per record, with who, when, its
-cause and the fields it changed. `ctx.history(c, id)` lists them; `ctx.history(c, id, { at: { revision } })` lists through that revision, and a root's `asOf` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
+cause and the fields it changed. `ctx.history(c, id)` lists them; `ctx.history(c, id, { at: { revision } })` lists through that revision, and a root's `as_of` reads the record as it stood at an instant. Pruning keeps the newest 256 revisions per record and
 folds the rest into a full-row anchor, so every kept revision still rebuilds.
 
 Schema migrations register immutable definitions in `bolt_history_schema`, with an active pointer in
@@ -263,9 +263,9 @@ new identity. Original revision payloads retain their old field names. The first
 definition records a full post-image, so migrated values cannot inherit a stale value from the prior schema.
 
 `ctx.history(c, id, { at: { revision }, view: true })` returns the original field definitions and values,
-the compatible projection into the current schema, and `uncompatible` field names. Built-in record
+the compatible projection into the current schema, and `incompatible` field names. Built-in record
 history uses that exact revision and displays its original labels and kinds. Removed fields, invalid
-values and unsupported conversions have an **uncompatible** indicator; compatible scalar conversions
+values and unsupported conversions have an **incompatible** indicator; compatible scalar conversions
 and declared renames restore automatically. Reference retargeting and changed custom field identities
 require manual resolution. Current outputs, the record's current read scope and field visibility still apply. A
 reader who loses access to the row loses its history. A
@@ -291,7 +291,7 @@ Per-record restore is two own callables, `history.preview` and `history.restore`
 `{ model, record, revision }` (`bolt.restore.preview` / `bolt.restore.run` in pages). The
 preview lists each field that would change (current and restored value) and each one left alone,
 with its reason: a link whose target was deleted, read-only (integration-owned or the owned
-parent's key), no grant, a locked state move, or an uncompatible historical value. Only the
+parent's key), no grant, a locked state move, or an incompatible historical value. Only the
 record's own stored columns are restored; computed fields, roll-ups, `seq`, system columns, owned
 children and many-relations are never touched, and a link's target is never written. The restore
 is one ordinary `update` observed at the previewed revision, so a concurrent change is a conflict
@@ -399,18 +399,17 @@ steps restart at the first step. A new release does not rewrite an open request'
 A routed write commits provisionally with history and a checkpoint of every held record.
 The shared approval panel shows the request and each named step as a timeline; its request
 selector preserves all earlier requests. `ctx.approvals.decide(id, { decision, reason? })`
-accepts `approve`, `reject` or `requestChanges`. Reject and request-changes require a reason;
+accepts `approve`, `reject` or `request_changes`. Reject and request-changes require a reason;
 approval may include one. A superseder uses Approve with a reason. Comments exist only as
 decision reasons. A requester cannot withdraw a request.
 
-| State             | Decision                                   | Result                                        |
-| ----------------- | ------------------------------------------ | --------------------------------------------- |
-| Pending           | approve                                    | next step, or approved after the last         |
-| Pending           | reject                                     | rejected; restore the pre-request checkpoint  |
-| Pending           | requestChanges                             | keep data; requester may edit                 |
-| Changes requested | requester saves                            | resubmit the same request and log             |
-| Open              | requester withdraws                        | withdrawn; restore the pre-request checkpoint |
-| Open              | authorized superseder approves with reason | superseded; keep data                         |
+| State             | Decision                                   | Result                                       |
+| ----------------- | ------------------------------------------ | -------------------------------------------- |
+| Pending           | approve                                    | next step, or approved after the last        |
+| Pending           | reject                                     | rejected; restore the pre-request checkpoint |
+| Pending           | request_changes                             | keep data; requester may edit                |
+| Changes requested | requester saves                            | resubmit the same request and log            |
+| Open              | authorized superseder approves with reason | superseded; keep data                        |
 
 Rejected, approved, superseded and withdrawn requests are terminal. Saving requested changes resubmits;
 the record's Save button reads Resubmit. There is no separate resubmit operation in page code.

@@ -10,8 +10,8 @@ it('collects declared output files through structured and custom kinds, once per
 		kind: 'object',
 		fields: {
 			direct: file,
-			multiple: { ...file, multiple: true },
-			list: { kind: 'list', of: file },
+			multiple: { ...file, many: true },
+			list: { kind: 'json', shape: file, many: true },
 			record: { kind: 'record', of: file },
 			tagged: { kind: 'union', by: 'status', arms: { ready: { report: file } } },
 			shaped: { kind: 'json', shape: file },
@@ -63,7 +63,7 @@ it('ignores opaque, undeclared, malformed and wrong-cardinality references', () 
 		[ref('array')]
 	])
 		expect(outputFiles(file, value)).toEqual([]);
-	expect(outputFiles({ ...file, multiple: true }, ref('scalar'))).toEqual([]);
+	expect(outputFiles({ ...file, many: true }, ref('scalar'))).toEqual([]);
 	expect(outputFiles({ kind: 'record', of: file }, [ref('wrong-container')])).toEqual([]);
 	expect(outputFiles({ kind: 'object', fields: {}, rest: file }, [ref('wrong-container')])).toEqual(
 		[]
@@ -103,12 +103,12 @@ it('stops recursive custom aliases without treating their contents as undeclared
 it('finds files only in declared model fields of nested row outputs', () => {
 	const kind = {
 		kind: 'object',
-		fields: { rows: { kind: 'list', of: { kind: 'row', of: 'reports' } } }
+		fields: { rows: { kind: 'row', of: 'reports', many: true } }
 	} as const;
 	const models = {
 		reports: {
 			description: 'Report',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, attachment: file }
 		}
 	} satisfies Parameters<typeof outputFiles>[3];

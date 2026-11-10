@@ -159,7 +159,7 @@ export type StartOutput<A> = A extends AutomationName
 					readonly deleted: number;
 					readonly findings: readonly Finding[];
 			  }
-			| { readonly pendingApproval: true; readonly findings: readonly Finding[] }
+			| { readonly pending_approval: true; readonly findings: readonly Finding[] }
 		: undefined;
 /** `ctx.schedule`: queues a run of an automation (or a sync's read) after the current write commits. */
 export interface Schedule {
@@ -441,7 +441,7 @@ export type Ingest =
 /**
  * The model works in as many calls as it needs (continuing a cut answer, calling tools); each ends only after 60 s without a
  * token. A structured `output` is built by the model on a draft (`initial`, else empty) with `edit` (set, remove or append
- * at JSON Pointers whose segment for an item of a keyed list, `{ kind: 'list', key }`, is its key, not its index),
+ * at JSON Pointers whose segment for an item of a keyed list, `{ kind: 'object', many: true, key }`, is its key, not its index),
  * inspected with `read`, `find` and `diff` (changes since the start, keyed items matched by key), and handed in with
  * `submit`; a submission that does not match `output` or `rules` comes back with its problems and the model goes on until
  * one matches.
@@ -482,7 +482,7 @@ type InferRequest<O, Tools> = {
 			 *   prompt: `Match invoice ${inv.number} from ${inv.supplier}: ${JSON.stringify(inv.lines)}. Read open purchase_orders
 			 *     and goods_receipts for this supplier; compare quantities and unit prices line by line.`,
 			 *   output: { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text', optional: true },
-			 *     variances: { kind: 'list', of: { kind: 'text' } } } },
+			 *     variances: { kind: 'text', many: true } } },
 			 *   tools: ['read'],
 			 *   steps: 6
 			 * });

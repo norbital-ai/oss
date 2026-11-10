@@ -10,7 +10,7 @@ const manifest: EngineManifest = {
 	models: {
 		documents: {
 			description: 'A scoped document',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				profile: {
@@ -20,7 +20,7 @@ const manifest: EngineManifest = {
 						fields: {
 							region: { kind: 'text' },
 							rank: { kind: 'int' },
-							flags: { kind: 'list', of: { kind: 'text' } }
+							flags: { kind: 'text', many: true }
 						}
 					}
 				}
@@ -117,7 +117,7 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 										]
 									},
 									fields: ['name'],
-									orderBy: { 'profile.rank': 'asc' },
+									order_by: { 'profile.rank': 'asc' },
 									limit: 1,
 									...(after === undefined ? {} : { after })
 								}
@@ -146,7 +146,7 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 						documents: {
 							where: { not: { profile: { flags: { some: { eq: 'blocked' } } } } },
 							fields: ['name'],
-							orderBy: 'name',
+							order_by: 'name',
 							limit: 10
 						}
 					});

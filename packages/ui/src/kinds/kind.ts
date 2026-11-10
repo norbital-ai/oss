@@ -1,3 +1,4 @@
+import { item_kind } from '@norbital-ai/std/kind';
 import { Array as Arr } from 'effect';
 // Field kinds as the ui sees them (§3.3.2): the literal a model or an input declares, structurally, so ui needs no bolt
 // dependency. Pure functions only: display text, text parsing, advisory checks and empty values. The host decides; these
@@ -87,22 +88,6 @@ export function formatDuration(seconds: number): string {
 		}
 	return (seconds < 0 ? '-' : '') + parts.join(' ');
 }
-function parseDuration(text: string): number | null {
-	const t = text.trim().toLowerCase();
-	if (/^-?\d+$/.test(t)) return Number(t) * 60;
-	const re = /(\d+(?:\.\d+)?)\s*(d|h|min|m|s)/g;
-	let total = 0,
-		seen = '',
-		m: RegExpExecArray | null;
-	while ((m = re.exec(t)) !== null) {
-		const symbol = m[2] === 'min' ? 'm' : m[2];
-		const unit = UNITS.find(([name]) => name === symbol);
-		if (unit === undefined) return null;
-		total += Number(m[1]) * unit[1];
-		seen += m[0];
-	}
-	return seen.replace(/\s/g, '') === t.replace(/\s/g, '') && seen !== '' ? Math.round(total) : null;
-}
 
 // ── points: "lat, lng" typed, or picked; never needs a provider (P19) ──
 export function parsePoint(text: string): Point | null {
@@ -190,12 +175,12 @@ export function inferKind(v: Value): Kind {
 	if (typeof v === 'number') return { kind: 'number' };
 	if (typeof v === 'boolean') return { kind: 'bool' };
 	if (Arr.isArray<Value>(v)) {
-		if (v.length === 0 || !v.every(valueObject)) return { kind: 'list', of: { kind: 'json' } };
+		if (v.length === 0 || !v.every(valueObject)) return { kind: 'json', many: true };
 		const fields: { [k: string]: Kind } = {};
 		for (const item of v)
 			for (const [k, held] of Object.entries(item))
 				if (fields[k] === undefined || held !== null) fields[k] = inferKind(held);
-		return { kind: 'list', of: { kind: 'object', fields } };
+		return { kind: 'object', fields, many: true };
 	}
 	if (valueObject(v))
 		return {
@@ -206,7 +191,6 @@ export function inferKind(v: Value): Kind {
 }
 /** Whether a value of this kind needs a whole row: structures, maps, code and long-form text. */
 export const wideKind = (kind: Kind): boolean =>
-	(kind.kind === 'list' && wideKind(kind.of)) ||
 	['object', 'record', 'union', 'json', 'custom', 'point'].includes(kind.kind) ||
 	(kind.kind === 'text' && (kind.format === 'cel' || kind.format === 'markdown'));
 
@@ -231,26 +215,26 @@ export function fieldsText(
 		.join(' · ');
 }
 
-/** The model's shared record label, evaluated against the row; legacy field lists retain per-kind formatting. */
+/** The model's shared record-label expression, evaluated against its visible fields. */
 export function recordText(
-	exposure: { fields: Fields; label: readonly string[]; record_label?: string } | undefined,
-	row: { readonly [field: string]: Value },
-	o: ShowOptions = {}
+	exposure: { record_label?: string } | undefined,
+	row: { readonly [field: string]: Value }
 ): string {
 	if (exposure === undefined) return typeof row['id'] === 'string' ? row['id'] : '';
 	// Native live references (approval targets) carry the authorized target identifier, never a stored copy.
 	if (typeof row['$label'] === 'string' && row['$label'].trim() !== '') return row['$label'];
-	return (
-		title(row, exposure.record_label ?? exposure.label, (field, value) =>
-			format(exposure.fields[field] ?? { kind: 'text' }, value, o)
-		) ?? ''
-	);
+	return title(row, exposure.record_label ?? []) ?? '';
 }
 /** One value as text in the viewer's locale; '' for none. Structured values render through `Show`, this is their summary. */
 export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}): string {
 	const v = value ?? null;
 	const locale = o.locale ?? 'en';
 	if (v === null) return '';
+	if (kind.many === true)
+		return Arr.isArray<Value>(v)
+			? v.map((item) => format(item_kind(kind), item, o)).join(', ')
+			: '';
+	if (kind.kind === 'json' && kind.shape !== undefined) return format(kind.shape, v, o);
 	switch (kind.kind) {
 		case 'int':
 		case 'number':
@@ -281,8 +265,6 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 			return instantText(String(v), locale, o.zone, kind.precision);
 		case 'time':
 			return String(v).slice(0, kind.precision === 'hour' ? 2 : 5);
-		case 'duration':
-			return typeof v === 'number' ? formatDuration(v) : String(v);
 		case 'period': {
 			if (!valueObject(v)) return '';
 			const temporal: Kind =
@@ -325,8 +307,6 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 				.join(', ');
 		case 'vector':
 			return Arr.isArray(v) ? `[${v.length}]` : '';
-		case 'list':
-			return Arr.isArray<Value>(v) ? v.map((x) => format(kind.of, x, o)).join(', ') : '';
 		case 'json':
 		case 'custom':
 		case 'object':
@@ -412,10 +392,6 @@ export function parse(kind: Kind, text: string): Parsed {
 				return { error: `at most ${scale} decimal places` };
 			return { value: Decimal.of(s) };
 		}
-		case 'duration': {
-			const n = parseDuration(t);
-			return n === null ? { error: 'expected a duration like 1h 30m' } : { value: n };
-		}
 		case 'point': {
 			const p = parsePoint(t);
 			return p === null ? { error: 'expected latitude, longitude' } : { value: p };
@@ -448,10 +424,21 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 	const v = value ?? null;
 	if (
 		v === null ||
-		(Arr.isArray<Value>(v) && v.length === 0 && (kind.kind === 'file' || kind.kind === 'list'))
+		(Arr.isArray<Value>(v) && v.length === 0 && (kind.kind === 'file' || kind.many === true))
 	) {
 		if (!required(kind)) return null;
-		return kind.kind === 'list' && (kind.min ?? 0) === 0 && v !== null ? null : 'is required';
+		return kind.many === true && kind.kind !== 'file' && (kind.min_items ?? 0) === 0 && v !== null
+			? null
+			: 'is required';
+	}
+	if (kind.many === true) {
+		if (!Arr.isArray<Value>(v)) return 'expected a list';
+		if (
+			(kind.min_items !== undefined && v.length < kind.min_items) ||
+			(kind.max_items !== undefined && v.length > kind.max_items)
+		)
+			return 'has the wrong number of items';
+		return null;
 	}
 	const range = (n: number, k: { min?: number; max?: number }) =>
 		(k.min !== undefined && n < k.min) || (k.max !== undefined && n > k.max)
@@ -509,12 +496,6 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 			return (Arr.isArray<Value>(v) ? v.length > MAX_FILES : false)
 				? `at most ${MAX_FILES} files`
 				: null;
-		case 'list':
-			if (!Arr.isArray<Value>(v)) return 'expected a list';
-			return (kind.min !== undefined && v.length < kind.min) ||
-				(kind.max !== undefined && v.length > kind.max)
-				? 'has the wrong number of items'
-				: null;
 		default:
 			return null;
 	}
@@ -532,11 +513,11 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 		if (x === null) return;
 		const object = valueObject(x) ? x : null;
 		const join = (key: string | number) => (path === '' ? String(key) : `${path}.${key}`);
-		if (k.kind === 'object' && object !== null)
+		if (k.many === true && Arr.isArray<Value>(x))
+			x.forEach((item, i) => walk(item_kind(k), item, join(i)));
+		else if (k.kind === 'object' && object !== null)
 			for (const [f, fk] of Object.entries(k.fields)) walk(fk, object[f], join(f));
 		else if (k.kind === 'json' && k.shape !== undefined) walk(k.shape, x, path);
-		else if (k.kind === 'list' && Arr.isArray<Value>(x))
-			x.forEach((item, i) => walk(k.of, item, join(i)));
 		else if (k.kind === 'record' && object !== null)
 			for (const [key, item] of Object.entries(object)) walk(k.of, item, join(key));
 		else if (k.kind === 'union' && 'arms' in k && object !== null) {
@@ -559,11 +540,10 @@ export function initial(kind: Kind): Value {
 		const result = Schema.decodeUnknownResult(schema)(d);
 		if (Result.isSuccess(result)) return result.success;
 	}
+	if (kind.many === true) return [];
 	switch (kind.kind) {
 		case 'state':
 			return kind.initial;
-		case 'list':
-			return [];
 		case 'text':
 			return kind.many ? [] : null;
 		case 'enum':
@@ -650,12 +630,12 @@ export function likeWhere(
 }
 /**
  * A picker's read request root layer (`query({ [of]: pickerRead(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
- * patterned `seq` fields; sorted by `orderBy`, else by the first sortable label field (a typed search ranks instead).
+ * patterned `seq` fields; sorted by `order_by`, else by the first sortable label field (a typed search ranks instead).
  */
 export function pickerRead(
 	target: { readonly search?: readonly string[]; readonly fields: Fields } | undefined,
 	labels: readonly string[],
-	o: { where?: Json | undefined; orderBy?: Json | undefined; limit: number },
+	o: { where?: Json | undefined; order_by?: Json | undefined; limit: number },
 	q: string
 ): { readonly [k: string]: Json } {
 	const text = q.trim(),
@@ -667,13 +647,14 @@ export function pickerRead(
 		const k = target?.fields[f];
 		return k !== undefined && sortable(k);
 	});
-	const orderBy =
-		o.orderBy ?? ((indexed && text !== '') || label === undefined ? undefined : { [label]: 'asc' });
+	const order_by =
+		o.order_by ??
+		((indexed && text !== '') || label === undefined ? undefined : { [label]: 'asc' });
 	return {
 		fields: [...labels],
 		limit: o.limit,
 		...(all.length === 0 ? {} : { where: all.length === 1 ? (all[0] ?? {}) : { and: all } }),
-		...(orderBy === undefined ? {} : { orderBy }),
+		...(order_by === undefined ? {} : { order_by }),
 		...(indexed && text !== '' ? { search: text } : {})
 	};
 }

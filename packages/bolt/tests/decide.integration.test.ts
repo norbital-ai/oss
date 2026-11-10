@@ -31,7 +31,7 @@ const manifest = {
 	models: {
 		tickets: {
 			description: 'A ticket',
-			label: 'subject',
+			record_label: 'record.subject',
 			fields: {
 				subject: { kind: 'text' },
 				photo: { kind: 'file', accept: ['image/*'], max: '1MiB', optional: true },
@@ -44,7 +44,7 @@ const manifest = {
 		},
 		secret_docs: {
 			description: 'Not for the desk',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				doc: { kind: 'file', accept: ['image/*'], max: '1MiB', optional: true }

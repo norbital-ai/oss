@@ -6,7 +6,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_outbox', {
 	description: 'A record change waiting to be written to another system by a sync.',
-	label: 'key',
+	record_label: 'record.key',
 	fields: {
 		seq: { kind: 'int' },
 		/** `'<model>.sync.<sync>'`. */
@@ -22,7 +22,7 @@ export default model('sys_outbox', {
 		image: { kind: 'json', optional: true },
 		writer: { kind: 'ref', to: 'sys_user', optional: true, on_delete: 'set_null' },
 		/** The fields changed since the last acknowledged write. */
-		changed: { kind: 'json', default: [], shape: { kind: 'list', of: { kind: 'text' } } },
+		changed: { kind: 'json', default: [], shape: { kind: 'text', many: true } },
 		/** The Idempotency-Key the remote dedupes a retried write by. */
 		key: { kind: 'text', unique: true },
 		status: {
@@ -48,11 +48,14 @@ export default model('sys_outbox', {
 	},
 	table: {
 		primary: 'uuid',
-		identity: 'seq',
-		indexes: [
-			{ on: ['next_attempt_at'], where: { status: { eq: 'queued' } } },
-			{ on: ['sync', 'record', 'seq'], where: { status: { in: ['queued', 'sending'] } } },
-			{ on: ['sync'], where: { status: { eq: 'dead' } } }
-		]
+		identity: 'seq'
+	},
+	indexes: {
+		by_next_attempt_at: { on: ['next_attempt_at'], where: { status: { eq: 'queued' } } },
+		by_sync_record_seq: {
+			on: ['sync', 'record', 'seq'],
+			where: { status: { in: ['queued', 'sending'] } }
+		},
+		by_sync: { on: ['sync'], where: { status: { eq: 'dead' } } }
 	}
 });

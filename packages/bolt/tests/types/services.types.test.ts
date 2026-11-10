@@ -162,7 +162,7 @@ is<
 		| 'bindings'
 		| 'invocationId'
 		| 'observed'
-		| 'onConflict'
+		| 'on_conflict'
 		| 'rate'
 		| 'restored'
 		| 'readGuards'
@@ -285,14 +285,7 @@ is<
 is<
 	Eq<
 		Exclude<CrossCall['_tag'], FacilityCall['_tag']>,
-		| 'read'
-		| 'act'
-		| 'acts'
-		| 'schedule'
-		| 'notify'
-		| 'send'
-		| 'request'
-		| 'progress'
+		'read' | 'act' | 'acts' | 'schedule' | 'notify' | 'send' | 'request' | 'progress'
 	>
 >();
 is<

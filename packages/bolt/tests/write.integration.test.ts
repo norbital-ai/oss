@@ -90,7 +90,7 @@ const ext = {
 		...manifest.models,
 		projects: {
 			description: 'A project',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				profile: {
@@ -114,13 +114,21 @@ const ext = {
 				bare: { stock: { lte: 1000 } }
 			}
 		},
-		quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } },
+		quotes: {
+			description: 'A quote',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
 		activities: {
 			description: 'An activity',
-			label: 'subject',
+			record_label: 'record.subject',
 			fields: { subject: { kind: 'text' } }
 		},
-		notes: { description: 'A note', label: 'body', fields: { body: { kind: 'text' } } }
+		notes: {
+			description: 'A note',
+			record_label: 'record.body',
+			fields: { body: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		...manifest.relationships,
@@ -134,7 +142,10 @@ const ext = {
 			outputs: { default: { projects: { fields: 'all' } } },
 			create: { columns: { projects: ['title', 'profile', 'stock', 'owner'] } }
 		},
-		quotes: { outputs: { default: { quotes: { fields: 'all' } } }, create: { columns: { quotes: ['title'] } } },
+		quotes: {
+			outputs: { default: { quotes: { fields: 'all' } } },
+			create: { columns: { quotes: ['title'] } }
+		},
 		activities: {
 			outputs: { default: { activities: { fields: 'all' } } },
 			create: { columns: { activities: ['subject', 'regarding'] } },
@@ -207,7 +218,7 @@ const rows = (sql: string) =>
 	);
 const one = (sql: string) => rows(sql).pipe(Effect.map((rows) => rows[0]!));
 const committed = (o: Outcome) => {
-	if (o.kind !== 'committed' && o.kind !== 'pendingApproval') throw new Error(JSON.stringify(o));
+	if (o.kind !== 'committed' && o.kind !== 'pending_approval') throw new Error(JSON.stringify(o));
 	return o;
 };
 const order = Effect.fn('Test.order')(function* (
@@ -323,7 +334,9 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 			expect(result.outcome).toMatchObject({ kind: 'refused', code: 'unique' });
 			expect(yield* rows('select id from orders')).toEqual([]);
 			expect(yield* rows('select id from lines')).toEqual([]);
-			expect(yield* rows("select revision from bolt_history where collection in ('orders', 'lines')")).toEqual([]);
+			expect(
+				yield* rows("select revision from bolt_history where collection in ('orders', 'lines')")
+			).toEqual([]);
 		}).pipe(Effect.provide(fixture))
 	);
 
@@ -407,17 +420,18 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 					unchanged: [{ model: 'orders', id }]
 				});
 				const kept = committed(
-					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], onConflict: 'keep' })).outcome
+					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], on_conflict: 'keep' })).outcome
 				);
 				expect(kept).toMatchObject({ output: [id], records: [] });
 				const updated = committed(
-					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], onConflict: 'update' })).outcome
+					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], on_conflict: 'update' }))
+						.outcome
 				);
 				expect(updated).toMatchObject({ output: [id], records: [{ id, revision: 3 }] });
 				const made = (yield* run({
 					verb: 'upsert',
 					input: [{ title: 'chair' }],
-					onConflict: 'update'
+					on_conflict: 'update'
 				})).outcome;
 				if (made.kind !== 'committed') throw new Error(JSON.stringify(made));
 				expect(made.output).toEqual([made.records[0]!.id]);
@@ -425,7 +439,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 					(yield* run({
 						verb: 'upsert',
 						input: [{ id: '0199a000-0000-7000-8000-0000000000aa', note: 'x' }],
-						onConflict: 'update'
+						on_conflict: 'update'
 					})).outcome
 				).toMatchObject({ code: 'notFound', field: 'id' });
 			}).pipe(Effect.provide(fixture))
@@ -762,7 +776,7 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 					{ verb: 'create', input: [{ title: 'held' }], authority: routed },
 					engine
 				)).outcome;
-				expect(o).toMatchObject({ kind: 'pendingApproval', requestId });
+				expect(o).toMatchObject({ kind: 'pending_approval', requestId });
 				const [created] = yield* rows(`select id::text from orders`);
 				expect(calls.map(({ kind, target }) => [kind, target])).toEqual([
 					['policy', 'p.orders.create']

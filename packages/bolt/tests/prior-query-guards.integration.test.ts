@@ -12,7 +12,7 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 
 const ACCOUNT = '0199a000-0000-7000-8000-000000000001';
 const input = {
-	account: { kind: 'id', of: 'accounts' },
+	account: { kind: 'ref', to: 'accounts' },
 	amount: { kind: 'int' },
 	label: { kind: 'text' }
 } satisfies NonNullable<EngineManifest['automations'][string]['input']>;
@@ -21,12 +21,12 @@ const manifest: EngineManifest = {
 	models: {
 		accounts: {
 			description: 'Balances guarded by prior native reads',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, balance: { kind: 'int' } }
 		},
 		ledger: {
 			description: 'The atomic debit evidence',
-			label: 'label',
+			record_label: 'record.label',
 			fields: {
 				label: { kind: 'text' },
 				amount: { kind: 'int' },

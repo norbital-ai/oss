@@ -5,7 +5,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_inbox', {
 	description: "A webhook delivery received for an integration instance, awaiting its sync's read.",
-	label: 'delivery',
+	record_label: 'record.delivery',
 	fields: {
 		sync: { kind: 'text' },
 		instance: { kind: 'ref', to: 'sys_integration', on_delete: 'cascade' },
@@ -18,7 +18,12 @@ export default model('sys_inbox', {
 	},
 	constraints: { one_inbound_delivery: { unique: ['sync', 'instance', 'delivery'] } },
 	table: {
-		primary: 'uuid',
-		indexes: [{ on: ['sync', 'instance', 'received_at'], where: { consumed_at: { isNull: true } } }]
+		primary: 'uuid'
+	},
+	indexes: {
+		by_sync_instance_received_at: {
+			on: ['sync', 'instance', 'received_at'],
+			where: { consumed_at: { is_null: true } }
+		}
 	}
 });

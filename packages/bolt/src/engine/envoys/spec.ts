@@ -21,7 +21,7 @@ export type EnvoySpec = Omit<
 	'policies' | 'group_messages' | 'triage' | 'triage_scope'
 > & {
 	readonly policies: NonEmpty<string>;
-	readonly groupMessages: typeof Configuration.Type.group_messages;
+	readonly group_messages: typeof Configuration.Type.group_messages;
 	readonly triage: false | { readonly scope: typeof Configuration.Type.triage_scope };
 };
 
@@ -49,7 +49,7 @@ export const envoySpec = Effect.fn('Envoys.spec')(function* (db: TenantDbShape, 
 	if (first === undefined) return undefined;
 	return {
 		...configuration,
-		groupMessages: group_messages,
+		group_messages: group_messages,
 		policies: [first, ...rest],
 		triage: triage ? { scope: triage_scope } : false
 	} satisfies EnvoySpec;

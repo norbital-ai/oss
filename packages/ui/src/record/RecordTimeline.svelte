@@ -78,7 +78,7 @@ revision returns to the live record.
 					`record.actor.${actor.kind}`,
 					actor.kind === 'system'
 						? 'Automation'
-						: actor.kind === 'apiKey'
+						: actor.kind === 'api_key'
 							? 'API key'
 							: actor.kind === 'envoy'
 								? 'Envoy'
@@ -175,8 +175,7 @@ revision returns to the live record.
 									bolt.history(source.of, row.id).pipe(
 										Effect.map((answer) => {
 											const subject =
-												recordText(kinds.catalog?.[source.of], row, { locale: bolt.locale }) ||
-												label(bolt, source.of);
+												recordText(kinds.catalog?.[source.of], row) || label(bolt, source.of);
 											return checkpoints(answer).map((checkpoint) => ({
 												key: `${source.of}:${row.id}:${checkpoint.revision}`,
 												of: source.of,

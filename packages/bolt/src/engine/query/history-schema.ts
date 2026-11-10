@@ -99,7 +99,7 @@ export function historyChanges(
 	return values;
 }
 
-const numeric = new Set(['int', 'number', 'decimal', 'money', 'sum', 'count', 'duration']);
+const numeric = new Set(['int', 'number', 'decimal', 'money', 'sum', 'count']);
 /** Only deterministic value-preserving conversions; current validation still decides whether a value is admissible. */
 export function compatibleHistoryValue(
 	value: Json,
@@ -180,9 +180,7 @@ export function compatibleHistoryValue(
 				return undefined;
 			if (Number.isInteger(n) && !Number.isSafeInteger(n)) return undefined;
 			if (
-				((after.kind === 'int' && after.storage !== 'int64') ||
-					after.kind === 'duration' ||
-					after.kind === 'count') &&
+				((after.kind === 'int' && after.storage !== 'int64') || after.kind === 'count') &&
 				(n < -2147483648 || n > 2147483647)
 			)
 				return undefined;

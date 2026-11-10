@@ -109,7 +109,7 @@ A grid of `rows` records by `cols` values (dates or a relation) whose cells hold
 					requestJson({
 						[rows]: {
 							where: rowWhere,
-							orderBy: { [rowLabel]: 'asc' },
+							order_by: { [rowLabel]: 'asc' },
 							fields: [rowLabel],
 							limit: MATRIX_PAGE,
 							after: after ?? undefined

@@ -168,7 +168,7 @@ layer(AdministrationFixtureLive)((it) => {
 					expect(yield* assignTeam(h, m, boss, founder, 'Region')).toBeNull();
 					const member = yield* as(founder);
 					if (member.actor.kind !== 'member') throw new Error('Expected native member');
-					expect(member.actor.teamPath).toEqual(['Region', 'Ops']);
+					expect(member.actor.team_path).toEqual(['Region', 'Ops']);
 					expect(member.policies).toEqual(['sales']);
 					expect(member.teamTree).toEqual(expect.arrayContaining(['Region', 'Depot']));
 					expect(yield* one(`SELECT to_regclass('sys_team') IS NULL AS absent`)).toEqual([
@@ -232,7 +232,7 @@ layer(AdministrationFixtureLive)((it) => {
 							id: founder,
 							admin: false,
 							teams: [team],
-							teamPath: ['Sales']
+							team_path: ['Sales']
 						},
 						teamTree: [team]
 					});

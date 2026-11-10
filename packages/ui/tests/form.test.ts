@@ -17,6 +17,7 @@ const specOf = (...args: Parameters<typeof d.formSpec>): FormSpec => {
 };
 
 const exposure = {
+	record_label: 'record.title',
 	label: ['title'],
 	fields: {
 		title: { kind: 'text' },
@@ -35,11 +36,11 @@ const exposure = {
 const automations = {
 	hire: { input: { name: { kind: 'text' }, start: { kind: 'date' } } },
 	close: {
-		input: { target: { kind: 'id', of: 'quotes' }, reason: { kind: 'text', optional: true } }
+		input: { target: { kind: 'ref', to: 'quotes' }, reason: { kind: 'text', optional: true } }
 	}
 } as const;
 const text = {
-	pendingApproval: 'held',
+	pending_approval: 'held',
 	conflict: 'conflict',
 	unknown: 'unknown',
 	running: 'running'
@@ -51,6 +52,7 @@ it.live('a custom create form applies explicit presets over defaults once, prese
 		const spec = specOf(
 			'movements',
 			{
+				record_label: 'record.activity',
 				label: ['activity'],
 				fields: {
 					activity: {
@@ -148,8 +150,8 @@ it.effect('a create form is the create allowlist, relations as pickers', () =>
 			['title', 'total', 'note', 'account']
 		);
 		assert.deepEqual(spec.fields.find((field) => field.name === 'account')?.kind, {
-			kind: 'id',
-			of: 'accounts'
+			kind: 'ref',
+			to: 'accounts'
 		});
 		assert.equal(
 			d.formSpec('quotes', (({ create: _create, ...rest }) => rest)(exposure), 'create'),
@@ -412,7 +414,7 @@ it.effect('committed: an update re-bases on what was sent; a create resets to de
 			create,
 			{},
 			{ title: 'B', total: '1', note: null, account: 'a' },
-			{ kind: 'pendingApproval', requestId: 'r', records: [] },
+			{ kind: 'pending_approval', requestId: 'r', records: [] },
 			text
 		);
 		assert.deepEqual(c.draft, { title: null, total: null, note: null, account: null });
@@ -542,6 +544,7 @@ it.live(
 				const spec = specOf(
 					'jobs',
 					{
+						record_label: 'record.title',
 						label: ['title'],
 						fields: {
 							title: { kind: 'text' },

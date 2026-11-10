@@ -7,6 +7,14 @@ import { database, exec, script } from './support.ts';
 type Case = { kind: FieldSpec; valid: readonly Json[]; invalid: readonly Json[] };
 const file = { id: 'file', name: 'file.bin', mime: 'application/octet-stream' };
 const cases: readonly Case[] = [
+	{
+		kind: { kind: 'int', many: true, min: 0, max: 10, min_items: 2, max_items: 3 },
+		valid: [
+			[1, 2],
+			[3, 4, 5]
+		],
+		invalid: [1, [1], [1, 11], [1, 2, 3, 4], [null, 2]]
+	},
 	{ kind: { kind: 'object', fields: {} }, valid: [{}], invalid: [{ extra: 1 }, [], null] },
 	{
 		kind: { kind: 'object', fields: { note: { kind: 'text', optional: true } } },
@@ -55,10 +63,11 @@ const cases: readonly Case[] = [
 	},
 	{
 		kind: {
-			kind: 'list',
-			min: 1,
-			max: 2,
-			of: { kind: 'object', optional: true, fields: { name: { kind: 'text' } } }
+			kind: 'json',
+			shape: { kind: 'object', optional: true, fields: { name: { kind: 'text' } } },
+			many: true,
+			min_items: 1,
+			max_items: 2
 		},
 		valid: [[null], [{ name: 'x' }, null]],
 		invalid: [[], [null, null, null], [{ name: null }]]
@@ -79,7 +88,7 @@ const cases: readonly Case[] = [
 		]
 	},
 	{
-		kind: { kind: 'file', accept: [], max: '1MB', multiple: true },
+		kind: { kind: 'file', accept: [], max: '1MB', many: true },
 		valid: [[], Array.from({ length: 25 }, () => file)],
 		invalid: [[null], [file, {}]]
 	},
@@ -106,7 +115,7 @@ const cases: readonly Case[] = [
 				day: { kind: 'date' },
 				amount: { kind: 'decimal', scale: 2 },
 				at: { kind: 'instant' },
-				id: { kind: 'id', of: 'entry' },
+				id: { kind: 'ref', to: 'entry' },
 				clock: { kind: 'time' }
 			}
 		},

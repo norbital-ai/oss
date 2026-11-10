@@ -30,6 +30,7 @@ afterEach(async () => {
 
 const declared: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: { name: { kind: 'text' } },
 		update: { columns: ['name'] },
@@ -38,7 +39,7 @@ const declared: NonNullable<KindsHost['catalog']> = {
 	}
 };
 const bare: NonNullable<KindsHost['catalog']> = {
-	jobs: { label: ['name'], fields: { name: { kind: 'text' } } }
+	jobs: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 };
 
 async function show({

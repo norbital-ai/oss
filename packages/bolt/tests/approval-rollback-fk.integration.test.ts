@@ -12,8 +12,16 @@ const manifest: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		folders: { description: 'A folder', label: 'name', fields: { name: { kind: 'text' } } },
-		documents: { description: 'A document', label: 'name', fields: { name: { kind: 'text' } } }
+		folders: {
+			description: 'A folder',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
+		documents: {
+			description: 'A document',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		'documents.folder': { to: 'folders', optional: true, onDelete: 'setNull' }

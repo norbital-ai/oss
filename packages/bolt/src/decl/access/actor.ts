@@ -19,14 +19,14 @@ type Member = {
 	phone: string | null;
 	external: boolean;
 	teams: readonly TeamName[];
-	teamPath: readonly string[];
+	team_path: readonly string[];
 	admin: boolean;
 	party: RecordRef | null;
 };
 
 /**
  * Who a request runs as (§3.9), discriminated by `kind`: a `member` (with teams and admin), an `envoy` answering a sender on
- * the instance it is deployed on, a public `visitor` of an app, an `apiKey`, or the `system` running an automation, a
+ * the instance it is deployed on, a public `visitor` of an app, an `api_key`, or the `system` running an automation, a
  * remote sync's read or write for one instance (`'<model>.sync.<sync>'`: the engine never sends a sync's own writes back
  * through it), or a platform run. `system` is the one reserved identity of the platform's own work: an automation run is
  * it, holding the automation's `policies` whoever started it (who did is the run's `trigger`, `ctx.run.trigger`), and
@@ -43,7 +43,7 @@ export type Actor =
 			linked?: Member;
 	  } // P32: the linked sender, either audience
 	| { kind: 'visitor'; app: AppName; visitor: string; anonymous?: true }
-	| { kind: 'apiKey'; key: Id<'sys_api_key'> }
+	| { kind: 'api_key'; key: Id<'sys_api_key'> }
 	| {
 			kind: 'system';
 			run: Id<'sys_run'>;

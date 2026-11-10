@@ -19,7 +19,7 @@ const manifest: EngineManifest = {
 	models: {
 		orders: {
 			description: 'An order',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		}
 	},
@@ -100,7 +100,7 @@ const setup = Effect.gen(function* () {
 			text: 'SELECT record_id FROM approval_request WHERE id=$1',
 			params: [id]
 		});
-	const decide = (requestId: string, decision: 'approve' | 'reject' | 'requestChanges') =>
+	const decide = (requestId: string, decision: 'approve' | 'reject' | 'request_changes') =>
 		approvals.decide({
 			requestId,
 			decision,
@@ -190,7 +190,7 @@ const setup = Effect.gen(function* () {
 	};
 });
 const request = (outcome: Outcome) => {
-	if (outcome.kind !== 'pendingApproval') throw new Error(JSON.stringify(outcome));
+	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
 	return outcome.requestId;
 };
 const ok = (outcome: Outcome) => {

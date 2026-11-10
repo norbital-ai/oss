@@ -5,11 +5,7 @@ import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
-import {
-	type EngineActor,
-	type RunTrigger,
-	type RunTriggerView
-} from '../engine/contracts.ts';
+import { type EngineActor, type RunTrigger, type RunTriggerView } from '../engine/contracts.ts';
 
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
@@ -57,7 +53,7 @@ const Member = Schema.Struct({
 	phone: Schema.NullOr(Schema.String),
 	external: Schema.Boolean,
 	teams: Schema.Array(Schema.String),
-	teamPath: Schema.Array(Schema.String),
+	team_path: Schema.Array(Schema.String),
 	admin: Schema.Boolean,
 	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String }))
 });
@@ -77,7 +73,7 @@ const Requestor = Schema.Union([
 		visitor: Schema.String,
 		anonymous: Schema.optionalKey(Schema.Literal(true))
 	}),
-	Schema.Struct({ kind: Schema.Literal('apiKey'), key: Schema.String })
+	Schema.Struct({ kind: Schema.Literal('api_key'), key: Schema.String })
 ]);
 /** An engine actor (`EngineActor`): a member, an envoy's turn, a visitor, an API key or the system identity's run. */
 export const EngineActorSchema: Schema.Codec<EngineActor> = Schema.Union([
@@ -181,7 +177,7 @@ export const ActBody = Schema.Struct({
 	input: Schema.Json,
 	issuedAt: Schema.String,
 	observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
-	onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
+	on_conflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
 });
 export type ActBody = typeof ActBody.Type;
 
@@ -229,7 +225,7 @@ export const WriteOutcome = Schema.Union([
 		)
 	}),
 	Schema.Struct({
-		kind: Schema.Literal('pendingApproval'),
+		kind: Schema.Literal('pending_approval'),
 		requestId: Schema.String,
 		records: Written
 	}),
@@ -414,7 +410,7 @@ export const AgentRow = Schema.Struct({
 	receipts: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
-				outcome: Schema.Literals(['committed', 'pendingApproval']),
+				outcome: Schema.Literals(['committed', 'pending_approval']),
 				callable: Schema.String,
 				records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })),
 				requestId: Schema.optionalKey(Schema.String)
@@ -555,7 +551,7 @@ const Start = Schema.Union([
 ]);
 export const Decide = Schema.Struct({
 	requestId: Schema.String,
-	decision: Schema.Literals(['approve', 'reject', 'requestChanges', 'withdraw']),
+	decision: Schema.Literals(['approve', 'reject', 'request_changes']),
 	reason: tolerant(Schema.String)
 });
 const ConvertSource = Schema.Union([

@@ -180,11 +180,16 @@ it.live(
 						csv: true,
 						catalog: {
 							jobs: {
+								record_label: 'record.name',
 								label: ['name'],
-								fields: { name: { kind: 'text' }, account: { kind: 'id', of: 'accounts' } },
+								fields: { name: { kind: 'text' }, account: { kind: 'ref', to: 'accounts' } },
 								relations: { account: { targets: ['accounts'] } }
 							},
-							accounts: { label: ['name'], fields: { name: { kind: 'text' } } }
+							accounts: {
+								record_label: 'record.name',
+								label: ['name'],
+								fields: { name: { kind: 'text' } }
+							}
 						}
 					})
 				);
@@ -310,6 +315,7 @@ it.live(
 					of: 'appointments',
 					catalog: {
 						appointments: {
+							record_label: 'record.name',
 							label: ['name'],
 							fields: { name: { kind: 'text' } },
 							syncs: { events: { kind: 'remote', with: 'google_calendar' } }
@@ -336,6 +342,7 @@ it.live("a model's import and export file syncs are rows of their own, run throu
 		const { bolt, started } = yield* browser(() => fakeBolt());
 		const catalog: NonNullable<KindsHost['catalog']> = {
 			jobs: {
+				record_label: 'record.name',
 				label: ['name'],
 				fields: { name: { kind: 'text' } },
 				syncs: { sheet: { kind: 'file', parser: ['json'], import: true, export: ['json'] } }
@@ -408,6 +415,7 @@ it.live(
 			const { bolt, started } = yield* browser(() => fakeBolt({ runs }));
 			const catalog: NonNullable<KindsHost['catalog']> = {
 				jobs: {
+					record_label: 'record.name',
 					label: ['name'],
 					fields: { name: { kind: 'text' } },
 					syncs: { sheet: { kind: 'file', import: true } }
@@ -473,61 +481,60 @@ it.live(
 		})
 );
 
-it.live(
-	'an import whose findings refuse says nothing was imported and lists them',
-	() =>
-		Effect.gen(function* () {
-			const rows = new Map<string, RunRow>();
-			const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
-				const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
-				const row = rows.get(id);
-				return Stream.make({ rows: row === undefined ? [] : [row], next: null }).pipe(
-					Stream.concat(Stream.never)
-				);
-			};
-			rows.set('run-1', {
-				id: 'run-1',
-				automation: 'jobs.sync.sheet',
-				status: 'succeeded',
-				result: {
-					applied: false,
-					findings: [{ at: 2, field: 'hours', message: 'expected an integer', severity: 'refuse' }]
-				}
-			});
-			const { bolt } = yield* browser(() => fakeBolt({ runs }));
-			const catalog: NonNullable<KindsHost['catalog']> = {
-				jobs: {
-					label: ['name'],
-					fields: { name: { kind: 'text' } },
-					syncs: { sheet: { kind: 'file', import: true } }
-				}
-			};
-			const target = yield* browser(() =>
-				show({
-					bolt,
-					catalog,
-					of: 'jobs',
-					upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
-				})
+it.live('an import whose findings refuse says nothing was imported and lists them', () =>
+	Effect.gen(function* () {
+		const rows = new Map<string, RunRow>();
+		const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
+			const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
+			const row = rows.get(id);
+			return Stream.make({ rows: row === undefined ? [] : [row], next: null }).pipe(
+				Stream.concat(Stream.never)
 			);
-			const input = element<HTMLInputElement>(target, '[data-view-import]');
-			Object.defineProperty(input, 'files', {
-				value: [new File(['x'], 'jobs.xlsx')],
-				configurable: true
-			});
-			input.dispatchEvent(new Event('change', { bubbles: true }));
-			yield* browser(() => settle());
-			assert.equal(row('import:sheet').dataset.status, 'failed');
-			assert.match(
-				textOf(element<HTMLElement>(row('import:sheet'), '[data-menu-error]')),
-				/Nothing was imported/
-			);
-			assert.match(
-				textOf(element<HTMLElement>(document, '[data-import-findings]')),
-				/Row 2 · Hours: expected an integer/
-			);
-			assert.equal(required(toasts.at(-1)).tone, 'error');
-		})
+		};
+		rows.set('run-1', {
+			id: 'run-1',
+			automation: 'jobs.sync.sheet',
+			status: 'succeeded',
+			result: {
+				applied: false,
+				findings: [{ at: 2, field: 'hours', message: 'expected an integer', severity: 'refuse' }]
+			}
+		});
+		const { bolt } = yield* browser(() => fakeBolt({ runs }));
+		const catalog: NonNullable<KindsHost['catalog']> = {
+			jobs: {
+				record_label: 'record.name',
+				label: ['name'],
+				fields: { name: { kind: 'text' } },
+				syncs: { sheet: { kind: 'file', import: true } }
+			}
+		};
+		const target = yield* browser(() =>
+			show({
+				bolt,
+				catalog,
+				of: 'jobs',
+				upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
+			})
+		);
+		const input = element<HTMLInputElement>(target, '[data-view-import]');
+		Object.defineProperty(input, 'files', {
+			value: [new File(['x'], 'jobs.xlsx')],
+			configurable: true
+		});
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+		yield* browser(() => settle());
+		assert.equal(row('import:sheet').dataset.status, 'failed');
+		assert.match(
+			textOf(element<HTMLElement>(row('import:sheet'), '[data-menu-error]')),
+			/Nothing was imported/
+		);
+		assert.match(
+			textOf(element<HTMLElement>(document, '[data-import-findings]')),
+			/Row 2 · Hours: expected an integer/
+		);
+		assert.equal(required(toasts.at(-1)).tone, 'error');
+	})
 );
 
 // Custom record-header actions use the same feedback as generated forms and toolbar items.
@@ -539,7 +546,7 @@ it.live(
 			const bolt = { t: (key: string) => (key === 'Refused' ? key : 'Localized') };
 			const outcomes: Outcome[] = [
 				{ kind: 'committed', output: null, records: [] },
-				{ kind: 'pendingApproval', requestId: 'request', records: [] },
+				{ kind: 'pending_approval', requestId: 'request', records: [] },
 				{ kind: 'refused', code: 'rule', message: 'Refused' },
 				{ kind: 'conflict', records: [] },
 				{ kind: 'unknown', invocation: 'retry-key' }
@@ -622,6 +629,7 @@ it.live(
 					bolt,
 					catalog: {
 						jobs: {
+							record_label: 'record.name',
 							label: ['name'],
 							fields: { name: { kind: 'text' } },
 							syncs: { sheet: { kind: 'file', import: true } }

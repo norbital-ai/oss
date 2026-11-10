@@ -16,8 +16,16 @@ const manifest = Result.getOrThrow(
 	decodeProjectedManifest({
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
 		models: {
-			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } },
-			logs: { description: 'A log line', label: 'line', fields: { line: { kind: 'text' } } }
+			quotes: {
+				description: 'A quote',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			},
+			logs: {
+				description: 'A log line',
+				record_label: 'record.line',
+				fields: { line: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {

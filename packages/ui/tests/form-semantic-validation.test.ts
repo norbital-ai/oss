@@ -17,6 +17,7 @@ const { default: Harness } = await import('./semantic-harness.svelte');
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' } },
 		create: { columns: ['title'] },
@@ -24,7 +25,7 @@ const catalog = {
 	}
 } satisfies NonNullable<KindsHost['catalog']>;
 const text = {
-	pendingApproval: 'held',
+	pending_approval: 'held',
 	conflict: 'conflict',
 	unknown: 'unknown',
 	running: 'running'

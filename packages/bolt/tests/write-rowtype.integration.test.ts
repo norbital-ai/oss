@@ -14,13 +14,13 @@ const manifest: EngineManifest = {
 	models: {
 		point: {
 			description: 'A parent named after a PostgreSQL type, with its child roll-up.',
-			label: 'code',
+			record_label: 'record.code',
 			key: ['code'],
 			fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'lines.amount' } }
 		},
 		line: {
 			description: 'A child named after a PostgreSQL type, with row alias collisions.',
-			label: 'code',
+			record_label: 'record.code',
 			key: ['code'],
 			fields: {
 				code: { kind: 'text' },
@@ -63,7 +63,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 			model: string,
 			verb: ActRequest['verb'],
 			input: Json,
-			onConflict?: 'update' | 'keep'
+			on_conflict?: 'update' | 'keep'
 		) =>
 			act(
 				{ manifest, db },
@@ -71,7 +71,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 					model,
 					verb,
 					input,
-					onConflict,
+					on_conflict,
 					mode: { _tag: 'Direct' },
 					key: `rowtype-${serial}`,
 					invocationId: `rowtype-${serial++}`,
@@ -92,7 +92,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 		yield* run('line', 'upsert', [{ code: 'L', amount: 5, point: PARENT }], 'update');
 		yield* run('line', 'import', {
 			rows: [{ code: 'IMPORTED', amount: 1, point: { code: 'P2' } }],
-			onConflict: 'update'
+			on_conflict: 'update'
 		});
 		yield* run('line', 'delete', [{ target: CHILD }]);
 		expect(

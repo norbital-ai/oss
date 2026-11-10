@@ -42,7 +42,7 @@
 		/** Seed rows of the view popover the viewer may edit or clear. */
 		initialFilter?: WhereOf<C>;
 		/** The cards' order within each lane; a viewer's sort replaces it (lane order stays the lanes'). */
-		orderBy?: OrderByOf<C>;
+		order_by?: OrderByOf<C>;
 		pageSize?: number;
 		/** The chrome (`ViewToolbar`): title, description, search, filter and sort (a sort orders the cards within each lane), actions, New. */
 		toolbar?: Toolbar<RowOf<C>>;
@@ -94,7 +94,7 @@
 		columns,
 		where,
 		initialFilter,
-		orderBy,
+		order_by,
 		pageSize = 25,
 		toolbar = {},
 		key
@@ -117,7 +117,7 @@
 		initialFilter: () => initialFilter
 	});
 	const scope = $derived(and(where, view.where));
-	const order = $derived(view.order.length > 0 ? orderOf(view.order) : orderBy);
+	const order = $derived(view.order.length > 0 ? orderOf(view.order) : order_by);
 	// the search is the lanes' (aggregate counts have none, so a searching board hides them)
 	let q = $state(''),
 		search = $state('');
@@ -186,7 +186,7 @@
 						listRequest(
 							kinds.catalog,
 							of,
-							{ where: scope, orderBy: order, search: search || undefined, limit: READ_LIMIT },
+							{ where: scope, order_by: order, search: search || undefined, limit: READ_LIMIT },
 							fields,
 							fields,
 							true
@@ -308,7 +308,7 @@
 						or: found.value.map(
 							(lane): Json =>
 								lane.where ?? {
-									[by]: lane.value === null ? { isNull: true } : { eq: encodeWire(lane.value) }
+									[by]: lane.value === null ? { is_null: true } : { eq: encodeWire(lane.value) }
 								}
 						)
 					};
@@ -360,7 +360,7 @@
 		and(
 			scope,
 			lane.where ?? {
-				[by]: lane.value === null ? { isNull: true } : { eq: encodeWire(lane.value) }
+				[by]: lane.value === null ? { is_null: true } : { eq: encodeWire(lane.value) }
 			}
 		);
 	// the lane expanded in the dialog, by its key; the button that opened it takes the focus back
@@ -614,7 +614,7 @@
 										onSelect={selectCard}
 										onRows={(page, ids) => registerRows(laneKey, page, ids)}
 										lane={lane.label}
-										orderBy={order}
+										order_by={order}
 										search={search || undefined}
 										{pageSize}
 										where={laneWhere(lane)}
@@ -662,7 +662,7 @@
 					dot={dotOf(expandedLane.value)}
 					count={expandedLane.count}
 					where={laneWhere(expandedLane)}
-					orderBy={order}
+					order_by={order}
 					{search}
 					{pageSize}
 					viewKey={key ?? of}

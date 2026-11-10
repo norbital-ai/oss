@@ -24,7 +24,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			notes: {
 				description: 'A note',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					due: { kind: 'date', optional: true, default: { var: 'today' } },

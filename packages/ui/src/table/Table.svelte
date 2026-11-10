@@ -85,7 +85,7 @@
 		/** Seed rows of the view popover the viewer may edit or clear; a cleared choice is kept in the URL. */
 		initialFilter?: S extends string ? WhereOf<S> : Where;
 		/** The initial sort; a viewer's sort replaces it and clearing restores it. */
-		orderBy?: S extends string ? OrderByOf<S> : OrderBy;
+		order_by?: S extends string ? OrderByOf<S> : OrderBy;
 		pageSize?: 10 | 25 | 50 | 100 | 200;
 		/** Financial reports retain a horizontally scrollable grid on narrow screens. */
 		layout?: 'responsive' | 'grid';
@@ -175,7 +175,7 @@
 		where,
 		hiddenWhere,
 		initialFilter,
-		orderBy,
+		order_by,
 		pageSize = 25,
 		layout = 'responsive',
 		toolbar = {},
@@ -407,7 +407,7 @@
 
 	// ── the page (rule 7: cursor-only, live) ──
 	const scope = $derived(and(and(where, hiddenWhere), vs.where));
-	const order = $derived(vs.order.length > 0 ? orderOf(vs.order) : orderBy);
+	const order = $derived(vs.order.length > 0 ? orderOf(vs.order) : order_by);
 	/** The page's search: the declared index's `search`, else a `where` over the label fields. */
 	const searched = $derived(
 		indexed
@@ -441,7 +441,7 @@
 							listRequest(
 								kinds.catalog,
 								name,
-								{ ...searched, orderBy: order, limit, after: at },
+								{ ...searched, order_by: order, limit, after: at },
 								fields,
 								refs
 							)
@@ -501,9 +501,7 @@
 		new Map(
 			shownRows.map<[ReadRow, Values]>((row) => [
 				row,
-				typeof row['id'] === 'string'
-					? (unref(kinds.catalog, model, refs, [row], client?.locale)[0] ?? row)
-					: row
+				typeof row['id'] === 'string' ? (unref(kinds.catalog, model, refs, [row])[0] ?? row) : row
 			])
 		)
 	);
@@ -649,7 +647,7 @@
 									listRequest(
 										kinds.catalog,
 										name,
-										{ ...searched, orderBy: order, limit: READ_LIMIT },
+										{ ...searched, order_by: order, limit: READ_LIMIT },
 										fields,
 										refs,
 										true

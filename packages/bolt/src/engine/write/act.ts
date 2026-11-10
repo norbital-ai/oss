@@ -260,7 +260,7 @@ export const idempotency = Effect.fn('Bolt.idempotency')(function* (
 		canonical({
 			callable: `${r.model}.${r.verb}`,
 			input: r.input,
-			onConflict: r.onConflict ?? null
+			on_conflict: r.on_conflict ?? null
 		})
 	);
 	const stored = Effect.fnUntraced(function* () {
@@ -328,7 +328,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	if (
 		sel === undefined ||
 		(r.verb === 'upsert' &&
-			(r.onConflict === undefined ||
+			(r.on_conflict === undefined ||
 				(byId ? sync === undefined && spec.update === undefined : key0.length === 0)))
 	)
 		return none(refused('forbidden', `${r.model} does not accept ${r.verb}.`));
@@ -396,12 +396,12 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		return none(refused('notFound', `No ${r.model} has this id.`, [missing, 'id']));
 	inputs.forEach((x, i) => {
 		const path = [i];
-		if (r.verb === 'create' || (imp !== undefined && imp.onConflict === undefined))
+		if (r.verb === 'create' || (imp !== undefined && imp.on_conflict === undefined))
 			f.create(r.model, sel, x, path);
 		else if (imp !== undefined)
 			f.create(r.model, sel, x, path, undefined, {
 				on: key0,
-				onConflict: imp.onConflict === 'update' ? 'update' : 'keep'
+				on_conflict: imp.on_conflict === 'update' ? 'update' : 'keep'
 			});
 		else if (byId) {
 			const { id, ...row } = x as Obj;
@@ -413,14 +413,14 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					row,
 					path,
 					undefined,
-					key0.length === 0 ? undefined : { on: key0, onConflict: r.onConflict! }
+					key0.length === 0 ? undefined : { on: key0, on_conflict: r.on_conflict! }
 				);
 				upserted.push(f.items[at]?.change.id ?? null);
 			} else {
 				upserted.push(id);
 				if (sync !== undefined && !onFile.has(k(r.model, id)))
 					f.create(r.model, sel, row, path, undefined, undefined, id);
-				else if (r.onConflict === 'update')
+				else if (r.on_conflict === 'update')
 					f.update(
 						r.model,
 						sync === undefined && spec.update !== undefined
@@ -503,7 +503,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					: []
 			),
 			...[...matched].map(([item, row]) => [item.change.model, String(row['id'])] as const),
-			...(r.onConflict === 'keep'
+			...(r.on_conflict === 'keep'
 				? [...onFile.values()].map((row) => [r.model, String(row['id'])] as const)
 				: []),
 			...f.items.flatMap((i) => i.refs.map((x) => [x.to, x.id] as const))
@@ -557,7 +557,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		}
 	};
 	const readable = (c: string, row: RowData) => readableBy(auth, c, row, visibility);
-	if (byId && r.onConflict === 'keep')
+	if (byId && r.on_conflict === 'keep')
 		for (const id of upserted) {
 			if (id === null) continue;
 			const row = onFile.get(k(r.model, id));
@@ -696,7 +696,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 									? {}
 									: { unchanged: planned.commit.unchanged })
 							}
-						: { kind: 'pendingApproval', requestId: request, records }
+						: { kind: 'pending_approval', requestId: request, records }
 				);
 			}
 			if (imp?.dryRun)
@@ -728,7 +728,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 					outcome,
 					captured: row.captured,
 					...(row.read_guards_applied === true &&
-					(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+					(outcome.kind === 'committed' || outcome.kind === 'pending_approval')
 						? { readGuardsConsumed: true as const }
 						: {}),
 					v: e.committed === undefined ? 0 : yield* e.committed(row, outcome)
@@ -1308,7 +1308,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			if (
 				found !== undefined &&
 				((item.parent === undefined && !readableBy(auth, c.model, found, visibility)) ||
-					(root && imp.onConflict === 'refuse'))
+					(root && imp.on_conflict === 'refuse'))
 			)
 				return {
 					guest: runs,
@@ -1330,11 +1330,11 @@ const plan = Effect.fn('Bolt.plan')(function* (
 						? 'skipped'
 						: found === undefined
 							? 'created'
-							: c.onConflict === 'keep'
+							: c.on_conflict === 'keep'
 								? 'kept'
 								: 'updated'
 				});
-			if (skip || (found !== undefined && c.onConflict === 'keep')) {
+			if (skip || (found !== undefined && c.on_conflict === 'keep')) {
 				items = items.filter((one) => one !== item && !descendants(one, item));
 				continue;
 			}
@@ -2868,7 +2868,7 @@ export const WritesLive = Layer.effect(
 										payload: encodeWire({
 											input: request.input,
 											observed: request.observed,
-											onConflict: request.onConflict
+											on_conflict: request.on_conflict
 										})
 									},
 									work

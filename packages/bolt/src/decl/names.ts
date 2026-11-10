@@ -258,14 +258,14 @@ export type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : t
 // ── columns ──
 /** Read-only system columns on every workspace row (§3.3.9); a built-in layer row has its key alone (`table`). */
 export type SystemColumns<M> = M extends SystemModelName
-	? { id: { kind: 'id'; of: M & string } }
+	? { id: { kind: 'ref'; to: M & string } }
 	: {
-			id: { kind: 'id'; of: M & string };
+			id: { kind: 'ref'; to: M & string };
 			revision: { kind: 'int' };
 			created_at: { kind: 'instant' };
 			updated_at: { kind: 'instant' };
-			created_by: { kind: 'id'; of: 'sys_user'; optional: true };
-			updated_by: { kind: 'id'; of: 'sys_user'; optional: true };
+			created_by: { kind: 'ref'; to: 'sys_user'; optional: true };
+			updated_by: { kind: 'ref'; to: 'sys_user'; optional: true };
 		};
 type ColumnsOf<M> = FieldsOf<M> & ComputedOf<M> & SystemColumns<M>;
 // Cache concrete columns; keep the original intersection semantics for union names.

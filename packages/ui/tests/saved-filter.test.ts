@@ -17,6 +17,7 @@ import type { ModelExposure } from '../src/kinds/context.ts';
 
 const catalog: Record<string, ModelExposure> = {
 	items: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -34,7 +35,7 @@ const scope = context(
 				amount: { kind: 'number' },
 				enabled: { kind: 'bool' },
 				date: { kind: 'date' },
-				ids: { kind: 'list', of: { kind: 'text' } }
+				ids: { kind: 'text', many: true }
 			}
 		}
 	},
@@ -100,7 +101,7 @@ it('saved rule fields retain hidden readable bindings and nullable record condit
 	const editable = savedFilterCatalog(original);
 	for (const [model, where] of [
 		['obligation', { state: { eq: 'OPEN' }, subject_id: { eq: { var: 'ctx.event.row.id' } } }],
-		['entry', { payslip_id: { isNull: true }, employment_id: { eq: { var: 'ctx.event.row.id' } } }]
+		['entry', { payslip_id: { is_null: true }, employment_id: { eq: { var: 'ctx.event.row.id' } } }]
 	] as const) {
 		const rows = fromWhere(editable, model, where, model, '', captured);
 		expect(rows).not.toBeNull();

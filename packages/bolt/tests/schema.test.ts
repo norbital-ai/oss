@@ -61,7 +61,7 @@ describe('next schema: fingerprint and plan', () => {
 			'signings',
 			tableOf({
 				description: 'signings',
-				label: 'status',
+				record_label: 'record.status',
 				fields: {
 					status: {
 						kind: 'state',
@@ -78,7 +78,7 @@ describe('next schema: fingerprint and plan', () => {
 				check: {
 					void_needs_reason: {
 						status: { ne: 'voided', in: ['unstamped', 'voided'] },
-						reason: { isNull: false }
+						reason: { is_null: false }
 					}
 				}
 			})
@@ -121,7 +121,7 @@ describe('next schema: fingerprint and plan', () => {
 			'prices',
 			tableOf({
 				description: 'prices',
-				label: 'code',
+				record_label: 'record.code',
 				fields: {
 					code: { kind: 'text' },
 					unit: { kind: 'money', currency: 'SGD', scale: 4 },
@@ -292,7 +292,11 @@ describe('next schema: fingerprint and plan', () => {
 			tz: 'UTC',
 			currency: null,
 			tables: {
-				notes: tableOf({ description: 'n', label: 'body', fields: { body: { kind: 'text' } } })
+				notes: tableOf({
+					description: 'n',
+					record_label: 'record.body',
+					fields: { body: { kind: 'text' } }
+				})
 			}
 		};
 		const objects = storeSync(schemaObjects(s));

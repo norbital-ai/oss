@@ -46,7 +46,7 @@ const fixture = (over: Partial<Client> = {}) => {
 				setup: {
 					kind: 'form',
 					steps: [{ text: 'Paste the key the ERP issued.' }],
-					fields: [{ name: 'apiKey', label: 'API key', secret: true }]
+					fields: [{ name: 'api_key', label: 'API key', secret: true }]
 				}
 			}
 		]

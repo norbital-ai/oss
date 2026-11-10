@@ -28,7 +28,7 @@ const code = (f: () => unknown) => {
 
 describe('next query: decode', () => {
 	it('decodes cursor keys as string-or-null JSON and keeps them parameterized', () => {
-		const query = storeSync(read(cat, 'orders', { limit: 2, orderBy: { note: 'asc' } }));
+		const query = storeSync(read(cat, 'orders', { limit: 2, order_by: { note: 'asc' } }));
 		if (query.kind !== 'read') throw new Error('Expected the native list read');
 		const first = storeSync(compile(cat, query, readOptions({ as: 'workspace' }, bindings)));
 		const after = (cursor: string) =>
@@ -113,7 +113,7 @@ describe('next query: decode', () => {
 		expect(
 			storeSync(
 				where(cat, 'notes', {
-					about: { orders: { is: { qty: { gt: 1 } } }, accounts: { isNull: true } }
+					about: { orders: { is: { qty: { gt: 1 } } }, accounts: { is_null: true } }
 				})
 			)
 		).toEqual({
@@ -154,7 +154,7 @@ describe('next query: decode', () => {
 				storeSync(
 					compile(
 						cat,
-						storeSync(read(cat, 'notes', { limit: 1, where: { created_at: { isNull: false } } })),
+						storeSync(read(cat, 'notes', { limit: 1, where: { created_at: { is_null: false } } })),
 						readOptions({ as: 'caller', authority: rep }, bindings)
 					)
 				)

@@ -45,7 +45,7 @@ export type Op =
 	| 'in'
 	| 'nin'
 	| 'like'
-	| 'isNull'
+	| 'is_null'
 	| 'notNull'
 	| 'has'
 	| 'hasAny'
@@ -71,7 +71,7 @@ const OpSchema = Schema.Literals([
 	'in',
 	'nin',
 	'like',
-	'isNull',
+	'is_null',
 	'notNull',
 	'has',
 	'hasAny',
@@ -263,7 +263,7 @@ export const manyAt = (
 	return { prefix: [...prefix, ...steps.map((r) => ({ k: 'is' as const, rel: r }))], name };
 };
 const keysOf = (v: object) => Object.keys(v);
-/** The where/orderBy decoder's one object test: an initial filter, a URL and an AI answer arrive as untyped JSON. */
+/** The where/order_by decoder's one object test: an initial filter, a URL and an AI answer arrive as untyped JSON. */
 const jsonObject = (v: Json | undefined): v is { readonly [key: string]: Json } =>
 	typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -351,7 +351,7 @@ export const OP_LABEL: { readonly [op in Op]: string } = {
 	in: 'is any of',
 	nin: 'is none of',
 	like: 'contains',
-	isNull: 'is empty',
+	is_null: 'is empty',
 	notNull: 'is not empty',
 	has: 'has',
 	hasAny: 'has any of',
@@ -384,7 +384,7 @@ const CMP_OPS: readonly Op[] = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte'];
 const EQUALITY_OPS: readonly Op[] = ['eq', 'ne', 'in', 'nin'];
 /** The grammar's operators for a path by its kind (`during` needs the catalogue's spans, so it waits for them). */
 function kindOps(r: Resolved): readonly Op[] {
-	const nulls: readonly Op[] = r.nullable ? ['isNull', 'notNull'] : [];
+	const nulls: readonly Op[] = r.nullable ? ['is_null', 'notNull'] : [];
 	if (r.leaf === 'rel') return [...EQUALITY_OPS, ...nulls];
 	const k = r.kind;
 	if ((k.kind === 'text' || k.kind === 'enum') && k.many)
@@ -392,18 +392,13 @@ function kindOps(r: Resolved): readonly Op[] {
 	if (k.kind === 'seq') return [...EQUALITY_OPS, ...nulls];
 	const own: readonly Op[] = Match.value(k.kind).pipe(
 		Match.when('text', (): readonly Op[] => ['like', ...EQUALITY_OPS]),
-		Match.whenOr('enum', 'state', 'id', 'currency', (): readonly Op[] => EQUALITY_OPS),
+		Match.whenOr('enum', 'state', 'ref', 'currency', (): readonly Op[] => EQUALITY_OPS),
 		Match.when('bool', (): readonly Op[] => ['eq']),
-		Match.whenOr(
-			'int',
-			'decimal',
-			'money',
-			'number',
-			'count',
-			'sum',
-			'duration',
-			(): readonly Op[] => [...CMP_OPS, 'in', 'nin']
-		),
+		Match.whenOr('int', 'decimal', 'money', 'number', 'count', 'sum', (): readonly Op[] => [
+			...CMP_OPS,
+			'in',
+			'nin'
+		]),
 		Match.whenOr('time', 'date', 'instant', (): readonly Op[] => CMP_OPS),
 		Match.when('period', (): readonly Op[] => [
 			'contains',
@@ -648,7 +643,7 @@ export function complete(n: Node): boolean {
 									typeof n.n === 'string' &&
 									/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(n.n) &&
 									Number.isFinite(Date.parse(n.n)))));
-	if (['isNull', 'notNull', 'isEmpty', 'notEmpty'].includes(n.op)) return true;
+	if (['is_null', 'notNull', 'isEmpty', 'notEmpty'].includes(n.op)) return true;
 	const a = n.arg;
 	if (a === null) return false;
 	if ('lit' in a) return a.lit !== null && a.lit !== '';
@@ -662,10 +657,10 @@ function leafOps(
 ): Json {
 	const a = n.arg;
 	switch (n.op) {
-		case 'isNull':
-			return { isNull: true };
+		case 'is_null':
+			return { is_null: true };
 		case 'notNull':
-			return { isNull: false };
+			return { is_null: false };
 		case 'isEmpty':
 			return { isEmpty: true };
 		case 'notEmpty':
@@ -737,7 +732,7 @@ function lowerWhere(cat: Catalog, model: string, n: Node, clock?: FilterClock): 
 	let body = leafOps(n, clock, instant);
 	if (body === null) return null;
 	// a record picked by label is sent in the `is` form (it needs the relation exposed, never its FK column); variables
-	// and `isNull` stay on the FK
+	// and `is_null` stay on the FK
 	if (r.leaf === 'rel' && n.arg !== null && ('lit' in n.arg || 'list' in n.arg))
 		body = { is: { id: body } };
 	return wrap(steps, { [name]: arm === undefined ? body : { [arm]: body } });
@@ -827,7 +822,7 @@ function retainedArg(
 		from === null ||
 		to === null ||
 		arg === null ||
-		['isNull', 'notNull', 'isEmpty', 'notEmpty'].includes(op)
+		['is_null', 'notNull', 'isEmpty', 'notEmpty'].includes(op)
 	)
 		return null;
 	if (arg._tag === 'var') return varError(to, op, arg.var, variables) === undefined ? arg : null;
@@ -1003,9 +998,9 @@ function fieldNodes(
 		if (k === 'notNull' || k === 'notEmpty' || k === 'during') return null;
 		let op: Op = k,
 			arg: Arg | null = null;
-		if (k === 'isNull' || k === 'isEmpty') {
+		if (k === 'is_null' || k === 'isEmpty') {
 			if (typeof v !== 'boolean') return null;
-			op = k === 'isNull' ? (v ? 'isNull' : 'notNull') : v ? 'isEmpty' : 'notEmpty';
+			op = k === 'is_null' ? (v ? 'is_null' : 'notNull') : v ? 'isEmpty' : 'notEmpty';
 		} else if (k === 'like' && varOf(v) !== null) {
 			arg = argOf(r, op, v, variables);
 			if (arg === null) return null;
@@ -1157,7 +1152,7 @@ export function fromWhere(
 	return out;
 }
 
-/** Child fields a many-relation aggregate may name (§3.3.9: numbers and durations; `min`/`max` also dates). */
+/** Child fields a many-relation aggregate may name (§3.3.9: numbers; `min`/`max` also dates). */
 function aggregable(cat: Catalog, child: string, q: Quant): string[] {
 	const x = cat[child];
 	if (x === undefined) return [];
@@ -1165,7 +1160,6 @@ function aggregable(cat: Catalog, child: string, q: Quant): string[] {
 		'int',
 		'decimal',
 		'money',
-		'duration',
 		'number',
 		...(q === 'min' || q === 'max' ? ['date', 'instant'] : [])
 	]);
@@ -1393,7 +1387,7 @@ export function matches(
 	if (n.arg !== null && 'var' in n.arg && valueObject(a) && 'var' in a)
 		throw new Error('Resolve variables before applying this local filter.');
 	switch (n.op) {
-		case 'isNull':
+		case 'is_null':
 			return v === null;
 		case 'notNull':
 			return v !== null;

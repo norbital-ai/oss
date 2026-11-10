@@ -7,7 +7,7 @@ import { model } from '../../../../decl/model.ts';
 export default model('sys_message', {
 	description:
 		'A message in a conversation: a transcript step, a queued input, or an integration message in or out.',
-	label: 'preview',
+	record_label: 'record.preview',
 	fields: {
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		conversation: { kind: 'text', optional: true },
@@ -58,18 +58,17 @@ export default model('sys_message', {
 		/** When a sent message with no report yet counts as delivered, presumed (the provider's quiet window). */
 		presume_at: { kind: 'instant', optional: true }
 	},
-	index: [
-		['conversation', 'seq'],
-		['integration', 'provider_id']
-	],
+
 	table: {
 		primary: 'text',
-		identity: 'seq',
-		indexes: [
-			{ on: ['conversation'], where: { state: { eq: 'queued' } } },
-			{ on: ['conversation'], where: { state: { eq: 'pending' } } },
-			{ on: ['seq'], where: { status: { in: ['queued', 'sending'] } } }
-		]
+		identity: 'seq'
 	},
-	outputs: { default: { fields: 'all' } }
+	outputs: { default: { fields: 'all' } },
+	indexes: {
+		by_conversation_seq: { on: ['conversation', 'seq'] },
+		by_integration_provider_id: { on: ['integration', 'provider_id'] },
+		by_conversation: { on: ['conversation'], where: { state: { eq: 'queued' } } },
+		by_conversation_2: { on: ['conversation'], where: { state: { eq: 'pending' } } },
+		by_seq: { on: ['seq'], where: { status: { in: ['queued', 'sending'] } } }
+	}
 });

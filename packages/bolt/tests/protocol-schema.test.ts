@@ -68,7 +68,7 @@ describe('the wire Schemas', () => {
 			input: [{ total: { $dec: '1.20' } }],
 			issuedAt: '2026-10-14T00:00:00.000Z',
 			observed: { o1: 3 },
-			onConflict: 'keep'
+			on_conflict: 'keep'
 		});
 		for (const outcome of [
 			{
@@ -76,7 +76,7 @@ describe('the wire Schemas', () => {
 				output: { id: 'o1' },
 				records: [{ model: 'orders', id: 'o1', revision: 1 }]
 			},
-			{ kind: 'pendingApproval', requestId: 'r1', records: [] },
+			{ kind: 'pending_approval', requestId: 'r1', records: [] },
 			{
 				kind: 'refused',
 				code: 'unique',
@@ -193,7 +193,7 @@ describe('the status map (rule 32)', () => {
 			message: code
 		});
 		expect(statusOf({ kind: 'committed', output: null, records: [] })).toBe(200);
-		expect(statusOf({ kind: 'pendingApproval', requestId: 'r', records: [] })).toBe(202);
+		expect(statusOf({ kind: 'pending_approval', requestId: 'r', records: [] })).toBe(202);
 		expect(statusOf({ kind: 'conflict', records: [] })).toBe(409);
 		expect(statusOf({ kind: 'unknown', invocation: 'i' })).toBe(504);
 		expect(

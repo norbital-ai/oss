@@ -10,11 +10,12 @@ import {
 	type KindSpec,
 	type TableSpec
 } from '@norbital-ai/store';
+import { Schema } from 'effect';
 import type { ModelSpec } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import { SYSTEM } from '../system/index.ts';
-import { labelPaths, recordLabelExpression } from '@norbital-ai/std/label';
+import { labelPaths } from '@norbital-ai/std/label';
 
 /**
  * A model as the store's table: a workspace model is audited (its `id`, `revision` and created/updated columns) with
@@ -24,7 +25,6 @@ export function tableOf(model: ModelSpec): TableSpec {
 	const {
 		description: _d,
 		icon: _i,
-		label: _l,
 		record_label: _rl,
 		table,
 		key,
@@ -40,7 +40,7 @@ export function tableOf(model: ModelSpec): TableSpec {
 		})
 	);
 	const natural = key === undefined ? {} : { natural: key };
-	const label = recordLabelExpression(model);
+	const label = model.record_label;
 	const recordLabel = label === undefined ? {} : { recordLabel: label };
 	if (table === undefined)
 		return { ...storage, fields, ...natural, ...recordLabel, audit: true, nativeRules: 2 };
@@ -52,8 +52,7 @@ export function tableOf(model: ModelSpec): TableSpec {
 		...recordLabel,
 		nativeRules: 2,
 		key: typeof p === 'object' ? [p.field] : p,
-		...(table.identity === undefined ? {} : { identity: table.identity }),
-		...(table.indexes === undefined ? {} : { indexes: table.indexes })
+		...(table.identity === undefined ? {} : { identity: table.identity })
 	};
 }
 /**
@@ -71,7 +70,14 @@ export function tablesOf(
 	for (const [key, r] of Object.entries({ ...SYSTEM.relationships, ...relationships })) {
 		const [model = '', field = ''] = key.split('.');
 		const own = refs.get(model) ?? {};
-		own[field] = { kind: 'ref', ...r };
+		const { where, ...relationship } = r;
+		own[field] = {
+			kind: 'ref',
+			...relationship,
+			...(where === undefined
+				? {}
+				: { where: Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(where) })
+		};
 		refs.set(model, own);
 	}
 	return Object.fromEntries(

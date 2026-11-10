@@ -47,8 +47,7 @@ function transitionLayout(change: () => void): void {
 			: (document as ViewTransitionDocument).startViewTransition;
 	if (
 		start === undefined ||
-		(typeof window !== 'undefined' &&
-			window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+		(typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
 	) {
 		change();
 		return;
@@ -166,9 +165,7 @@ export class FormState {
 				? Object.fromEntries(
 						Object.entries(spec.children ?? {}).flatMap(([relation]) => {
 							const seeded = prefill[relation];
-							return Array.isArray(seeded)
-								? [[relation, seeded.filter(valueObject)] as const]
-								: [];
+							return Array.isArray(seeded) ? [[relation, seeded.filter(valueObject)] as const] : [];
 						})
 					)
 				: {};
@@ -289,8 +286,7 @@ export class FormState {
 			}
 	}
 	edit(): void {
-		if (!this.spec.readonly && this.mode === 'view')
-			transitionLayout(() => (this.mode = 'edit'));
+		if (!this.spec.readonly && this.mode === 'view') transitionLayout(() => (this.mode = 'edit'));
 	}
 	view(): void {
 		transitionLayout(() => {
@@ -304,8 +300,9 @@ export class FormState {
 	fieldDirty(name: string): boolean {
 		return (
 			this.mode !== 'view' &&
-			Object.keys(changed({ [name]: this.base[name] ?? null }, { [name]: this.values[name] ?? null }))
-				.length > 0
+			Object.keys(
+				changed({ [name]: this.base[name] ?? null }, { [name]: this.values[name] ?? null })
+			).length > 0
 		);
 	}
 	expectCapabilities(): void {
@@ -479,7 +476,7 @@ export class FormState {
 		const target = this.spec.target;
 		if (
 			target.of === 'model' &&
-			(outcome.kind === 'committed' || outcome.kind === 'pendingApproval')
+			(outcome.kind === 'committed' || outcome.kind === 'pending_approval')
 		) {
 			const own = outcome.records.find(
 				(record) => record.model === target.model && record.id === target.id
@@ -496,7 +493,7 @@ export class FormState {
 		this.errors = settled.errors;
 		this.notice = settled.notice;
 		if (settled.newKey) this.#key = crypto.randomUUID();
-		if (outcome.kind === 'committed' || outcome.kind === 'pendingApproval') this.children = {};
+		if (outcome.kind === 'committed' || outcome.kind === 'pending_approval') this.children = {};
 		this.#persist();
 		for (const receive of this.#beforeOutcomes) receive(outcome);
 		for (const receive of this.#outcomes) receive(outcome);

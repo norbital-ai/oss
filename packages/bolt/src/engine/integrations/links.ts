@@ -640,8 +640,8 @@ export const integrationLinks = (
 						BoltError.make(
 							outcome.kind === 'refused'
 								? outcome.code
-								: outcome.kind === 'pendingApproval'
-									? 'pendingApproval'
+								: outcome.kind === 'pending_approval'
+									? 'pending_approval'
 									: 'conflict',
 							'admission',
 							outcome.kind === 'refused' ? outcome.message : 'The import start was not applied.'

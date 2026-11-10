@@ -153,7 +153,7 @@ export type KindSpec = {
 	readonly shape?: KindSpec;
 	readonly rest?: KindSpec;
 };
-const INLINE = new Set(['json', 'list', 'object', 'record']);
+const INLINE = new Set(['json', 'object', 'record']);
 /** What the catalog reads of a table: its fields and computed fields, its key and audit columns, and its search. */
 export type CatalogTable = {
 	readonly fields: { readonly [name: string]: KindSpec };
@@ -203,7 +203,6 @@ const PG: { readonly [kind: string]: string } = {
 	currency: 'text',
 	int: 'int8',
 	count: 'int8',
-	duration: 'int8',
 	number: 'float8',
 	decimal: 'numeric',
 	money: 'numeric',
@@ -214,7 +213,6 @@ const PG: { readonly [kind: string]: string } = {
 	time: 'time',
 	id: 'uuid',
 	json: 'jsonb',
-	list: 'jsonb',
 	object: 'jsonb',
 	file: 'jsonb',
 	custom: 'jsonb',
@@ -225,20 +223,23 @@ const PG: { readonly [kind: string]: string } = {
 /** A field of kind `k` as the compilers read it: its column, Postgres type and options. */
 export function fieldInfo(name: string, k: KindSpec, extra: Partial<FieldInfo> = {}): FieldInfo {
 	const kind = k.kind === 'seq' ? (k.pattern === undefined ? 'int' : 'text') : k.kind;
+	const nativeMany = k.many === true && (kind === 'text' || kind === 'enum');
 	const pg =
-		kind === 'period'
-			? k.of === 'date'
-				? 'daterange'
-				: 'tstzrange'
-			: k.many
-				? 'text[]'
-				: (PG[kind] ?? 'text');
+		k.many === true && !nativeMany
+			? 'jsonb'
+			: kind === 'period'
+				? k.of === 'date'
+					? 'daterange'
+					: 'tstzrange'
+				: k.many
+					? 'text[]'
+					: (PG[kind] ?? 'text');
 	return {
 		name,
 		kind,
 		column: name,
 		pg,
-		...(k.many ? { many: true } : {}),
+		...(nativeMany ? { many: true } : {}),
 		...(k.format === 'email' ? { email: true } : {}),
 		...(k.format === 'phone' ? { phone: true } : {}),
 		...(k.format === 'team' ? { team: true } : {}),
@@ -256,7 +257,7 @@ export function fieldInfo(name: string, k: KindSpec, extra: Partial<FieldInfo> =
 			? { state: { initial: k.initial, states: k.states } }
 			: {}),
 		...(kind === 'id' && typeof k.of === 'string' ? { of: k.of } : {}),
-		...(INLINE.has(kind) ? { shape: k } : {}),
+		...(INLINE.has(kind) || (k.many === true && !nativeMany) ? { shape: k } : {}),
 		...extra
 	};
 }
@@ -303,7 +304,7 @@ export function catalogOf(
 					)
 				);
 		for (const [n, k] of Object.entries(spec.fields))
-			if (k.kind !== 'ref') f.set(n, fieldInfo(n, k));
+			if (k.kind !== 'ref' || k.many === true) f.set(n, fieldInfo(n, k));
 		for (const [n, c] of Object.entries(spec.computed ?? {}))
 			f.set(n, fieldInfo(n, { kind: c.kind }, { computed: true }));
 		fields.set(name, f);
@@ -312,7 +313,7 @@ export function catalogOf(
 	}
 	for (const [from, spec] of Object.entries(specs))
 		for (const [fk, rel] of Object.entries(spec.fields)) {
-			if (rel.kind !== 'ref' || rel.to === undefined) continue;
+			if (rel.kind !== 'ref' || rel.many === true || rel.to === undefined) continue;
 			const own = fields.get(from);
 			if (own === undefined) continue;
 			const targets = typeof rel.to === 'string' ? [rel.to] : [...rel.to];

@@ -8,7 +8,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 
 - A read is one JSON layer map. A key without a dot names a root with `outputs.default`, at most once per request. A dotted key is a layer of that root's output and implies its parents.
 - A root reads one output (`output`, `default` when absent) that a held policy must grant.
-- A layer takes `where`, `fields`, `orderBy`, `limit`, `search`, `aggregate`. Only a root takes `output`, `after`, `asOf`.
+- A layer takes `where`, `fields`, `order_by`, `limit`, `search`, `aggregate`. Only a root takes `output`, `after`, `as_of`.
 - A named ref layer replaces its FK with the row or null; a many-layer is its rows.
 - The answer maps each root to `{ rows, next, total }`. `total` counts every match in the same statement, linear in the match. An index search root and a nested many-layer carry none: use `aggregate` on that layer.
 - A user filter composes with the policy per key (`where` AND, `limit` capped); nothing widens it.
@@ -37,7 +37,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 - Pass `bolt.clock('day').today` or a minute or hour clock's `now` as literal inputs. See [dates-and-time.md](dates-and-time.md).
 - A value position may hold `{ field: '<column>' }` or `{ var: '<CEL>' }` over `requestor` (`id`, `email`, `phone`, `party`, `visitor`, `instance`, `teams`, `teamTree`, `scopes.<policy>`) and the clock, evaluated once per read and checked against the field's kind.
 - Time expressions are edge-only: view filters, the agent's read and described filters evaluate them; the store refuses them.
-- A prior state of a record is `bolt.history` on a page, or a root `asOf` instant in server code.
+- A prior state of a record is `bolt.history` on a page, or a root `as_of` instant in server code.
 
 ## SSR pages
 
@@ -65,7 +65,7 @@ Use `query` for every read, in pages and server code. Keep ids, decimals and dat
 
 ## Observed revisions
 
-An automation that reads, waits for external work, then writes passes `{ observed: { [id]: revision } }` to `ctx.act`, so a newer edit conflicts instead of being overwritten. Handle `committed` and `pendingApproval` honestly: the latter is written and held.
+An automation that reads, waits for external work, then writes passes `{ observed: { [id]: revision } }` to `ctx.act`, so a newer edit conflicts instead of being overwritten. Handle `committed` and `pending_approval` honestly: the latter is written and held.
 
 ## Aggregates
 

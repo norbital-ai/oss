@@ -105,7 +105,7 @@ export const nightly = automation({
 export const follow_up = automation({
 	description: 'Chase an order three days after it is placed',
 	policies: ['sales_rep'],
-	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } } },
+	input: { ids: { kind: 'ref', to: 'orders', many: true } },
 	retry: { attempts: 3, backoff: '1min' },
 	concurrency: { max: 1 },
 	run: function* ({ ids }, ctx) {
@@ -129,7 +129,7 @@ export const follow_up = automation({
 export const render = automation({
 	description: 'Render an order confirmation',
 	policies: ['sales_rep'],
-	input: { order: { kind: 'id', of: 'orders' } },
+	input: { order: { kind: 'ref', to: 'orders' } },
 	output: { kind: 'file', accept: ['application/pdf'], max: '5MiB' },
 	run: function* ({ order }, ctx) {
 		const { orders } = yield* ctx.query({
@@ -164,13 +164,12 @@ export const inbound_hook = automation({
 
 export const orders_submit = automation({
 	description: 'Submit this order',
-	input: { target: { kind: 'id', of: 'orders' } },
+	input: { target: { kind: 'ref', to: 'orders' } },
 	policies: ['sales_rep'],
 	run: function* ({ target }, ctx) {
 		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
 			.rows[0];
-		if (order === undefined)
-			return yield* ctx.refuse('Choose an existing order.');
+		if (order === undefined) return yield* ctx.refuse('Choose an existing order.');
 		yield* ctx.act('orders.update', [{ target: order.id, set: { status: 'submitted' } }], {
 			observed: { [order.id]: order.revision }
 		});
@@ -179,7 +178,7 @@ export const orders_submit = automation({
 
 export const orders_renote = automation({
 	description: 'Set a note on many orders',
-	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } }, note: { kind: 'text' } },
+	input: { ids: { kind: 'ref', to: 'orders', many: true }, note: { kind: 'text' } },
 	output: { kind: 'int' },
 	policies: ['sales_rep'],
 	run: function* ({ ids, note }, ctx) {
@@ -240,8 +239,7 @@ export const customers_return_row = automation({
 	run: function* (_, ctx) {
 		const page = yield* ctx.query({ customers: { limit: 1 } });
 		const customer = page.customers.rows[0];
-		if (customer === undefined)
-			return yield* ctx.refuse('Choose an existing customer.');
+		if (customer === undefined) return yield* ctx.refuse('Choose an existing customer.');
 		return customer;
 	}
 });

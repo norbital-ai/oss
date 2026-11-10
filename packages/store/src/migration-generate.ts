@@ -50,31 +50,31 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 	const not = (cond: string) => `NOT coalesce(${cond}, false)`;
 	const absent = `(${x} IS NULL OR ${x} = 'null'::jsonb)`;
 	const body = (): string => {
+		if (k.many === true) {
+			const { many: _many, optional: _optional, min_items, max_items, key: _key, ...item } = k;
+			return `CASE WHEN jsonb_typeof(${x}) = 'array' THEN (${min_items === undefined ? '' : `jsonb_array_length(${x}) < ${min_items} OR `}${max_items === undefined ? '' : `jsonb_array_length(${x}) > ${max_items} OR `}EXISTS (SELECT 1 FROM jsonb_array_elements(${x}) ${v}(e) WHERE ${shapeViolation(`${v}.e`, item, depth + 1)})) ELSE true END`;
+		}
+
 		switch (k.kind) {
 			case 'text':
 			case 'currency':
-				return k.kind === 'text' && k.many === true
-					? `CASE WHEN jsonb_typeof(${x}) = 'array' THEN EXISTS (SELECT 1 FROM jsonb_array_elements(${x}) ${v}(e) WHERE ${shapeViolation(`${v}.e`, { kind: 'text', ...(k.max === undefined ? {} : { max: k.max }), ...(k.format === undefined ? {} : { format: k.format }) }, depth + 1)}) ELSE true END`
-					: not(
-							`jsonb_typeof(${x}) = 'string'${k.kind === 'text' && k.max !== undefined ? ` AND length(${x} #>> '{}') <= ${k.max}` : ''}${k.kind === 'text' && k.format === 'email' ? ` AND ${x} #>> '{}' ~ '^[^@[:space:]]+@[^@[:space:]]+$'` : ''}`
-						);
+				return not(
+					`jsonb_typeof(${x}) = 'string'${k.kind === 'text' && k.max !== undefined ? ` AND length(${x} #>> '{}') <= ${k.max}` : ''}${k.kind === 'text' && k.format === 'email' ? ` AND ${x} #>> '{}' ~ '^[^@[:space:]]+@[^@[:space:]]+$'` : ''}`
+				);
 			case 'time':
 				return not(
 					`jsonb_typeof(${x}) = 'string' AND ${x} #>> '{}' ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9]([.][0-9]+)?)?$'`
 				);
 			case 'enum':
-				return k.many === true
-					? `CASE WHEN jsonb_typeof(${x}) = 'array' THEN EXISTS (SELECT 1 FROM jsonb_array_elements(${x}) ${v}(e) WHERE ${shapeViolation(`${v}.e`, { kind: 'enum', values: k.values }, depth + 1)}) ELSE true END`
-					: not(
-							`jsonb_typeof(${x}) = 'string' AND ${k.values.length === 0 ? 'false' : `${x} #>> '{}' IN (${k.values.map(lit).join(', ')})`}`
-						);
+				return not(
+					`jsonb_typeof(${x}) = 'string' AND ${k.values.length === 0 ? 'false' : `${x} #>> '{}' IN (${k.values.map(lit).join(', ')})`}`
+				);
 			case 'state':
 				return not(
 					`jsonb_typeof(${x}) = 'string' AND ${Object.keys(k.states).length === 0 ? 'false' : `${x} #>> '{}' IN (${Object.keys(k.states).sort().map(lit).join(', ')})`}`
 				);
 			case 'int':
 			case 'count':
-			case 'duration':
 				return `CASE WHEN jsonb_typeof(${x}) = 'number' THEN NOT ((${x} #>> '{}')::numeric % 1 = 0${k.kind === 'count' ? ` AND (${x} #>> '{}')::numeric >= 0` : ''}${k.kind === 'int' && k.min !== undefined ? ` AND (${x} #>> '{}')::numeric >= ${k.min}` : ''}${k.kind === 'int' && k.max !== undefined ? ` AND (${x} #>> '{}')::numeric <= ${k.max}` : ''}) ELSE true END`;
 			case 'number':
 				return `CASE WHEN jsonb_typeof(${x}) = 'number' THEN NOT (true${k.min === undefined ? '' : ` AND (${x} #>> '{}')::numeric >= ${k.min}`}${k.max === undefined ? '' : ` AND (${x} #>> '{}')::numeric <= ${k.max}`}) ELSE true END`;
@@ -94,8 +94,6 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 				return not(
 					`jsonb_typeof(${x}) = 'string' AND pg_input_is_valid(${x} #>> '{}', 'timestamptz')`
 				);
-			case 'list':
-				return `CASE WHEN jsonb_typeof(${x}) = 'array' THEN (${k.min === undefined ? '' : `jsonb_array_length(${x}) < ${k.min} OR `}${k.max === undefined ? '' : `jsonb_array_length(${x}) > ${k.max} OR `}EXISTS (SELECT 1 FROM jsonb_array_elements(${x}) ${v}(e) WHERE ${shapeViolation(`${v}.e`, k.of, depth + 1)})) ELSE true END`;
 			case 'object': {
 				const fields = Object.entries(k.fields).map(([f, sub]) =>
 					shapeViolation(
@@ -131,10 +129,6 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 										`(${not(`${x} ->> ${lit(k.by)} = ${lit(tag)}`)} OR ${shapeViolation(x, { kind: 'object', fields }, depth + 1)})`
 								)
 								.join(' AND ')})`;
-			case 'id':
-				return not(
-					`jsonb_typeof(${x}) = 'string' AND ${x} #>> '{}' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`
-				);
 			case 'ref':
 				return typeof k.to === 'string'
 					? not(`jsonb_typeof(${x}) = 'string'`)
@@ -142,7 +136,7 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 							x,
 							{
 								kind: 'object',
-								fields: { collection: { kind: 'enum', values: k.to }, id: { kind: 'text' } }
+								fields: { model: { kind: 'enum', values: k.to }, id: { kind: 'text' } }
 							},
 							depth + 1
 						);
@@ -155,7 +149,7 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 			case 'vector':
 				return shapeViolation(
 					x,
-					{ kind: 'list', min: k.dim, max: k.dim, of: { kind: 'number' } },
+					{ kind: 'number', many: true, min_items: k.dim, max_items: k.dim },
 					depth + 1
 				);
 			case 'file': {
@@ -168,11 +162,7 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 						size: { kind: 'int', optional: true }
 					}
 				};
-				return shapeViolation(
-					x,
-					k.multiple === true ? { kind: 'list', of: file } : file,
-					depth + 1
-				);
+				return shapeViolation(x, file, depth + 1);
 			}
 			case 'seq':
 				return shapeViolation(x, { kind: k.pattern === undefined ? 'int' : 'text' }, depth + 1);
@@ -200,7 +190,7 @@ export function shapeViolation(x: string, k: FieldSpec, depth = 0): string {
 	};
 	return k.optional === true ? `(NOT ${absent} AND ${body()})` : `(${absent} OR ${body()})`;
 }
-const INLINE = /*#__PURE__*/ new Set(['json', 'list', 'object', 'record']);
+const INLINE = /*#__PURE__*/ new Set(['json', 'object', 'record']);
 /** Inline fields whose shape changed from `before` to `after`: each a data step and the check that follows it. */
 function shapeSteps(before: SchemaSpec | null, after: SchemaSpec): string[] {
 	if (before === null) return [];
@@ -209,7 +199,12 @@ function shapeSteps(before: SchemaSpec | null, after: SchemaSpec): string[] {
 		for (const [f, k] of Object.entries(spec.fields)) {
 			const table = before.tables[t] ?? before.tables[spec.was ?? t];
 			const was = table?.fields[f] ?? table?.fields[k.was ?? f];
-			if (!INLINE.has(k.kind) || was === undefined || canonical(was) === canonical(k)) continue;
+			if (
+				(!INLINE.has(k.kind) && k.many !== true) ||
+				was === undefined ||
+				canonical(was) === canonical(k)
+			)
+				continue;
 			const condition =
 				spec.nativeRules !== undefined
 					? `${q(f)} is ${k.optional === true ? 'not ' : ''}null ${k.optional === true ? 'and' : 'or'} store_json_valid(${q(f)}, ${lit(canonical(k))}::jsonb) is not true`

@@ -30,13 +30,11 @@ const m: EngineManifest = {
 						kind: 'object',
 						fields: {
 							groups: {
-								kind: 'list',
-								of: {
-									kind: 'object',
-									fields: {
-										target: { kind: 'id', of: 'tags', optional: true }
-									}
-								}
+								kind: 'object',
+								fields: {
+									target: { kind: 'ref', to: 'tags', optional: true }
+								},
+								many: true
 							}
 						}
 					}
@@ -55,7 +53,7 @@ const m: EngineManifest = {
 	customFields: {
 		preferences: {
 			description: 'Ranked targets.',
-			shape: { kind: 'list', max: 5, of: { kind: 'id', of: 'tags' } }
+			shape: { kind: 'ref', to: 'tags', many: true, max_items: 5 }
 		}
 	}
 };

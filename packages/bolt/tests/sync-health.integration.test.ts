@@ -20,7 +20,11 @@ const OTHER_DEAD = '0199a000-0000-7000-8000-000000000015';
 const manifest: EngineManifest = {
 	...base,
 	models: {
-		contacts: { description: 'A contact', label: 'name', fields: { name: { kind: 'text' } } }
+		contacts: {
+			description: 'A contact',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		}
 	},
 	relationships: {},
 	exposures: {

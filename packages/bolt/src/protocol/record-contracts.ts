@@ -51,7 +51,7 @@ export const HistorySnapshotSchema = Schema.Struct({
 	fields: Schema.Record(Schema.String, FieldSpec),
 	values: Schema.Record(Schema.String, Schema.Json),
 	compatible: Schema.Record(Schema.String, Schema.Json),
-	uncompatible: Schema.Array(Schema.String)
+	incompatible: Schema.Array(Schema.String)
 });
 /** `history.preview`'s answer (rule 17): advice for one restore; `history.restore` recomputes it before writing. */
 export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct({
@@ -69,7 +69,7 @@ export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct(
 				'noGrant',
 				'stateLocked',
 				'definitionChanged',
-				'uncompatible'
+				'incompatible'
 			])
 		})
 	)

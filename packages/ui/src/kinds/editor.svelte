@@ -336,8 +336,8 @@ The editor of one value by its field kind: every kind's input in one component (
 		{disabled}
 		{invalid}
 	/>
-{:else if plan.editor === 'id' && kind.kind === 'id'}
-	<Picker of={kind.of} value={str(v)} {onChange} where={kind.where} {id} {disabled} {invalid} />
+{:else if plan.editor === 'id' && kind.kind === 'ref' && typeof kind.to === 'string'}
+	<Picker of={kind.to} value={str(v)} {onChange} where={kind.where} {id} {disabled} {invalid} />
 {:else if kind.kind === 'custom' && custom && !rawJson}
 	<StructuredData
 		kind={custom.shape}

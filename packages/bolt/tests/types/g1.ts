@@ -74,13 +74,13 @@ automation({
 });
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error U5 `record` is an input-only kind
 	fields: { a: { kind: 'record', of: { kind: 'int' } } }
 });
 model('probe', {
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error U6 `union` is an input-only kind
 	fields: { a: { kind: 'union', by: 't', arms: {} } }
 });
@@ -325,19 +325,19 @@ automation({
 // ── state `{ to, edit }` and owned relationships (rules 40, 41) ──
 model('probe', {
 	description: 'x',
-	label: 's',
+	record_label: 'record.s',
 	// @ts-expect-error S1 `edit` is 'all', 'none' or a list
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { edit: 'some' } } } }
 });
 model('probe', {
 	description: 'x',
-	label: 's',
+	record_label: 'record.s',
 	// @ts-expect-error S2 `to` is a list of states
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { to: 'a' } } } }
 });
 model('probe', {
 	description: 'x',
-	label: 's',
+	record_label: 'record.s',
 	// @ts-expect-error S3 a state takes no default (a create lands in `initial`, X-30)
 	fields: { s: { kind: 'state', initial: 'a', default: 'a', states: { a: {} } } }
 });
@@ -379,7 +379,7 @@ policy({
 policy({ description: 'x', grants: { customers: { outputs: { default: { where: { email: { eq: { actor: 'mail' } } } } } } } });
 model('probe', {
 	description: 'x',
-	label: 'e',
+	record_label: 'record.e',
 	fields: { e: { kind: 'text', format: 'email' } },
 	// @ts-expect-error E4 not in a static position (`check`, rule 4)
 	constraints: { mine: { check: { e: { eq: { var: 'requestor.email' } } } } }

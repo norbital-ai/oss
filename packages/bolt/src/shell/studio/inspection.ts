@@ -107,7 +107,7 @@ const message = Schema.NullOr(Schema.String);
 export const StudioInspection = Schema.Struct({
 	/** Proven administrator capability is independent of whether member activity could be measured. */
 	canInspect: Schema.Boolean,
-	asOf: Schema.String,
+	as_of: Schema.String,
 	usage: Schema.Array(chart),
 	members: Schema.NullOr(
 		Schema.Array(

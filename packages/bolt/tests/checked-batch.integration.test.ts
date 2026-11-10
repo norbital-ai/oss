@@ -15,11 +15,15 @@ const manifest: EngineManifest = {
 	models: {
 		customers: {
 			description: 'Customers',
-			label: 'name',
+			record_label: 'record.name',
 			key: ['name'],
 			fields: { name: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		},
-		orders: { description: 'Orders', label: 'title', fields: { title: { kind: 'text' } } }
+		orders: {
+			description: 'Orders',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		}
 	},
 	relationships: {},
 	exposures: {
@@ -82,8 +86,8 @@ const fixture = Effect.gen(function* () {
 	const t = Context.get(context, TestWorkspace);
 	const writer = t.member(['writer']);
 	const restricted = t.member(['restricted']);
-	const requester = t.member(['requester'], { teams: ['Requesters'], teamPath: ['Requesters'] });
-	const reviewer = t.member(['reviewer'], { teams: ['Reviewers'], teamPath: ['Reviewers'] });
+	const requester = t.member(['requester'], { teams: ['Requesters'], team_path: ['Requesters'] });
+	const reviewer = t.member(['reviewer'], { teams: ['Reviewers'], team_path: ['Reviewers'] });
 	yield* t.as(t.admin).query({ customers: {} });
 	const calls = Context.get(context, Callables);
 	const bindings = () => ({
@@ -227,7 +231,7 @@ it.live(
 						{
 							callable: 'customers.upsert',
 							input: [{ name: 'Second', note: 'Updated' }],
-							onConflict: 'update'
+							on_conflict: 'update'
 						}
 					])
 				).toMatchObject({ kind: 'committed' });
@@ -236,7 +240,7 @@ it.live(
 						{
 							callable: 'customers.upsert',
 							input: [{ name: 'Second', note: 'Ignored' }],
-							onConflict: 'keep'
+							on_conflict: 'keep'
 						}
 					])
 				).toMatchObject({ kind: 'committed' });
@@ -280,9 +284,9 @@ it.live(
 					.bodyActs(f.requester)
 					.checked([{ callable: 'customers.create', input: [{ name: 'Held checked' }] }]);
 				for (const result of [checked]) {
-					expect(result.kind).toBe('pendingApproval');
+					expect(result.kind).toBe('pending_approval');
 					expect('output' in result).toBe(false);
-					if (result.kind !== 'pendingApproval') throw new Error('The batch bypassed review.');
+					if (result.kind !== 'pending_approval') throw new Error('The batch bypassed review.');
 					expect(
 						yield* f.t.db.value(Schema.String, {
 							text: 'SELECT state FROM bolt_approvals WHERE id = $1',

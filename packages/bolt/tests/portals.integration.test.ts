@@ -16,16 +16,24 @@ const source = {
 	models: {
 		services: {
 			description: 'Services',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, cost: { kind: 'text' } }
 		},
-		enquiries: { description: 'Enquiries', label: 'name', fields: { name: { kind: 'text' } } },
+		enquiries: {
+			description: 'Enquiries',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
 		bookings: {
 			description: 'Bookings',
-			label: 'note',
+			record_label: 'record.note',
 			fields: { note: { kind: 'text' }, customer: { kind: 'text' } }
 		},
-		orders: { description: 'Orders', label: 'note', fields: { note: { kind: 'text' } } }
+		orders: {
+			description: 'Orders',
+			record_label: 'record.note',
+			fields: { note: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		'orders.owner': { to: 'sys_user', optional: true, default: { var: 'requestor.id' } }

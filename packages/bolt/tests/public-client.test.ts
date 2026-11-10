@@ -150,6 +150,7 @@ it.effect('retains search-index metadata in public hydration', () =>
 	Effect.gen(function* () {
 		const catalog = {
 			orders: {
+				record_label: 'record.title',
 				label: ['title'],
 				fields: { title: { kind: 'text' as const } },
 				indexes: { hue: { description: 'Hue', input: { r: { kind: 'number' as const } } } }

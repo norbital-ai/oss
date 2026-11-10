@@ -13,10 +13,10 @@ How apps and forms show multi-entity, effective-dated data without leaking syste
 ## Identifiers
 
 - Use the model's `record_label`, else the record UUID, in pickers, relations, headings and approvals. Never duplicate it into a field.
-- A relation column names the relation; the target's label renders itself. A picker shows the target's label; `label`, `orderBy`, `limit`, `where` narrow it.
+- A relation column names the relation; the target's label renders itself. A picker shows the target's label; `label`, `order_by`, `limit`, `where` narrow it.
 - The compiler rejects a system field as a column or field. Pass identity through the `id` prop.
 - An update `Form` needs `id={record.id}` even with `{record}`: `record` supplies values, `id` selects the target and shares the enclosing `RecordShell`'s draft and Save. Create forms omit it. A matching update form delegates submit to the record header: add no second Save.
-- A custom control calling `bolt.act` distinguishes committed from `pendingApproval`. After a committed transition, return the matching `useRecordController()?.current` to view, checking model and id. Keep refused edits in the draft. Prevent a transition while the form is dirty. Add no second draft store.
+- A custom control calling `bolt.act` distinguishes committed from `pending_approval`. After a committed transition, return the matching `useRecordController()?.current` to view, checking model and id. Keep refused edits in the draft. Prevent a transition while the form is dirty. Add no second draft store.
 
 ## Kinds on views
 

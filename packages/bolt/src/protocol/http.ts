@@ -318,11 +318,7 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			const body = yield* requestBody(request, ActBody);
 			const named = chargesFor(
 				authority,
-				[
-					body.callable === 'convert.previewPdf'
-						? 'convert'
-						: body.callable
-				],
+				[body.callable === 'convert.previewPdf' ? 'convert' : body.callable],
 				who
 			).filter(
 				(charge) =>
@@ -419,7 +415,7 @@ export type ActCall = {
 	readonly issuedAt: string;
 	readonly retry?: boolean | undefined;
 	readonly observed?: { readonly [id: string]: number } | undefined;
-	readonly onConflict?: 'update' | 'keep' | undefined;
+	readonly on_conflict?: 'update' | 'keep' | undefined;
 	readonly rate?: readonly RateCharge[] | undefined;
 };
 export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
@@ -570,7 +566,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				outcome = result.ok
 					? committed({
 							...(result.where === undefined ? {} : { where: result.where }),
-							...(result.orderBy === undefined ? {} : { orderBy: result.orderBy })
+							...(result.order_by === undefined ? {} : { order_by: result.order_by })
 						})
 					: {
 							kind: 'refused',
@@ -1211,15 +1207,15 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 	const body = (schema: Json) => ({ required: true, content: { 'application/json': { schema } } });
 	const responses = {
 		200: { description: 'answered' },
-		202: { description: 'pendingApproval, or running: the act continues as the named run' },
+		202: { description: 'pending_approval, or running: the act continues as the named run' },
 		401: { description: 'unauthenticated' },
 		422: { description: 'refused' }
 	};
 	return {
 		openapi: '3.1.0',
 		info: { title: 'Bolt workspace', version },
-		components: { securitySchemes: { apiKey: { type: 'http', scheme: 'bearer' } } },
-		security: [{ apiKey: [] }],
+		components: { securitySchemes: { api_key: { type: 'http', scheme: 'bearer' } } },
+		security: [{ api_key: [] }],
 		paths: {
 			[PATHS.q]: {
 				post: {

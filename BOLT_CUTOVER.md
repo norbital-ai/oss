@@ -28,9 +28,13 @@ keep its records, history, attachments and existing connection references in the
 3. Check that every legacy reference that was mapped now points to the intended UUID, and that
    public and private conversations retain their visibility for staff, the owner and outside
    senders. Inspect pending approvals and connection delivery state before enabling workers.
-4. Prepare the stored decision and outcome rename only when the new wire names land. Inventory
-   persisted JSON that includes `pendingApproval`, `requestChanges` or `uncompatible` before
-   changing it. Match known payload paths and types so the migration leaves free text intact.
+4. Inventory persisted structured decisions, outcomes and actor metadata before renaming their
+   keys and values. The standalone and scoped audit bundles include `0004_authoring_names.sql`.
+   Each migration takes an exclusive event-table lock, disables the immutable trigger, rewrites
+   only root status `pendingApproval` and actor kind `apiKey`, validates the updated check and
+   restores the trigger in the same transaction. Apply it with the migration owner after pausing
+   writers. Verify payload text and immutable-row enforcement afterward. Other stored payload
+   formats need their own schema-aware migration for `requestChanges` and `uncompatible`.
 5. Keep each history row's schema association. Stamp rows only when the version's field mapping
    is known. For rows that require expiry, record the affected models, revisions and retention
    decision first. Inspect legacy audit receipts and apply the supported adoption procedure or
@@ -50,3 +54,14 @@ Tenant rollout needs the final release's migration bundle and the host steps in
 Rebuild schema objects whose own-row predicates use `like`. They now match case-insensitively
 like reads. Review any affected checks and partial unique indexes against a tenant copy before
 applying the generated migration.
+
+The record-label cut generates label and search columns for system models that previously used
+field-list labels. Include those objects in the release migration and rebuild their text indexes.
+Field descriptors use `many`, `ref`, and the new list-bound keys in manifests and JSON shape checks.
+Regenerate those schema checks from the final manifest before preparing the immutable bundle.
+
+Many-valued text and enum fields use native `text[]`. For columns that formerly stored a
+list in JSONB, include an explicit conversion in the reviewed migration. Use
+`ARRAY(SELECT jsonb_array_elements_text(value))` for non-null arrays, preserving SQL NULL
+where the field is optional. Rebuild state guards and dependent indexes after the type change.
+Rehearse this conversion on the copied tenant before sealing the final migration bundle.

@@ -60,7 +60,7 @@
 		(k?.kind === 'json' &&
 			(k.shape === undefined ||
 				k.shape.kind === 'json' ||
-				((k.shape.kind === 'record' || k.shape.kind === 'list') && k.shape.of.kind === 'json')));
+				(k.shape.kind === 'record' && k.shape.of.kind === 'json')));
 
 	function level(c: string, prefix: string, depth: number, all: boolean): Entry[] {
 		const x = catalog[c];

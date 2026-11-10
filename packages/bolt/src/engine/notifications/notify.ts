@@ -67,7 +67,7 @@ export const NotifyWire = Schema.Union([
 			'request',
 			'approve',
 			'reject',
-			'requestChanges',
+			'request_changes',
 			'resubmit',
 			'supersede',
 			'withdraw'

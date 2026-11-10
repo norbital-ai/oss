@@ -60,8 +60,8 @@ it('accepts decoder literals in nested atomic patches, appends and removals', ()
 						nested: { kind: 'object', fields: { at: { kind: 'instant' } } }
 					}
 				},
-				amounts: { kind: 'list', of: { kind: 'decimal', scale: 2 } },
-				days: { kind: 'list', of: { kind: 'date' } }
+				amounts: { kind: 'decimal', scale: 2, many: true },
+				days: { kind: 'date', many: true }
 			}
 		})
 	});

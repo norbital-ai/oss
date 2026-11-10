@@ -95,14 +95,14 @@ export type ReadIR =
 	  };
 
 /**
- * One root of a read request: its read (a page, an aggregate or a search), or with `asOf` the history fold of each
+ * One root of a read request: its read (a page, an aggregate or a search), or with `as_of` the history fold of each
  * record its `where` pins, as a page of the `fields` asked for.
  */
 export type RequestRoot =
 	| { readonly root: string; readonly read: ReadIR }
 	| {
 			readonly root: string;
-			readonly asOf: readonly Extract<ReadIR, { kind: 'history' }>[];
+			readonly as_of: readonly Extract<ReadIR, { kind: 'history' }>[];
 			readonly fields?: readonly string[] | undefined;
 	  };
 
@@ -128,13 +128,16 @@ const declarationsOf = (cat: Catalog) => {
 				])
 			);
 		out = Object.fromEntries(
-			Object.entries(paths).map(([root, read]) => [root, { outputs: { default: read, ...named(root) } }])
+			Object.entries(paths).map(([root, read]) => [
+				root,
+				{ outputs: { default: read, ...named(root) } }
+			])
 		);
 		declared.set(cat, out);
 	}
 	return out;
 };
-/** The ids a root `where` pins (`{ id: { eq } }` or `{ id: { in } }`): what an `asOf` read folds. */
+/** The ids a root `where` pins (`{ id: { eq } }` or `{ id: { in } }`): what an `as_of` read folds. */
 function pinned(w: Json | undefined): readonly string[] | undefined {
 	if (!Predicate.isObject(w) || Object.keys(w).length !== 1 || !Predicate.isObject(w['id']))
 		return undefined;
@@ -199,7 +202,7 @@ export function request(base: Catalog, json: Json | undefined): ReadIR {
 		const only = (what: string) => {
 			if (below.length > 0)
 				throw invalid(
-					`'${root}': ${what} names no layers (${below.join(', ')}); remove those keys from this read, or read the layers in a separate read without aggregate/asOf`
+					`'${root}': ${what} names no layers (${below.join(', ')}); remove those keys from this read, or read the layers in a separate read without aggregate/as_of`
 				);
 		};
 		const sub = (path: string, model: string): SelectIR => {
@@ -241,9 +244,9 @@ export function request(base: Catalog, json: Json | undefined): ReadIR {
 					select: sub(child, target),
 					page: storeSync(page({ limit })),
 					...(filter === undefined ? {} : { where: filter }),
-					...(layer.orderBy === undefined
+					...(layer.order_by === undefined
 						? {}
-						: { order: storeSync(order(layer.orderBy, cat, target)) }),
+						: { order: storeSync(order(layer.order_by, cat, target)) }),
 					...(measured?.kind === 'aggregate'
 						? {
 								aggregate: {
@@ -271,22 +274,22 @@ export function request(base: Catalog, json: Json | undefined): ReadIR {
 					: undefined;
 			return w === undefined ? text : text === undefined ? w : { t: 'and', of: [w, text] };
 		};
-		if (top.asOf !== undefined) {
-			only('an asOf read');
+		if (top.as_of !== undefined) {
+			only('an as_of read');
 			const ids = pinned(top.where);
 			if (ids === undefined)
 				throw invalid(
-					`'${root}': asOf folds the records its where pins: { id: { eq } } or { id: { in } }`
+					`'${root}': as_of folds the records its where pins: { id: { eq } } or { id: { in } }`
 				);
-			// ponytail: an asOf read folds pinned ids, root fields only; fold a whole page when a view needs it
+			// ponytail: an as_of read folds pinned ids, root fields only; fold a whole page when a view needs it
 			return {
 				root,
-				asOf: ids.map((id) => ({
+				as_of: ids.map((id) => ({
 					kind: 'history',
 					model: root,
 					...output,
 					id,
-					at: { _tag: 'Instant', instant: top.asOf! },
+					at: { _tag: 'Instant', instant: top.as_of! },
 					full: true
 				})),
 				...(top.fields === undefined ? {} : { fields: top.fields })
@@ -333,7 +336,7 @@ export function request(base: Catalog, json: Json | undefined): ReadIR {
 			// a root page counts every row it matches (`total`) in the same statement
 			total: true,
 			...(top.where === undefined ? {} : { where: storeSync(where(cat, root, top.where)) }),
-			...(top.orderBy === undefined ? {} : { order: storeSync(order(top.orderBy, cat, root)) }),
+			...(top.order_by === undefined ? {} : { order: storeSync(order(top.order_by, cat, root)) }),
 			...(typeof top.search === 'string' && top.search !== '' ? { search: top.search } : {})
 		};
 		return { root, read: listed };
@@ -341,7 +344,7 @@ export function request(base: Catalog, json: Json | undefined): ReadIR {
 	return { kind: 'request', roots };
 }
 
-/** `read(model, { where?, select?, orderBy?, search? } & Paged)`: the engine's own page read (never off the wire). */
+/** `read(model, { where?, select?, order_by?, search? } & Paged)`: the engine's own page read (never off the wire). */
 export function read(cat: Catalog, model: string, q: Obj): ReadIR {
 	return storeSync(storeRead(cat, model, q));
 }

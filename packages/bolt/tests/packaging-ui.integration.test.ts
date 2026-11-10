@@ -15,7 +15,7 @@ const manifest = Result.getOrThrow(
 		models: {
 			jobs: {
 				description: 'Jobs',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					status: { kind: 'enum', values: ['open', 'closed'], default: 'open' }
@@ -96,7 +96,7 @@ describe('/runs', () => {
 						phone: null,
 						external,
 						teams: [],
-						teamPath: [],
+						team_path: [],
 						admin: false,
 						party: null
 					},

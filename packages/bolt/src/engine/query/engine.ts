@@ -142,7 +142,7 @@ export function readTargets(cat: Catalog, ir: ReadIR, authority?: Authority): Re
 	if (ir.kind === 'request')
 		return new Set(
 			ir.roots.flatMap((r) =>
-				('read' in r ? [r.read] : r.asOf).flatMap((x: ReadIR) => [
+				('read' in r ? [r.read] : r.as_of).flatMap((x: ReadIR) => [
 					...readTargets(cat, x, authority)
 				])
 			)
@@ -504,7 +504,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 		if (batch.some((ir) => ir.kind === 'request')) {
 			const parts = (ir: ReadIR): readonly ReadIR[] =>
 				ir.kind === 'request'
-					? ir.roots.flatMap((r): readonly ReadIR[] => ('read' in r ? [r.read] : r.asOf))
+					? ir.roots.flatMap((r): readonly ReadIR[] => ('read' in r ? [r.read] : r.as_of))
 					: [ir];
 			const values = yield* run(batch.flatMap(parts), reader, bindings, from);
 			let at = 0;
@@ -515,7 +515,7 @@ export function readEngine(config: ReadEngineConfig): ReadEngine & {
 					ir.roots.map((r) => {
 						if ('read' in r) return [r.root, next()];
 						const keep = r.fields === undefined ? undefined : new Set(['id', ...r.fields]);
-						const rows = r.asOf.flatMap((): Json[] => {
+						const rows = r.as_of.flatMap((): Json[] => {
 							const row = next();
 							if (!Predicate.isObject(row)) return [];
 							return [
@@ -880,7 +880,7 @@ function decoderCall(member: string, args: readonly Json[]): [string, readonly J
 		throw BoltError.make(
 			'invalid',
 			'decode',
-			'query takes one read request: query({ <model>: { where?, fields?, orderBy?, limit? }, … })'
+			'query takes one read request: query({ <model>: { where?, fields?, order_by?, limit? }, … })'
 		);
 	return [member === 'db.query' ? 'db.request' : 'request', [request]];
 }

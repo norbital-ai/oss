@@ -48,11 +48,11 @@ export function pageHits(
 	return out;
 }
 
-/** The shared CEL identifier or legacy label fields; unnamed rows use a placeholder, never their id. */
-export const labelOf = (row: Row, label: readonly string[], expression?: string) =>
+/** The shared CEL identifier. */
+export const labelOf = (row: Row, expression?: string) =>
 	(typeof row['$label'] === 'string' && row['$label'].trim() !== ''
 		? row['$label']
-		: recordTitle(row, expression ?? label)) ?? 'Unnamed record';
+		: recordTitle(row, expression ?? [])) ?? 'Unnamed record';
 
 /** The same model scopes and declared search hints serve Find and Norbius mentions. */
 export function recordScopes(
@@ -294,7 +294,7 @@ export const searchRecords = Effect.fn('Finder.searchRecords')(function* (
 					{
 						kind: 'record',
 						key: `${model}/${row['id']}`,
-						label: labelOf(row, exposure.label, exposure.record_label),
+						label: labelOf(row, exposure.record_label),
 						context: scope.label,
 						model,
 						id: row['id']

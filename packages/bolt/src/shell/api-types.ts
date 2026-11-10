@@ -298,7 +298,7 @@ export const SettingsAnswer: Schema.Decoder<Settings> = Schema.Struct({
 				audience: Schema.Literals(['public', 'private']),
 				task: Schema.String,
 				policies: Strings,
-				groupMessages: Schema.Literals(['disabled', 'mention_or_reply', 'all']),
+				group_messages: Schema.Literals(['disabled', 'mention_or_reply', 'all']),
 				delegation: Schema.Literals(['enabled', 'disabled']),
 				triage: Schema.Boolean,
 				dm: Schema.Literals(['union', 'envoy']),
@@ -554,7 +554,7 @@ const InboxRequestAnswer: Schema.Decoder<InboxRequest> = Schema.Struct({
 	canSupersede: Schema.Boolean,
 	moves: Schema.Array(
 		Schema.Struct({
-			decision: Schema.Literals(['approve', 'reject', 'requestChanges', 'withdraw']),
+			decision: Schema.Literals(['approve', 'reject', 'request_changes']),
 			reason: Schema.Literals(['required', 'optional'])
 		})
 	)

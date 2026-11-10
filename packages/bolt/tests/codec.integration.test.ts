@@ -18,7 +18,7 @@ const manifest: EngineManifest = {
 	models: {
 		shifts: {
 			description: 'A shift',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				span: { kind: 'period', of: 'date' },
@@ -27,7 +27,7 @@ const manifest: EngineManifest = {
 		},
 		breaks: {
 			description: 'A break',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, span: { kind: 'period', of: 'date' } }
 		}
 	},

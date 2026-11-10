@@ -5,7 +5,7 @@ import { model } from '../../../../decl/model.ts';
 
 export default model('sys_sync_row', {
 	description: "A remote sync's mapping of one remote row to its record.",
-	label: 'remote_id',
+	record_label: 'record.remote_id',
 	fields: {
 		/** `'<model>.sync.<sync>'`. */
 		sync: { kind: 'text' },
@@ -22,6 +22,7 @@ export default model('sys_sync_row', {
 		one_remote_id: { unique: ['sync', 'instance', 'remote_id'] },
 		one_record: { unique: ['sync', 'instance', 'record'] }
 	},
-	index: [['sync', 'instance', 'partition', 'cycle']],
-	table: { primary: 'uuid' }
+
+	table: { primary: 'uuid' },
+	indexes: { by_sync_instance_partition_cycle: { on: ['sync', 'instance', 'partition', 'cycle'] } }
 });

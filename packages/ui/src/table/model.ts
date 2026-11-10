@@ -37,7 +37,7 @@ export function searchIndexes(
 ): SearchIndex[] {
 	const untypable = (k: Kind): boolean =>
 		['seq', 'sum', 'count', 'vector', 'state'].includes(k.kind) ||
-		(k.kind === 'list' && k.of.kind === 'number');
+		(k.many === true && k.kind === 'number');
 	const why = (raw: string | undefined, input: Fields) =>
 		raw !== undefined
 			? fill(text.raw, { field: input[raw]?.label ?? humanize(raw) })
