@@ -147,7 +147,8 @@ export function makeDeliver(e: SyncEngine) {
 	const settle = Effect.fn('Syncs.settle')(function* (
 		r: Outbox,
 		status: 'failed' | 'dead' | 'skipped',
-		message: string
+		message: string,
+		notify = true
 	) {
 		const now = iso(yield* Clock.currentTimeMillis),
 			c = new Chain();
@@ -163,7 +164,7 @@ export function makeDeliver(e: SyncEngine) {
 			);
 			deliverRun(c, 'sends_skipped', now);
 		}
-		if (r.writer !== null)
+		if (notify && r.writer !== null)
 			noticeInsert(
 				c,
 				'sync_failure',
@@ -185,8 +186,29 @@ export function makeDeliver(e: SyncEngine) {
 				m.workspace.signup?.policies
 			);
 		yield* db.write(c.sql('NULL AS outcome'));
-		if (status !== 'dead') yield* e.announce(now);
+		yield* e.announce(now);
 		changed(r);
+	});
+	const admitted = Effect.fn('Syncs.deliveryClaim')(function* (r: Outbox) {
+		const c = new Chain();
+		const now = iso(yield* Clock.currentTimeMillis);
+		const state = yield* db.value(
+			Schema.Struct({ active: Schema.Boolean, superseded: Schema.Boolean }),
+			{
+				text: `SELECT jsonb_build_object('active', EXISTS (SELECT 1 FROM sys_outbox WHERE ${lease(c, r)} AND claimed_at >= ${c.p(now)}::timestamptz - interval '5 minutes'),
+				'superseded',
+				EXISTS (SELECT 1 FROM sys_outbox newer JOIN sys_outbox held ON held.id = ${c.p(r.id)}
+				WHERE newer.sync = held.sync AND newer.instance = held.instance AND newer.record = held.record
+				AND newer.seq > held.seq AND newer.status = 'acked'))`,
+				params: c.params
+			}
+		);
+		if (!state.active) return false;
+		if (state.superseded) {
+			yield* settle(r, 'skipped', 'A newer change has already been delivered.', false);
+			return false;
+		}
+		return true;
 	});
 	const refuse = Effect.fn('Syncs.rollbackWrite')(function* (r: Outbox, message: string) {
 		const bindings = yield* e.bindings();
@@ -275,6 +297,7 @@ export function makeDeliver(e: SyncEngine) {
 		changed(r);
 	});
 	const attempt = Effect.fn('Syncs.write')(function* (r: Outbox) {
+		if (!(yield* admitted(r))) return;
 		const s = syncsOf(m).get(r.sync);
 		if (s === undefined || !s.write)
 			return yield* settle(r, 'skipped', 'This sync is no longer declared.');
@@ -289,6 +312,13 @@ export function makeDeliver(e: SyncEngine) {
 			instance: r.instance,
 			key: r.key,
 			configuration: inst.configuration,
+			fence: admitted(r).pipe(
+				Effect.flatMap((active) =>
+					active
+						? Effect.void
+						: Effect.fail(BoltError.make('fenced', 'admission', 'This delivery claim has expired.'))
+				)
+			),
 			args: [
 				{
 					op: r.op,
@@ -315,6 +345,7 @@ export function makeDeliver(e: SyncEngine) {
 			Effect.result
 		);
 		if (result._tag === 'Failure') {
+			if (!(yield* admitted(r))) return;
 			const error = result.failure;
 			const sql = inst.definition.driver === 'sqlserver';
 			// A rejected database write needs review. Preserve the local commitment and its frozen payload.
@@ -341,8 +372,20 @@ export function makeDeliver(e: SyncEngine) {
 		c.cte(
 			'acked',
 			`UPDATE sys_outbox SET status = 'acked', acked_at = ${c.p(now)}::timestamptz,
-			result = ${c.p(result.success)}::jsonb, error = NULL WHERE ${lease(c, r)} RETURNING id`
+			result = ${c.p(result.success)}::jsonb, error = NULL WHERE ${lease(c, r)} RETURNING id, seq`
 		);
+		const superseded = c.cte(
+			'superseded',
+			`UPDATE sys_outbox older SET status = 'skipped', error = '{"message":"A newer change has already been delivered."}'::jsonb
+			WHERE older.sync = ${c.p(r.sync)} AND older.instance = ${c.p(r.instance)} AND older.record = ${c.p(r.record)}
+			AND older.seq < (SELECT seq FROM acked) AND older.status IN ('queued', 'sending', 'dead') RETURNING key`
+		);
+		c.cte(
+			'sends_superseded',
+			`UPDATE sys_message SET status = 'skipped', error = 'A newer change has already been delivered.'
+			WHERE meta ->> 'sync_write' IN (SELECT key FROM ${superseded}) AND status = 'queued' RETURNING id`
+		);
+		deliverRun(c, 'sends_superseded', now);
 		const remote = result.success?.$id ?? r.remote_id;
 		if (r.op === 'delete')
 			c.cte(
@@ -378,7 +421,9 @@ export function makeDeliver(e: SyncEngine) {
 				SELECT o.id FROM sys_outbox o JOIN sys_integration i ON i.id = o.instance AND i.active
 				WHERE ${ready('$2')} AND ((o.status = 'queued' AND o.next_attempt_at <= $1::timestamptz) OR (o.status = 'sending' AND o.claimed_at < $1::timestamptz - interval '5 minutes'))
 				AND NOT EXISTS (SELECT 1 FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance AND p.record = o.record
-				 AND p.seq < o.seq AND p.status IN ('queued', 'sending', 'dead'))
+				 AND p.seq < o.seq AND p.status IN ('queued', 'sending'))
+				AND NOT EXISTS (SELECT 1 FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance AND p.record = o.record
+				 AND p.id <> o.id AND p.status = 'sending' AND p.claimed_at >= $1::timestamptz - interval '5 minutes')
 				ORDER BY o.seq LIMIT 1 FOR UPDATE OF o SKIP LOCKED), claimed AS (
 				UPDATE sys_outbox o SET status = 'sending', attempts = o.attempts + 1, claimed_at = $1::timestamptz
 				FROM candidate WHERE o.id = candidate.id RETURNING o.*)
@@ -397,9 +442,11 @@ export function makeDeliver(e: SyncEngine) {
 				delivered++;
 			}
 			const [next] = yield* db.rows(Schema.Struct({ at: Schema.NullOr(Schema.String) }), {
-				text: `SELECT min(CASE WHEN o.status = 'sending' THEN o.claimed_at + interval '5 minutes' ELSE o.next_attempt_at END)::text AS at
+				text: `SELECT min(greatest(CASE WHEN o.status = 'sending' THEN o.claimed_at + interval '5 minutes' ELSE o.next_attempt_at END,
+			(SELECT max(p.claimed_at + interval '5 minutes') FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance
+			AND p.record = o.record AND p.id <> o.id AND p.status = 'sending')))::text AS at
 			FROM sys_outbox o JOIN sys_integration i ON i.id = o.instance AND i.active WHERE ${ready('$1')} AND o.status IN ('queued', 'sending')
-			AND NOT EXISTS (SELECT 1 FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance AND p.record = o.record AND p.seq < o.seq AND p.status IN ('queued', 'sending', 'dead'))`,
+			AND NOT EXISTS (SELECT 1 FROM sys_outbox p WHERE p.sync = o.sync AND p.instance = o.instance AND p.record = o.record AND p.seq < o.seq AND p.status IN ('queued', 'sending'))`,
 				params: [databases]
 			});
 			if (next?.at !== null && next?.at !== undefined) yield* schedule(next.at);

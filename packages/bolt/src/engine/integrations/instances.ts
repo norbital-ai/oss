@@ -307,7 +307,8 @@ export const instanceRequest = (
 	op: Json,
 	known?: Effect.Effect<Instance | undefined, EngineError>,
 	/** A sync write's `Idempotency-Key`, set on every http request it makes. */
-	key?: string
+	key?: string,
+	fence?: Effect.Effect<void, EngineError>
 ): Effect.Effect<CrossAnswer, EngineError> =>
 	Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
 		const instance = yield* known ??
@@ -381,6 +382,7 @@ export const instanceRequest = (
 			if (start <= current) break;
 			yield* Effect.sleep(start - current);
 		}
+		if (fence !== undefined) yield* fence;
 		const got = yield* cfg.links
 			.request(to, http)
 			.pipe(
@@ -496,6 +498,8 @@ export const integrationBody = (
 		instance: string;
 		key?: string;
 		configuration: Json;
+		/** Recheck a sync delivery's claim after pacing and before every external operation. */
+		fence?: Effect.Effect<void, EngineError>;
 	}
 ) =>
 	Effect.gen(function* () {
@@ -521,6 +525,7 @@ export const integrationBody = (
 					{ ...prepared, id, ...(options.key === undefined ? {} : { syncWrite: options.key }) },
 					bindings.now
 				);
+				if (options.fence !== undefined) yield* options.fence;
 				yield* cfg.db.write(c.sql('NULL AS outcome'));
 				yield* cfg.announce(bindings.now);
 				return { ok: true, value: id };
@@ -552,7 +557,14 @@ export const integrationBody = (
 								);
 							const done =
 								call._tag === 'request' && call.to === null
-									? instanceRequest(cfg, options.instance, call.operation, known, options.key)
+									? instanceRequest(
+											cfg,
+											options.instance,
+											call.operation,
+											known,
+											options.key,
+											options.fence
+										)
 									: call._tag === 'send' && options.kind === 'syncWrite'
 										? send(call.message)
 										: undefined;

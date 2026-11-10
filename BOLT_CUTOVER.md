@@ -65,3 +65,9 @@ list in JSONB, include an explicit conversion in the reviewed migration. Use
 `ARRAY(SELECT jsonb_array_elements_text(value))` for non-null arrays, preserving SQL NULL
 where the field is optional. Rebuild state guards and dependent indexes after the type change.
 Rehearse this conversion on the copied tenant before sealing the final migration bundle.
+
+Sync delivery no longer treats a dead outbox entry as a predecessor barrier. A newer
+acknowledgement retires older pending or dead entries for that record, including their queued
+conversation messages. An older dead entry from a prior release is checked again before any
+external operation when replayed. Include this ordering and claim-expiry case in the copied
+tenant's delivery rehearsal.

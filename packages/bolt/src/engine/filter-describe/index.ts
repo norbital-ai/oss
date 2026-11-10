@@ -19,12 +19,12 @@
 //
 // No fallback (owner): a System 1 failure, or nothing chosen, applies nothing. The whole answers within
 // `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
-import { Clock, Effect, Equal, Predicate, Result, Schema } from 'effect';
+import { Effect, Equal, Predicate, Result, Schema } from 'effect';
 import { encodeWire } from '@norbital-ai/std/wire';
 import { labelPaths } from '@norbital-ai/std/label';
 import { Ai } from '../ports.ts';
 import { Decisions, Manifest, Reads, type DecisionsShape, type ReadsShape } from '../services.ts';
-import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
+import { Unavailable } from '../../decl/errors.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, RowData } from '../contracts.ts';
 import type { Pred } from '@norbital-ai/store';
@@ -1740,19 +1740,8 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			return { fail: { ok: false, code: 'invalid', message: 'Invalid local filter fields.' } };
 		return local ? { fields: localFields(o.localFields!, text, today) } : {};
 	};
-	const call = (
-		state: DecisionRequest['state'],
-		questions: { [id: string]: DecisionQuestion },
-		ms: number
-	) =>
+	const call = (state: DecisionRequest['state'], questions: { [id: string]: DecisionQuestion }) =>
 		cfg.decisions.decide('filter', { state, questions }).pipe(
-			Effect.timeoutOrElse({
-				duration: ms,
-				orElse: () =>
-					Effect.fail(
-						new FacilityFailure({ kind: 'timeout', message: 'the filter description timed out' })
-					)
-			}),
 			Effect.catch((error) =>
 				Effect.succeed({
 					ok: false as const,
@@ -1786,7 +1775,6 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 		const fail = (message: string): Described => ({ ok: false, code: 'invalid', message });
 		if (o.text.trim() === '' || o.text.length > FILTER_MAX_TEXT)
 			return fail(`A description is 1–${FILTER_MAX_TEXT} characters.`);
-		const started = yield* Clock.currentTimeMillis;
 		const subjectOf = subject(o, o.text, o.bindings.today);
 		if (subjectOf.fail !== undefined) return subjectOf.fail;
 		const local = o.model === '$local';
@@ -2051,11 +2039,7 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			timezone: o.bindings.tz,
 			weekStartsOn: 'Monday'
 		};
-		const r = yield* call(
-			state,
-			questions,
-			Math.max(1, Math.round(FILTER_DEADLINE_MS - ((yield* Clock.currentTimeMillis) - started)))
-		);
+		const r = yield* call(state, questions);
 		if ('ok' in r) return r;
 		// A literal "last/first <relation> before D" has a fixed aggregate meaning; calendar spans are not records.
 		const statedExtremum = (rel: string) => {
@@ -2363,7 +2347,21 @@ export function makeFilterDescribe(cfg: FilterDescribeConfig) {
 			fields: catalogue(subjectOf.fields ?? fieldsOf(o.model, '', o.authority, o.bindings))
 		};
 	});
-	return { describe, options: opts };
+	return {
+		describe: (input: Parameters<typeof describe>[0]) =>
+			describe(input).pipe(
+				Effect.timeoutOrElse({
+					duration: FILTER_DEADLINE_MS,
+					orElse: () =>
+						Effect.succeed<Described>({
+							ok: false,
+							code: 'timeout',
+							message: 'Could not build a filter from that description.'
+						})
+				})
+			),
+		options: opts
+	};
 }
 export const filterDescribe = Effect.gen(function* () {
 	const manifest = yield* Manifest,

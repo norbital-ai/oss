@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Instant } from '@norbital-ai/std/date';
-import { Context, Effect, Exit, Layer, Option, Schema, Scope } from 'effect';
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from 'effect';
 import { afterAll } from 'vitest';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import type { Json } from '../src/decl/values.ts';
-import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { TenantDb, type RawDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '../src/engine/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Identity, RunHandlers, Runs, Writes } from '../src/engine/services.ts';
 import { Syncs, syncTriggers } from '../src/engine/sync/index.ts';
@@ -79,12 +80,17 @@ let afterProgress: Effect.Effect<void, never, TenantDb> | undefined;
 // One workspace for the file: each case names its own rows and starts with an empty CRM log.
 const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
-const setupFor = Effect.fnUntraced(function* (fixture: EngineManifest, guestSource: string) {
+const setupFor = Effect.fnUntraced(function* (
+	fixture: EngineManifest,
+	guestSource: string,
+	adapt: (db: TenantDbShape) => RawDb = (db) => db
+) {
 	const db = Context.get(yield* Layer.build(TestDb.layer(fixture)), TenantDb);
+	const adapter = adapt(db);
 	const intercepted = TenantDb.typed({
-		...db,
+		...adapter,
 		write: (statement, lock) =>
-			db
+			adapter
 				.write(statement, lock)
 				.pipe(
 					Effect.tap(() =>
@@ -322,6 +328,161 @@ describe('durable model sync', () => {
 				})
 			)
 	);
+	it.live('delivers a newer change past a dead row and retires stale replays', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* setupFor(manifest, source);
+				yield* f.act('create', [{ name: 'Original' }]);
+				yield* f.handler('sync.deliver');
+				const row = (yield* f.rows())[0];
+				if (row === undefined) throw new Error('Missing contact');
+				yield* f.act('update', [{ target: row.id, set: { name: 'Undeliverable' } }]);
+				f.mode('down');
+				for (let attempt = 0; attempt < 8; attempt++) {
+					yield* f.handler('sync.deliver');
+					f.t.clock.advance('2h');
+				}
+				expect(yield* f.syncs.health('crm')).toMatchObject({ dead: 1 });
+				f.mode('ok');
+				yield* f.act('update', [{ target: row.id, set: { name: 'Current' } }]);
+				yield* f.handler('sync.deliver');
+				expect(f.calls.at(-1)?.body?.name).toBe('Current');
+				expect(yield* f.syncs.health('crm')).toMatchObject({ dead: 0, pending: 0 });
+				expect(yield* f.syncs.replay('crm').pipe(Effect.provide(f.context))).toEqual({
+					replayed: 0
+				});
+				const delivered = f.calls.length;
+				// A database created before the cut may still carry an older dead row after a newer acknowledgement.
+				yield* f.t.db.write({
+					text: "UPDATE sys_outbox SET status = 'dead' WHERE record = $1 AND image ->> 'name' = 'Undeliverable'",
+					params: [row.id]
+				});
+				expect(yield* f.syncs.replay('crm').pipe(Effect.provide(f.context))).toEqual({
+					replayed: 1
+				});
+				yield* f.handler('sync.deliver');
+				expect(f.calls).toHaveLength(delivered);
+				expect(yield* f.syncs.health('crm')).toMatchObject({ dead: 0, pending: 0 });
+			})
+		)
+	);
+	it.live('a stale delivery claim makes no external request after a replacement acknowledges', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const blocked = yield* Deferred.make<void>(),
+					resume = yield* Deferred.make<void>();
+				let armed = false,
+					delayed = false;
+				const f = yield* setupFor(manifest, source, (db) => ({
+					...db,
+					read: (statements) =>
+						Effect.gen(function* () {
+							const result = yield* db.read(statements);
+							if (
+								armed &&
+								!delayed &&
+								statements.some((statement) =>
+									statement.text.includes('FROM sys_integration WHERE id IN')
+								)
+							) {
+								delayed = true;
+								yield* Deferred.succeed(blocked, undefined);
+								yield* Deferred.await(resume);
+							}
+							return result;
+						})
+				}));
+				yield* f.act('create', [{ name: 'Once' }]);
+				armed = true;
+				const first = yield* f.handler('sync.deliver').pipe(Effect.forkChild);
+				yield* Effect.gen(function* () {
+					yield* Deferred.await(blocked);
+					f.t.clock.advance('6min');
+					yield* f.handler('sync.deliver');
+					yield* Deferred.succeed(resume, undefined);
+					yield* Fiber.join(first);
+					expect(f.calls).toHaveLength(1);
+					expect(
+						yield* f.t.db.rows(Schema.Struct({ status: Schema.String, attempts: Schema.Number }), {
+							text: 'SELECT status, attempts FROM sys_outbox',
+							params: []
+						})
+					).toEqual([{ status: 'acked', attempts: 2 }]);
+				}).pipe(Effect.ensuring(Deferred.succeed(resume, undefined)));
+			})
+		)
+	);
+	it.live('a replay waits for a later live claim on the same record', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* setupFor(manifest, source);
+				yield* f.act('create', [{ name: 'Before' }]);
+				yield* f.t.db.write({ text: "UPDATE sys_outbox SET status = 'dead'", params: [] });
+				const row = (yield* f.rows())[0];
+				if (row === undefined) throw new Error('Missing contact');
+				yield* f.act('update', [{ target: row.id, set: { name: 'After' } }]);
+				yield* f.t.db.write({
+					text: "UPDATE sys_outbox SET status = 'sending', attempts = 1, claimed_at = $1::timestamptz WHERE status = 'queued'",
+					params: [f.t.clock.now()]
+				});
+				expect(yield* f.syncs.replay('crm').pipe(Effect.provide(f.context))).toEqual({
+					replayed: 1
+				});
+				expect(yield* f.handler('sync.deliver')).toEqual({ delivered: 0 });
+				expect(f.calls).toEqual([]);
+			})
+		)
+	);
+	it.live('a failure before choosing a partition is recorded on connection health', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fixture: EngineManifest = {
+					...manifest,
+					exposures: {
+						contacts: {
+							...manifest.exposures.contacts,
+							outputs: { default: { contacts: { fields: 'all' } } },
+							syncs: { crm: { with: 'crm', partitions: 'areas', read: true } }
+						}
+					},
+					integrations: {
+						crm: {
+							description: 'CRM',
+							driver: 'http',
+							http: { baseUrl: 'https://crm.example' },
+							configuration: { areas: { kind: 'text', many: true, default: [] } }
+						}
+					}
+				};
+				const f = yield* setupFor(fixture, source, (db) => ({
+					...db,
+					write: (statement, lock) =>
+						statement.text.includes('WITH released AS')
+							? Effect.fail(DbError.make('XX000', 'Partition cleanup unavailable'))
+							: db.write(statement, lock)
+				}));
+				yield* f.t.db.write({
+					text: `INSERT INTO sys_sync (id,sync,instance,partition,health,digest,cycle,version)
+				VALUES (gen_random_uuid(),'contacts.sync.crm','crm','retired','{"state":"ready"}'::jsonb,'previous',0,1)`,
+					params: []
+				});
+				expect(Exit.isFailure(yield* Effect.exit(f.handler('contacts.sync.crm')))).toBe(true);
+				expect(
+					yield* f.t.db.value(Schema.Json, {
+						text: "SELECT status -> 'health' FROM sys_integration WHERE id = 'crm'",
+						params: []
+					})
+				).toMatchObject({ state: 'attention', message: 'Partition cleanup unavailable' });
+				expect(
+					yield* f.t.db.value(Schema.Number, {
+						text: 'SELECT count(*)::int FROM sys_sync WHERE partition IS NULL',
+						params: []
+					})
+				).toBe(0);
+			})
+		)
+	);
+
 	it.live(
 		'resumes SQL writes and reads after ten missed slots, keeps the write key, and holds a permanent SQL rejection',
 		() =>

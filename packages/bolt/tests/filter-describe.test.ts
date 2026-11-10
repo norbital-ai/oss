@@ -4,7 +4,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import type { Arm, Authority, ModelAuthority } from '../src/engine/contracts.ts';
-import { Effect, Layer, Schema } from 'effect';
+import { Deferred, Effect, Fiber, Layer, Schema } from 'effect';
+import { TestClock } from 'effect/testing';
 import { Ai, Logs } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -410,6 +411,36 @@ const byField =
 	};
 
 describe('filter.describe offers System 1 the exposure and maps its choices onto the grammar', () => {
+	it.effect('the whole deadline interrupts a stalled lookup before asking System 1', () =>
+		Effect.gen(function* () {
+			const entered = yield* Deferred.make<void>();
+			let interrupted = false;
+			const port = system1(byField({}));
+			const builder = nativeDescriber(port, manifest, () =>
+				Deferred.succeed(entered, undefined).pipe(
+					Effect.andThen(Effect.never),
+					Effect.ensuring(
+						Effect.sync(() => {
+							interrupted = true;
+						})
+					)
+				)
+			);
+			const pending = yield* builder
+				.describe({ model: 'jobs', text: 'jobs for bob tan', authority: caller(), bindings })
+				.pipe(Effect.forkChild);
+			yield* Deferred.await(entered);
+			yield* TestClock.adjust('3 seconds');
+			expect(yield* Fiber.join(pending)).toEqual({
+				ok: false,
+				code: 'timeout',
+				message: 'Could not build a filter from that description.'
+			});
+			expect(interrupted).toBe(true);
+			expect(port.requests).toEqual([]);
+		})
+	);
+
 	it.effect(
 		'a phrase a found record holds is read once, loosely, through its relation; "not" before it negates it; its words echo nowhere else',
 		() =>
