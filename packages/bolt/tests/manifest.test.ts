@@ -57,7 +57,11 @@ describe('decodeManifest', () => {
 			{ ...base, workspace: { locale: 'en' } },
 			{ ...base, teams: { sales: 'p' } },
 			{ ...base, policies: { p: { description: '', grants: { orders: { read: 'all' } } } } },
-			{ ...base, policies: { p: { description: '', grants: { orders: { moves: ['a->b'] } } } } },
+			{ ...base, policies: { p: { description: '', grants: { orders: { moves: 'all' } } } } },
+			{
+				...base,
+				policies: { p: { description: '', grants: { orders: { update: { moves: ['a->b'] } } } } }
+			},
 			{ ...base, policies: { p: { description: '', grants: { orders: { reed: true } } } } },
 			{
 				...base,
@@ -128,9 +132,8 @@ describe('decodeManifest', () => {
 									'orders.lines': { where: { qty: { gt: 0 } } }
 								},
 								create: { columns: { orders: ['region'], 'orders.lines': ['qty'] } },
-								update: { verdict: true },
-								delete: { verdict: true },
-								moves: { status: ['draft->sent'] }
+								update: { verdict: true, moves: { status: ['draft->sent'] } },
+								delete: { verdict: true }
 							},
 							lines: { read: true }
 						}
@@ -144,7 +147,7 @@ describe('decodeManifest', () => {
 			'orders.lines': { where: { qty: { gt: 0 } } }
 		});
 		expect(grant?.create).toEqual({ columns: { orders: ['region'], 'orders.lines': ['qty'] } });
-		expect(grant?.update).toEqual({ verdict: true });
+		expect(grant?.update).toEqual({ verdict: true, moves: { status: ['draft->sent'] } });
 		expect(grant?.delete).toEqual({ verdict: true });
 		expect(m.policies.rep?.grants.lines?.read).toBe(true);
 	});

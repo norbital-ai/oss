@@ -77,7 +77,10 @@ const manifest = Result.getOrThrow(
 				create: { columns: { notes: ['text', 'order'] } }
 			},
 			openings: {
-				outputs: { default: { openings: { fields: 'all' } }, listing: { openings: { fields: ['title', 'location', 'description'] } } }
+				outputs: {
+					default: { openings: { fields: 'all' } },
+					listing: { openings: { fields: ['title', 'location', 'description'] } }
+				}
 			},
 			applications: {
 				outputs: { default: { applications: { fields: 'all' } } },
@@ -94,8 +97,7 @@ const manifest = Result.getOrThrow(
 					orders: {
 						read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
 						create: true,
-						update: true,
-						moves: { status: ['draft->submitted'] }
+						update: { moves: { status: ['draft->submitted'] } }
 					},
 					notes: { read: true, create: true }
 				}
@@ -108,8 +110,7 @@ const manifest = Result.getOrThrow(
 					orders: {
 						read: true,
 						create: true,
-						update: true,
-						moves: { status: ['draft->submitted'] }
+						update: { moves: { status: ['draft->submitted'] } }
 					},
 					notes: { read: true, create: true }
 				}

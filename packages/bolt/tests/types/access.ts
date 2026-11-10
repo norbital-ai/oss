@@ -60,6 +60,7 @@ export const salesRep = policy({
 			},
 			update: {
 				columns: { orders: ['status', 'note'] },
+				moves: { status: ['draft->submitted', 'submitted->draft'] },
 				// the pre-image check `previous` was; the owner's team reviews a status change
 				verdict: function* (changes, ctx) {
 					if (changes.some((c) => c.before.status === 'ordered'))
@@ -79,8 +80,7 @@ export const salesRep = policy({
 						? ctx.allow()
 						: ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
 				}
-			},
-			moves: { status: ['draft->submitted', 'submitted->draft'] }
+			}
 		},
 		// a narrow named output: the shape is the model's, the grant only filters rows
 		customers: {
@@ -122,13 +122,13 @@ export const clerk = policy({
 	grants: {
 		orders: {
 			update: {
+				moves: 'all',
 				verdict: function* (changes, ctx) {
 					return changes.every((c) => c.before.placed_at === null && c.set.placed_at != null)
 						? ctx.allow()
 						: yield* ctx.refuse('Place an unplaced order.', { field: 'placed_at' });
 				}
-			},
-			moves: 'all'
+			}
 		}
 	}
 });
@@ -192,10 +192,10 @@ policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
 policy({ description: 'x', grants: { orders: { create: { columns: { 'orders.customer': ['name'] } } } } });
 // @ts-expect-error A9 a move along an undeclared edge
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { moves: { status: ['draft->ordered'] } } } });
+policy({ description: 'x', grants: { orders: { update: { moves: { status: ['draft->ordered'] } } } } });
 // @ts-expect-error A10 moves on a field that is not a state
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { moves: { note: ['a->b'] } } } });
+policy({ description: 'x', grants: { orders: { update: { moves: { note: ['a->b'] } } } } });
 // @ts-expect-error A11 policy `queries` are gone with declared queries
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { queries: ['open_total'] } } });

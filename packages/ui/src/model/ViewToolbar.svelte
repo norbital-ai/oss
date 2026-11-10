@@ -43,7 +43,7 @@
 	/**
 	 * An author's actions-menu item (§3.6): an icon, a name, a line of description and the handler itself. The menu owns
 	 * the rest: a promise the handler returns is the item's pending state, a rejection or a refused outcome its error (in
-	 * place and as a toast), an `Outcome` (`bolt.act`) is toasted, and a run handle (`bolt.start`) shows its run under the
+	 * place and as a toast), an `Outcome` (`ctx.act`) is toasted, and a run handle (`ctx.run`) shows its run under the
 	 * toolbar. A handler that returns nothing closes the menu (it opened a sheet or a file picker of its own).
 	 */
 	export type ToolbarItem<R = Row> = {
@@ -488,7 +488,7 @@
 				}),
 				why: null,
 				button: msg(bolt, 'view.syncButton', 'Sync'),
-				act: () => bolt.start(`${model}.sync.${r.name}`, {})
+				act: () => bolt.run(`${model}.sync.${r.name}`, {})
 			})),
 			...files.flatMap((f): Entry[] => [
 				...(f.import
@@ -512,7 +512,7 @@
 								hint: msg(bolt, 'view.templateHint', "The import's columns as a spreadsheet"),
 								why: null,
 								button: msg(bolt, 'view.download', 'Download'),
-								act: () => bolt.start(`${model}.sync.${f.name}`, { mode: 'template', ...scoped() })
+								act: () => bolt.run(`${model}.sync.${f.name}`, { mode: 'template', ...scoped() })
 							} satisfies Entry
 						]
 					: []),
@@ -532,7 +532,7 @@
 					button: msg(bolt, 'view.download', 'Download'),
 					act: () => {
 						const where = shown();
-						return bolt.start(`${model}.sync.${f.name}`, {
+						return bolt.run(`${model}.sync.${f.name}`, {
 							mode: 'export',
 							to,
 							...scoped(),
@@ -841,7 +841,7 @@
 	/** What the page shows: the author's scope and the viewer's filter. */
 	const shown = () => and(and(author, hiddenAuthor), view?.where);
 	function startImport(sync: string, file: string) {
-		const h = bolt.start(`${model}.sync.${sync}`, { mode: 'import', file, ...scoped() });
+		const h = bolt.run(`${model}.sync.${sync}`, { mode: 'import', file, ...scoped() });
 		if (bolt.runs === undefined) return track(h); // no run reads here: RunStatus says so
 		return h.pipe(
 			Effect.map((outcome) => {

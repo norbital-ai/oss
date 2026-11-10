@@ -3,7 +3,7 @@ import type { ViewNames } from '../decl/ctx.ts';
 import type { PageBolt } from './page-bolt.ts';
 import type { ShellBolt } from '../shell/runtime.ts';
 import type { PublicClient } from '../shell/public/client.ts';
-export type { PageAct, PageBolt, PageCall, PageClock, PageStart, Query } from './page-bolt.ts';
+export type { PageAct, PageBolt, PageCall, PageClock, PageRun, Query } from './page-bolt.ts';
 export { resolveDevice, type DeviceApi } from './device.ts';
 export { fileRef } from './file-ref.ts';
 export { frameworkText } from '../shell/i18n.ts';

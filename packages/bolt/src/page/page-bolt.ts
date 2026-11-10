@@ -39,11 +39,7 @@ import type {
 	Unavailable
 } from '../decl/errors.ts';
 import type { ModelName, FileField, FileSyncName, Is, ReadableName } from '../decl/names.ts';
-import type {
-	ConvertSource,
-	PreviewPdfOptions,
-	StartInput
-} from '../decl/runtime/facilities.ts';
+import type { ConvertSource, PreviewPdfOptions, StartInput } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, PlainDate, RequestId } from '../decl/values.ts';
 import type { ApprovalView } from '../engine/approvals/approvals.ts';
 import type { RecordCapabilities, RecordParentContext } from '../protocol/record-contracts.ts';
@@ -75,7 +71,7 @@ export type PageAct<O, N = string> = Effect.Effect<
 	ActRefused | ActConflict | ActUnknown
 >;
 /** Admission of queued runs; a committed output is the queue receipt. `runs` follows execution and its declared result. */
-export type PageStart<A extends string = string> = Effect.Effect<
+export type PageRun<A extends string = string> = Effect.Effect<
 	Outcome<{
 		readonly id: Id<'sys_run'>;
 		readonly ids: readonly Id<'sys_run'>[];
@@ -152,7 +148,7 @@ export interface PageBolt {
 	 * Execute the returned Effect through the mounted page runtime (`run`, `fork` or `attach` from `@norbital-ai/ui/effect`).
 	 * A `pendingApproval` receipt is successful submission, not final approval; `running` is followed through the run ledger.
 	 * Refusal, conflict and uncertain settlement fail with `ActRefused`, `ActConflict` and `ActUnknown` respectively.
-	 * @param callable A generated model verb, such as `orders.create`; automations use start instead.
+	 * @param callable A generated model verb, such as `orders.create`; automations use run.
 	 * @param input The verb's ActInput batch, with branded target ids for updates and deletes.
 	 * @param options Optional idempotency keys and observed revisions.
 	 * @returns A PageAct Effect with the committed, pendingApproval or running receipt.
@@ -166,12 +162,12 @@ export interface PageBolt {
 	): PageAct<ActOutput<N>, N>;
 	/**
 	 * Starts an automation now with its typed input, or once per input in one request (a bulk action over selected
-	 * records); `id`/`ids` are the runs' ids before the outcome settles (a toolbar item returning it shows the runs).
+	 * records). A batch needs at least one input. `id`/`ids` are the runs' ids before the outcome settles (a toolbar item returning it shows the runs).
 	 */
-	start<const A extends string>(
+	run<const A extends string>(
 		automation: Is<A, StartableName>,
 		input: NoInfer<StartInput<A> | readonly StartInput<A>[]>
-	): PageStart<A>;
+	): PageRun<A>;
 	/** `accept` and `max` are checked before bytes are stored; a refusal is `ActRefused`. */
 	upload(
 		file: Blob & { name?: string },

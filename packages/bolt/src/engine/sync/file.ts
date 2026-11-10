@@ -79,7 +79,7 @@ type Caller = {
 type FileSyncServices =
 	Manifest | TenantDb | Callables | Reads | Identity | Guest | Files | Facilities | Convert;
 
-/** A file sync's start input, as `bolt.start('<model>.sync.<sync>', input)` decodes it. */
+/** A file sync's input, as `ctx.run('<model>.sync.<sync>', input)` decodes it. */
 export const FILE_SYNC_INPUT: InputSpec = {
 	mode: { kind: 'enum', values: ['import', 'template', 'export'] },
 	file: { kind: 'text', optional: true },

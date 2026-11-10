@@ -125,17 +125,17 @@ ctx.act('notice_notes.import', [{ notice, note: 'x' }]);
 // @ts-expect-error P12 an import names how it meets a stored row
 ctx.act('notice_notes.import', { rows: [{ notice, note: 'x' }] });
 // @ts-expect-error P8 an automation's input
-ctx.start('orders_renote', { ids: [order], note: 5 });
+ctx.run('orders_renote', { ids: [order], note: 5 });
 // @ts-expect-error P9 an unknown callable
 ctx.act('orders.nope', {});
 ctx.act('orders.update', [{ target: order, set: { note: 'x' } }]);
 // @ts-expect-error P10 a field the update allowlist leaves out
 ctx.act('orders.update', [{ target: order, set: { number: 'x' } }]);
-ctx.start('nightly', {});
+ctx.run('nightly', {});
 // a file sync's export input, one or a batch (`format` is part of the export arm)
-ctx.start('orders.sync.sheet', { mode: 'export', format: 'json' });
-ctx.start('orders.sync.sheet', [{ mode: 'export', format: 'csv' }]);
-ctx.start('orders_renote', { ids: [order], note: 'x' }).pipe(
+ctx.run('orders.sync.sheet', { mode: 'export', format: 'json' });
+ctx.run('orders.sync.sheet', [{ mode: 'export', format: 'csv' }]);
+ctx.run('orders_renote', { ids: [order], note: 'x' }).pipe(
 	Effect.map((outcome) => {
 		is<
 			Eq<

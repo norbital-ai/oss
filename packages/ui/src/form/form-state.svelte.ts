@@ -114,7 +114,7 @@ export class FormState {
 	#key: string;
 	#revision = $state<number | undefined>(undefined);
 	#act: Act;
-	#start: ViewBolt['start'] | undefined;
+	#start: ViewBolt['run'] | undefined;
 	#startAttempt:
 		{ readonly key: string; readonly input: string; readonly handle: RunHandle } | undefined;
 	#text: NoticeText;
@@ -146,7 +146,7 @@ export class FormState {
 		act: Act,
 		text: NoticeText,
 		locked: (field: string) => boolean = () => false,
-		start?: ViewBolt['start'],
+		start?: ViewBolt['run'],
 		storageKey?: string
 	) {
 		this.spec = spec;

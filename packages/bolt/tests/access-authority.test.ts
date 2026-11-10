@@ -55,7 +55,10 @@ const m: EngineManifest = {
 	relationships: { 'lines.order': { to: 'orders', inverse: 'lines', owned: true } },
 	exposures: {
 		orders: {
-			outputs: { default: { orders: { fields: 'all' }, 'orders.lines': { fields: 'all' } }, summary: { orders: { fields: ['status', 'region'] } } },
+			outputs: {
+				default: { orders: { fields: 'all' }, 'orders.lines': { fields: 'all' } },
+				summary: { orders: { fields: ['status', 'region'] } }
+			},
 			update: { columns: { orders: ['note', 'status'], 'orders.lines': ['qty'] } }
 		},
 		lines: { outputs: { default: { lines: { fields: 'all' } } } },
@@ -81,8 +84,11 @@ const m: EngineManifest = {
 						orders: { where: { region: { eq: 'north' } } },
 						'orders.lines': { where: { qty: { gt: 0 } } }
 					},
-					update: { columns: { orders: ['note', 'status'] }, verdict: true },
-					moves: { status: ['draft->submitted'] }
+					update: {
+						columns: { orders: ['note', 'status'] },
+						verdict: true,
+						moves: { status: ['draft->submitted'] }
+					}
 				}
 			}
 		},

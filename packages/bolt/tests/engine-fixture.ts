@@ -92,9 +92,8 @@ export const manifest = {
 				orders: {
 					read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
 					create: { verdict: true },
-					update: { verdict: true },
-					delete: { verdict: true },
-					moves: { status: ['draft->submitted'] }
+					update: { verdict: true, moves: { status: ['draft->submitted'] } },
+					delete: { verdict: true }
 				},
 				lines: {
 					read: {

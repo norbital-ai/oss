@@ -24,9 +24,11 @@
 | `ctx.recordCapabilities`, `ctx.previewPdf`, `ctx.fileUrl` | Use `ctx.record_capabilities`, `ctx.preview_pdf`, `ctx.file_url`. |
 | `ctx.files.image(ref, { jpeg: { maxEdge } })` | Use `{ jpeg: { max_edge } }`. |
 | Page `ctx.convert(source, request)` | Start an automation that uses `ctx.convert.document` to create a file. Use `ctx.preview_pdf` for PDF bytes. |
+| Page `ctx.start(name, input)` and type `PageStart` | Use `ctx.run(name, input)` and type `PageRun`. The returned job handle still carries `id`, `ids` and `automation`. |
 | `ctx.files.text`, `ctx.files.table`, `ctx.files.sheet` | Use `ctx.convert.ingest` in an automation for parsed documents and spreadsheets. A file-sync parser reads its bytes with `ctx.files.get`. |
 | Policy `automations: [...]` | Move the list to `capabilities.automations`. |
 | Policy `create.check`, `update.check`, `delete.check` | Rename the callback to `verdict` in the same verb block. |
+| Policy `moves` on a model grant | Move it into `update.moves`. Rewrite `update: true` as `update: { moves }` or use `update: { columns: {}, moves }` when the old policy granted only moves. |
 | `ctx.approve(flow => flow.step(...).supersededBy(...))` | Pass `{ steps: [{ name, teams }], superseded_by: [...] }` directly. Use ordinary conditions to select steps. Use `ctx.allow()` and `yield* ctx.refuse(...)` for immediate verdicts. Approval steps name teams. |
 | `automation(name, spec)` | Use `automation(spec)`. The file supplies the name and the body infers its input and result from the declared fields. |
 | `on: { cron: ... }` or `on: { webhook: ... }` | Use `on: [{ cron: ... }]` or `on: [{ webhook: ... }]`. |

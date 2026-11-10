@@ -447,7 +447,7 @@ type ReadSyncName<C, S = SyncsOf<C>> = {
 		: never;
 }[keyof S] &
 	string;
-/** A remote sync that reads, as a run a policy's `automations` may start and `bolt.start` runs: `'<model>.sync.<name>'`. */
+/** A remote sync that reads, available to `ctx.run` through policy `capabilities.automations`: `'<model>.sync.<name>'`. */
 export type SyncCallable = {
 	[C in ModelName]: `${C}.sync.${ReadSyncName<C> | FileSyncName<C>}`;
 }[ModelName];

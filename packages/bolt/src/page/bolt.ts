@@ -868,14 +868,15 @@ export const createBolt = (config: BoltConfig) =>
 					)
 				),
 			// many inputs are one request queueing one run each (a bulk action), not one request per record
-			start(automation: string, input: Wired | readonly Wired[]) {
+			run(automation: string, input: Wired | readonly Wired[]) {
 				const inputs: readonly Wired[] = Array.isArray(input) ? input : [input];
 				const runs = inputs.map((one) => ({
 					input: one,
 					id: uuid()
 				}));
-				const ids = runs.map((run) => run.id),
-					id = ids[0]!;
+				const ids = runs.map((run) => run.id);
+				const id = ids[0];
+				if (id === undefined) throw new RangeError('An automation batch needs at least one input.');
 				return Object.assign(send('start', { automation, runs }, id), { id, ids, automation });
 			},
 			upload: (

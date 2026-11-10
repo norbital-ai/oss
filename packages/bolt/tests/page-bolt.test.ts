@@ -331,8 +331,8 @@ describe('PDF preview', () => {
 	it.effect('returns PDF bytes from a lazy preview', () =>
 		Effect.gen(function* () {
 			const pdf = new TextEncoder().encode('%PDF');
-			const { bolt, sent } = yield* client(() =>
-				new Response(pdf, { headers: { 'content-type': 'application/pdf' } })
+			const { bolt, sent } = yield* client(
+				() => new Response(pdf, { headers: { 'content-type': 'application/pdf' } })
 			);
 			const preview = bolt.preview_pdf({ markdown: '# Report' }, { page: 'A4' });
 			expect(sent).toHaveLength(0);
@@ -415,14 +415,15 @@ describe('acts, starts, uploads and the session', () => {
 			expect(yield* Effect.flip(refused.act('jobs.create', [{}]))).toBeInstanceOf(ActRefused);
 		})
 	);
-	it.effect('start names its run at once and sends one request when run', () =>
+	it.effect('run names its job at once and submits it when executed', () =>
 		Effect.gen(function* () {
 			const { bolt, sent } = yield* client(
 				outcome({ kind: 'committed', output: null, records: [] })
 			);
-			const start = bolt.start('sync', {});
-			expect([start.id, start.automation]).toEqual(['k1', 'sync']);
-			expect(yield* start).toMatchObject({ kind: 'committed' });
+			expect(() => bolt.run('sync', [])).toThrow('An automation batch needs at least one input.');
+			const run = bolt.run('sync', {});
+			expect([run.id, run.automation]).toEqual(['k1', 'sync']);
+			expect(yield* run).toMatchObject({ kind: 'committed' });
 			expect(sent).toEqual([
 				{
 					callable: 'start',

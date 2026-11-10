@@ -227,7 +227,7 @@ export type ViewBolt = {
 			live: number
 		): Effect.Effect<ActSuccess, ActFailure>;
 	};
-	start(automation: string, input: Value | readonly Value[]): RunHandle;
+	run(automation: string, input: Value | readonly Value[]): RunHandle;
 	/** §3.5 `runs(automation, { where?, limit })`; absent until the client serves it (views then say so). */
 	runs?(automation: string, options: { where?: Json; limit: number }): Live<Page<RunRow>>;
 	file_url(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;

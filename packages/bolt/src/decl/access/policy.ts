@@ -152,19 +152,20 @@ export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> =
 	| ({
 			columns?: { [P in WritePath<C, O>]?: readonly LayerColumn<C, O, P>[] } & object;
 			verdict?: O extends 'create' ? CreateCheck<C> : UpdateCheck<C>;
-	  } & object);
+	  } & (O extends 'update'
+			? { moves?: 'all' | { [F in StateField<C>]?: readonly Edge<C, F>[] } }
+			: object));
 /** A delete grant: `true`, or `{ verdict }`. */
 export type DeleteGrant<C extends ModelName> = true | ({ verdict?: DeleteCheck<C> } & object);
 type Declares<C, V> = ExposureSpecOf<C> extends { [P in V & string]: unknown } ? true : false;
 /**
  * A model grant: its access points `read` (the `default` output) and `outputs` (named ones), `create`, `update`,
- * `delete` (each only when the model declares it), `history` and state `moves`.
+ * `delete` (each only when the model declares it) and `history`. State `moves` are part of `update`.
  */
 export type Grant<C extends ModelName> = {
 	read?: ReadGrant<C>;
 	outputs?: { [O in Exclude<OutputName<C>, 'default'>]?: ReadGrant<C, O> };
 	history?: HistoryGrant<C>;
-	moves?: 'all' | { [F in StateField<C>]?: readonly Edge<C, F>[] };
 	create?: Declares<C, 'create'> extends true ? WriteGrant<C, 'create'> : never;
 	update?: Declares<C, 'update'> extends true ? WriteGrant<C, 'update'> : never;
 	delete?: Declares<C, 'delete'> extends true ? DeleteGrant<C> : never;

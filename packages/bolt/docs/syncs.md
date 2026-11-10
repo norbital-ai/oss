@@ -128,7 +128,7 @@ authority. Remote sync reads instead use trusted workspace authority.
 The toolbar supplies Import, Export and Download template. `write` returns records for export;
 without it, the view's rows are exported through the schema. A document export instead returns
 `{ document: { html }, name }`; see [documents](./documents.md). Start a file run as
-`bolt.start('model.sync.name', { mode: 'import', file, context })` or
+`ctx.run('model.sync.name', { mode: 'import', file, context })` or
 `{ mode: 'export', context, format? }` (documents use `to`).
 
 Built-in parsers are `xlsx`, `csv`, `tsv`, `json`, `ics` and `txt`. The parser list is exactly what

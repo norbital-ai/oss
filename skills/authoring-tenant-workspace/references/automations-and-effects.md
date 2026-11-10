@@ -19,7 +19,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 - A row write runs its model's `effect`, never an automation.
 - Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rateLimited`. Cron, webhook, effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
 - A safety-net cron depending only on workspace data declares `rest`: when a run writes nothing, no slot fires until the workspace is used or the rest passes. Never on a cron that finds work by time or reads what a connected link writes.
-- A page starts a run with `bolt.start(name, input)`, which yields `id` and `automation` for run status. Output is readable on the run.
+- A page starts a run with `ctx.run(name, input)`, which yields `id` and `automation` for run status. Output is readable on the run.
 - Every startable automation appears in the Command Center with its typed form; a page form is optional.
 
 ## Reruns

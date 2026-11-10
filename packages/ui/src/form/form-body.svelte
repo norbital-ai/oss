@@ -95,7 +95,7 @@
 						running: t('running')
 					},
 					(field) => locked(modelFields, record)(field),
-					(automation, input) => bolt.start(automation, input),
+					(automation, input) => bolt.run(automation, input),
 					storageKey
 				);
 	if (matching) untrack(() => form.prefill(values));

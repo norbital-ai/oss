@@ -888,11 +888,8 @@ declare module '../../src/index.ts' {
 							};
 							verdict: true;
 						};
-						update: { columns: { orders: readonly ['status', 'note'] }; verdict: true };
+						update: { columns: { orders: readonly ['status', 'note'] }; verdict: true; moves: { status: readonly ['draft->submitted', 'submitted->draft'] } };
 						delete: { verdict: true };
-						moves: {
-							status: readonly ['draft->submitted', 'submitted->draft'];
-						};
 					};
 					customers: {
 						outputs: {

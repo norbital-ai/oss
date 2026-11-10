@@ -49,17 +49,26 @@ const ReadGrantData = Schema.Union([
 ]);
 export type ReadGrantData = typeof ReadGrantData.Type;
 /**
- * A create or update grant: `true`, or the `columns` per write path it admits and `check: true` when its policy declares
- * the callback the guest runs (`policy.<p>.grants.<model>.<op>.check`).
+ * A create or update grant: `true`, or the admitted `columns` and the guest verdict marker.
  */
-const WriteGrantData = Schema.Union([
+const writeGrantFields = {
+	columns: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+	verdict: Schema.optionalKey(Schema.Literal(true))
+};
+const WriteGrantData = Schema.Union([Schema.Literal(true), Schema.Struct(writeGrantFields)]);
+export type WriteGrantData = typeof WriteGrantData.Type;
+const UpdateGrantData = Schema.Union([
 	Schema.Literal(true),
 	Schema.Struct({
-		columns: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-		verdict: Schema.optionalKey(Schema.Literal(true))
+		...writeGrantFields,
+		moves: Schema.optionalKey(
+			Schema.Union([
+				Schema.Literal('all'),
+				Schema.Record(Schema.String, Schema.Array(Schema.String))
+			])
+		)
 	})
 ]);
-export type WriteGrantData = typeof WriteGrantData.Type;
 const DeleteGrantData = Schema.Union([
 	Schema.Literal(true),
 	Schema.Struct({ verdict: Schema.optionalKey(Schema.Literal(true)) })
@@ -71,11 +80,8 @@ const GrantData = Schema.Struct({
 	outputs: Schema.optionalKey(Schema.Record(Schema.String, ReadGrantData)),
 	history: Schema.optionalKey(GrantArm),
 	create: Schema.optionalKey(WriteGrantData),
-	update: Schema.optionalKey(WriteGrantData),
-	delete: Schema.optionalKey(DeleteGrantData),
-	moves: Schema.optionalKey(
-		Schema.Union([Schema.Literal('all'), Schema.Record(Schema.String, Schema.Array(Schema.String))])
-	)
+	update: Schema.optionalKey(UpdateGrantData),
+	delete: Schema.optionalKey(DeleteGrantData)
 });
 export type GrantData = typeof GrantData.Type;
 /** One `limits` entry (rule 38): a bare rate counts per actor (an envoy key: per sender); a list applies every rule. */

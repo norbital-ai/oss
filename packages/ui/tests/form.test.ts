@@ -269,7 +269,7 @@ it.live('an automation submit reports queue admission and retains its native run
 				},
 				text,
 				undefined,
-				(automation, input) => bolt.start(automation, input)
+				(automation, input) => bolt.run(automation, input)
 			);
 			const observed: Outcome[] = [];
 			form.onOutcome((outcome) => observed.push(outcome));
@@ -332,7 +332,7 @@ it.live(
 				(callable, input, options) => bolt.act(callable, input, options),
 				text,
 				undefined,
-				(automation, input) => bolt.start(automation, input)
+				(automation, input) => bolt.run(automation, input)
 			);
 			assert.equal((yield* form.submit())?.kind, 'unknown');
 			const first = form.run;

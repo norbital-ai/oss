@@ -138,7 +138,7 @@
 		mutationError = null;
 		const r = yield* Effect.result(api.run(id));
 		if (r._tag === 'Failure') return void (mutationError = r.failure.message);
-		const o = yield* bolt.start(r.success.automation, r.success.input ?? {});
+		const o = yield* bolt.run(r.success.automation, r.success.input ?? {});
 		if (o.kind === 'refused') mutationError = o.message;
 	});
 	let chosen = $state<string | null>(null);
@@ -160,7 +160,7 @@
 			entering = automation;
 			return;
 		}
-		const o = yield* bolt.start(automation, {});
+		const o = yield* bolt.run(automation, {});
 		if (o.kind === 'refused') mutationError = o.message;
 	});
 	const acts = (r: Pick<RunView, 'id' | 'status'>): Act[] => [

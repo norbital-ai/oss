@@ -14,7 +14,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 | Page-level operation | `toolbar.actions`, the ⚡ menu |
 | One-row operation | the view's row `actions`: an automation or guarded verb |
 | One-record operation | `RecordShell` `actions` |
-| A run's progress | an item whose `run` returns `bolt.start(…)`; `RunStatus` or `RunsFor` elsewhere |
+| A run's progress | an item whose `run` returns `ctx.run(…)`; `RunStatus` or `RunsFor` elsewhere |
 | Create | `toolbar.new`, which opens `RecordShell mode="create"` |
 | Filter and sort | the toolbar popover; fixed scope is `where`, a starting filter `initialFilter` |
 | Row range and paging | the table's footer |
@@ -35,7 +35,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 | nothing | closes the menu |
 | an Effect | spinner, then Done; a typed failure shows in place and as a toast |
 | an Effect from `bolt.act` | its committed or pending-approval result is toasted; refusals use the failure channel |
-| an Effect from `bolt.start` | the run's live status under the toolbar |
+| an Effect from `ctx.run` | the run's live status under the toolbar |
 
 - `requiresSelection: true` lists it under Bulk and turns selection on. `disabled: (selected) => string | null` says why not.
 - Never toast or track a spinner for a menu item yourself.

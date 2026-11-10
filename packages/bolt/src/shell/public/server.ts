@@ -67,7 +67,7 @@ const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup): Pub
 	preview_pdf: unavailable,
 	record_capabilities: unavailable,
 	act: unavailable,
-	start: unavailable,
+	run: unavailable,
 	decode: unavailable,
 	describe: unavailable,
 	options: unavailable,

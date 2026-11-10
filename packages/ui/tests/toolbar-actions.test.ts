@@ -316,7 +316,7 @@ it.live(
 						}
 					},
 					actions: [
-						{ icon: 'lucide:refresh-cw', name: 'Refresh', run: () => bolt.start('refresh', {}) }
+						{ icon: 'lucide:refresh-cw', name: 'Refresh', run: () => bolt.run('refresh', {}) }
 					]
 				})
 			);

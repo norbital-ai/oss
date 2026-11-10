@@ -25,7 +25,7 @@
 		history: unavailable,
 		clock: () => ({ today: '2026-01-02', now: '2026-01-02T03:04:05.000Z' }),
 		act: unavailable,
-		start: unavailable,
+		run: unavailable,
 		file_url: unavailable,
 		approvals: { decide: unavailable, get: unavailable, list: unavailable },
 		actor: null,

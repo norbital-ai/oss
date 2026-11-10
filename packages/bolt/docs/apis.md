@@ -8,7 +8,7 @@ from `@norbital-ai/ui/effect`. Returned values retain their declared ids, decima
 | ----------------------------- | ------------------- | ------------------------- | ------------------------- | -------------------- | ----------------------------- | ---------------------- |
 | `query`                       | live / once         | `ctx.query`, workspace | `ctx.query`, workspace | its policies         | file: caller; remote: trusted | workspace              |
 | `act`                         | yes                 | return rows               | none (returns a verdict)  | yes                  | return changes                | none                   |
-| `start` / `schedule`          | `ctx.start`        | none                      | none                      | yes                  | none                          | none                   |
+| `run` / `schedule`          | `ctx.run`        | none                      | none                      | yes                  | none                          | none                   |
 | `ai`                          | start an automation | none                      | none                      | infer, decide, embed | none                          | none                   |
 | `request`                     | none                | none                      | none                      | selected instance    | own instance                  | none                   |
 | `send` / `notify`             | none                | none                      | none                      | yes                  | remote write                  | notify returns notices |
@@ -111,7 +111,7 @@ Business operations live in named automations with explicit typed inputs.
 
 A write based on a previously read row carries its observed revision. The engine checks the revision before it commits. A transform can read workspace data and carry related rows into the same commit.
 
-`ctx.start(name, input)` starts an automation or file sync. `ctx.schedule(name, input, { at?, key? })`
+`ctx.run(name, input)` starts an automation or file sync. `ctx.schedule(name, input, { at?, key? })`
 queues after commit; a key replaces queued work with that key. Use the runs catalogue for progress
 and result. An automation declares `policies` (at least one); every run executes as the reserved
 system identity (`ctx.actor.kind === 'system'`) holding exactly them, whoever started it. The run

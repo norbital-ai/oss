@@ -116,19 +116,13 @@ an identifier derived from hidden fields nor matches their terms in search. Lega
 field names/lists remain compatible and normalize to the same calculation for workspace models;
 new declarations should use `record_label`. This is model metadata, not a writable data field.
 
-## Layer maps
+## Output trees and write layers
 
-`read`, each output, `create` and `update` are layer maps: a flat object keyed by path in the read or write
-tree. `'orders'` is the root layer, `'orders.customer'` and `'orders.lines'` the layers under it,
-`'orders.lines.product'` one deeper; at most five levels. Each segment is a relation of the layer
-above (a ref, an inverse many-relation or an owned child), and each layer's parent is declared too
-(`bolt check`: `model/layer`). `read: 'all'` is `{ <model>: { fields: 'all' } }`.
-
-- `read` declares the `default` output; `outputs` declares named ones (never `default`), each a fixed
-  layer map (`'all'` allowed). Every read names one output (`output`, `default` when absent) and its
-  layer keys are that output's layers. Policies grant outputs and filter their rows; they never change
-  a shape. Without `read` a model is no read root; it can still store data and be a layer of another
-  model's `read`.
+- `outputs` declares `default` and any named outputs. Each output lists `fields` (or `'all'`) and
+  nests a projection under each relation it exposes. For example, use
+  `{ fields: ['number'], customer: { fields: ['name'] } }`. A read uses `default` unless it
+  names another `output`. Policies grant outputs and filter their rows. A model without an output
+  can still store data and appear in another model's output tree.
 - `create.columns` / `update.columns` declare the writable columns per layer. A write layer is a
   many-relation (the child rows); it never lists the key that ties a child to its parent.
   `create.filled` names columns the transform fills when the writer omits them.
@@ -142,16 +136,16 @@ above (a ref, an inverse many-relation or an owned child), and each layer's pare
 
 Declare application-layer immutability once, on the model or the field:
 
-- `locked: { status: { eq: 'paid' } }` is an own-field predicate. A matching row refuses update and
-  delete on every write path (page, agent, automation, import, bulk edit, approval resubmit); the
-  record page offers a lock with a reason instead of Edit. It is not a database permission and is
-  not inherited by related rows unless their own model declares it.
+- `constraints: { paid: { locked: { status: { eq: 'paid' } } } }` makes a matching row read-only.
+  Add `except: ['note']` to allow edits to selected fields. Each matching lock must allow a field
+  for it to be editable. A matching row cannot be deleted. Related rows use their own model's rules.
 - An `enum` field may declare `transitions: { draft: ['placed'], placed: [] }`. An update naming a
   target outside the current state's list is refused. The enum editor offers only those targets
   plus the current value.
 - A `state` field remains the stricter lifecycle: `initial`, per-state `to`, and `edit` (which fields
   the state permits). Use `state` when the lifecycle owns field edits; use `enum` transitions when
-  the record has independent fields and only the status moves.
+  the record has independent fields and only the status moves. Policies authorize edges through
+  `update.moves`.
 
 Do not reimplement either rule in `update.transform`, a delete check, or a template form: the host
 and the generated record UI already enforce them.
@@ -206,7 +200,7 @@ export default automation({
 `order_duplicating` grants the order read and create the run uses. Its `requestor.*` operands name
 the system identity, so a rule about the starter is code over `ctx.run.trigger`, and a ref the run
 writes is set explicitly (a `requestor.id` default does not apply). A person or the agent starts it by hand
-only through a held policy's `automations: ['orders_duplicate']`; code that schedules it needs none. A page starts it with `bolt.start('orders_duplicate', { order: id })` and
+only through a held policy's `capabilities.automations`; code that schedules it needs none. A page starts it with `ctx.run('orders_duplicate', { order: id })` and
 shows its run status. Several independent writes belong in one `ctx.act.many(...)` call when
 they must commit atomically; dependent parent/child creates nest the child rows in the parent's
 write layers. A transform can carry other rows into the same commit. A whole automation is durable work and may contain several independent commits.

@@ -270,12 +270,13 @@ export function compileAuthority(m: EngineManifest, holder: Holder, key: string)
 				}
 				if (g.delete !== undefined)
 					a.delete.push({ policy: p, check: g.delete !== true && g.delete.verdict === true });
-				if (g.moves === 'all')
+				const moves = g.update === true ? undefined : g.update?.moves;
+				if (moves === 'all')
 					for (const [f, k] of Object.entries(m.models[c]?.fields ?? {})) {
 						if (k.kind === 'state') a.moves[f] = 'all';
 					}
 				else
-					for (const [f, edges] of Object.entries(g.moves ?? {})) {
+					for (const [f, edges] of Object.entries(moves ?? {})) {
 						const had = a.moves[f];
 						a.moves[f] = had === 'all' ? 'all' : [...new Set([...(had ?? []), ...edges])];
 					}
