@@ -1,19 +1,15 @@
-// The engine contracts (§2.3, §3.3.10 `/engine`, §11.1 P2): the only coupling between the engine areas. Types plus the
-// few runtime values every area shares (budgets, the port-call wrapper, the manifest projection); failures are `errors.ts`.
-//
-// Ownership: who implements what is declared here.
-//   EngineManifest, engineManifest ....... P1 compiler (A2, C1); consumed by every area
-//   TenantDb ............................. adapters in `node/db` (PGlite, Postgres); a cell reads the host's `HostTenantDb`
-//   Pred, ReadIR, SelectIR, ReadEngine ... query compiler (A4, `engine/query`): Where literal → Pred, Pred → SQL and JS
-//   Change, Captured ..................... write compiler (A5, `engine/write`): flattening, the one statement, RETURNING
-//   Authority ............................ access (A6, `engine/access`): compiled per (actor, revisions, release), rule 37
-//   GuestPort, Bridge, CrossCall ......... guest runtime (A10, `engine/guest`): isolate runner, walls, crossings
-//   HostPorts and every *Port ............ host adapters (bolt-server self-host, P5; any other host); the engine only
-//                                          calls them through native port services — deadlines are driven by runs,
-//                                          `membership`/`secrets`/`tenancy` by identity (§5.11), `ai` by agents (A11)
-//   Outcome .............................. write compiler (A5) builds it; protocol (A9) maps it to HTTP (rule 32)
-// Bolt never names a host (P18): every port below is generic.
-import type { Refused, Unknown } from '../decl/ctx.ts';
+// Shared engine budgets and native ABI types. Services live in services.ts, the database in db/tenant-db.ts,
+// compiled source in manifest.ts and the versioned host boundary in protocol/host-api.ts.
+// Runtime schemas own the wire shapes derived here. Host capabilities remain generic.
+import type {
+	EngineActorSchema,
+	RunTriggerSchema,
+	RunTriggerViewSchema,
+	WriteOutcome,
+	Outcome as ActOutcomeSchema,
+	Written as WrittenSchema
+} from '../protocol/schema.ts';
+import type { ImageMetadataSchema, IngestedSchema } from './media.ts';
 import type { DeliveryReport } from './conversations/status.ts';
 import type { BoltError } from '../protocol/errors.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
@@ -134,7 +130,6 @@ export type QueuedRun = {
 	cause: string;
 	depth: number;
 };
-export type NoticeRow = Omit<import('./notifications/notify.ts').NoticeInsert, 'id'>;
 /** One committed row change from `RETURNING old.*, new.*`: the input of triggers (rule 50) and live routing (A9). */
 export type Captured = {
 	model: string;
@@ -147,89 +142,21 @@ export type Captured = {
 };
 
 // ── outcomes (rule 32): the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
-export type Written = readonly { model: string; id: string; revision: number }[];
-export type Outcome =
-	| {
-			kind: 'committed';
-			output: Json;
-			records: Written;
-			/** An act that wrote no row: the records already holding every supplied value (after callbacks). */
-			unchanged?: readonly { model: string; id: string }[];
-	  }
-	| { kind: 'pending_approval'; requestId: string; records: Written }
-	| Refused
-	| {
-			kind: 'conflict';
-			records: readonly { model: string; id: string; fields: readonly string[] }[];
-	  }
-	| Unknown;
+export type Written = typeof WrittenSchema.Type;
+export type Outcome = typeof WriteOutcome.Type;
 /** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`Running`). */
-export type Running = { kind: 'running'; run: string };
+export type Running = Extract<ActOutcome, { kind: 'running' }>;
 /** What an act answers its caller: the write's outcome, or `running` once it outlives the person-wait. */
-export type ActOutcome = Outcome | Running;
+export type ActOutcome = typeof ActOutcomeSchema.Type;
 
 // ── actors and authority (A6) ──
 /** The decl `Actor` with names erased: one engine serves any workspace. */
-export type MemberActor = {
-	kind: 'member';
-	id: string;
-	email: string | null;
-	phone: string | null;
-	external: boolean;
-	teams: readonly string[];
-	team_path: readonly string[];
-	admin: boolean;
-	party: { model: string; id: string } | null;
-};
-export type EngineActor =
-	| MemberActor
-	/**
-	 * hook:envoys — P32: the envoy's turn on `instance` (the `sys_integration` row it arrived on, `{ var: 'requestor.instance' }`);
-	 * `member` names the linked sender (either audience); `linked` is set on a linked member's DM and binds `actor` operands.
-	 */
-	| {
-			kind: 'envoy';
-			envoy: string;
-			instance: string;
-			sender: string;
-			member: string | null;
-			linked?: MemberActor;
-	  }
-	/**
-	 * A visitor of a public app or a no-sign-in kiosk. `anonymous`: `visitor` is the anonymous `sys_user` the visitor's
-	 * cookie holds (`requestor.id`, its own rows' owner); absent, `visitor` is a per-request id that owns nothing.
-	 */
-	| { kind: 'visitor'; app: string; visitor: string; anonymous?: true }
-	| { kind: 'api_key'; key: string }
-	/**
-	 * The reserved system identity: an automation's or platform run's work, or a remote sync's read page for the
-	 * instance it runs for (`'<model>.sync.<sync>'`). Its `requestor.*` operands name no person.
-	 */
-	| {
-			kind: 'system';
-			run: string;
-			by: { automation: string } | { platform: string } | { sync: string; instance: string };
-	  };
+export type MemberActor = Extract<EngineActor, { kind: 'member' }>;
+export type EngineActor = typeof EngineActorSchema.Type;
 /** The decl `RunTrigger` with names erased (`sys_run.trigger`): who or what started an automation run. */
-export type RunTrigger =
-	| {
-			kind: 'person';
-			actor: Exclude<EngineActor, { kind: 'system' }>;
-			agent?: { conversation: string };
-	  }
-	| { kind: 'system'; cause: 'cron' | 'webhook' }
-	| {
-			kind: 'system';
-			cause: 'effect';
-			model: string;
-			verb: 'created' | 'updated' | 'deleted';
-			records: readonly string[];
-	  }
-	| { kind: 'system'; cause: 'schedule'; by?: { automation: string; run: string } };
+export type RunTrigger = typeof RunTriggerSchema.Type;
 /** A run's trigger as the ledger shows it (decl `RunTriggerView`): a person by actor ref and display name. */
-export type RunTriggerView =
-	| Exclude<RunTrigger, { kind: 'person' }>
-	| { kind: 'person'; ref: string; name: string | null; agent?: true };
+export type RunTriggerView = typeof RunTriggerViewSchema.Type;
 /** One read arm of one layer of one output: its policy's row filter; arms of every held policy union (rule 35). */
 export type Arm = { policy: string; where: Pred; history?: true };
 /**
@@ -439,46 +366,16 @@ export interface ConvertPort {
 	): Promise<Uint8Array>;
 }
 /** An ingest's model calls as Convert reports them (audio): their call ids (the metering keys), model, tokens and charge. */
-export type IngestUsage = {
-	readonly calls: readonly string[];
-	readonly model: string;
-	readonly input: number;
-	readonly output: number;
-	readonly cost: number;
-};
+export type IngestUsage = NonNullable<IngestMeta['usage']>;
 /** An ingest's metering: audio's model calls (`usage`) and the conversion's compute (`stats`). */
-export type IngestMeta = {
-	readonly usage?: IngestUsage;
-	readonly stats: {
-		readonly pages: number | null;
-		readonly bytes: number;
-		readonly cpuMs: number;
-		readonly wallMs: number;
-	};
-};
-export type IngestImage = {
-	readonly name: string;
-	readonly mime: string;
-	readonly bytes: Uint8Array;
-};
+export type IngestMeta = Ingested['meta'];
+export type IngestImage = Ingested['images'][number];
 /**
  * Plan 12, Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is
  * sanitised HTML, one block element per line (audio: one `<section data-speaker data-start data-end>` per segment); `data`
  * (a spreadsheet, CSV or JSON) is its cells as `{ sheets }`, or a JSON file's own value. `images` are referenced by name.
  */
-export type Ingested =
-	| {
-			readonly kind: 'document';
-			readonly html: string;
-			readonly images: readonly IngestImage[];
-			readonly meta: IngestMeta;
-	  }
-	| {
-			readonly kind: 'data';
-			readonly json: Json;
-			readonly images: readonly IngestImage[];
-			readonly meta: IngestMeta;
-	  };
+export type Ingested = typeof IngestedSchema.Type;
 /**
  * File ingestion (plan 12) behind the agent's `read_file` and `ctx.convert.ingest`: one file to `Ingested`, or
  * `unsupported` (the format has no parser: CAD). A video container is heard from its audio track.
@@ -500,11 +397,7 @@ export interface IngestPort {
 		signal: AbortSignal
 	): Promise<Ingested | { readonly unsupported: string }>;
 }
-export interface SecretsPort {
-	get(name: string, signal: AbortSignal): Promise<string | null>;
-	set(name: string, value: string, signal: AbortSignal): Promise<void>;
-	remove(name: string, signal: AbortSignal): Promise<void>;
-}
+
 export type AiMessage = { role: 'user' | 'assistant' | 'tool'; content: Json };
 export type AiRequest = {
 	model: string;
@@ -757,10 +650,7 @@ export interface LogPort {
 	write(event: LogEvent): void;
 	query(query: LogQuery, signal: AbortSignal): Promise<readonly LogRow[]>;
 }
-export interface TenancyPort {
-	/** The environment scope a request's host name addresses, or `null`. */
-	resolve(host: string): Promise<string | null>;
-}
+
 export interface MembershipPort {
 	/** `team` is a source team handle (`+team.ts`). */
 	project(
@@ -997,19 +887,7 @@ export interface BundlerPort {
 	bundle(request: BundleRequest, signal: AbortSignal): Promise<Bundled>;
 }
 /** What `ctx.files.image` reads from a JPEG, PNG or HEIC: format, size, the PDQ perceptual hash and EXIF. */
-export type ImageFacts = {
-	readonly format: 'jpeg' | 'png' | 'heic';
-	readonly width: number;
-	readonly height: number;
-	readonly pdq: string;
-	readonly exif: {
-		readonly takenAt?: string;
-		readonly gps?: { readonly lat: number; readonly lng: number };
-		readonly software?: string;
-		readonly make?: string;
-		readonly model?: string;
-	};
-};
+export type ImageMetadata = typeof ImageMetadataSchema.Type;
 export type ImagePreviewSize = 64 | 512 | 1024;
 export type ImagePreviewMime = 'image/jpeg' | 'image/png' | 'image/heic' | 'image/heif';
 /** A rectangle in the oriented image, with coordinates from zero to one. */
@@ -1032,7 +910,7 @@ export type ImagePreview = {
  * `LIMITS.storedFileBytes`): `facts`, a JPEG at most `maxEdge` on its long side, and a preview at most 5 MiB.
  */
 export interface ImagesPort {
-	facts(bytes: Uint8Array, signal: AbortSignal): Promise<ImageFacts>;
+	facts(bytes: Uint8Array, signal: AbortSignal): Promise<ImageMetadata>;
 	jpeg(bytes: Uint8Array, maxEdge: number, signal: AbortSignal): Promise<Uint8Array>;
 	/** Lossless PNG of the selected oriented pixels, at most 5 MiB; the source stays unchanged. */
 	crop(bytes: Uint8Array, box: ImageCrop, signal: AbortSignal): Promise<Uint8Array>;
@@ -1083,21 +961,3 @@ export type CronEntry = { readonly id: string; readonly cron: string; readonly z
  * rests, and while the workspace is not in use the host need not fire it before this instant.
  */
 export type CronFired = { readonly ran: boolean; readonly until?: string };
-
-export type HostPorts = {
-	/** Durable administrator audit; no runtime-log fallback is permitted. */
-	audit?: import('../protocol/audit.ts').AuditPort;
-	files: FilesPort;
-	deadlines: DeadlinesPort;
-	secrets?: SecretsPort;
-	convert?: ConvertPort;
-	ai?: AiPort;
-	geocoder?: GeocoderPort;
-	web?: WebReadPort;
-	browser?: BrowserPort;
-	push?: TransportPort;
-	links?: LinksPort;
-	logs?: LogPort;
-	tenancy?: TenancyPort;
-	membership?: MembershipPort;
-};

@@ -6,8 +6,9 @@ import { BoltError, storeSync } from '../../protocol/errors.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { readGuardBaseline } from '../approvals/read-guards.ts';
 import { Effect, Schema } from 'effect';
+import type { NoticeInsert } from '../notifications/notify.ts';
 import { WriteOutcome } from '../../protocol/schema.ts';
-import type { EngineActor, Lock, NoticeRow, QueuedRun, RowData, Sql } from '../contracts.ts';
+import type { EngineActor, Lock, QueuedRun, RowData, Sql } from '../contracts.ts';
 import { relations, type EngineManifest } from '../manifest.ts';
 import { Live, Wake, Links } from '../services.ts';
 import { toPred } from '../access/pred.ts';
@@ -60,7 +61,7 @@ export type Commit = {
 	owned: readonly OwnedLock[];
 	rate: readonly RateCharge[];
 	runs: readonly (QueuedRun & { id: string; actor?: string; starter?: Json })[];
-	notices: readonly (NoticeRow & { id: string })[];
+	notices: readonly NoticeInsert[];
 	output: Json;
 	/** An act that writes no row: the updated records that already held their values. */
 	unchanged?: readonly { model: string; id: string }[];

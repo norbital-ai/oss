@@ -18,6 +18,7 @@ import {
 	Stream,
 	type Scope
 } from 'effect';
+import { IngestedSchema } from './media.ts';
 import { Unavailable } from '../decl/errors.ts';
 import type {
 	ConvertSource,
@@ -61,7 +62,7 @@ import type {
 	HttpPort,
 	HttpRequest,
 	HttpResponse,
-	ImageFacts,
+	ImageMetadata,
 	ImageCrop,
 	ImagePreview,
 	ImagePreviewMime,
@@ -125,40 +126,10 @@ export class Files extends Context.Service<
 
 // ── convert ──
 /** `reference` is the bytes of a styling document (docx, pptx, odt). */
-export type ConvertOptions = {
-	readonly reference?: Uint8Array;
-	readonly page?: 'A4' | 'A3' | 'Letter';
-	readonly landscape?: boolean;
-};
-/** What an ingest answers (plan 12) with its image bytes decoded by `bytes`: Convert's wire (base64) or the port's ABI. */
-export const ingestAnswer = <B extends Schema.Codec<Uint8Array, unknown>>(bytes: B) => {
-	const fields = {
-		images: Schema.Array(Schema.Struct({ name: Schema.String, mime: Schema.String, bytes })),
-		meta: Schema.Struct({
-			usage: Schema.optionalKey(
-				Schema.Struct({
-					calls: Schema.Array(Schema.String),
-					model: Schema.String,
-					input: Schema.Number,
-					output: Schema.Number,
-					cost: Schema.Number
-				})
-			),
-			stats: Schema.Struct({
-				pages: Schema.NullOr(Schema.Number),
-				bytes: Schema.Number,
-				cpuMs: Schema.Number,
-				wallMs: Schema.Number
-			})
-		})
-	};
-	return Schema.Union([
-		Schema.Struct({ kind: Schema.Literal('document'), html: Schema.String, ...fields }),
-		Schema.Struct({ kind: Schema.Literal('data'), json: Schema.Json, ...fields })
-	]);
-};
+export type ConvertSettings = Parameters<ConvertPort['convert']>[2];
+
 const IngestAnswered = Schema.Union([
-	ingestAnswer(Schema.Uint8Array),
+	IngestedSchema,
 	Schema.Struct({ unsupported: Schema.String })
 ]);
 /**
@@ -172,11 +143,11 @@ export class Convert extends Context.Service<
 		readonly convert: (
 			source: ConvertSource,
 			to: ConvertTarget,
-			options: ConvertOptions
+			options: ConvertSettings
 		) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly previewPdf?: (
 			source: ConvertSource,
-			options: Pick<ConvertOptions, 'page' | 'landscape'>
+			options: Pick<ConvertSettings, 'page' | 'landscape'>
 		) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly ingest?: (
 			file: {
@@ -191,6 +162,7 @@ export class Convert extends Context.Service<
 	}
 >()('bolt/Convert') {
 	static fromAbi(port: ConvertPort | Off, ingester?: IngestPort['ingest']): Layer.Layer<Convert> {
+		const previewPdf = isOff(port) ? undefined : port.previewPdf;
 		return Layer.succeed(Convert, {
 			...(isOff(port)
 				? { targets: [], convert: () => turnedOff('convert') }
@@ -198,14 +170,16 @@ export class Convert extends Context.Service<
 						targets: port.targets,
 						convert: (source, to, options) =>
 							Port.attempt('convert', (signal) => port.convert(source, to, options, signal)),
-						...(port.previewPdf === undefined
+						...(previewPdf === undefined
 							? {}
 							: {
 									previewPdf: (
 										source: ConvertSource,
-										options: Pick<ConvertOptions, 'page' | 'landscape'>
+										options: Pick<ConvertSettings, 'page' | 'landscape'>
 									) =>
-										Port.attempt('convert', (signal) => port.previewPdf!(source, options, signal))
+										Port.attempt('convert', (signal) =>
+											previewPdf.call(port, source, options, signal)
+										)
 								})
 					}),
 			...(ingester === undefined
@@ -222,7 +196,6 @@ export class Convert extends Context.Service<
 	}
 }
 
-// ── speech ──
 // ── web, geo ──
 /** Reads a public page; refuses private, loopback and link-local addresses. `raw` also answers the markup and its links. */
 export class WebRead extends Context.Service<
@@ -962,7 +935,7 @@ export class Bundler extends Context.Service<
 export class Images extends Context.Service<
 	Images,
 	{
-		readonly facts: (bytes: Uint8Array) => Effect.Effect<ImageFacts, PortFailure>;
+		readonly facts: (bytes: Uint8Array) => Effect.Effect<ImageMetadata, PortFailure>;
 		readonly jpeg: (bytes: Uint8Array, maxEdge: number) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly crop: (bytes: Uint8Array, box: ImageCrop) => Effect.Effect<Uint8Array, PortFailure>;
 		readonly preview: (

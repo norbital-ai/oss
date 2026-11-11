@@ -8,7 +8,8 @@ import {
 	type Ingested,
 	type IngestPort
 } from './contracts.ts';
-import { ingestAnswer, type Convert } from './ports.ts';
+import type { Convert } from './ports.ts';
+import { ingestAnswer } from './media.ts';
 import { fromBase64, toBase64 } from './crypto.ts';
 import { Port } from './port.ts';
 
@@ -200,7 +201,12 @@ const POLL = { firstMs: 100, growth: 1.5, lastMs: 5000 };
  */
 const ingestJob = (
 	config: DocumentConverterConfig,
-	file: { readonly name: string; readonly mime: string; readonly sha256?: string; readonly lane?: string },
+	file: {
+		readonly name: string;
+		readonly mime: string;
+		readonly sha256?: string;
+		readonly lane?: string;
+	},
 	bytes: Uint8Array | ReadableStream<Uint8Array>,
 	{ password, ...options }: object & { readonly password?: string }
 ) =>
@@ -268,7 +274,11 @@ const ingestJob = (
 		const started = yield* job(posted);
 		// a queue under a burst answers in its time: every job asking four times a second would be the burst
 		let ended = started;
-		for (let wait = POLL.firstMs; !settled(ended); wait = Math.min(wait * POLL.growth, POLL.lastMs)) {
+		for (
+			let wait = POLL.firstMs;
+			!settled(ended);
+			wait = Math.min(wait * POLL.growth, POLL.lastMs)
+		) {
 			yield* Effect.sleep(wait);
 			ended = yield* Port.attempt('convert', (signal) =>
 				fetcher(`${base}/v1/jobs/${started.id}`, { headers, signal })

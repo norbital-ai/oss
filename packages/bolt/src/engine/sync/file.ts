@@ -521,9 +521,7 @@ const importFile = Effect.fn('FileSyncs.import')(function* (
 		);
 	const main = EffectArray.isArray<Json | undefined>(outcome.output) ? outcome.output[0] : null;
 	const actions = (
-		Predicate.isObject(main) && EffectArray.isArray<Json | undefined>(main['rows'])
-			? main['rows']
-			: []
+		Predicate.isObject(main) && EffectArray.isArray(main['rows']) ? main['rows'] : []
 	)
 		.filter((x) => Predicate.isObject(x))
 		.map((r) => r['action']);

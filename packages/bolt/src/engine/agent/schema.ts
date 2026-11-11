@@ -14,12 +14,7 @@ import type { Authority, Captured, RowData } from '../contracts.ts';
  * `envoy` is a sender on an envoy's instance (P32): `member` the linked member, if any; `dm` whether it is a direct message.
  * `policies` is an automation's declared set; a sub-agent copies its parent's `as`, never wider.
  */
-export type As =
-	| { member: string; team?: string }
-	| {
-			envoy: { name: string; instance: string; sender: string; member: string | null; dm: boolean };
-	  }
-	| { policies: readonly string[]; run: string };
+export type As = typeof AsSchema.Type;
 
 /** `verdicts` counts incomplete verdicts; the verifier runs again after each, with no stall (rule 63a, today's behaviour). */
 export type Plan = Types.Mutable<typeof PlanSchema.Type>;
@@ -55,42 +50,14 @@ export const Conversation = Schema.Struct({
 }).annotate({ identifier: 'sys_conversation' });
 export type ConversationRow = typeof Conversation.Type;
 /** What a row is beyond its role; absent on ordinary messages. */
-export type Meta =
-	| { tag: 'cut'; continuation?: string }
-	/** `origin` (L-BOLT-546): `/compact` (manual) or the window (automatic). */
-	| {
-			tag: 'compact';
-			cutoff: number;
-			keep: readonly string[];
-			origin?: 'manual' | 'requested' | 'automatic';
-	  }
-	| { tag: 'verdict'; complete: boolean; gaps: readonly string[] }
-	| { tag: 'confirm'; call: ToolCall }
-	| { tag: 'reply'; receipts: readonly Receipt[]; asked?: true; usage?: Usage }
-	| { tag: 'failed'; code: string; detail?: string; usage?: Usage }
-	/** A tool row whose result was clipped keeps the whole output for `read_file { call }` (rule 62). */
-	| { tag: 'output'; full: Json }
-	| { tag: 'note' }
-	/** The workspace's tools as this conversation was last told them. */
-	| { tag: 'tools' }
-	/** A workspace event the host published (a merge landed, maintenance scheduled), heard at a turn step; `at` is its time. */
-	| { tag: 'event'; at: string }
-	/** A sub-agent's report to its parent (its answer, its question, a failure or a stop), queued as the parent's input. */
-	| { tag: 'report'; conversation: string; asked?: true }
-	/** A message held until `at`, or with no `at` until the running turn finishes. */
-	| { tag: 'scheduled'; at?: string };
+export type Meta = typeof MetaSchema.Type;
 /** Every model call of a turn summed (turn steps, compaction, verifier, awaited children): the cost disclosure's data. */
 export type Usage = {
 	-readonly [K in keyof typeof UsageSchema.Type]: (typeof UsageSchema.Type)[K];
 };
 export type ToolCall = Types.Mutable<typeof ToolCallSchema.Type>;
 /** Rule 59: one per write outcome of a turn. */
-export type Receipt = {
-	outcome: 'committed' | 'pending_approval';
-	callable: string;
-	records: readonly { model: string; id: string }[];
-	requestId?: string;
-};
+export type Receipt = typeof ReceiptSchema.Type;
 const AsSchema = Schema.Union([
 	Schema.Struct({ member: Schema.String, team: Schema.optionalKey(Schema.String) }),
 	Schema.Struct({

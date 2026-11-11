@@ -5,7 +5,6 @@ import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
-import { type EngineActor, type RunTrigger, type RunTriggerView } from '../engine/contracts.ts';
 
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
@@ -76,7 +75,7 @@ const Requestor = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal('api_key'), key: Schema.String })
 ]);
 /** An engine actor (`EngineActor`): a member, an envoy's turn, a visitor, an API key or the system identity's run. */
-export const EngineActorSchema: Schema.Codec<EngineActor> = Schema.Union([
+export const EngineActorSchema = Schema.Union([
 	...Requestor.members,
 	Schema.Struct({
 		kind: Schema.Literal('system'),
@@ -104,7 +103,7 @@ const SystemTrigger = [
 	})
 ] as const;
 /** An automation run's trigger (`RunTrigger`, `sys_run.trigger`). */
-export const RunTriggerSchema: Schema.Codec<RunTrigger> = Schema.Union([
+export const RunTriggerSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('person'),
 		actor: Requestor,
@@ -113,7 +112,7 @@ export const RunTriggerSchema: Schema.Codec<RunTrigger> = Schema.Union([
 	...SystemTrigger
 ]);
 /** A run's trigger as the run ledger answers it (`RunTriggerView`). */
-export const RunTriggerViewSchema: Schema.Codec<RunTriggerView> = Schema.Union([
+export const RunTriggerViewSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('person'),
 		ref: Schema.String,
@@ -210,7 +209,7 @@ const REFUSAL_CODES = [
 	'memory',
 	'tooLarge'
 ] as const;
-const Written = Schema.Array(
+export const Written = Schema.Array(
 	Schema.Struct({ model: Schema.String, id: Schema.String, revision: Schema.Number })
 );
 /** A write's outcome (rule 32), told apart by `kind`: what the engine stores and replays for an idempotency key. */

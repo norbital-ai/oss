@@ -5,21 +5,9 @@ import { Worker } from 'node:worker_threads';
 import { Effect, Predicate, Schema } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
 import { LIMITS, type ImagesPort, type ImageCrop as CropBox } from '../engine/contracts.ts';
+import { ImageMetadataSchema } from '../engine/media.ts';
 import { Port } from '../engine/port.ts';
 
-const ImageFactsSchema = Schema.Struct({
-	format: Schema.Literals(['jpeg', 'png', 'heic']),
-	width: Schema.Number,
-	height: Schema.Number,
-	pdq: Schema.String,
-	exif: Schema.Struct({
-		takenAt: Schema.optionalKey(Schema.String),
-		gps: Schema.optionalKey(Schema.Struct({ lat: Schema.Number, lng: Schema.Number })),
-		software: Schema.optionalKey(Schema.String),
-		make: Schema.optionalKey(Schema.String),
-		model: Schema.optionalKey(Schema.String)
-	})
-});
 const failed = (error: unknown) =>
 	new FacilityFailure({
 		kind: 'upstream',
@@ -111,7 +99,7 @@ const image = <A>(
 	);
 
 export const imagesPort: ImagesPort = {
-	facts: (bytes, signal) => Effect.runPromise(image(bytes, {}, ImageFactsSchema), { signal }),
+	facts: (bytes, signal) => Effect.runPromise(image(bytes, {}, ImageMetadataSchema), { signal }),
 	jpeg: (bytes, maxEdge, signal) =>
 		Effect.runPromise(image(bytes, { maxEdge }, bytesSchema), { signal }),
 	crop: (bytes, crop, signal) => Effect.runPromise(image(bytes, { crop }, bytesSchema), { signal }),

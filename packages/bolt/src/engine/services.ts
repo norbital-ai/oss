@@ -179,7 +179,7 @@ export class Writes extends Context.Service<Writes, WritesShape>()('bolt/Writes'
 
 // ── callables (E6) ──
 /** A callable name decoded once (`parseCallable`, M3): a generated verb, an automation or a sync (`'<m>.sync.<s>'`). */
-export type Callable =
+export type ParsedCallable =
 	| { readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	| { readonly _tag: 'Automation'; readonly automation: string }
 	| { readonly _tag: 'Sync'; readonly model: string; readonly sync: string };
@@ -662,14 +662,14 @@ export type CrossCall =
 	  }
 	| {
 			readonly _tag: 'act';
-			readonly callable: Callable;
+			readonly callable: ParsedCallable;
 			readonly input: Json;
 			readonly options?: ActOptions | undefined;
 	  }
 	| {
 			readonly _tag: 'acts';
 			readonly acts: readonly {
-				readonly callable: Callable;
+				readonly callable: ParsedCallable;
 				readonly input: Json;
 				readonly observed?: Readonly<Record<string, number>> | undefined;
 				readonly on_conflict?: 'update' | 'keep' | undefined;
@@ -813,7 +813,7 @@ export type MessageStore = {
 export type ParseCallable = (
 	callable: string,
 	manifest: EngineManifest
-) => Result.Result<Callable, BoltError>;
+) => Result.Result<ParsedCallable, BoltError>;
 export type Verbs = readonly Verb[];
 /** E7, `access/*`: one evaluator over compiled grant arms. */
 export type Admits = (

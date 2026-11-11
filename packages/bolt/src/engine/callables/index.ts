@@ -18,7 +18,7 @@ import {
 	type StartRequest,
 	type PlannedCommit,
 	type ReadsShape,
-	type Callable,
+	type ParsedCallable,
 	type CallablesShape,
 	type ShapeOf
 } from '../services.ts';
@@ -105,8 +105,8 @@ const refused = (code: Refused['code'], message: string, field?: string): Refuse
 const HOUR = 3_600_000;
 export const VERBS: readonly Verb[] = ['create', 'update', 'delete', 'upsert', 'erase', 'import'];
 /** The generated verbs admitted by both typed and dynamically checked atomic batches. */
-export function isBatchCallable(callable: Callable): callable is Extract<
-	Callable,
+export function isBatchCallable(callable: ParsedCallable): callable is Extract<
+	ParsedCallable,
 	{ _tag: 'Verb' }
 > & {
 	verb: 'create' | 'update' | 'upsert' | 'delete';
@@ -154,7 +154,7 @@ function scheduledAt(now: string): string {
 export function parseCallable(
 	callable: string,
 	manifest: EngineManifest
-): Result.Result<Callable, BoltError> {
+): Result.Result<ParsedCallable, BoltError> {
 	const dot = callable.lastIndexOf('.'),
 		model = callable.slice(0, dot),
 		member = callable.slice(dot + 1);

@@ -17,3 +17,7 @@
 - Include generated system record-label columns, rebuilt JSON shape checks and any former JSONB list-to-`text[]` conversions in the reviewed tenant schema migration.
 
 - Include compiler-generated `.norbital/models/*.ts` and `.norbital/integrations/*.ts` in Studio and language-service type inputs. Model and integration source imports these typed bindings, and the matching SDK exposes their runtime factories through `@norbital-ai/bolt/declarations`.
+
+- Update native host type imports to `ImageMetadata`, `ConvertSettings` and `ParsedCallable`. Notice inserts use their owning `NoticeInsert` contract. The author-facing `ImageFacts`, `ConvertOptions` and string `Callable` names keep their distinct roles.
+
+- Import `HostPorts` from `@norbital-ai/bolt/host-api`. The unused engine `HostPorts`, `SecretsPort` and `TenancyPort` definitions are removed.

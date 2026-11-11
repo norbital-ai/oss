@@ -7,6 +7,7 @@ export * from './errors.ts';
 export { BoltError, CODE, CODES, PHASES, type Code, type Phase } from '../protocol/errors.ts';
 export * from './services.ts';
 export * from './ports.ts';
+export { ingestAnswer } from './media.ts';
 export { Port, type PortFailure } from './port.ts';
 export * from './host.ts';
 export { Secrets, type SecretsCodec, type SecretsShape } from './secrets.ts';

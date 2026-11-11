@@ -46,7 +46,7 @@ import type {
 	ApprovalsShape,
 	Authenticated,
 	Bridge,
-	Callable,
+	ParsedCallable,
 	Callables,
 	CallablesShape,
 	CallResult,
@@ -181,11 +181,11 @@ is<
 >();
 
 // ── callables ──
-is<Eq<Callable['_tag'], 'Verb' | 'Automation' | 'Sync'>>();
+is<Eq<ParsedCallable['_tag'], 'Verb' | 'Automation' | 'Sync'>>();
 is<Eq<'action' extends keyof CallablesShape ? true : false, false>>();
 is<
 	Eq<
-		Extract<Callable, { _tag: 'Verb' }>,
+		Extract<ParsedCallable, { _tag: 'Verb' }>,
 		{ readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	>
 >();
@@ -195,7 +195,7 @@ is<Eq<'query' extends keyof CallablesShape ? true : false, false>>();
 is<
 	Eq<
 		ParseCallable,
-		(callable: string, manifest: EngineManifest) => Result.Result<Callable, BoltError>
+		(callable: string, manifest: EngineManifest) => Result.Result<ParsedCallable, BoltError>
 	>
 >();
 
@@ -296,7 +296,7 @@ is<
 		true
 	>
 >();
-is<Eq<Extract<CrossCall, { _tag: 'act' }>['callable'], Callable>>();
+is<Eq<Extract<CrossCall, { _tag: 'act' }>['callable'], ParsedCallable>>();
 
 // ── facilities, decisions ──
 is<Eq<keyof FacilitiesShape, 'dispatch' | 'fileLoader' | 'loggedTransport'>>();
