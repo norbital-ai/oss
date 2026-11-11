@@ -92,8 +92,9 @@ import type { EngineManifest, SkillSpec } from '../manifest.ts';
 import type { Json } from '../../decl/values.ts';
 import { encodeWire } from '@norbital-ai/std/wire';
 import type { AiRequest, AiResponse, Authority, Bindings } from '../contracts.ts';
+import { textOf } from './schema.ts';
 import { Authorities } from '../identity/actor.ts';
-import { generate, isFacilityError, modelCall, overflow, servesModel, textOf } from './ai.ts';
+import { isFacilityError, modelCall, overflow, servesModel } from './ai.ts';
 import {
 	bounded,
 	COMPACT_FORMAT,
@@ -805,9 +806,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			output: { kind: 'json' }
 		};
 		const attempt = Effect.gen(function* () {
-			const response = yield* infer(request).pipe(
-				Effect.mapError((error) => new Unusable({ message: error.message }))
-			);
+			const response = yield* infer(request);
 			if (response.finish === 'cut')
 				return yield* Effect.fail(new Unusable({ message: 'the verifier response was cut' }));
 			const schema = Schema.Struct({
@@ -831,7 +830,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				times: AGENT_LIMITS.verifyAttempts - 1,
 				while: (error) => error instanceof Unusable
 			}),
-			Effect.catchTag('Unusable', (error) => Effect.logWarning(error).pipe(Effect.as(null)))
+			Effect.catchTags({
+				Unusable: (error) => Effect.logWarning(error).pipe(Effect.as(null)),
+				FacilityFailure: (error) => Effect.logWarning(error).pipe(Effect.as(null)),
+				Unavailable: (error) => Effect.logWarning(error).pipe(Effect.as(null))
+			})
 		);
 	});
 	/**
@@ -1803,7 +1806,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						role: 'user',
 						content: note
 					});
-				const request: Omit<AiRequest, 'tools'> = {
+				const request: AiRequest = {
 					model: conv.model,
 					purpose: 'chat',
 					system: system({
@@ -1818,6 +1821,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						authority
 					}),
 					messages: history,
+					...(tools.length === 0
+						? {}
+						: {
+								tools: tools.map(({ name, description, input }) => ({ name, description, input }))
+							}),
 					...(files.length === 0
 						? {}
 						: {
@@ -1844,7 +1852,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					rows,
 					conv,
 					(onRequest) =>
-						generate(config.ai, request, toolset.toolkit, {
+						modelCall(config.ai, request, {
 							onDelta: live.delta,
 							onReasoning: live.reasoning,
 							...wall,
@@ -1990,7 +1998,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						const proof = yield* transcript(id);
 						const verdict = yield* verify(conv, conv.plan, proof, (request) =>
 							observed('verify', proof, conv, (onRequest) =>
-								modelCall(config.ai, request, { ...wall, onRequest })
+								modelCall(config.ai, request, {
+									...wall,
+									onRequest,
+									retryUpstream: AGENT_LIMITS.verifyAttempts - 1
+								})
 							)
 						);
 						const gaps = verdict?.gaps ?? ['The verifier could not reach a verdict.'];

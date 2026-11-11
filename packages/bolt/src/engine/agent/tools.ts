@@ -423,6 +423,8 @@ export type ToolContext = {
 /** One catalogue tool as the loop treats it: its Studio role, and whether its answer depends only on its arguments within a turn (the same call again straight after is not run). */
 export type AgentTool = {
 	readonly name: string;
+	readonly description: string;
+	readonly input: Json;
 	readonly studio?: StudioRole;
 	readonly pure?: true;
 };
@@ -1724,14 +1726,14 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		paths = readPaths(e.manifest, a),
 		agent = x.mode === 'agent',
 		hosted = x.hostTools;
-	const entries: (AgentTool & {
+	const entries: (Pick<AgentTool, 'name' | 'studio' | 'pure'> & {
 		readonly tool: AnyTool;
 		readonly handlers: Context.Context<Handlers>;
 	})[] = [];
 	const add = (
 		tool: AnyTool,
 		handlers: Effect.Effect<Context.Context<Handlers>>,
-		meta: Omit<AgentTool, 'name'> = {}
+		meta: Pick<AgentTool, 'studio' | 'pure'> = {}
 	) =>
 		Effect.map(handlers, (built) => {
 			entries.push({ name: tool.name, tool, handlers: built, ...meta });
@@ -3744,7 +3746,7 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		description: string,
 		input: Json,
 		call: (input: Json, callId: string) => Effect.Effect<ToolAnswer, EngineError | PortFailure>,
-		meta: Omit<AgentTool, 'name'> = {}
+		meta: Pick<AgentTool, 'studio' | 'pure'> = {}
 	) =>
 		Effect.gen(function* () {
 			if (!Predicate.isObject(input)) return;
@@ -3884,8 +3886,10 @@ A committed write answers the stored rows; a held one waits for approval.`,
 		);
 	self = run;
 	return {
-		tools: entries.map(({ name, studio, pure }) => ({
+		tools: entries.map(({ name, tool, studio, pure }) => ({
 			name,
+			description: Tool.getDescription(tool) ?? '',
+			input: toolSchema(tool),
 			...(studio === undefined ? {} : { studio }),
 			...(pure === undefined ? {} : { pure })
 		})),

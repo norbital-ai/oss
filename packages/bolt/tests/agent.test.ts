@@ -280,6 +280,54 @@ describe('the context projection (rule 60)', () => {
 
 describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	const req: AiRequest = { model: 'default', messages: [{ role: 'user', content: 'hi' }] };
+	it.effect('keeps the native response and records prompt sizes at the model boundary', () =>
+		Effect.gen(function* () {
+			const native: AiResponse = {
+				content: { text: 'ready', extra: [1, 2] },
+				reasoning: 'received reasoning',
+				toolCalls: [{ id: 'c1', name: 'read', input: { id: 'one' }, invalid: 'provider note' }],
+				finish: 'cut',
+				continuation: 'next',
+				usage: {
+					input: 10,
+					output: 4,
+					cost: 0.2,
+					call: 'call1',
+					provider: 'provider1',
+					cached: 3,
+					reasoning: 2
+				}
+			};
+			const { p, requests } = port([() => response(native)]);
+			expect(yield* modelCall(p, req)).toEqual({
+				...native,
+				usage: {
+					...native.usage,
+					prompt: { system: 0, messages: JSON.stringify(req.messages).length, tools: 0 }
+				}
+			});
+			expect(requests[0]).toBe(req);
+		})
+	);
+	it.effect('resets a utility attempt’s private streamed progress before retrying', () =>
+		Effect.gen(function* () {
+			const failed: Step = () =>
+				Stream.concat(
+					Stream.succeed<AiEvent>({ _tag: 'Delta', text: 'discarded' }),
+					Stream.fail(
+						new FacilityFailure({ kind: 'upstream', status: 503, message: 'lost connection' })
+					)
+				);
+			const { p, requests } = port([failed, stalls('kept')]);
+			expect(
+				yield* elapsed(modelCall(p, req, { wallMs: 20, retryUpstream: 1 }), 1_021)
+			).toMatchObject({
+				content: 'kept',
+				finish: 'cut'
+			});
+			expect(requests).toHaveLength(2);
+		})
+	);
 	it.effect(
 		'the default response deadline cancels and settles a silent provider after 60 seconds to its first event',
 		() =>
@@ -937,6 +985,22 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					yield* elapsed(inferFacility(exhausted.p)(at({ prompt: 'research', output })), 63_001)
 				).toMatchObject({ ok: false, error: { kind: 'upstream' } });
 				expect(exhausted.requests).toHaveLength(7);
+				const capacity: Step = () =>
+					Stream.fail(
+						new FacilityFailure({
+							kind: 'rateLimited',
+							status: 429,
+							message: 'capacity'
+						})
+					);
+				const mixed = port([capacity, capacity, capacity, fail, fail, fail, fail]);
+				expect(
+					yield* elapsed(inferFacility(mixed.p)(at({ prompt: 'research', output })), 63_001)
+				).toMatchObject({
+					ok: false,
+					error: { kind: 'upstream' }
+				});
+				expect(mixed.requests).toHaveLength(7);
 			})
 	);
 

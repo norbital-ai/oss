@@ -11,7 +11,7 @@ import type { AiEvent } from '../ports.ts';
 import type { Json } from '../../decl/values.ts';
 import { LIMITS, type AiRequest, type AiResponse } from '../contracts.ts';
 import { filePart } from './ingest.ts';
-import { SaidContent, StepContent } from './schema.ts';
+import { SaidContent, StepContent, textOf } from './schema.ts';
 
 export type OpenAiChatConfig = {
 	/** The API base, e.g. `https://openrouter.ai/api/v1`. */
@@ -40,12 +40,6 @@ const inFlightBudget = Schema.decodeUnknownOption(
 		})
 	)
 );
-const textOf = (c: Json): string =>
-	typeof c === 'string'
-		? c
-		: Predicate.isObject(c) && typeof c['text'] === 'string'
-			? c['text']
-			: JSON.stringify(c);
 
 /** The engine's messages decoded as its transcript rows hold them, by role. */
 const stepOf = Schema.decodeUnknownOption(StepContent),

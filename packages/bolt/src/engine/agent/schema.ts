@@ -1,5 +1,5 @@
 // Conversations and messages (§5.9, rules 57–63): the transcript, the queue and an instance's message history are the same
-// `sys_message` rows, the system models `src/system/data/model/+sys_{conversation,message}.model.ts`.
+// `sys_message` rows. Each system model lives under `src/system/data/model/<name>/+model.ts`.
 import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
 import { STUDIO_ROLES } from '../../protocol/schema.ts';
@@ -7,6 +7,13 @@ import { PageAction, PageResult, Usage as UsageSchema } from '../../protocol/sch
 import type { Json } from '../../decl/values.ts';
 import type { AgentRow } from '../../protocol/wire.ts';
 import type { Authority, Captured, RowData } from '../contracts.ts';
+
+/** Plain words from a message or provider reply. */
+export const textOf = (content: Json): string => {
+	if (typeof content === 'string') return content;
+	const t = Predicate.isObject(content) ? content['text'] : undefined;
+	return typeof t === 'string' ? t : JSON.stringify(content);
+};
 
 /**
  * Whose authority a message carries (rules 57, 60, 63a): resolved per message, so each steer acts as its own sender.
