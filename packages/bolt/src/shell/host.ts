@@ -239,6 +239,7 @@ const SyncReplay = Schema.Struct({
 	instance: Schema.NonEmptyString,
 	ids: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
+const SyncRetire = Schema.Struct({ instance: Schema.NonEmptyString, id: Schema.NonEmptyString });
 const RunId = Schema.Struct({ id: Schema.String });
 /** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL). */
 const Branding = Schema.Struct({
@@ -722,8 +723,7 @@ const makeShell = Effect.gen(function* () {
 				return ready(b, kioskAuth);
 			}
 			const auth = opened.authority;
-			const siteKey =
-				m.workspace.signup?.challenge === undefined ? undefined : turnstile?.siteKey;
+			const siteKey = m.workspace.signup?.challenge === undefined ? undefined : turnstile?.siteKey;
 			const b = {
 				...bootFor(m, ws, auth),
 				nav: [],
@@ -1130,6 +1130,18 @@ const makeShell = Effect.gen(function* () {
 				const { instance, ids } = yield* requestBody(request, SyncReplay);
 				yield* manageInstance(auth, instance);
 				return json({ value: yield* syncs.replay(instance, ids) });
+			}
+			case 'GET /instance-sync-dead-letters': {
+				const instance = url.searchParams.get('instance') ?? '';
+				yield* manageInstance(auth, instance);
+				return json({ value: yield* syncs.deadLetters(instance) });
+			}
+			case 'POST /instance-sync-retire': {
+				const { instance, id } = yield* requestBody(request, SyncRetire);
+				yield* manageInstance(auth, instance);
+				if (auth.actor.kind !== 'member')
+					return refused('forbidden', 'A member must retire a write.', 403);
+				return json({ value: yield* syncs.retire(instance, id, auth.actor.id) });
 			}
 			case 'POST /audit/query': {
 				if (!auth.admin || auth.actor.kind !== 'member')

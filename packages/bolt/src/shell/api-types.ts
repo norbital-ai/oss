@@ -133,6 +133,8 @@ export type InstanceMessage = typeof InstanceMessage.Type;
 export const InstanceSyncHealth = SyncHealth;
 export type InstanceSyncHealth = typeof InstanceSyncHealth.Type;
 export const SyncReplayAnswer = Schema.Struct({ replayed: Schema.Number });
+export { SyncDeadLetter } from '../engine/sync/health-schema.ts';
+export const SyncRetireAnswer = Schema.Struct({ retired: Schema.Number });
 
 // ── the routes' answers, decoded once by `shellApi` ──
 const Strings = Schema.Array(Schema.String);
@@ -679,6 +681,10 @@ export type ShellApi = {
 	/** Sync health and dead-letter replay require update permission on this instance. */
 	instanceSyncHealth(instance: string): Call<InstanceSyncHealth>;
 	replayInstanceSync(instance: string, ids?: readonly string[]): Call<typeof SyncReplayAnswer.Type>;
+	instanceDeadLetters(
+		instance: string
+	): Call<readonly import('../engine/sync/health-schema.ts').SyncDeadLetter[]>;
+	retireInstanceSync(instance: string, id: string): Call<typeof SyncRetireAnswer.Type>;
 	logs(query: LogQuery): Call<readonly LogRow[]>;
 	/** Administrator-only server filtering over the host's separate audit store. */
 	audit(query: AuditQuery): Call<AuditPage>;

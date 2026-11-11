@@ -75,6 +75,13 @@ ordering. Retries use exponential backoff with jitter, up to 8 attempts over abo
 move to dead letter with Replay. Remote conflicts or refusal restore the last acknowledged row
 and expose the failure; a connection's `rate` paces requests and honors `Retry-After`.
 
+SQL writes retain the locally committed record: transient SQL failures retry while the verified
+connection is active, and permanent failures become dead letters. In **Settings → Integrations**,
+an operator who may update the instance can replay a dead letter or retire that specific write.
+Retirement marks only a dead write as skipped, retains its payload and original error, records the
+operator and time, and wakes later writes for the record. It neither cancels an in-flight request nor
+undoes a remote commit. Resolve the remote state before retiring; replay always uses the saved payload.
+
 ## Files
 
 A plain sheet needs no code: headers use field names/labels, writable columns define the schema,

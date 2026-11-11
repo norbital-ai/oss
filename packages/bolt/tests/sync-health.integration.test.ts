@@ -96,6 +96,20 @@ const setup = Effect.gen(function* () {
 					body: JSON.stringify(body)
 				})
 			),
+		retire: (body: Json) =>
+			t.handle(
+				new Request(`${ORIGIN}/__bolt/shell/instance-sync-retire`, {
+					method: 'POST',
+					headers: { cookie, 'content-type': 'application/json' },
+					body: JSON.stringify(body)
+				})
+			),
+		deadLetters: (instance: string) =>
+			t.handle(
+				new Request(`${ORIGIN}/__bolt/shell/instance-sync-dead-letters?instance=${instance}`, {
+					headers: { cookie }
+				})
+			),
 		outbox: () =>
 			t.db.rows(
 				Schema.Struct({
@@ -110,6 +124,54 @@ const setup = Effect.gen(function* () {
 });
 
 describe('shell integration sync health and replay', () => {
+	it.live('retires only an admitted dead write once and retains its payload and operator', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const f = yield* setup;
+				const before = yield* f.outbox();
+				expect((yield* f.deadLetters(OTHER)).status).toBe(403);
+				expect((yield* f.retire({ instance: OTHER, id: OTHER_DEAD })).status).toBe(403);
+				expect(yield* json(yield* f.retire({ instance: OWN, id: OTHER_DEAD }))).toEqual({
+					value: { retired: 0 }
+				});
+				expect(yield* json(yield* f.retire({ instance: OWN, id: QUEUED }))).toEqual({
+					value: { retired: 0 }
+				});
+				const results = yield* Effect.all(
+					[f.retire({ instance: OWN, id: DEAD }), f.retire({ instance: OWN, id: DEAD })],
+					{ concurrency: 2 }
+				);
+				const values = yield* Effect.forEach(results, (response) =>
+					json(response).pipe(
+						Effect.flatMap(
+							Schema.decodeUnknownEffect(
+								Schema.Struct({ value: Schema.Struct({ retired: Schema.Number }) })
+							)
+						)
+					)
+				);
+				expect(values.reduce((sum, result) => sum + result.value.retired, 0)).toBe(1);
+				const after = yield* f.outbox();
+				const retired = after.find((row) => row.id === DEAD);
+				expect(retired).toMatchObject({
+					status: 'skipped',
+					attempts: 8,
+					error: {
+						message: 'Delivery unavailable',
+						retired: { at: NOW, by: expect.any(String) }
+					}
+				});
+				expect(after.filter((row) => row.id !== DEAD)).toEqual(
+					before.filter((row) => row.id !== DEAD)
+				);
+				expect(yield* json(yield* f.replay({ instance: OWN, ids: [DEAD] }))).toEqual({
+					value: { replayed: 0 }
+				});
+				const listed = yield* json(yield* f.deadLetters(OWN));
+				expect(listed).toMatchObject({ value: [{ id: SECOND_DEAD }] });
+			})
+		)
+	);
 	it.live(
 		'reads only an integration instance the caller may update and refuses unknown instances',
 		() =>

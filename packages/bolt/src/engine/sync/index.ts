@@ -42,6 +42,7 @@ import { makeRead } from './read.ts';
 import { makeDeliver, SYNC_DELIVER } from './write.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue } from '../runs/queue.ts';
+import { deliverRun } from '../integrations/outbound.ts';
 import { makeHint } from './hint.ts';
 
 /** One remote sync of a model, as the engine runs it. */
@@ -151,7 +152,7 @@ export const syncActor = (s: RemoteSync, instance: string, run: string): EngineA
 });
 
 export { SyncHealth } from './health-schema.ts';
-import { SyncHealth } from './health-schema.ts';
+import { SyncHealth, SyncDeadLetter } from './health-schema.ts';
 export type SyncsShape = {
 	/** A pushing driver's `invalidate` of sync `'<model>.<sync>'`: one read of that instance and partition, unless one is queued. */
 	readonly invalidate: (
@@ -166,6 +167,12 @@ export type SyncsShape = {
 		instance: string,
 		ids?: readonly string[]
 	) => Effect.Effect<{ readonly replayed: number }, EngineError>;
+	readonly deadLetters: (instance: string) => Effect.Effect<readonly SyncDeadLetter[], EngineError>;
+	readonly retire: (
+		instance: string,
+		id: string,
+		actor: string
+	) => Effect.Effect<{ readonly retired: number }, EngineError>;
 	/** The definition's `test` body for a paired instance: fails with the body's failure; no body passes. */
 	readonly test: (instance: string) => Effect.Effect<void, EngineError>;
 };
@@ -277,6 +284,49 @@ export const SyncsLive = Layer.effect(
 				return read > Date.parse(health.last_read_at ?? '1970-01-01')
 					? { ...health, last_read_at: iso(read), lag_seconds: (ms - read) / 1000 }
 					: health;
+			}),
+			deadLetters: (instance: string) =>
+				db.rows(SyncDeadLetter, {
+					text: `SELECT id::text, model, record, record_revision AS revision, op, at::text,
+						error ->> 'message' AS message FROM sys_outbox
+						WHERE instance = $1 AND status = 'dead' ORDER BY seq LIMIT 50`,
+					params: [instance]
+				}),
+			retire: Effect.fn('Syncs.retire')(function* (instance: string, id: string, actor: string) {
+				const now = iso(yield* Clock.currentTimeMillis),
+					c = new Chain();
+				c.cte(
+					'retired',
+					`UPDATE sys_outbox SET status = 'skipped',
+					error = coalesce(error, '{}'::jsonb) || jsonb_build_object('retired', jsonb_build_object(
+						'at', ${c.p(now)}::text, 'by', ${c.p(actor)}::text))
+					WHERE instance = ${c.p(instance)} AND id::text = ${c.p(id)} AND status = 'dead'
+					RETURNING id, model, record, key`
+				);
+				c.cte(
+					'sends_skipped',
+					`UPDATE sys_message SET status = 'skipped', error = 'The source write was retired.'
+					WHERE meta ->> 'sync_write' IN (SELECT key FROM retired) AND status = 'queued' RETURNING id`
+				);
+				deliverRun(c, 'sends_skipped', now);
+				enqueue(
+					c,
+					[{ automation: SYNC_DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }],
+					{ when: 'EXISTS (SELECT 1 FROM retired)' }
+				);
+				const [row] = yield* db.returning(
+					Schema.Struct({
+						model: Schema.NullOr(Schema.String),
+						record: Schema.NullOr(Schema.String)
+					}),
+					c.sql('(SELECT model FROM retired) AS model, (SELECT record FROM retired) AS record')
+				);
+				if (row?.model && row.record) {
+					live.syncChanged('sys_integration', [instance]);
+					live.syncChanged(row.model, [row.record]);
+					yield* wake.at(now);
+				}
+				return { retired: row?.model ? 1 : 0 };
 			}),
 			replay: Effect.fn('Syncs.replay')(function* (instance: string, ids?: readonly string[]) {
 				const now = iso(yield* Clock.currentTimeMillis),

@@ -11,3 +11,15 @@ export const SyncHealth = Schema.Struct({
 	webhooks_quiet: Schema.Boolean
 });
 export type SyncHealth = typeof SyncHealth.Type;
+
+/** A stopped write an integration operator can inspect and retire. */
+export const SyncDeadLetter = Schema.Struct({
+	id: Schema.String,
+	model: Schema.String,
+	record: Schema.String,
+	revision: Schema.Number,
+	op: Schema.String,
+	at: Schema.String,
+	message: Schema.NullOr(Schema.String)
+});
+export type SyncDeadLetter = typeof SyncDeadLetter.Type;

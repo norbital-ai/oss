@@ -1,17 +1,7 @@
 // The shell's browser half (§3.5, §5.10): `$bolt` as pages see it (the data client plus `href` and `agent`), the
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
 // needs one. The generated `$bolt` module re-exports `bolt` (below) with the ui edge (`run`, `fork`, `attach`).
-import {
-	Clock,
-	Context,
-	Effect,
-	Equal,
-	Layer,
-	Option,
-	Queue,
-	Schema,
-	Stream
-} from 'effect';
+import { Clock, Context, Effect, Equal, Layer, Option, Queue, Schema, Stream } from 'effect';
 import { encodeWire, type Wired } from '@norbital-ai/std/wire';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
@@ -33,6 +23,8 @@ import {
 	InstanceMessage,
 	InstanceSyncHealth,
 	SyncReplayAnswer,
+	SyncRetireAnswer,
+	SyncDeadLetter,
 	Invitation,
 	LogRowAnswer,
 	OlderPage,
@@ -228,8 +220,7 @@ export function shellApi(
 		integration: instances,
 		integrationOffers: () => integrationOffers({ base: based(`${BOLT}/integrations/`), fetch: f }),
 		/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
-		organization: (logo: string | null) =>
-			done('POST', `${SHELL}/organization`, { logo }),
+		organization: (logo: string | null) => done('POST', `${SHELL}/organization`, { logo }),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
 		instanceMessages: (instance: string, before?: string) =>
 			call(
@@ -250,6 +241,14 @@ export function shellApi(
 				instance,
 				...(ids === undefined ? {} : { ids: [...ids] })
 			}),
+		instanceDeadLetters: (instance: string) =>
+			call(
+				Schema.Array(SyncDeadLetter),
+				'GET',
+				`${SHELL}/instance-sync-dead-letters?${new URLSearchParams({ instance })}`
+			),
+		retireInstanceSync: (instance: string, id: string) =>
+			call(SyncRetireAnswer, 'POST', `${SHELL}/instance-sync-retire`, { instance, id }),
 		logs: (x: import('../engine/contracts.ts').LogQuery) =>
 			call(
 				Schema.Array(LogRowAnswer),
@@ -331,8 +330,7 @@ export function shellApi(
 				}),
 			pageResult: (message: string, result: PageResult) =>
 				act('sys_message.pageResult', { message, result }),
-			claimPageAction: (message: string) =>
-				act('sys_message.claimPageAction', { message }),
+			claimPageAction: (message: string) => act('sys_message.claimPageAction', { message }),
 			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport

@@ -1026,6 +1026,11 @@ export const SHELL_ZH: { readonly [key: string]: string } = {
 	'Webhooks are quiet while reads still find changes.': '读取仍发现变更，但未收到 Webhook。',
 	'Retry deliveries that stopped after repeated failures.': '重试因多次失败而停止的投递。',
 	'Replay dead letters': '重放失败投递',
+	'Retire rejected write?': '终止这次被拒绝的写入？',
+	'This stops retrying this saved write and releases later changes for the record. Confirm that its remote state is understood.':
+		'终止重试这次已保存的写入，让该记录的后续更改继续同步。请确认已核对远端状态。',
+	'Retire write': '终止写入',
+	'Retiring…': '正在终止…',
 	'Replaying…': '正在重放…',
 	Retrying: '重试中',
 	Failed: '失败',
