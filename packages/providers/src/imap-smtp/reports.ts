@@ -64,7 +64,7 @@ function dsn(status: string): Report | null {
 	const rank = (f: Map<string, string>) => ranks[(f.get('action') ?? '').toLowerCase()] ?? 1;
 	const worst = recipients.sort((a, b) => rank(b) - rank(a))[0];
 	if (worst === undefined) return null;
-	const action = worst.get('action')!.toLowerCase(),
+	const action = worst.get('action')?.toLowerCase(),
 		st = /^[245]\.\d{1,3}\.\d{1,3}/.exec(worst.get('status') ?? '')?.[0];
 	const diagnostic = (worst.get('diagnostic-code') ?? '').replace(/^[\w-]+\s*;\s*/, '');
 	const code = codeOf(diagnostic, st);

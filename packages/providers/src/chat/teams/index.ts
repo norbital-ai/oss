@@ -2,6 +2,8 @@
 // network through axios and MSAL, past the host's fetch, so the token and the Connector are plain calls here. Teams has
 // no dedupe key on a send. Nothing installed names a Graph delta endpoint, and reading a chat back takes a Graph
 // permission a bot does not hold by default and per-thread ids a delivery does not leave here, so this is webhook-only.
+import { Schema } from 'effect';
+import { parse as parseJson, json } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 
@@ -18,30 +20,48 @@ const CONNECTORS = new Set([
 	'smba.infra.gov.teams.microsoft.us',
 	'smba.trafficmanager.net'
 ]);
-type Account = { readonly id: string; readonly name?: string };
-type Activity = {
-	readonly type?: string;
-	readonly id?: string;
-	readonly timestamp?: string;
-	readonly serviceUrl?: string;
-	readonly from?: Account;
-	readonly recipient?: Account;
-	readonly conversation?: {
-		readonly id: string;
-		readonly name?: string;
-		readonly isGroup?: boolean;
-		readonly conversationType?: string;
-	};
-	readonly text?: string;
-	readonly replyToId?: string;
-	readonly entities?: readonly { readonly type: string; readonly mentioned?: Account }[];
-	readonly attachments?: readonly {
-		readonly contentType?: string;
-		readonly contentUrl?: string;
-		readonly name?: string;
-		readonly content?: { readonly downloadUrl?: string };
-	}[];
-};
+const Account = Schema.Struct({
+	id: Schema.String,
+	name: Schema.optionalKey(Schema.String)
+});
+type Account = typeof Account.Type;
+const Activity = Schema.Struct({
+	type: Schema.optionalKey(Schema.String),
+	id: Schema.optionalKey(Schema.String),
+	timestamp: Schema.optionalKey(Schema.String),
+	serviceUrl: Schema.optionalKey(Schema.String),
+	from: Schema.optionalKey(Account),
+	recipient: Schema.optionalKey(Account),
+	conversation: Schema.optionalKey(
+		Schema.Struct({
+			id: Schema.String,
+			name: Schema.optionalKey(Schema.String),
+			isGroup: Schema.optionalKey(Schema.Boolean),
+			conversationType: Schema.optionalKey(Schema.String)
+		})
+	),
+	text: Schema.optionalKey(Schema.String),
+	replyToId: Schema.optionalKey(Schema.String),
+	entities: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				type: Schema.String,
+				mentioned: Schema.optionalKey(Account)
+			})
+		)
+	),
+	attachments: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				contentType: Schema.optionalKey(Schema.String),
+				contentUrl: Schema.optionalKey(Schema.String),
+				name: Schema.optionalKey(Schema.String),
+				content: Schema.optionalKey(Schema.Json)
+			})
+		)
+	)
+});
+type Activity = typeof Activity.Type;
 
 /** A thread keeps its service URL: a Connector call needs it, and only a delivery says it. */
 const threadOf = (serviceUrl: string, conversation: string) => `${serviceUrl}|${conversation}`;
@@ -83,10 +103,12 @@ export const teams: ChatPlatform = {
 					})
 				}
 			);
-			const answer = (await response.json().catch(() => ({}))) as {
-				access_token?: string;
-				expires_in?: number;
-			};
+			const answer = await Schema.decodeUnknownPromise(
+				Schema.Struct({
+					access_token: Schema.optionalKey(Schema.String),
+					expires_in: Schema.optionalKey(Schema.Number)
+				})
+			)(await response.json().catch(() => ({})));
 			if (!response.ok || answer.access_token === undefined)
 				throw new PlatformError(`Teams token answered ${response.status}`, response.status);
 			token = {
@@ -96,7 +118,12 @@ export const teams: ChatPlatform = {
 			return answer.access_token;
 		};
 		await bearer();
-		const connector = async <A>(serviceUrl: string, path: string, body: object) => {
+		const connector = async <A>(
+			schema: Schema.Decoder<A>,
+			serviceUrl: string,
+			path: string,
+			body: object
+		) => {
 			const url = new URL(path, serviceUrl.endsWith('/') ? serviceUrl : `${serviceUrl}/`);
 			if (url.protocol !== 'https:' || !CONNECTORS.has(url.hostname))
 				throw new PlatformError(`${url.hostname} is not a Teams service`, 400);
@@ -110,11 +137,14 @@ export const teams: ChatPlatform = {
 			});
 			if (!response.ok)
 				throw new PlatformError(`Teams answered ${response.status}`, response.status);
-			return (await response.json().catch(() => ({}))) as A;
+			return json(schema, response);
 		};
 		const activities = (thread: string, activity: object) => {
 			const [serviceUrl = '', conversation = ''] = thread.split('|');
-			return connector<{ id?: string }>(
+			return connector(
+				Schema.Struct({
+					id: Schema.optionalKey(Schema.String)
+				}),
 				serviceUrl,
 				`v3/conversations/${encodeURIComponent(conversation)}/activities`,
 				activity
@@ -123,7 +153,14 @@ export const teams: ChatPlatform = {
 		const filesOf = ({ attachments, serviceUrl = '' }: Activity): IncomingFile[] =>
 			(attachments ?? []).flatMap((file) => {
 				const download = file.contentType === DOWNLOAD,
-					url = download ? file.content?.downloadUrl : file.contentUrl;
+					info = Schema.decodeUnknownOption(Schema.Struct({ downloadUrl: Schema.String }))(
+						file.content
+					),
+					url = download
+						? info._tag === 'Some'
+							? info.value.downloadUrl
+							: undefined
+						: file.contentUrl;
 				if (url === undefined) return [];
 				return {
 					name: file.name ?? 'attachment',
@@ -183,7 +220,7 @@ export const teams: ChatPlatform = {
 			async deliver(request, body) {
 				let activity: Activity;
 				try {
-					activity = JSON.parse(body) as Activity;
+					activity = await parseJson(Activity, body);
 					await validator.check(request.headers.get('authorization') ?? '', {
 						...(activity.serviceUrl === undefined ? {} : { serviceUrl: activity.serviceUrl })
 					});
@@ -202,14 +239,21 @@ export const teams: ChatPlatform = {
 			},
 			async openDirect(user) {
 				if (user.includes('|')) return user;
-				const made = await connector<{ id: string }>(DEFAULT_SERVICE, 'v3/conversations', {
-					bot: { id: appId },
-					isGroup: false,
-					members: [{ id: user }],
-					...(appTenantId === ''
-						? {}
-						: { tenantId: appTenantId, channelData: { tenant: { id: appTenantId } } })
-				});
+				const made = await connector(
+					Schema.Struct({
+						id: Schema.String
+					}),
+					DEFAULT_SERVICE,
+					'v3/conversations',
+					{
+						bot: { id: appId },
+						isGroup: false,
+						members: [{ id: user }],
+						...(appTenantId === ''
+							? {}
+							: { tenantId: appTenantId, channelData: { tenant: { id: appTenantId } } })
+					}
+				);
 				return threadOf(DEFAULT_SERVICE, made.id);
 			}
 		};

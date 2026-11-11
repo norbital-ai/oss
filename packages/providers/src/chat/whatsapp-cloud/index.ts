@@ -1,7 +1,9 @@
 // WhatsApp Business Cloud, Meta's own API. Webhooks only: it offers no message history and no dedupe key on a send. Its
 // typing indicator answers one inbound message, which would take a message id per thread, so it is left out.
+import { download, parse as parseJson } from '../http.ts';
+import { Schema } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
-import { appFields, download, graph, pieces, verified } from '../meta.ts';
+import { appFields, graph, pieces, verified } from '../meta.ts';
 
 const API = 'https://graph.facebook.com/v25.0';
 const LIMIT = 4096;
@@ -10,37 +12,60 @@ const MEDIA = ['image', 'document', 'audio', 'video', 'voice', 'sticker'] as con
 const MEDIA_HOST = /(^|\.)(fbcdn\.net|fbsbx\.com)$|^graph\.facebook\.com$/;
 /** A business-scoped user id, for someone who shares no phone number. */
 const SCOPED_USER = /^[A-Z]{2}\.(?:ENT\.)?[A-Za-z0-9]{1,128}$/;
-type Media = {
-	readonly id: string;
-	readonly mime_type: string;
-	readonly caption?: string;
-	readonly filename?: string;
-};
-type Inbound = Partial<Record<(typeof MEDIA)[number], Media>> & {
-	readonly id: string;
-	readonly timestamp: string;
-	readonly from?: string;
-	readonly from_user_id?: string;
-	readonly text?: { readonly body: string };
-	readonly context?: { readonly id?: string };
-};
-type Contact = {
-	readonly wa_id?: string;
-	readonly user_id?: string;
-	readonly profile?: { readonly name?: string };
-};
-type Hook = {
-	readonly entry?: readonly {
-		readonly changes?: readonly {
-			readonly field: string;
-			readonly value: {
-				readonly metadata?: { readonly phone_number_id?: string };
-				readonly contacts?: readonly Contact[];
-				readonly messages?: readonly Inbound[];
-			};
-		}[];
-	}[];
-};
+const Media = Schema.Struct({
+	id: Schema.String,
+	mime_type: Schema.String,
+	caption: Schema.optionalKey(Schema.String),
+	filename: Schema.optionalKey(Schema.String)
+});
+type Media = typeof Media.Type;
+const Inbound = Schema.Struct({
+	image: Schema.optionalKey(Media),
+	document: Schema.optionalKey(Media),
+	audio: Schema.optionalKey(Media),
+	video: Schema.optionalKey(Media),
+	voice: Schema.optionalKey(Media),
+	sticker: Schema.optionalKey(Media),
+	id: Schema.String,
+	timestamp: Schema.String,
+	from: Schema.optionalKey(Schema.String),
+	from_user_id: Schema.optionalKey(Schema.String),
+	text: Schema.optionalKey(Schema.Struct({ body: Schema.String })),
+	context: Schema.optionalKey(Schema.Struct({ id: Schema.optionalKey(Schema.String) }))
+});
+type Inbound = typeof Inbound.Type;
+const Contact = Schema.Struct({
+	wa_id: Schema.optionalKey(Schema.String),
+	user_id: Schema.optionalKey(Schema.String),
+	profile: Schema.optionalKey(
+		Schema.Struct({
+			name: Schema.optionalKey(Schema.String)
+		})
+	)
+});
+type Contact = typeof Contact.Type;
+const Hook = Schema.Struct({
+	entry: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				changes: Schema.optionalKey(
+					Schema.Array(
+						Schema.Struct({
+							field: Schema.String,
+							value: Schema.Struct({
+								metadata: Schema.optionalKey(
+									Schema.Struct({ phone_number_id: Schema.optionalKey(Schema.String) })
+								),
+								contacts: Schema.optionalKey(Schema.Array(Contact)),
+								messages: Schema.optionalKey(Schema.Array(Inbound))
+							})
+						})
+					)
+				)
+			})
+		)
+	)
+});
 
 const parse = (
 	message: Inbound,
@@ -87,11 +112,16 @@ export const whatsappCloud: ChatPlatform = {
 	],
 	async connect({ accessToken = '', appSecret = '', verifyToken = '', phoneNumberId = '' }, host) {
 		const auth = { authorization: `Bearer ${accessToken}` };
-		const call = <A>(path: string, body?: object) =>
-			graph<A>(host.fetch, `${API}/${path}`, auth, body);
-		await call(`${phoneNumberId}/whatsapp_business_profile`);
+		const call = <A>(schema: Schema.Decoder<A>, path: string, body?: object) =>
+			graph(schema, host.fetch, `${API}/${path}`, auth, body);
+		await call(Schema.Json, `${phoneNumberId}/whatsapp_business_profile`);
 		const content = async (id: string) => {
-			const { url } = await call<{ readonly url: string }>(id);
+			const { url } = await call(
+				Schema.Struct({
+					url: Schema.String
+				}),
+				id
+			);
 			const target = new URL(url);
 			if (target.protocol !== 'https:' || !MEDIA_HOST.test(target.hostname))
 				throw new Error('a media URL off Meta’s hosts gets no token');
@@ -102,7 +132,7 @@ export const whatsappCloud: ChatPlatform = {
 			async deliver(request, body) {
 				const handshake = verified(request, body, verifyToken, appSecret);
 				if (handshake !== null) return handshake;
-				const { entry = [] } = JSON.parse(body) as Hook;
+				const { entry = [] } = await parseJson(Hook, body);
 				// one app can serve several numbers: another number's message is not this link's to answer
 				const changes = entry
 					.flatMap((one) => one.changes ?? [])
@@ -121,7 +151,16 @@ export const whatsappCloud: ChatPlatform = {
 			async send(thread, text) {
 				let id: string | undefined;
 				for (const piece of pieces(text, LIMIT)) {
-					const sent = await call<{ readonly messages?: readonly { readonly id: string }[] }>(
+					const sent = await call(
+						Schema.Struct({
+							messages: Schema.optionalKey(
+								Schema.Array(
+									Schema.Struct({
+										id: Schema.String
+									})
+								)
+							)
+						}),
 						`${phoneNumberId}/messages`,
 						{
 							messaging_product: 'whatsapp',

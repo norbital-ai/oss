@@ -1,42 +1,36 @@
 // iMessage through Sendblue, with Sendblue's own SDK. A direct thread is the contact's number; a group's is `group:<id>`,
 // which no E.164 number can be. Sendblue shows no dedupe key on a send and no edit or unsend event, and its event stream
 // calls itself no replay log, so repair is reading a thread back.
-import type SendblueAPI from 'sendblue';
-import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
+import { Schema } from 'effect';
+import { parse as parseJson, fileOf } from '../http.ts';
+import type { ChatConnection, ChatHost, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { signed } from '../verify.ts';
 
-type Raw = SendblueAPI.MessageListResponse.Data;
-type Download = (url: string) => Promise<Uint8Array>;
+const Raw = Schema.Struct({
+	message_handle: Schema.optionalKey(Schema.String),
+	from_number: Schema.optionalKey(Schema.String),
+	date_sent: Schema.optionalKey(Schema.String),
+	group_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	is_outbound: Schema.optionalKey(Schema.Boolean),
+	is_reaction: Schema.optionalKey(Schema.Boolean),
+	status: Schema.optionalKey(Schema.String),
+	sendblue_number: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	content: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	group_display_name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	reply_to: Schema.optionalKey(
+		Schema.NullOr(
+			Schema.Struct({ message_handle: Schema.optionalKey(Schema.NullOr(Schema.String)) })
+		)
+	),
+	media_url: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
+type Raw = typeof Raw.Type;
 
 const GROUP = 'group:',
 	HISTORY_PAGES = 20;
-const IMAGES: Readonly<Record<string, string>> = {
-	jpg: 'image/jpeg',
-	jpeg: 'image/jpeg',
-	png: 'image/png',
-	gif: 'image/gif',
-	heic: 'image/heic',
-	webp: 'image/webp'
-};
-
-/** `media_url` is a link, or the file itself as a data URL. */
-const fileOf = (url: string, download: Download): IncomingFile => {
-	const inline = /^data:([^;,]+)/.exec(url)?.[1];
-	const name = inline === undefined ? (url.split(/[?#]/)[0]?.split('/').pop() ?? '') : '';
-	return {
-		name: name || 'attachment',
-		mime:
-			inline ?? IMAGES[name.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream',
-		fetch: async () =>
-			inline === undefined
-				? download(url)
-				: new Uint8Array(Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'))
-	};
-};
-
 /** A person's message to `line`: an account's lines can share one webhook, and a reaction is no message. */
-const parse = (raw: Raw, line: string, download: Download): Incoming | null => {
+const parse = (raw: Raw, line: string, fetch: ChatHost['fetch']): Incoming | null => {
 	const { message_handle: id, from_number: from, date_sent: sentAt, group_id: group } = raw;
 	if (id === undefined || from === undefined || sentAt === undefined) return null;
 	if (raw.is_outbound === true || raw.is_reaction === true || raw.status !== 'RECEIVED')
@@ -51,7 +45,7 @@ const parse = (raw: Raw, line: string, download: Download): Incoming | null => {
 		group: Boolean(group),
 		title: raw.group_display_name ?? null,
 		replyTo: raw.reply_to?.message_handle ?? null,
-		...(raw.media_url ? { files: [fileOf(raw.media_url, download)] } : {})
+		...(raw.media_url ? { files: [fileOf(raw.media_url, fetch)] } : {})
 	};
 };
 
@@ -82,16 +76,12 @@ export const sendblue: ChatPlatform = {
 				);
 			throw error;
 		};
-		const download: Download = async (url) => {
-			const response = await host.fetch(url);
-			if (!response.ok) throw new PlatformError('Sendblue media', response.status);
-			return new Uint8Array(await response.arrayBuffer());
-		};
+
 		const connection: ChatConnection = {
 			account: fromNumber,
 			async deliver(request, body) {
 				signed(request.headers.get('sb-signing-secret'), webhookSecret);
-				const message = parse(JSON.parse(body) as Raw, fromNumber, download);
+				const message = parse(await parseJson(Raw, body), fromNumber, host.fetch);
 				if (message === null) return nothing();
 				const repliedTo =
 					message.group === true &&
@@ -141,7 +131,7 @@ export const sendblue: ChatPlatform = {
 						limit: 100,
 						offset
 					});
-					messages.push(...data.flatMap((raw) => parse(raw, fromNumber, download) ?? []));
+					messages.push(...data.flatMap((raw) => parse(raw, fromNumber, host.fetch) ?? []));
 					offset += data.length;
 					if (data.length === 0 || pagination?.hasMore === false)
 						return { messages, complete: true };

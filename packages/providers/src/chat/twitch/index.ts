@@ -2,6 +2,8 @@
 // limits, so a message is sent as one line. Chat goes out on an app token this adapter mints; a whisper needs the bot's own
 // user token, which lasts until it expires because a refreshed one has nowhere to persist here. The EventSub subscriptions
 // are created once by hand: Twitch checks a new one by calling the webhook, which is not live while `connect` runs.
+import { Schema } from 'effect';
+import { parse as parseJson, json } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
@@ -11,40 +13,67 @@ const TOKEN = 'https://id.twitch.tv/oauth2/token';
 const MAX_AGE_MS = 10 * 60 * 1000;
 const EARLY_MS = 60_000;
 const LIMIT = 500;
-type Chat = {
-	readonly message_id: string;
-	readonly broadcaster_user_id: string;
-	readonly broadcaster_user_name?: string;
-	readonly source_broadcaster_user_id?: string | null;
-	readonly chatter_user_id: string;
-	readonly chatter_user_login?: string;
-	readonly chatter_user_name?: string;
-	readonly message: {
-		readonly text: string;
-		readonly fragments?: readonly {
-			readonly type: string;
-			readonly mention?: { readonly user_id?: string } | null;
-		}[];
-	};
-	readonly reply?: {
-		readonly parent_message_id: string;
-		readonly parent_user_id: string;
-	} | null;
-};
-type Whisper = {
-	readonly whisper_id: string;
-	readonly from_user_id: string;
-	readonly from_user_login?: string;
-	readonly from_user_name?: string;
-	readonly whisper: { readonly text: string };
-};
-type Notification = {
-	readonly challenge?: string;
-	readonly subscription?: { readonly type?: string };
-	readonly event?: Chat | Whisper;
-};
+const Chat = Schema.Struct({
+	message_id: Schema.String,
+	broadcaster_user_id: Schema.String,
+	broadcaster_user_name: Schema.optionalKey(Schema.String),
+	source_broadcaster_user_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	chatter_user_id: Schema.String,
+	chatter_user_login: Schema.optionalKey(Schema.String),
+	chatter_user_name: Schema.optionalKey(Schema.String),
+	message: Schema.Struct({
+		text: Schema.String,
+		fragments: Schema.optionalKey(
+			Schema.Array(
+				Schema.Struct({
+					type: Schema.String,
+					mention: Schema.optionalKey(
+						Schema.Union([
+							Schema.Struct({
+								user_id: Schema.optionalKey(Schema.String)
+							}),
+							Schema.Null
+						])
+					)
+				})
+			)
+		)
+	}),
+	reply: Schema.optionalKey(
+		Schema.Union([
+			Schema.Struct({
+				parent_message_id: Schema.String,
+				parent_user_id: Schema.String
+			}),
+			Schema.Null
+		])
+	)
+});
+type Chat = typeof Chat.Type;
+const Whisper = Schema.Struct({
+	whisper_id: Schema.String,
+	from_user_id: Schema.String,
+	from_user_login: Schema.optionalKey(Schema.String),
+	from_user_name: Schema.optionalKey(Schema.String),
+	whisper: Schema.Struct({
+		text: Schema.String
+	})
+});
+type Whisper = typeof Whisper.Type;
+const Notification = Schema.Struct({
+	challenge: Schema.optionalKey(Schema.String),
+	subscription: Schema.optionalKey(
+		Schema.Struct({
+			type: Schema.optionalKey(Schema.String)
+		})
+	),
+	event: Schema.optionalKey(Schema.Unknown)
+});
 
-const clip = (text: string) => Array.from(text.replace(/\s*\n\s*/g, ' ')).slice(0, LIMIT).join('');
+const clip = (text: string) =>
+	Array.from(text.replace(/\s*\n\s*/g, ' '))
+		.slice(0, LIMIT)
+		.join('');
 const chat = (event: Chat, sentAt: string, me: string): Incoming => ({
 	id: event.message_id,
 	thread: event.broadcaster_user_id,
@@ -95,7 +124,13 @@ export const twitch: ChatPlatform = {
 		}
 	],
 	async connect(
-		{ clientId = '', clientSecret = '', webhookSecret = '', botUsername = '', userAccessToken = '' },
+		{
+			clientId = '',
+			clientSecret = '',
+			webhookSecret = '',
+			botUsername = '',
+			userAccessToken = ''
+		},
 		host
 	) {
 		if (webhookSecret.length < 10 || webhookSecret.length > 100)
@@ -113,7 +148,13 @@ export const twitch: ChatPlatform = {
 			});
 			if (!response.ok)
 				throw new PlatformError(`Twitch answered ${response.status}`, response.status);
-			const made: { access_token: string; expires_in?: number } = await response.json();
+			const made = await json(
+				Schema.Struct({
+					access_token: Schema.String,
+					expires_in: Schema.optionalKey(Schema.Number)
+				}),
+				response
+			);
 			app = {
 				token: made.access_token,
 				until: Date.now() + (made.expires_in ?? 3600) * 1000 - EARLY_MS
@@ -147,9 +188,19 @@ export const twitch: ChatPlatform = {
 				return appToken().then((fresh) => helix(path, fresh, body));
 			});
 		};
-		const { data = [] }: { data?: readonly { id: string; login: string }[] } = await (
+		const { data = [] } = await json(
+			Schema.Struct({
+				data: Schema.optionalKey(
+					Schema.Array(
+						Schema.Struct({
+							id: Schema.String,
+							login: Schema.String
+						})
+					)
+				)
+			}),
 			await asApp(`/users?login=${encodeURIComponent(botUsername)}`)
-		).json();
+		);
 		const bot = data[0];
 		if (bot === undefined) throw new PlatformError(`no Twitch user ${botUsername}`, 404);
 		const me = bot.id;
@@ -163,7 +214,7 @@ export const twitch: ChatPlatform = {
 				// its fractions run to nanoseconds, past what a Date reads
 				const at = Date.parse(timestamp.replace(/\.(\d{3})\d+/, '.$1'));
 				if (Number.isNaN(at) || Date.now() - at > MAX_AGE_MS) throw new Unverified('stale');
-				const payload = JSON.parse(body) as Notification,
+				const payload = await parseJson(Notification, body),
 					kind = header('type');
 				if (kind === 'webhook_callback_verification')
 					return nothing(
@@ -174,7 +225,7 @@ export const twitch: ChatPlatform = {
 					type = payload.subscription?.type,
 					sentAt = new Date(at).toISOString();
 				if (type === 'channel.chat.message') {
-					const message = event as Chat;
+					const message = await Schema.decodeUnknownPromise(Chat)(event);
 					const copied =
 						message.source_broadcaster_user_id !== undefined &&
 						message.source_broadcaster_user_id !== null &&
@@ -184,10 +235,8 @@ export const twitch: ChatPlatform = {
 						: { messages: [chat(message, sentAt, me)] };
 				}
 				if (type === 'user.whisper.message') {
-					const message = event as Whisper;
-					return message.from_user_id === me
-						? nothing()
-						: { messages: [whisper(message, sentAt)] };
+					const message = await Schema.decodeUnknownPromise(Whisper)(event);
+					return message.from_user_id === me ? nothing() : { messages: [whisper(message, sentAt)] };
 				}
 				return nothing();
 			},
@@ -201,19 +250,31 @@ export const twitch: ChatPlatform = {
 					});
 					return { id: key };
 				}
-				const sent: {
-					data?: readonly {
-						message_id: string;
-						is_sent: boolean;
-						drop_reason?: { message?: string } | null;
-					}[];
-				} = await (
+				const sent = await json(
+					Schema.Struct({
+						data: Schema.optionalKey(
+							Schema.Array(
+								Schema.Struct({
+									message_id: Schema.String,
+									is_sent: Schema.Boolean,
+									drop_reason: Schema.optionalKey(
+										Schema.Union([
+											Schema.Struct({
+												message: Schema.optionalKey(Schema.String)
+											}),
+											Schema.Null
+										])
+									)
+								})
+							)
+						)
+					}),
 					await asApp('/chat/messages', {
 						broadcaster_id: thread,
 						sender_id: me,
 						message: clip(text)
 					})
-				).json();
+				);
 				const result = sent.data?.[0];
 				if (result?.is_sent !== true)
 					throw new PlatformError(

@@ -1,24 +1,31 @@
 // Instagram Direct through the Instagram API with Instagram Login. Webhooks only: no history read and no dedupe key on a
 // send are known here. Every conversation is one person's, so the thread is their id.
+import { Schema } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
-import { appFields, filesOf, graph, messaging, pieces, verified, type Attachment } from '../meta.ts';
+import { appFields, filesOf, graph, messaging, pieces, verified, Attachment } from '../meta.ts';
 
 const API = 'https://graph.instagram.com/v26.0';
 const BYTES = 1000;
-type Event = {
-	readonly sender: { readonly id: string };
-	readonly timestamp: number;
-	readonly message?: {
-		readonly mid: string;
-		readonly text?: string;
-		readonly is_echo?: boolean;
-		readonly is_deleted?: boolean;
-		readonly attachments?: readonly Attachment[];
-		readonly reply_to?: { readonly mid?: string };
-	};
-};
+const Event = Schema.Struct({
+	sender: Schema.Struct({ id: Schema.String }),
+	timestamp: Schema.Number,
+	message: Schema.optionalKey(
+		Schema.Struct({
+			mid: Schema.String,
+			text: Schema.optionalKey(Schema.String),
+			is_echo: Schema.optionalKey(Schema.Boolean),
+			is_deleted: Schema.optionalKey(Schema.Boolean),
+			attachments: Schema.optionalKey(Schema.Array(Attachment)),
+			reply_to: Schema.optionalKey(Schema.Struct({ mid: Schema.optionalKey(Schema.String) }))
+		})
+	)
+});
+type Event = typeof Event.Type;
 
-const parse = ({ sender, timestamp, message }: Event, fetch: typeof globalThis.fetch): Incoming | null => {
+const parse = (
+	{ sender, timestamp, message }: Event,
+	fetch: typeof globalThis.fetch
+): Incoming | null => {
 	if (message === undefined || message.is_echo === true) return null;
 	const base = {
 		id: message.mid,
@@ -41,7 +48,8 @@ export const instagram: ChatPlatform = {
 	via: { en: 'Official API', zh: '官方 API' },
 	consistency: 'webhook',
 	icon: 'simple-icons:instagram',
-	guide: 'https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api',
+	guide:
+		'https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api',
 	fields: [
 		{ name: 'accessToken', label: { en: 'Access token', zh: '访问令牌' }, secret: true },
 		...appFields,
@@ -49,20 +57,32 @@ export const instagram: ChatPlatform = {
 	],
 	async connect({ accessToken = '', appSecret = '', verifyToken = '', accountId = '' }, host) {
 		const auth = { authorization: `Bearer ${accessToken}` };
-		const profile = await graph<{ readonly name?: string; readonly username?: string }>(
+		const profile = await graph(
+			Schema.Struct({
+				name: Schema.optionalKey(Schema.String),
+				username: Schema.optionalKey(Schema.String)
+			}),
 			host.fetch,
 			`${API}/${accountId}?fields=id,name,username`,
 			auth
 		);
 		const post = (body: object) =>
-			graph<{ readonly message_id: string }>(host.fetch, `${API}/${accountId}/messages`, auth, body);
+			graph(
+				Schema.Struct({
+					message_id: Schema.String
+				}),
+				host.fetch,
+				`${API}/${accountId}/messages`,
+				auth,
+				body
+			);
 		const connection: ChatConnection = {
 			account: profile.username ?? profile.name ?? accountId,
 			async deliver(request, body) {
 				const handshake = verified(request, body, verifyToken, appSecret);
 				if (handshake !== null) return handshake;
 				return {
-					messages: messaging<Event>(body, 'instagram').flatMap(
+					messages: (await messaging(Event, body, 'instagram')).flatMap(
 						(event) => parse(event, host.fetch) ?? []
 					)
 				};

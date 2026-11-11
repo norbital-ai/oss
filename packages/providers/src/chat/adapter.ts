@@ -51,7 +51,8 @@ export const recent = <V>(limit = 1000) => {
 		set(key: string, value: V) {
 			held.delete(key);
 			held.set(key, value);
-			if (held.size > limit) held.delete(held.keys().next().value as string);
+			const oldest = held.keys().next().value;
+			if (held.size > limit && oldest !== undefined) held.delete(oldest);
 		}
 	};
 };
@@ -96,9 +97,7 @@ export type ChatConnection = {
 	 * The platform's own change log: what changed since `cursor`, deletes included, and the cursor to keep. `null` asks for
 	 * a starting cursor. A platform with one needs no `history`.
 	 */
-	changes?(
-		cursor: string | null
-	): Promise<{
+	changes?(cursor: string | null): Promise<{
 		readonly messages: readonly Incoming[];
 		readonly cursor: string;
 		/** The platform no longer holds `cursor`: catching up restarted, and what happened between is lost. */
@@ -133,10 +132,7 @@ export type ChatPlatform = {
 	readonly icon?: string;
 	readonly fields: readonly ChatField[];
 	/** Connects with the settings a person entered: a call the platform answers proves them. */
-	connect(
-		settings: Readonly<Record<string, string>>,
-		host: ChatHost
-	): Promise<ChatConnection>;
+	connect(settings: Readonly<Record<string, string>>, host: ChatHost): Promise<ChatConnection>;
 };
 /** What a connection gets from its host. `receive` is for a platform that pushes over a socket or a long poll: it stores
  * before it resolves, and a rejection means the platform's message must not be acknowledged. */
@@ -289,8 +285,9 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 		const catchUp = gate.withPermits(1)(
 			Effect.gen(function* () {
 				const connection = live;
-				if (connection?.changes === undefined) return;
-				const answer = yield* call('changes', () => connection.changes!(cursor));
+				const changes = connection?.changes;
+				if (connection === null || changes === undefined) return;
+				const answer = yield* call('changes', () => changes.call(connection, cursor));
 				yield* hostCall(`store ${name} changes`, () => store(answer.messages));
 				if (answer.cursor !== cursor) {
 					yield* hostCall(`keep ${name} cursor`, () =>
@@ -408,9 +405,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 							),
 			typing: (to, on) =>
 				need.pipe(
-					Effect.flatMap((connection) =>
-						call('typing', async () => connection.typing?.(to, on))
-					),
+					Effect.flatMap((connection) => call('typing', async () => connection.typing?.(to, on))),
 					Effect.asVoid
 				),
 			test: (input) =>

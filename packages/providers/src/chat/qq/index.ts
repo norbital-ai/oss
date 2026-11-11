@@ -2,6 +2,8 @@
 // a key derived from the app secret. Webhooks only: it offers no history, edits or deletes.
 // A reply names the message it answers, for five minutes, each with a new `msg_seq`. Past that, or after a restart, a
 // send goes out as a message of the bot's own, which QQ limits.
+import { Schema } from 'effect';
+import { parse as parseJson, download as downloadFile } from '../http.ts';
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { PlatformError, Unverified, nothing, recent } from '../adapter.ts';
@@ -17,35 +19,41 @@ const SEND_TO: Readonly<Record<string, string>> = {
 	channel: '/channels',
 	direct: '/dms'
 };
-type File = {
-	readonly content_type?: string;
-	readonly filename?: string;
-	readonly url?: string;
-	readonly size?: number;
-	readonly voice_wav_url?: string;
-};
-type Event = {
-	readonly id: string;
-	readonly content?: string;
-	readonly timestamp: string;
-	readonly author: {
-		readonly id?: string;
-		readonly username?: string;
-		readonly bot?: boolean;
-		readonly user_openid?: string;
-		readonly member_openid?: string;
-	};
-	readonly group_openid?: string;
-	readonly channel_id?: string;
-	readonly guild_id?: string;
-	readonly member?: { readonly nick?: string };
-	readonly attachments?: readonly File[];
-};
-type Hook = {
-	readonly op?: number;
-	readonly t?: string;
-	readonly d?: Event & { readonly plain_token?: string; readonly event_ts?: string };
-};
+const File = Schema.Struct({
+	content_type: Schema.optionalKey(Schema.String),
+	filename: Schema.optionalKey(Schema.String),
+	url: Schema.optionalKey(Schema.String),
+	size: Schema.optionalKey(Schema.Number),
+	voice_wav_url: Schema.optionalKey(Schema.String)
+});
+const Event = Schema.Struct({
+	id: Schema.String,
+	content: Schema.optionalKey(Schema.String),
+	timestamp: Schema.String,
+	author: Schema.Struct({
+		id: Schema.optionalKey(Schema.String),
+		username: Schema.optionalKey(Schema.String),
+		bot: Schema.optionalKey(Schema.Boolean),
+		user_openid: Schema.optionalKey(Schema.String),
+		member_openid: Schema.optionalKey(Schema.String)
+	}),
+	group_openid: Schema.optionalKey(Schema.String),
+	channel_id: Schema.optionalKey(Schema.String),
+	guild_id: Schema.optionalKey(Schema.String),
+	member: Schema.optionalKey(
+		Schema.Struct({
+			nick: Schema.optionalKey(Schema.String)
+		})
+	),
+	attachments: Schema.optionalKey(Schema.Array(File))
+});
+type Event = typeof Event.Type;
+const Hook = Schema.Struct({
+	op: Schema.optionalKey(Schema.Number),
+	t: Schema.optionalKey(Schema.String),
+	d: Schema.optionalKey(Schema.Json)
+});
+type Hook = typeof Hook.Type;
 
 const placeOf = (type: string | undefined, event: Event) =>
 	type === 'C2C_MESSAGE_CREATE'
@@ -96,9 +104,9 @@ const parse = (
 		})
 	};
 };
-const parsed = (body: string): Hook | null => {
+const parsed = async (body: string): Promise<Hook | null> => {
 	try {
-		return JSON.parse(body) as Hook;
+		return await parseJson(Hook, body);
 	} catch {
 		return null;
 	}
@@ -132,11 +140,13 @@ export const qq: ChatPlatform = {
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ appId, clientSecret })
 			});
-			const answer = (await response.json().catch(() => ({}))) as {
-				readonly access_token?: string;
-				readonly expires_in?: string | number;
-				readonly message?: string;
-			};
+			const answer = await Schema.decodeUnknownPromise(
+				Schema.Struct({
+					access_token: Schema.optionalKey(Schema.String),
+					expires_in: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
+					message: Schema.optionalKey(Schema.String)
+				})
+			)(await response.json().catch(() => ({})));
 			if (answer.access_token === undefined)
 				throw new PlatformError(
 					answer.message ?? 'QQ refused the app credentials',
@@ -148,11 +158,7 @@ export const qq: ChatPlatform = {
 			};
 			return answer.access_token;
 		};
-		const content = async (url: string) => {
-			const response = await host.fetch(url);
-			if (!response.ok) throw new PlatformError('file unavailable', response.status);
-			return new Uint8Array(await response.arrayBuffer());
-		};
+		const content = (url: string) => downloadFile(host.fetch, url);
 		await token();
 		const answering = recent<{ readonly id: string; readonly at: number; seq: number }>();
 		const connection: ChatConnection = {
@@ -160,15 +166,18 @@ export const qq: ChatPlatform = {
 			async deliver(request, body) {
 				const signature = request.headers.get('x-signature-ed25519'),
 					timestamp = request.headers.get('x-signature-timestamp'),
-					hook = parsed(body);
+					hook = await parsed(body);
 				if (hook?.op === 13) {
+					const challenge = await Schema.decodeUnknownPromise(
+						Schema.Struct({ event_ts: Schema.String, plain_token: Schema.String })
+					)(hook.d);
 					// the setup challenge may arrive unsigned, and its answer signs what it carries: signing anything with a
 					// `{` in it could hand a stranger a valid signature on a forged event
-					const signing = `${hook.d?.event_ts}${hook.d?.plain_token}`;
+					const signing = `${challenge.event_ts}${challenge.plain_token}`;
 					if (signing.includes('{')) throw new Unverified('not a challenge');
 					return nothing(
 						Response.json({
-							plain_token: hook.d?.plain_token,
+							plain_token: challenge.plain_token,
 							signature: sign(null, Buffer.from(signing), privateKey).toString('hex')
 						})
 					);
@@ -178,7 +187,10 @@ export const qq: ChatPlatform = {
 					timestamp !== null &&
 					verify(null, Buffer.from(timestamp + body), publicKey, Buffer.from(signature, 'hex'));
 				if (!genuine || hook === null) throw new Unverified('bad signature');
-				const message = hook.op === 0 && hook.d !== undefined ? parse(hook.t, hook.d, content) : null;
+				const message =
+					hook.op === 0 && hook.d !== undefined
+						? parse(hook.t, await Schema.decodeUnknownPromise(Event)(hook.d), content)
+						: null;
 				if (message !== null)
 					answering.set(message.thread, { id: message.id, at: Date.now(), seq: 0 });
 				return {
@@ -206,11 +218,13 @@ export const qq: ChatPlatform = {
 						body: JSON.stringify({ content: text, msg_type: 0, ...answers })
 					}
 				);
-				const sent = (await response.json().catch(() => ({}))) as {
-					readonly id?: string;
-					readonly code?: number;
-					readonly message?: string;
-				};
+				const sent = await Schema.decodeUnknownPromise(
+					Schema.Struct({
+						id: Schema.optionalKey(Schema.String),
+						code: Schema.optionalKey(Schema.Number),
+						message: Schema.optionalKey(Schema.String)
+					})
+				)(await response.json().catch(() => ({})));
 				if (!response.ok || (sent.code ?? 0) !== 0)
 					throw new PlatformError(
 						sent.message ?? `QQ answered ${response.status}`,

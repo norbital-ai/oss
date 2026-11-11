@@ -1,6 +1,8 @@
 // Novu's bridge: its agents take Slack, Teams, WhatsApp, Telegram and email, and post here only what is directed at the
 // agent, so every message counts as a mention. It offers no read of a thread: a bridge call carries its own transcript, and
 // that is not a repair. The API key signs the bridge too unless a separate secret is set.
+import { Schema } from 'effect';
+import { parse as parseJson } from '../http.ts';
 import { createHmac } from 'node:crypto';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
@@ -9,32 +11,49 @@ import { same } from '../verify.ts';
 const INGEST = 'https://api.novu.co/v1/agents/events/ingest';
 const MAX_AGE_MS = 5 * 60 * 1000;
 const MAX_SKEW_MS = 30 * 1000;
-type Attachment = {
-	readonly url?: string;
-	readonly name?: string;
-	readonly mimeType?: string;
-	readonly size?: number;
-};
-type Message = {
-	readonly text: string;
-	readonly platformMessageId: string;
-	readonly author: {
-		readonly userId: string;
-		readonly fullName: string;
-		readonly isBot: boolean | 'unknown';
-	};
-	readonly timestamp: string;
-	readonly attachments?: readonly Attachment[];
-	readonly replyTo?: { readonly messageId: string };
-};
-type Bridge = {
-	readonly event?: string;
-	readonly conversationId?: string;
-	readonly message?: Message | null;
-	readonly previousMessage?: Message | null;
-	readonly subscriber?: { readonly subscriberId: string } | null;
-	readonly platformContext?: { readonly isDM?: boolean };
-};
+const Attachment = Schema.Struct({
+	url: Schema.optionalKey(Schema.String),
+	name: Schema.optionalKey(Schema.String),
+	mimeType: Schema.optionalKey(Schema.String),
+	size: Schema.optionalKey(Schema.Number)
+});
+const Message = Schema.Struct({
+	text: Schema.String,
+	platformMessageId: Schema.String,
+	author: Schema.Struct({
+		userId: Schema.String,
+		fullName: Schema.String,
+		isBot: Schema.Union([Schema.Boolean, Schema.Literal('unknown')])
+	}),
+	timestamp: Schema.String,
+	attachments: Schema.optionalKey(Schema.Array(Attachment)),
+	replyTo: Schema.optionalKey(
+		Schema.Struct({
+			messageId: Schema.String
+		})
+	)
+});
+type Message = typeof Message.Type;
+const Bridge = Schema.Struct({
+	event: Schema.optionalKey(Schema.String),
+	conversationId: Schema.optionalKey(Schema.String),
+	message: Schema.optionalKey(Schema.Union([Message, Schema.Null])),
+	previousMessage: Schema.optionalKey(Schema.Union([Message, Schema.Null])),
+	subscriber: Schema.optionalKey(
+		Schema.Union([
+			Schema.Struct({
+				subscriberId: Schema.String
+			}),
+			Schema.Null
+		])
+	),
+	platformContext: Schema.optionalKey(
+		Schema.Struct({
+			isDM: Schema.optionalKey(Schema.Boolean)
+		})
+	)
+});
+type Bridge = typeof Bridge.Type;
 
 /** Refuses a bridge call whose `t=<ms>,v1=<hex>` header is not an HMAC of `t.body`, or that is out of its window. */
 const verify = (header: string | null, body: string, secret: string) => {
@@ -131,7 +150,7 @@ export const novu: ChatPlatform = {
 						);
 				}
 				verify(request.headers.get('novu-signature'), body, bridgeSecret || apiKey);
-				const bridge = JSON.parse(body) as Bridge,
+				const bridge = await parseJson(Bridge, body),
 					thread = bridge.conversationId;
 				if (thread === undefined || bridge.event === undefined)
 					return nothing(new Response(null, { status: 400 }));
@@ -141,9 +160,7 @@ export const novu: ChatPlatform = {
 					return gone === null || gone === undefined
 						? nothing()
 						: {
-								messages: [
-									{ ...parsed(bridge, thread, gone), text: '', files: [], deleted: true }
-								]
+								messages: [{ ...parsed(bridge, thread, gone), text: '', files: [], deleted: true }]
 							};
 				}
 				if (message === null || message === undefined || message.author.isBot === true)

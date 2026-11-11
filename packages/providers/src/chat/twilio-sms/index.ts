@@ -1,5 +1,7 @@
 // SMS and MMS through Twilio. A delivery carries no time of its own, so `sentAt` is its arrival. A thread is the other
 // party's number, and only their messages come back: what the account sent is not an inbound message.
+import { Schema } from 'effect';
+import { json, request as requestHttp } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { twilioSignature } from '../../twilio/whatsapp.ts';
@@ -9,14 +11,15 @@ const API = 'https://api.twilio.com';
 const LIMIT = 1600;
 const PAGE = 100;
 const TWIML = () => new Response('<Response/>', { headers: { 'content-type': 'text/xml' } });
-type Resource = {
-	readonly sid: string;
-	readonly body?: string | null;
-	readonly date_sent?: string | null;
-	readonly date_created?: string | null;
-	readonly direction?: string;
-	readonly from?: string | null;
-};
+const Resource = Schema.Struct({
+	sid: Schema.String,
+	body: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	date_sent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	date_created: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	direction: Schema.optionalKey(Schema.String),
+	from: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
+type Resource = typeof Resource.Type;
 
 const message = (
 	id: string,
@@ -47,20 +50,20 @@ export const twilioSms: ChatPlatform = {
 			optional: true
 		}
 	],
-	async connect({ accountSid = '', authToken = '', phoneNumber = '', messagingServiceSid = '' }, host) {
+	async connect(
+		{ accountSid = '', authToken = '', phoneNumber = '', messagingServiceSid = '' },
+		host
+	) {
 		const sender = messagingServiceSid || phoneNumber;
 		if (sender === '') throw new PlatformError('name a Twilio number or Messaging Service', 400);
 		const authorization = `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
 			account = `${API}/2010-04-01/Accounts/${encodeURIComponent(accountSid)}`;
 		const call = async (url: string, form?: URLSearchParams) => {
-			const response = await host.fetch(url, {
+			return requestHttp(host.fetch, url, {
 				method: form === undefined ? 'GET' : 'POST',
 				headers: { authorization },
 				...(form === undefined ? {} : { body: form })
 			});
-			if (!response.ok)
-				throw new PlatformError(`Twilio answered ${response.status}`, response.status);
-			return response;
 		};
 		await call(`${account}.json`);
 		const media = async (url: string) => {
@@ -112,15 +115,18 @@ export const twilioSms: ChatPlatform = {
 							throw new PlatformError(`${file.name}: this host serves no file link`, 400);
 						})
 					);
-				const sent: Resource = await (await call(`${account}/Messages.json`, form)).json();
+				const sent = await json(Resource, await call(`${account}/Messages.json`, form));
 				return { id: sent.sid };
 			},
 			async history(thread, since) {
 				const query = new URLSearchParams({ From: thread, PageSize: String(PAGE) });
 				if (phoneNumber !== '') query.set('To', phoneNumber);
-				const { messages = [] }: { messages?: readonly Resource[] } = await (
+				const { messages = [] } = await json(
+					Schema.Struct({
+						messages: Schema.optionalKey(Schema.Array(Resource))
+					}),
 					await call(`${account}/Messages.json?${query}`)
-				).json();
+				);
 				const from = Date.parse(since),
 					at = (row: Resource) => Date.parse(row.date_sent ?? row.date_created ?? '');
 				return {

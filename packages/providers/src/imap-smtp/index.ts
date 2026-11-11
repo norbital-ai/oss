@@ -132,7 +132,9 @@ const F = {
 	},
 	clientId: { name: 'clientId', label: t('Client ID', '客户端 ID') },
 	clientSecret: { name: 'clientSecret', label: t('Client secret', '客户端密钥'), secret: true }
-} satisfies { [k: string]: ProviderSetup['fields'] extends readonly (infer F)[] | undefined ? F : never };
+} satisfies {
+	[k: string]: ProviderSetup['fields'] extends readonly (infer F)[] | undefined ? F : never;
+};
 const COMMON = [F.fromName, F.folder, F.tracking, F.quietHours];
 const WATCHED = t(
 	"Mail arriving in the watched folder enters this integration; replies are sent through SMTP as this address. Bounce and delay reports landing there update each message's delivery status (spam complaints are not reported over IMAP).",
@@ -192,7 +194,7 @@ const PASSWORD: ProviderSetup = {
 	]
 };
 
-const MICROSOFT: ProviderSetup = {
+const MICROSOFT = {
 	kind: 'form',
 	steps: [
 		{
@@ -230,7 +232,7 @@ const MICROSOFT: ProviderSetup = {
 		F.clientSecret,
 		...COMMON
 	]
-};
+} as const satisfies ProviderSetup;
 
 /** One click: the host's Google client signs in, and the sign-in names the mailbox. */
 const GOOGLE: ProviderSetup = { kind: 'oauth', steps: [] };
@@ -248,14 +250,14 @@ const syncSetup = (method: Method): ProviderSetup => {
 	const steps = {
 		password: [],
 		microsoft: [
-			setup.steps[0]!,
+			MICROSOFT.steps[0],
 			{
 				text: t(
 					'Grant delegated IMAP.AccessAsUser.All and offline_access permissions for this mailbox.',
 					'为此邮箱授予委托的 IMAP.AccessAsUser.All 和 offline_access 权限。'
 				)
 			},
-			setup.steps[2]!,
+			MICROSOFT.steps[2],
 			{
 				text: t(
 					'Connect and sign in as the mailbox in the window that opens.',
@@ -351,6 +353,7 @@ const mailboxOf = Effect.fn('Mailbox.input')(function* (
 		return yield* Effect.fail(
 			new PairingInvalid({ message: 'The delivery window is a number of hours (up to 720)' })
 		);
+	const authServer = get('authServer');
 	const common = {
 		address,
 		fromName: get('fromName'),
@@ -358,7 +361,7 @@ const mailboxOf = Effect.fn('Mailbox.input')(function* (
 		tracking: !personal && get('tracking') === 'on',
 		quietHours: quiet,
 		pixelKey,
-		...(get('authServer') === null ? {} : { authServer: get('authServer')!.toLowerCase() })
+		...(authServer === null ? {} : { authServer: authServer.toLowerCase() })
 	};
 	if (method === 'password')
 		return {

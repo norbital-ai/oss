@@ -1,7 +1,8 @@
 // Linear, through its GraphQL API with Linear's SDK. A thread is an issue, by its id. A comment takes an id of ours, so a
 // send cannot post twice. Files are links in a comment's markdown, so none are parsed.
+import { Schema } from 'effect';
+import { parse as parseJson } from '../http.ts';
 import { createHash } from 'node:crypto';
-import type { EntityWebhookPayloadWithCommentData } from '@linear/sdk/webhooks';
 import type { ChatConnection, ChatPlatform } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
@@ -9,7 +10,30 @@ import { hmac, signed } from '../verify.ts';
 const REPLAY_MS = 60_000;
 const PAGES = 10;
 
-type Hook = Omit<EntityWebhookPayloadWithCommentData, 'type'> & { readonly type: string };
+const Hook = Schema.Struct({
+	type: Schema.String,
+	action: Schema.String,
+	webhookTimestamp: Schema.Number,
+	data: Schema.optionalKey(Schema.Unknown),
+	updatedFrom: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+});
+const Comment = Schema.Struct({
+	id: Schema.String,
+	body: Schema.String,
+	createdAt: Schema.String,
+	updatedAt: Schema.String,
+	issueId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	userId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	user: Schema.optionalKey(
+		Schema.NullOr(Schema.Struct({ id: Schema.String, name: Schema.String }))
+	),
+	issue: Schema.optionalKey(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
+	parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	parent: Schema.optionalKey(
+		Schema.NullOr(Schema.Struct({ userId: Schema.optionalKey(Schema.NullOr(Schema.String)) }))
+	),
+	editedAt: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
 type Failed = Error & { readonly status?: number; readonly retryAfter?: number };
 
 /** A key as the UUID v4 Linear asks of a comment's id. */
@@ -50,12 +74,19 @@ export const linear: ChatPlatform = {
 			account: me.displayName,
 			async deliver(request, body) {
 				signed(request.headers.get('linear-signature'), hmac(webhookSecret, body, 'hex'));
-				const { type, action, data, updatedFrom, webhookTimestamp } = JSON.parse(body) as Hook;
+				const {
+					type,
+					action,
+					data: raw,
+					updatedFrom,
+					webhookTimestamp
+				} = await parseJson(Hook, body);
 				if (!(Math.abs(Date.now() - webhookTimestamp) <= REPLAY_MS))
 					throw new Unverified('stale delivery');
+				if (type !== 'Comment') return nothing();
+				const data = await Schema.decodeUnknownPromise(Comment)(raw);
 				// a comment with no user is an app's, and one on anything but an issue has no thread here
-				if (type !== 'Comment' || !data.issueId || !data.user || data.userId === me.id)
-					return nothing();
+				if (!data.issueId || !data.user || data.userId === me.id) return nothing();
 				const base = {
 					id: data.id,
 					thread: data.issueId,

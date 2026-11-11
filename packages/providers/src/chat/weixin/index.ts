@@ -3,6 +3,7 @@
 // host's dedupe absorbs what repeats. Its `getupdates` shows no deletes, so it is no change log, and it offers no history.
 // A reply carries the `context_token` of the person's last message; after a restart iLink may refuse a send until they
 // write again.
+import { Schema } from 'effect';
 import { createDecipheriv, randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
@@ -17,47 +18,77 @@ const PROVE_MS = 3_000;
 const BOT = 2;
 const FINISHED = 2;
 const TEXT = 1;
-type Media = {
-	readonly encrypt_query_param?: string;
-	readonly aes_key?: string;
-	readonly full_url?: string;
-};
-type Item = {
-	readonly type?: number;
-	readonly text_item?: { readonly text?: string };
-	readonly voice_item?: { readonly media?: Media; readonly text?: string };
-	readonly image_item?: {
-		readonly media?: Media;
-		readonly aeskey?: string;
-		readonly mid_size?: number;
-		readonly hd_size?: number;
-	};
-	readonly video_item?: { readonly media?: Media; readonly video_size?: number };
-	readonly file_item?: {
-		readonly media?: Media;
-		readonly file_name?: string;
-		readonly len?: string;
-	};
-	readonly ref_msg?: { readonly message_item?: { readonly msg_id?: string } };
-};
-type Raw = {
-	readonly seq?: number;
-	readonly message_id?: number;
-	readonly client_id?: string;
-	readonly from_user_id?: string;
-	readonly context_token?: string;
-	readonly create_time_ms?: number;
-	readonly message_type?: number;
-	readonly item_list?: readonly Item[];
-};
-type Answer = {
-	readonly ret?: number;
-	readonly errcode?: number;
-	readonly errmsg?: string;
-	readonly msgs?: readonly Raw[];
-	readonly get_updates_buf?: string;
-	readonly longpolling_timeout_ms?: number;
-};
+const Media = Schema.Struct({
+	encrypt_query_param: Schema.optionalKey(Schema.String),
+	aes_key: Schema.optionalKey(Schema.String),
+	full_url: Schema.optionalKey(Schema.String)
+});
+type Media = typeof Media.Type;
+const Item = Schema.Struct({
+	type: Schema.optionalKey(Schema.Number),
+	text_item: Schema.optionalKey(
+		Schema.Struct({
+			text: Schema.optionalKey(Schema.String)
+		})
+	),
+	voice_item: Schema.optionalKey(
+		Schema.Struct({
+			media: Schema.optionalKey(Media),
+			text: Schema.optionalKey(Schema.String)
+		})
+	),
+	image_item: Schema.optionalKey(
+		Schema.Struct({
+			media: Schema.optionalKey(Media),
+			aeskey: Schema.optionalKey(Schema.String),
+			mid_size: Schema.optionalKey(Schema.Number),
+			hd_size: Schema.optionalKey(Schema.Number)
+		})
+	),
+	video_item: Schema.optionalKey(
+		Schema.Struct({
+			media: Schema.optionalKey(Media),
+			video_size: Schema.optionalKey(Schema.Number)
+		})
+	),
+	file_item: Schema.optionalKey(
+		Schema.Struct({
+			media: Schema.optionalKey(Media),
+			file_name: Schema.optionalKey(Schema.String),
+			len: Schema.optionalKey(Schema.String)
+		})
+	),
+	ref_msg: Schema.optionalKey(
+		Schema.Struct({
+			message_item: Schema.optionalKey(
+				Schema.Struct({
+					msg_id: Schema.optionalKey(Schema.String)
+				})
+			)
+		})
+	)
+});
+type Item = typeof Item.Type;
+const Raw = Schema.Struct({
+	seq: Schema.optionalKey(Schema.Number),
+	message_id: Schema.optionalKey(Schema.Number),
+	client_id: Schema.optionalKey(Schema.String),
+	from_user_id: Schema.optionalKey(Schema.String),
+	context_token: Schema.optionalKey(Schema.String),
+	create_time_ms: Schema.optionalKey(Schema.Number),
+	message_type: Schema.optionalKey(Schema.Number),
+	item_list: Schema.optionalKey(Schema.Array(Item))
+});
+type Raw = typeof Raw.Type;
+const Answer = Schema.Struct({
+	ret: Schema.optionalKey(Schema.Number),
+	errcode: Schema.optionalKey(Schema.Number),
+	errmsg: Schema.optionalKey(Schema.String),
+	msgs: Schema.optionalKey(Schema.Array(Raw)),
+	get_updates_buf: Schema.optionalKey(Schema.String),
+	longpolling_timeout_ms: Schema.optionalKey(Schema.Number)
+});
+type Answer = typeof Answer.Type;
 
 const keyOf = (item: Item, media: Media) => {
 	const hex = item.image_item?.aeskey;
@@ -117,7 +148,8 @@ const parse = (raw: Raw, read: (url: string) => Promise<Uint8Array>): Incoming |
 	const id = raw.message_id ?? raw.client_id ?? raw.seq,
 		user = raw.from_user_id,
 		items = raw.item_list ?? [];
-	if (raw.message_type === BOT || id === undefined || user === undefined || user === '') return null;
+	if (raw.message_type === BOT || id === undefined || user === undefined || user === '')
+		return null;
 	const said = items.find((item) => item.text_item?.text ?? item.voice_item?.text),
 		text = said?.text_item?.text ?? said?.voice_item?.text ?? '',
 		replyTo = said?.ref_msg?.message_item?.msg_id,
@@ -168,9 +200,14 @@ export const weixin: ChatPlatform = {
 					body: JSON.stringify({ ...body, base_info: { channel_version: '0.1.0' } }),
 					signal: AbortSignal.any([closing.signal, deadline.signal])
 				});
-				const answer = (await response.json().catch(() => ({}))) as Answer;
+				const answer = await Schema.decodeUnknownPromise(Answer)(
+					await response.json().catch(() => ({}))
+				);
 				if (!response.ok)
-					throw new PlatformError(answer.errmsg ?? `iLink answered ${response.status}`, response.status);
+					throw new PlatformError(
+						answer.errmsg ?? `iLink answered ${response.status}`,
+						response.status
+					);
 				if ((answer.ret ?? 0) !== 0 || (answer.errcode ?? 0) !== 0)
 					throw new PlatformError(
 						answer.errmsg ?? `iLink answered ret=${answer.ret} errcode=${answer.errcode}`,

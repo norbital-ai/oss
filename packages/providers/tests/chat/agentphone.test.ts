@@ -84,6 +84,44 @@ describe('AgentPhone', () => {
 			expect(h.events).toEqual([]);
 		})
 	);
+	it.live(
+		'refuses malformed signed message fields before storing and accepts the next delivery',
+		() =>
+			Effect.gen(function* () {
+				yield* platformApi(answer);
+				const h = yield* connected(agentphone, settings);
+				for (const fields of [
+					{ messageId: 3 },
+					{ from: [] },
+					{ message: {} },
+					{ mediaUrls: [7] }
+				]) {
+					const body = event(fields);
+					expect(yield* Effect.flip(h.link.webhook!(webhook(body, signature(body))))).toMatchObject(
+						{
+							_tag: 'ProviderUnavailable'
+						}
+					);
+				}
+				expect(h.events).toEqual([]);
+				const ignored = JSON.stringify({ event: 'call.ended' });
+				expect((yield* h.link.webhook!(webhook(ignored, signature(ignored)))).status).toBe(200);
+				const body = event();
+				expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+				expect(h.events).toHaveLength(1);
+			})
+	);
+	it.live('refuses an invalid send acknowledgement', () =>
+		Effect.gen(function* () {
+			yield* platformApi((call) =>
+				JSON.parse(call.body).to_number === '' ? json({}, 422) : json({ id: 19 })
+			);
+			const h = yield* connected(agentphone, settings);
+			expect(yield* Effect.flip(h.link.send!({ to: person, text: 'hello' }, []))).toMatchObject({
+				_tag: 'ProviderUnavailable'
+			});
+		})
+	);
 	it.live('a message the engine did not store is not acknowledged', () =>
 		Effect.gen(function* () {
 			yield* platformApi(answer);

@@ -2,8 +2,9 @@
 // endpoint hears direct messages and @mentions only, and neither edits nor deletes: the rest is Workspace Events over
 // Pub/Sub, left out. Reading a space back needs a Workspace administrator's approval, and without it `history` answers
 // an incomplete nothing. The endpoint's audience is either the project number or its URL, so both tokens are accepted.
+import { Predicate, Schema } from 'effect';
+import { parse as parseJson, json } from '../http.ts';
 import { createHash } from 'node:crypto';
-import type { chat_v1 } from '@googleapis/chat';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { PlatformError, nothing, Unverified } from '../adapter.ts';
 
@@ -14,21 +15,68 @@ const SEND_SCOPE = 'https://www.googleapis.com/auth/chat.bot';
 const READ_SCOPE = 'https://www.googleapis.com/auth/chat.app.messages.readonly';
 const THREADS = '/threads/';
 const PAGES = 10;
-type Message = chat_v1.Schema$Message;
-type Event = {
-	readonly type?: string;
-	readonly message?: Message;
-	readonly space?: chat_v1.Schema$Space;
-	readonly chat?: {
-		readonly messagePayload?: {
-			readonly message?: Message;
-			readonly space?: chat_v1.Schema$Space;
-		};
-	};
-};
+const Message = Schema.Struct({
+	name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	createTime: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	lastUpdateTime: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	text: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	argumentText: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	sender: Schema.optionalKey(
+		Schema.NullOr(
+			Schema.Struct({
+				name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+				type: Schema.optionalKey(Schema.NullOr(Schema.String)),
+				displayName: Schema.optionalKey(Schema.NullOr(Schema.String))
+			})
+		)
+	),
+	thread: Schema.optionalKey(
+		Schema.NullOr(Schema.Struct({ name: Schema.optionalKey(Schema.NullOr(Schema.String)) }))
+	),
+	quotedMessageMetadata: Schema.optionalKey(
+		Schema.NullOr(Schema.Struct({ name: Schema.optionalKey(Schema.NullOr(Schema.String)) }))
+	),
+	attachment: Schema.optionalKey(
+		Schema.NullOr(
+			Schema.Array(
+				Schema.Struct({
+					contentName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+					contentType: Schema.optionalKey(Schema.NullOr(Schema.String)),
+					attachmentDataRef: Schema.optionalKey(
+						Schema.NullOr(
+							Schema.Struct({ resourceName: Schema.optionalKey(Schema.NullOr(Schema.String)) })
+						)
+					)
+				})
+			)
+		)
+	)
+});
+type Message = typeof Message.Type;
+const Space = Schema.Struct({
+	displayName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	type: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	spaceType: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
+const Event = Schema.Struct({
+	type: Schema.optionalKey(Schema.String),
+	message: Schema.optionalKey(Message),
+	space: Schema.optionalKey(Space),
+	chat: Schema.optionalKey(
+		Schema.Struct({
+			messagePayload: Schema.optionalKey(
+				Schema.Struct({ message: Schema.optionalKey(Message), space: Schema.optionalKey(Space) })
+			)
+		})
+	)
+});
 
 const spaceOf = (thread: string) => thread.split(THREADS)[0] ?? thread;
-const statusOf = (error: unknown) => (error as { status?: number } | null)?.status;
+const statusOf = (error: unknown) =>
+	Predicate.hasProperty(error, 'status') && typeof error.status === 'number'
+		? error.status
+		: undefined;
 /** A Google API call, with its refusal as a `PlatformError`. */
 const answered = async <A>(work: Promise<A>) =>
 	work.catch((error: unknown) => {
@@ -54,10 +102,13 @@ export const gchat: ChatPlatform = {
 		{ name: 'projectNumber', label: { en: 'Project number', zh: '项目编号' } }
 	],
 	async connect({ credentials = '', projectNumber = '' }, host) {
-		const { client_email: email, private_key: key } = JSON.parse(credentials) as {
-			client_email: string;
-			private_key: string;
-		};
+		const { client_email: email, private_key: key } = await parseJson(
+			Schema.Struct({
+				client_email: Schema.String,
+				private_key: Schema.String
+			}),
+			credentials
+		);
 		const [{ chat }, { JWT, OAuth2Client }] = await Promise.all([
 			import('@googleapis/chat'),
 			import('google-auth-library')
@@ -76,7 +127,10 @@ export const gchat: ChatPlatform = {
 			const response = await host.fetch(CERTS);
 			if (!response.ok)
 				throw new PlatformError(`Google answered ${response.status}`, response.status);
-			certs = { keys: (await response.json()) as Record<string, string>, at: Date.now() };
+			certs = {
+				keys: await json(Schema.Record(Schema.String, Schema.String), response),
+				at: Date.now()
+			};
 			return certs.keys;
 		};
 		const verified = async (header: string | null) => {
@@ -131,7 +185,7 @@ export const gchat: ChatPlatform = {
 			account: email,
 			async deliver(request, body) {
 				await verified(request.headers.get('authorization'));
-				const event = JSON.parse(body) as Event;
+				const event = await parseJson(Event, body);
 				const { message, space } =
 					event.chat?.messagePayload ?? (event.type === 'MESSAGE' ? event : {});
 				if (!message || !space?.name) return nothing();

@@ -2,8 +2,9 @@
 // edits, unsends and anything a webhook missed come from the durable event log. `Spectrum()` itself is not used: it hooks
 // SIGINT and SIGTERM to exit the process, and its send takes no dedupe key. Its platform definition's own `lifecycle`
 // makes the same clients, renews their token and closes them. Tokens and gRPC go around `host.fetch`.
+import { parse as parseJson } from '../http.ts';
+import { Predicate, Schema } from 'effect';
 import type { imessage } from '@spectrum-ts/imessage';
-import { Predicate } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
@@ -26,20 +27,40 @@ type Content = {
 	readonly target?: { readonly id?: string };
 	readonly items?: readonly { readonly content?: Content }[];
 };
-type Space = { readonly id: string; readonly phone?: string; readonly platform?: string };
-type Envelope = {
-	readonly event: string;
-	readonly space?: Space;
-	readonly message: {
-		readonly id: string;
-		readonly platform?: string;
-		readonly direction?: string;
-		readonly timestamp?: string;
-		readonly sender?: { readonly id: string };
-		readonly space: Space;
-		readonly content: Content;
-	};
-};
+const Content: Schema.Codec<Content> = Schema.suspend(() =>
+	Schema.Struct({
+		type: Schema.String,
+		text: Schema.optionalKey(Schema.String),
+		url: Schema.optionalKey(Schema.String),
+		id: Schema.optionalKey(Schema.String),
+		name: Schema.optionalKey(Schema.String),
+		mimeType: Schema.optionalKey(Schema.String),
+		size: Schema.optionalKey(Schema.Number),
+		content: Schema.optionalKey(Content),
+		target: Schema.optionalKey(Schema.Struct({ id: Schema.optionalKey(Schema.String) })),
+		items: Schema.optionalKey(Schema.Array(Schema.Struct({ content: Schema.optionalKey(Content) })))
+	})
+);
+const Space = Schema.Struct({
+	id: Schema.String,
+	phone: Schema.optionalKey(Schema.String),
+	platform: Schema.optionalKey(Schema.String)
+});
+type Space = typeof Space.Type;
+const Envelope = Schema.Struct({
+	event: Schema.String,
+	space: Schema.optionalKey(Space),
+	message: Schema.optionalKey(Schema.Unknown)
+});
+const Message = Schema.Struct({
+	id: Schema.String,
+	platform: Schema.optionalKey(Schema.String),
+	direction: Schema.optionalKey(Schema.String),
+	timestamp: Schema.optionalKey(Schema.String),
+	sender: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+	space: Space,
+	content: Content
+});
 
 const SHARED = 'shared',
 	TOLERANCE_S = 300,
@@ -181,9 +202,11 @@ export const photon: ChatPlatform = {
 					request.headers.get('x-spectrum-signature'),
 					`v0=${hmac(webhookSecret, `v0:${at}:${body}`, 'hex')}`
 				);
-				const { event, space, message } = JSON.parse(body) as Envelope;
+				const { event, space, message: raw } = await parseJson(Envelope, body);
+				if (event !== 'messages') return nothing();
+				const message = await Schema.decodeUnknownPromise(Message)(raw);
 				const platform = message.platform ?? message.space.platform;
-				if (event !== 'messages' || message.direction === 'outbound') return nothing();
+				if (message.direction === 'outbound') return nothing();
 				if (platform !== undefined && platform !== 'iMessage') return nothing();
 				const parts = leaves(message.content),
 					text = parts
@@ -243,7 +266,10 @@ export const photon: ChatPlatform = {
 			},
 			// each line keeps its own log, so the cursor holds one place per line
 			async changes(cursor) {
-				const held: Readonly<Record<string, number>> = cursor === null ? {} : JSON.parse(cursor),
+				const held =
+						cursor === null
+							? {}
+							: await parseJson(Schema.Record(Schema.String, Schema.Number), cursor),
 					places: Record<string, number> = {},
 					messages: Incoming[] = [];
 				let gap = false;

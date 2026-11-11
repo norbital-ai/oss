@@ -1,45 +1,69 @@
 // Direct messages on the social accounts connected to Zernio, one key for all of them. A thread is the account and its
 // conversation, the two every call names. Post comments are left out: nothing shows how one is answered.
+import { Schema } from 'effect';
+import { parse as parseJson, json, request as requestHttp, download } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
 
 const API = 'https://zernio.com/api';
 const PAGE = 100;
-type Attachment = { readonly type: string; readonly url?: string };
-type Inbound = {
-	readonly id: string;
-	readonly conversationId: string;
-	readonly platformMessageId?: string;
-	readonly direction: 'incoming' | 'outgoing';
-	readonly text?: string | null;
-	readonly attachments?: readonly Attachment[];
-	readonly sender: { readonly id: string; readonly name?: string; readonly username?: string };
-	readonly sentAt: string;
-};
-type Webhook = {
-	readonly event?: string;
-	readonly message: Inbound;
-	readonly account: { readonly id: string };
-	readonly metadata?: { readonly quotedMessageId?: string };
-};
+const Attachment = Schema.Struct({
+	type: Schema.String,
+	url: Schema.optionalKey(Schema.String)
+});
+type Attachment = typeof Attachment.Type;
+const Inbound = Schema.Struct({
+	id: Schema.String,
+	conversationId: Schema.String,
+	platformMessageId: Schema.optionalKey(Schema.String),
+	direction: Schema.Union([Schema.Literal('incoming'), Schema.Literal('outgoing')]),
+	text: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	attachments: Schema.optionalKey(Schema.Array(Attachment)),
+	sender: Schema.Struct({
+		id: Schema.String,
+		name: Schema.optionalKey(Schema.String),
+		username: Schema.optionalKey(Schema.String)
+	}),
+	sentAt: Schema.String
+});
+const Webhook = Schema.Struct({
+	event: Schema.optionalKey(Schema.String),
+	message: Inbound,
+	account: Schema.Struct({
+		id: Schema.String
+	}),
+	metadata: Schema.optionalKey(
+		Schema.Struct({
+			quotedMessageId: Schema.optionalKey(Schema.String)
+		})
+	)
+});
+type Webhook = typeof Webhook.Type;
 /** A message as the list endpoint flattens it: its body in `message`, its sender in `senderId`. */
-type Listed = {
-	readonly id: string;
-	readonly platformMessageId?: string;
-	readonly direction: 'incoming' | 'outgoing';
-	readonly message?: string | null;
-	readonly text?: string | null;
-	readonly senderId?: string;
-	readonly senderName?: string;
-	readonly sentAt?: string;
-	readonly createdAt?: string;
-};
-type Page = {
-	readonly messages?: readonly Listed[];
-	readonly pagination?: { readonly nextCursor?: string | null };
-	readonly sortOrderApplied?: 'asc' | 'desc';
-};
+const Listed = Schema.Struct({
+	id: Schema.String,
+	platformMessageId: Schema.optionalKey(Schema.String),
+	direction: Schema.Union([Schema.Literal('incoming'), Schema.Literal('outgoing')]),
+	message: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	text: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	senderId: Schema.optionalKey(Schema.String),
+	senderName: Schema.optionalKey(Schema.String),
+	sentAt: Schema.optionalKey(Schema.String),
+	createdAt: Schema.optionalKey(Schema.String)
+});
+type Listed = typeof Listed.Type;
+const Page = Schema.Struct({
+	messages: Schema.optionalKey(Schema.Array(Listed)),
+	pagination: Schema.optionalKey(
+		Schema.Struct({
+			nextCursor: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]))
+		})
+	),
+	sortOrderApplied: Schema.optionalKey(
+		Schema.Union([Schema.Literal('asc'), Schema.Literal('desc')])
+	)
+});
 
 const split = (thread: string) => {
 	const at = thread.indexOf(':');
@@ -64,8 +88,8 @@ export const zernio: ChatPlatform = {
 		{ name: 'webhookSecret', label: { en: 'Webhook secret', zh: 'Webhook 密钥' }, secret: true }
 	],
 	async connect({ apiKey = '', webhookSecret = '' }, host) {
-		const call = async <A>(path: string, body?: object): Promise<A> => {
-			const response = await host.fetch(`${API}${path}`, {
+		const call = async <A>(schema: Schema.Decoder<A>, path: string, body?: object): Promise<A> => {
+			const response = await requestHttp(host.fetch, `${API}${path}`, {
 				method: body === undefined ? 'GET' : 'POST',
 				headers: {
 					authorization: `Bearer ${apiKey}`,
@@ -73,15 +97,9 @@ export const zernio: ChatPlatform = {
 				},
 				...(body === undefined ? {} : { body: JSON.stringify(body) })
 			});
-			if (response.ok) return response.json();
-			const after = Number(response.headers.get('retry-after'));
-			throw new PlatformError(
-				`${path} answered ${response.status}`,
-				response.status,
-				after > 0 ? after * 1000 : undefined
-			);
+			return json(schema, response);
 		};
-		await call('/v1/inbox/conversations?limit=1');
+		await call(Schema.Json, '/v1/inbox/conversations?limit=1');
 		const file = (id: string, attachment: Attachment, index: number): IncomingFile[] => {
 			const url = attachment.url;
 			if (url === undefined || url === '') return [];
@@ -90,11 +108,7 @@ export const zernio: ChatPlatform = {
 				{
 					name: `zernio-${id}-${index}`,
 					mime: media ? `${attachment.type}/*` : 'application/octet-stream',
-					fetch: async () => {
-						const response = await host.fetch(url);
-						if (!response.ok) throw new PlatformError('no file', response.status);
-						return new Uint8Array(await response.arrayBuffer());
-					}
+					fetch: () => download(host.fetch, url)
 				}
 			];
 		};
@@ -120,14 +134,27 @@ export const zernio: ChatPlatform = {
 					request.headers.get('x-zernio-signature') ?? request.headers.get('x-late-signature'),
 					hmac(webhookSecret, body, 'hex')
 				);
-				const payload = JSON.parse(body) as Webhook;
+				const envelope = await parseJson(
+					Schema.Struct({ event: Schema.optionalKey(Schema.String) }),
+					body
+				);
+				if (envelope.event !== 'message.received') return nothing();
+				const payload = await parseJson(Webhook, body);
 				return payload.event === 'message.received' && payload.message.direction === 'incoming'
 					? { messages: [inbound(payload)] }
 					: nothing();
 			},
 			async send(thread, text) {
 				const { accountId, conversation } = split(thread);
-				const { data }: { data?: { messageId?: string; id?: string } } = await call(
+				const { data } = await call(
+					Schema.Struct({
+						data: Schema.optionalKey(
+							Schema.Struct({
+								messageId: Schema.optionalKey(Schema.String),
+								id: Schema.optionalKey(Schema.String)
+							})
+						)
+					}),
 					`/v1/inbox/conversations/${conversation}/messages`,
 					{ accountId, message: text }
 				);
@@ -138,20 +165,23 @@ export const zernio: ChatPlatform = {
 			typing: async (thread, on) => {
 				if (!on) return;
 				const { accountId, conversation } = split(thread);
-				await call(`/v1/inbox/conversations/${conversation}/typing`, { accountId });
+				await call(Schema.Json, `/v1/inbox/conversations/${conversation}/typing`, { accountId });
 			},
 			async history(thread, since) {
 				const { accountId, conversation } = split(thread),
 					from = Date.parse(since),
 					messages: Incoming[] = [];
-				for (let cursor: string | null | undefined; ; ) {
+				for (let cursor: string | null | undefined; ;) {
 					const query = new URLSearchParams({
 						accountId,
 						limit: String(PAGE),
 						sortOrder: 'desc',
 						...(cursor === undefined || cursor === null ? {} : { cursor })
 					});
-					const page = await call<Page>(`/v1/inbox/conversations/${conversation}/messages?${query}`);
+					const page = await call(
+						Page,
+						`/v1/inbox/conversations/${conversation}/messages?${query}`
+					);
 					const rows = page.messages ?? [],
 						at = (row: Listed) => Date.parse(row.sentAt ?? row.createdAt ?? '');
 					for (const row of rows)

@@ -3,6 +3,8 @@
 // Juicebox with the PIN. No conversation key is kept: each call reads them from the conversation, which is one more API
 // call for each message but holds nothing per conversation. A message's id is its sequence id, the id edits, deletes and
 // replies name it by. Group quote replies, read receipts and opening a conversation are left out.
+import { Schema } from 'effect';
+import { parse as parseJson } from '../http.ts';
 import type {
 	ChatWithJuicebox,
 	ConversationKeyMap,
@@ -16,43 +18,62 @@ import { xAccount, xApi, xChallenge, xFields } from '../x/index.ts';
 const PAGE = 50;
 const EVENT_FIELDS =
 	'conversation_id,conversation_token,created_at,encoded_event,id,sender_id,message_event_signature';
-const SIGNING_FIELDS = 'public_key_version,public_key,signing_public_key,identity_public_key_signature';
-type PublicKey = {
-	readonly public_key_version?: string;
-	readonly version?: string;
-	readonly public_key?: string;
-	readonly signing_public_key?: string;
-	readonly identity_public_key_signature?: string;
-	readonly juicebox_config?: {
-		readonly key_store_token_map_json?: string;
-		readonly token_map?: readonly {
-			readonly key: string;
-			readonly value: { readonly token: string };
-		}[];
-	};
-};
-type Row = {
-	readonly sender_id?: string;
-	readonly encoded_event?: string;
-	readonly conversation_token?: string;
-	readonly created_at?: string;
-};
-type Page = {
-	readonly data?: readonly Row[];
-	readonly meta?: {
-		readonly conversation_key_events?: readonly string[];
-		readonly next_token?: string;
-	};
-};
-type Payload = {
-	readonly conversation_id?: string;
-	readonly encoded_event?: string;
-	readonly sender_id?: string;
-	readonly conversation_key_version?: string;
-	readonly conversation_key_change_event?: string;
-	readonly encrypted_conversation_key?: string;
-};
-type Activity = Payload & { readonly event_type?: string; readonly payload?: Payload };
+const SIGNING_FIELDS =
+	'public_key_version,public_key,signing_public_key,identity_public_key_signature';
+const PublicKey = Schema.Struct({
+	public_key_version: Schema.optionalKey(Schema.String),
+	version: Schema.optionalKey(Schema.String),
+	public_key: Schema.optionalKey(Schema.String),
+	signing_public_key: Schema.optionalKey(Schema.String),
+	identity_public_key_signature: Schema.optionalKey(Schema.String),
+	juicebox_config: Schema.optionalKey(
+		Schema.Struct({
+			key_store_token_map_json: Schema.optionalKey(Schema.String),
+			token_map: Schema.optionalKey(
+				Schema.Array(
+					Schema.Struct({
+						key: Schema.String,
+						value: Schema.Struct({
+							token: Schema.String
+						})
+					})
+				)
+			)
+		})
+	)
+});
+type PublicKey = typeof PublicKey.Type;
+const Row = Schema.Struct({
+	sender_id: Schema.optionalKey(Schema.String),
+	encoded_event: Schema.optionalKey(Schema.String),
+	conversation_token: Schema.optionalKey(Schema.String),
+	created_at: Schema.optionalKey(Schema.String)
+});
+type Row = typeof Row.Type;
+const Page = Schema.Struct({
+	data: Schema.optionalKey(Schema.Array(Row)),
+	meta: Schema.optionalKey(
+		Schema.Struct({
+			conversation_key_events: Schema.optionalKey(Schema.Array(Schema.String)),
+			next_token: Schema.optionalKey(Schema.String)
+		})
+	)
+});
+const Payload = Schema.Struct({
+	conversation_id: Schema.optionalKey(Schema.String),
+	encoded_event: Schema.optionalKey(Schema.String),
+	sender_id: Schema.optionalKey(Schema.String),
+	conversation_key_version: Schema.optionalKey(Schema.String),
+	conversation_key_change_event: Schema.optionalKey(Schema.String),
+	encrypted_conversation_key: Schema.optionalKey(Schema.String)
+});
+type Payload = typeof Payload.Type;
+const Activity = Schema.Struct({
+	...Payload.fields,
+	event_type: Schema.optionalKey(Schema.String),
+	payload: Schema.optionalKey(Payload)
+});
+type Activity = typeof Activity.Type;
 
 const versionOf = (key: PublicKey) => key.public_key_version ?? key.version;
 /** A one-to-one's id names both people; its API path names the other one. */
@@ -96,7 +117,10 @@ export const xchat: ChatPlatform = {
 			account = await xAccount(api),
 			me = account.id;
 		const publicKeys = async (user: string, fields: string) => {
-			const { data } = await api.json<{ data?: PublicKey | PublicKey[] }>(
+			const { data } = await api.json(
+				Schema.Struct({
+					data: Schema.optionalKey(Schema.Union([PublicKey, Schema.Array(PublicKey)]))
+				}),
 				'GET',
 				`/2/users/${encodeURIComponent(user)}/public_keys?public_key.fields=${fields}`
 			);
@@ -115,7 +139,9 @@ export const xchat: ChatPlatform = {
 			config = own?.juicebox_config?.key_store_token_map_json;
 		if (version === undefined || config === undefined)
 			throw new PlatformError('this account has no XChat keys registered', 400);
-		const tokens = new Map(own?.juicebox_config?.token_map?.map((realm) => [realm.key, realm.value.token]));
+		const tokens = new Map(
+			own?.juicebox_config?.token_map?.map((realm) => [realm.key, realm.value.token])
+		);
 		const { createChat } = await import('@xdevplatform/chat-xdk');
 		const crypto: ChatWithJuicebox = await oneAtATime(async () => {
 			const chat = await createChat({
@@ -164,7 +190,8 @@ export const xchat: ChatPlatform = {
 		/** A page of a conversation, newest first, and the keys it holds. */
 		const read = async (conversation: string, token?: string) => {
 			const after = token === undefined ? '' : `&pagination_token=${encodeURIComponent(token)}`;
-			const page = await api.json<Page>(
+			const page = await api.json(
+				Page,
 				'GET',
 				`/2/chat/conversations/${pathOf(conversation, me)}/events?max_results=${PAGE}&chat_message_event.fields=${EVENT_FIELDS}${after}`
 			);
@@ -298,7 +325,13 @@ export const xchat: ChatPlatform = {
 			async deliver(request, body) {
 				const challenge = xChallenge(request, body, settings['apiSecret'] ?? '');
 				if (challenge !== null) return nothing(challenge);
-				const root = JSON.parse(body) as Activity & { data?: Activity | Activity[] };
+				const root = await parseJson(
+					Schema.Struct({
+						...Activity.fields,
+						data: Schema.optionalKey(Schema.Union([Activity, Schema.Array(Activity)]))
+					}),
+					body
+				);
 				const events = await Promise.all([root.data ?? root].flat().map(received));
 				return { messages: events.flat() };
 			},
@@ -331,7 +364,7 @@ export const xchat: ChatPlatform = {
 				const from = Date.parse(since),
 					messages: Incoming[] = [];
 				let whole = true;
-				for (let token: string | undefined; ; ) {
+				for (let token: string | undefined; ;) {
 					const { rows, keys, next } = await read(thread, token);
 					const signing = await signers([me, ...rows.flatMap((row) => row.sender_id ?? [])]);
 					for (const row of rows) {

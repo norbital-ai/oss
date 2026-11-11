@@ -4,6 +4,13 @@
 //
 // A subscription starts with one unsigned delivery of its verification token. The connection's page shows it, and a
 // person pastes it into Notion, which rejects a forged one, and into `verificationToken` here.
+import { Schema } from 'effect';
+import {
+	parse as parseJson,
+	json,
+	download as downloadFile,
+	request as requestHttp
+} from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
@@ -13,28 +20,56 @@ const VERSION = '2026-03-11';
 /** The longest comment, cut from what Notion accepts in one; the rest follows in its discussion. */
 const PIECES = /[\s\S]{1,1900}/gu;
 
-type Comment = {
-	readonly id: string;
-	readonly discussion_id: string;
-	readonly created_by: { readonly id: string; readonly name?: string };
-	readonly created_time: string;
-	readonly last_edited_time: string;
-	readonly parent: { readonly page_id?: string };
-	readonly rich_text: readonly {
-		readonly plain_text: string;
-		readonly mention?: { readonly user?: { readonly id: string } };
-	}[];
-	readonly attachments?: readonly {
-		readonly category: string;
-		readonly file: { readonly url: string };
-	}[];
-};
-type Event = {
-	readonly type: string;
-	readonly timestamp: string;
-	readonly entity: { readonly id: string };
-	readonly data?: { readonly page_id?: string };
-};
+const Comment = Schema.Struct({
+	id: Schema.String,
+	discussion_id: Schema.String,
+	created_by: Schema.Struct({
+		id: Schema.String,
+		name: Schema.optionalKey(Schema.String)
+	}),
+	created_time: Schema.String,
+	last_edited_time: Schema.String,
+	parent: Schema.Struct({
+		page_id: Schema.optionalKey(Schema.String)
+	}),
+	rich_text: Schema.Array(
+		Schema.Struct({
+			plain_text: Schema.String,
+			mention: Schema.optionalKey(
+				Schema.Struct({
+					user: Schema.optionalKey(
+						Schema.Struct({
+							id: Schema.String
+						})
+					)
+				})
+			)
+		})
+	),
+	attachments: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				category: Schema.String,
+				file: Schema.Struct({
+					url: Schema.String
+				})
+			})
+		)
+	)
+});
+type Comment = typeof Comment.Type;
+const Event = Schema.Struct({
+	type: Schema.String,
+	timestamp: Schema.String,
+	entity: Schema.Struct({
+		id: Schema.String
+	}),
+	data: Schema.optionalKey(
+		Schema.Struct({
+			page_id: Schema.optionalKey(Schema.String)
+		})
+	)
+});
 
 export const notion: ChatPlatform = {
 	id: 'notion',
@@ -56,7 +91,7 @@ export const notion: ChatPlatform = {
 	],
 	async connect({ token = '', verificationToken = '' }, host) {
 		const api = async (path: string, init: RequestInit = {}) => {
-			const response = await host.fetch(`${API}${path}`, {
+			return requestHttp(host.fetch, `${API}${path}`, {
 				...init,
 				headers: {
 					authorization: `Bearer ${token}`,
@@ -64,36 +99,32 @@ export const notion: ChatPlatform = {
 					'content-type': 'application/json'
 				}
 			});
-			if (response.ok) return response;
-			const wait = Number(response.headers.get('retry-after'));
-			throw new PlatformError(
-				`${path} answered ${response.status}`,
-				response.status,
-				wait > 0 ? wait * 1000 : undefined
-			);
 		};
 		const read = async (id: string) => {
 			const response = await api(`/comments/${id}`).catch((error: unknown) => {
 				if (error instanceof PlatformError && error.status === 404) return null;
 				throw error;
 			});
-			return response === null ? null : ((await response.json()) as Comment);
+			return response === null ? null : await json(Comment, response);
 		};
 		const post = async (comment: object) =>
-			(await (
+			await json(
+				Schema.Struct({ id: Schema.String, discussion_id: Schema.String }),
 				await api('/comments', { method: 'POST', body: JSON.stringify(comment) })
-			).json()) as Comment;
-		const download = async (url: string) => {
-			const response = await host.fetch(url);
-			if (!response.ok)
-				throw new PlatformError(`a file answered ${response.status}`, response.status);
-			return new Uint8Array(await response.arrayBuffer());
-		};
-		const me = (await (await api('/users/me')).json()) as {
-			readonly id: string;
-			readonly name: string | null;
-			readonly bot?: { readonly workspace_name?: string };
-		};
+			);
+		const download = (url: string) => downloadFile(host.fetch, url);
+		const me = await json(
+			Schema.Struct({
+				id: Schema.String,
+				name: Schema.Union([Schema.String, Schema.Null]),
+				bot: Schema.optionalKey(
+					Schema.Struct({
+						workspace_name: Schema.optionalKey(Schema.String)
+					})
+				)
+			}),
+			await api('/users/me')
+		);
 		// a connection cannot be @-mentioned in Notion's composer, so a mention of it is usually only its name typed out
 		const escaped = me.name?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 		const named = escaped ? new RegExp(`(?<![\\w.-])@${escaped}(?![\\w-])`, 'i') : null;
@@ -124,13 +155,20 @@ export const notion: ChatPlatform = {
 			async deliver(request, body) {
 				const signature = request.headers.get('x-notion-signature');
 				if (signature === null) {
-					const shown = (JSON.parse(body) as { readonly verification_token?: string }).verification_token;
+					const shown = (
+						await parseJson(
+							Schema.Struct({
+								verification_token: Schema.optionalKey(Schema.String)
+							}),
+							body
+						)
+					).verification_token;
 					if (shown !== undefined) return { messages: [], about: { verificationToken: shown } };
 				}
 				// an HMAC under an empty key is one anybody can compute
 				if (verificationToken === '') throw new Unverified('no verification token yet');
 				signed(signature, `sha256=${hmac(verificationToken, body, 'hex')}`);
-				const event = JSON.parse(body) as Event;
+				const event = await parseJson(Event, body);
 				if (event.type === 'comment.deleted')
 					return {
 						messages: [
