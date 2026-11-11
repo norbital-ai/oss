@@ -242,6 +242,20 @@ layer(workspace, { excludeTestServices: true })('onApproved', (it) => {
 			})
 	);
 
+	it.effect('waits too when an update of the held record changes nothing', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const request = held(yield* f.act('create', [{ name: 'idle' }]));
+			const target = yield* f.idOf('idle');
+			// no column moves, so it is no write; what its body carries must not post ahead of the decision
+			yield* f.act('update', [{ target, set: { name: 'idle' } }], { ...f.requester, admin: true });
+			expect(yield* f.postings('edit', 'idle')).toEqual([]);
+			expect(yield* f.decide(request, 'reject', 'No')).toMatchObject({ status: 'Rejected' });
+			expect(yield* f.postings('edit', 'idle')).toEqual([]);
+			expect(yield* f.postings('idle')).toEqual([]);
+		})
+	);
+
 	it.effect('asks a held create again with its owned children, as they now stand', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;

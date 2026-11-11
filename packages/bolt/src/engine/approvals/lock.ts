@@ -83,10 +83,11 @@ export function lockPieces(
 		AND EXISTS (SELECT 1 FROM jsonb_array_elements(a.records) r JOIN ap_touch t ON t.c = r ->> 'collection' AND t.id = r ->> 'id')
 	ORDER BY a.id FOR UPDATE OF a`
 	);
+	// a request an automation raised is decided as it stands: nobody changes its records, and the answer says so
 	c.assertWith(
 		"NOT EXISTS (SELECT 1 FROM ap_hit WHERE route ? '__boltReadGuards')",
-		'conflict',
-		"(SELECT jsonb_build_object('model', 'approval_request', 'ids', jsonb_agg(id::text))::text FROM ap_hit WHERE route ? '__boltReadGuards')"
+		'underApproval',
+		"(SELECT h.id::text || ' Under approval: the system raised this request. Approve or reject it; its record cannot be changed.' FROM ap_hit h WHERE h.route ? '__boltReadGuards' LIMIT 1)"
 	);
 	const names = c.p(
 		Object.fromEntries(Object.entries(teams(m)).map(([handle, t]) => [handle, t.name ?? handle]))

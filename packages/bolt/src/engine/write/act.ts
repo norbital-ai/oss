@@ -1749,8 +1749,14 @@ const plan = Effect.fn('Bolt.plan')(function* (
 		]),
 		auth.actor
 	);
+	// an update that changes nothing is no write, yet its transform may carry `onApproved`: a held record's waits too
+	const idle = yield* holders(
+		own,
+		unchanged.map(({ model, id }) => [model, id] as const),
+		auth.actor
+	);
 	// a change to a held record joins its request: what it carries `onApproved` waits for the approving decision too
-	if (held.length > 0)
+	if (held.length > 0 || idle.length > 0)
 		writes.splice(
 			0,
 			writes.length,
