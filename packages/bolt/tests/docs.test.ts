@@ -39,11 +39,9 @@ it('the declaration functions are documented, and spec parameters list their fie
 		'group',
 		'id_of',
 		'instance_id',
-		'integration',
 		'is_instance',
 		'mcp',
 		'messages',
-		'model',
 		'policy',
 		'secrets',
 		'seeder',
@@ -51,15 +49,20 @@ it('the declaration functions are documented, and spec parameters list their fie
 		'tool',
 		'workspace'
 	]);
-	const model = docs.symbol('bolt', 'model')!;
-	expect(model.signature).toContain('function model');
+	const model = docs.symbol('bolt', 'ModelDeclaration')!;
+	expect(model.signature).toContain('interface ModelDeclaration');
 	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
-	expect(model.params?.[1]?.fields?.map((f) => f.name)).toContain('fields');
-
+	expect(model.params?.[0]?.fields?.map((f) => f.name)).toContain('fields');
 });
 
 it('keeps implementation guidance and parameter documentation on the core public contracts', () => {
-	for (const name of ['model', 'workspace', 'automation', 'secrets']) {
+	for (const name of [
+		'ModelDeclaration',
+		'IntegrationDeclaration',
+		'workspace',
+		'automation',
+		'secrets'
+	]) {
 		const contract = docs.symbol('bolt', name);
 		expect(
 			contract?.params?.every((param) => Boolean(param.summary)),
@@ -87,10 +90,10 @@ it('svelte components list their props with the props docs', () => {
 });
 
 it('search ranks an exact name first and narrows by namespace', () => {
-	expect(docs.search('model')[0]).toMatchObject({
+	expect(docs.search('ModelDeclaration')[0]).toMatchObject({
 		namespace: 'bolt',
-		name: 'model',
-		kind: 'function'
+		name: 'ModelDeclaration',
+		kind: 'interface'
 	});
 	expect(
 		docs.search('add days', { namespaces: ['std/'] }).every((h) => h.namespace.startsWith('std/'))

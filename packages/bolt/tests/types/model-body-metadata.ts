@@ -1,6 +1,7 @@
 // Fresh nested declarations keep their metadata and their generated callback contexts together.
 import { expectTypeOf } from '@effect/vitest';
-import { automation, model } from '../../src/index.ts';
+import { automation } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import type { CreatedRow, Id, Vector, WriteCtx } from '../../src/index.ts';
 import type { AutomationCtx } from '../../src/index.ts';
 import type { AutomationSpecOf } from '../../src/decl/runtime/names.ts';
@@ -8,7 +9,7 @@ import type { StoredRow } from '../../src/decl/names.ts';
 import { orders } from './fixture/models.ts';
 import './registry.ts';
 
-model('orders', {
+bind_model('orders')({
 	...orders.spec,
 	create: {
 		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },

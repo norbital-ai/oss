@@ -25,6 +25,12 @@ const workspaceFiles = Effect.fn('bolt.workspaceFiles')(function* (root: string)
 		path = yield* Path.Path;
 	// the heavy and derived folders sit at the root; everything else is the workspace's own
 	const rels = [...GENERATED];
+	for (const folder of ['models', 'integrations']) {
+		const directory = path.join('.norbital', folder);
+		if (yield* fs.exists(path.join(root, directory)))
+			for (const file of yield* fs.readDirectory(path.join(root, directory)))
+				if (file.endsWith('.ts')) rels.push(path.join(directory, file));
+	}
 	for (const name of yield* fs.readDirectory(root)) {
 		if (SKIPPED.has(name)) continue;
 		const at = path.join(root, name);

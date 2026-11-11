@@ -2,6 +2,7 @@
 
 | Old form | New form |
 | --- | --- |
+| `model(name, spec)` and `integration(name, spec)` imported from the package root | Run `bolt check` to generate declaration bindings. Import `model` from `.norbital/models/<name>.ts` or `integration` from `.norbital/integrations/<name>.ts` using the declaration file’s relative path, then call `model(spec)` or `integration(spec)`. The generated binding supplies its path-derived callback types. |
 | `Insert<M>` or `CreateTree<M>` | `CreateInput<M>` |
 | `Patch<M>` or `UpdateTree<M>` | `UpdateInput<M>` |
 | `CreateRow<M>` in a transform | Infer the row from the model's create transform signature. Use `CreateInput<M>` for rows the caller supplies. |

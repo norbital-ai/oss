@@ -4,9 +4,9 @@
 // `directory` output through the kernel directory (rule 35a) or a read grant; written by the admin verbs. An `anonymous` user is a visitor's identity on
 // a public app or a no-sign-in kiosk: no address, no member; signing in links it (session.ts `verifyCode`), and the daily
 // prune removes it 30 days after its last visit unless a record still references it.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_user', {
+export default bind_model('sys_user')({
 	description: 'A member of the workspace: staff or an external party contact.',
 	record_label: 'record.name',
 	fields: {

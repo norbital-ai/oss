@@ -2,7 +2,8 @@ import { Effect } from 'effect';
 // G1 (§11.2): the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
 import { Decimal } from '@norbital-ai/std/decimal';
-import { automation, model, policy } from '../../src/index.ts';
+import { automation, policy } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import type { Id, InputOf, Row, Where } from '../../src/index.ts';
 import type { RowState, StoredRow } from '../../src/decl/names.ts';
 import * as rt from './fixture/runtime.ts';
@@ -72,13 +73,13 @@ automation({
 		return 0;
 	}
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error U5 `record` is an input-only kind
 	fields: { a: { kind: 'record', of: { kind: 'int' } } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error U6 `union` is an input-only kind
@@ -94,7 +95,7 @@ automation({
 });
 
 // ── write callbacks and workspace reads (rules 10, 15, 27) ──
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -109,7 +110,7 @@ model('orders', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -119,7 +120,7 @@ model('orders', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -129,7 +130,7 @@ model('orders', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -139,7 +140,7 @@ model('orders', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	update: {
 		...m.orders.spec.update,
@@ -152,7 +153,7 @@ model('orders', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -163,7 +164,7 @@ model('orders', {
 	}
 });
 // T6 the transform's workspace reads pick the fields they need (rule 72: read only the needed columns)
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -175,7 +176,7 @@ model('orders', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -188,7 +189,7 @@ model('orders', {
 	}
 });
 // Workspace selections retain the generated sequence and id, including read requests.
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -323,31 +324,31 @@ automation({
 });
 
 // ── state `{ to, edit }` and owned relationships (rules 40, 41) ──
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error S1 `edit` is 'all', 'none' or a list
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { edit: 'some' } } } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error S2 `to` is a list of states
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { to: 'a' } } } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error S3 a state takes no default (a create lands in `initial`, X-30)
 	fields: { s: { kind: 'state', initial: 'a', default: 'a', states: { a: {} } } }
 });
-model('order_lines', {
+bind_model('order_lines')({
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
 	create: { columns: { order_lines: ['order', 'item', 'qty', 'price'] } },
 	update: { columns: { order_lines: ['qty'] } }
 });
-model('order_lines', {
+bind_model('order_lines')({
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
 	// @ts-expect-error O1 an owned child's parent key never changes after create (rule 41)
@@ -377,7 +378,7 @@ policy({
 // @ts-expect-error E3 an unknown actor operand
 // prettier-ignore
 policy({ description: 'x', grants: { customers: { outputs: { default: { where: { email: { eq: { actor: 'mail' } } } } } } } });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.e',
 	fields: { e: { kind: 'text', format: 'email' } },

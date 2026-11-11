@@ -1,7 +1,7 @@
 // A sign-in session (§5.11.2): the token is stored only as its SHA-256. Engine only: not exposed.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_session', {
+export default bind_model('sys_session')({
 	description: 'A signed-in session of a member.',
 	record_label: 'record.via',
 	fields: {

@@ -2,9 +2,9 @@
 // rows. `seq` is the database's order; the inbound (provider_id … addressed) and outbound (status … epoch) columns are
 // the conversations area's. A sync's pending writes are `sys_outbox` rows, never messages. Grantable; written through the
 // agent panel's actions and the conversation integrations.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_message', {
+export default bind_model('sys_message')({
 	description:
 		'A message in a conversation: a transcript step, a queued input, or an integration message in or out.',
 	record_label: 'record.preview',

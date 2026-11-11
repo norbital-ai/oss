@@ -33,7 +33,7 @@ Exact shapes: `EnvoySpec`, `McpSpec`, `IntegrationSpec` from `@norbital-ai/bolt`
 
 ## Integration definitions
 
-- `integration(name, spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
+- `integration(spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
 - Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord and wechat.
 - `rate` paces every request. HTTP paths stay under the declared HTTPS base URL.
 - SQL Server takes structured operations: `read`, `call`, CDC pages, `insertOnce`. Discover them on the integration spec; the host bounds execution.

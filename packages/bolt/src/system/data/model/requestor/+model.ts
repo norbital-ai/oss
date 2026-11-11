@@ -1,7 +1,7 @@
 // Who asked for an approval request (R3): the requesting member, read with their request.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('requestor', {
+export default bind_model('requestor')({
 	description: 'The member who requested an approval.',
 	record_label: 'record.user_id',
 	fields: {

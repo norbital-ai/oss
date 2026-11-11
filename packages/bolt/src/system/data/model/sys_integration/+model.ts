@@ -6,9 +6,9 @@
 // instance or the envoy a workspace instance carries; an update deploys an envoy, pauses the instance or edits its
 // configuration. The engine checks each against the definition (engine/integrations/instances.ts); a named instance is
 // `+workspace.ts`'s and is never deleted here.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_integration', {
+export default bind_model('sys_integration')({
 	description: 'An integration instance: one external account of one integration definition.',
 	record_label: 'record.name',
 	fields: {

@@ -2,10 +2,11 @@ import { install } from '../../../src/decl/runtime/guest.ts';
 install();
 // A hand-written workspace for the type corpus: the `src/data/model/<name>/+model.ts` literals a template writes, every
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
-import { custom_field, model } from '../../../src/index.ts';
+import { custom_field } from '../../../src/index.ts';
+import { bind_model } from '../../../src/declarations.ts';
 import type { Finding, Notice, SyncRow } from '../../../src/index.ts';
 
-export const customers = model('customers', {
+export const customers = bind_model('customers')({
 	description: 'Buyers',
 	record_label: 'record.name',
 	fields: {
@@ -73,7 +74,7 @@ export const customers = model('customers', {
 	indexes: { find: { text: ['name'] } }
 });
 
-export const orders = model('orders', {
+export const orders = bind_model('orders')({
 	description: 'Sales orders',
 	record_label:
 		"[record.number != null ? string(record.number) : '', record.customer != null ? string(record.customer) : ''].filter(part, part != '').join(' · ')",
@@ -268,7 +269,7 @@ export const orders = model('orders', {
 	}
 });
 
-export const order_lines = model('order_lines', {
+export const order_lines = bind_model('order_lines')({
 	description: 'Lines of an order',
 	record_label: 'record.item',
 	fields: {
@@ -285,7 +286,7 @@ export const order_lines = model('order_lines', {
 	outputs: { default: { fields: 'all' } }
 });
 
-export const notices = model('notices', {
+export const notices = bind_model('notices')({
 	description: 'Supplier notices mirrored from the inbox',
 	record_label: 'record.subject',
 	key: ['inbox', 'message_id'],
@@ -328,7 +329,7 @@ export const notices = model('notices', {
 	}
 });
 
-export const notice_notes = model('notice_notes', {
+export const notice_notes = bind_model('notice_notes')({
 	description: 'What we add about a notice',
 	record_label: 'record.notice',
 	fields: {
@@ -342,7 +343,7 @@ export const notice_notes = model('notice_notes', {
 	update: { columns: { notice_notes: ['note'] } }
 });
 
-export const sites = model('sites', {
+export const sites = bind_model('sites')({
 	description: 'Customer sites',
 	record_label: 'record.name',
 	fields: {
@@ -384,7 +385,7 @@ export const sites = model('sites', {
 	update: { columns: { sites: ['name', 'location'] } }
 });
 
-export const products = model('products', {
+export const products = bind_model('products')({
 	description: 'Products from the ledger',
 	record_label: 'record.name',
 	key: ['source', 'external_code'],
@@ -422,7 +423,7 @@ export const products = model('products', {
 	}
 });
 
-export const entries = model('entries', {
+export const entries = bind_model('entries')({
 	description: "Calendar entries mirrored from members' calendars",
 	record_label: 'record.subject',
 	key: ['account', 'calendar_id', 'external_id'],

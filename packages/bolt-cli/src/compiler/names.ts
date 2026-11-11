@@ -1,10 +1,11 @@
 /// <reference types="node" />
-// The names index (§3.1, rule 8): `.norbital/names.ts`, the only generated code. `bolt sync` evaluates the declarations and
+// The names index (§3.1, rule 8): `.norbital/names.ts` and path-bound declaration modules. `bolt sync` evaluates the declarations and
 // prints each part's data as literal type text (strings and numbers as literals, arrays as readonly tuples, bodies
 // dropped); a model is printed as its three parts (`splitModel`). No part reads a source file, so a body typed from the
 // index is never circular; the path-derived parts (pages, groups, skills) are unions of names.
 import { Array, Effect, FileSystem, Path, Predicate } from 'effect';
-import type { Discovered } from './discover.ts';
+import { discover, type Discovered } from './discover.ts';
+import { writeDeclarations } from './declarations.ts';
 import type { Role } from '@norbital-ai/bolt/tooling';
 import { layerModels, splitModel, SYSTEM } from '@norbital-ai/bolt/tooling';
 import { type ModelLiteral, type ModelParts } from '@norbital-ai/bolt';
@@ -346,11 +347,15 @@ declare module '*?bytes' {
 /** Brands \`{ id, name, mime }\` as a stored-file handle for guest writes (prelude; not \`/client\`). */
 declare function fileRef(file: { readonly id: string; readonly name: string; readonly mime: string }): import('@norbital-ai/bolt').FileRef;
 `;
-export const writeTypeSetup = Effect.fn('bolt.writeTypeSetup')(function* (root: string) {
+export const writeTypeSetup = Effect.fn('bolt.writeTypeSetup')(function* (
+	root: string,
+	files?: readonly Discovered[]
+) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const dir = path.join(root, '.norbital');
 	yield* fs.makeDirectory(dir, { recursive: true });
+	yield* writeDeclarations(root, files ?? (yield* discover(root)).files);
 	for (const [file, text] of [
 		['tsconfig.json', TSCONFIG],
 		['bolt.d.ts', BOLT_DTS]

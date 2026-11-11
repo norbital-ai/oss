@@ -3,7 +3,8 @@ install();
 import { Effect, Result } from 'effect';
 // The runtime roles of the type corpus workspace: what a template puts in +workspace.ts, +secrets.ts, src/integration,
 // src/automation and src/agent. Every body sits in its literal, typed from `../registry.ts` by its name.
-import { automation, integration, mcp, secrets, workspace } from '../../../src/index.ts';
+import { automation, mcp, secrets, workspace } from '../../../src/index.ts';
+import { bind_integration } from '../../../src/declarations.ts';
 
 export const secretNames = secrets({
 	ERP_URL: { label: 'ERP base URL' },
@@ -31,7 +32,7 @@ export const ws = workspace({
 });
 
 // HTTP: a configured base URL, a credential sealed at pairing, Standard Webhooks, a request rate and a pairing test
-export const erp = integration('erp', {
+export const erp = bind_integration('erp')({
 	description: 'The ERP API.',
 	driver: 'http',
 	configuration: {
@@ -53,7 +54,7 @@ export const erp = integration('erp', {
 });
 
 // a database: products are read from it, ordered orders written to it (`model(…).syncs`)
-export const kingdee = integration('kingdee', {
+export const kingdee = bind_integration('kingdee')({
 	description: 'An accounting database.',
 	driver: 'sqlserver',
 	credential: { connection: { kind: 'text', label: 'Connection string' } },
@@ -67,13 +68,13 @@ export const kingdee = integration('kingdee', {
 });
 
 // a mailbox: its messages reach `notices` as deliveries
-export const support_mail = integration('support_mail', {
+export const support_mail = bind_integration('support_mail')({
 	description: 'The support mailbox.',
 	driver: 'email'
 });
 
 // a member's calendar: the driver pushes events, one cursor per chosen calendar
-export const calendar = integration('calendar', {
+export const calendar = bind_integration('calendar')({
 	description: "A member's calendar.",
 	driver: 'calendar',
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' },

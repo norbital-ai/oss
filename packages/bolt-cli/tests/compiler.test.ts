@@ -15,13 +15,45 @@ import type { CheckDiagnostic } from '../src/compiler/check/index.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
 import { engineManifest } from '../../bolt/src/engine/manifest.ts';
 import { load, manifestErrors } from '../src/compiler/load.ts';
-import { namesIndex, writeNames } from '../src/compiler/names.ts';
+import { namesIndex, writeNames, writeTypeSetup } from '../src/compiler/names.ts';
 import { install } from '../../bolt/src/decl/runtime/guest.ts';
 install();
 const fixture = (name: string) =>
 	fileURLToPath(new URL(`../../bolt/tests/fixtures/${name}`, import.meta.url));
 const BOLT = '../../../../src/index.ts'; // src as seen from a fixture's .norbital/
 describe('next compiler: discover', () => {
+	it.live('generates typed path bindings and removes a deleted declaration binding', () =>
+		Effect.gen(function* () {
+			const root = yield* scratchPath(`compiler-bindings-${randomUUID()}`);
+			try {
+				yield* writeTypeSetup(root, [
+					{ role: 'model', name: 'orders', path: 'src/data/model/sales/orders/+model.ts' },
+					{
+						role: 'integration_definition',
+						name: 'crm',
+						path: 'src/integration/crm/+integration.ts'
+					}
+				]);
+				expect(readFileSync(join(root, '.norbital/models/orders.ts'), 'utf8')).toContain(
+					'bind_model("orders")'
+				);
+				expect(readFileSync(join(root, '.norbital/integrations/crm.ts'), 'utf8')).toContain(
+					'bind_integration("crm")'
+				);
+				yield* writeTypeSetup(root, [
+					{ role: 'model', name: 'invoices', path: 'src/data/model/invoices/+model.ts' }
+				]);
+				expect(existsSync(join(root, '.norbital/models/orders.ts'))).toBe(false);
+				expect(existsSync(join(root, '.norbital/integrations/crm.ts'))).toBe(false);
+				expect(readFileSync(join(root, '.norbital/models/invoices.ts'), 'utf8')).toContain(
+					'bind_model("invoices")'
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+
 	it.live(
 		'loads nested model folders by leaf identity, with parent models and sibling representations',
 		() =>

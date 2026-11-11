@@ -1,8 +1,8 @@
 // An invitation: the authored team affiliation a member receives on acceptance. It names the person by their
 // email, their mobile number, or both; either proves it. Administrators read it (X-18 identity); no grant.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_invitation', {
+export default bind_model('sys_invitation')({
 	description: 'An invitation to join the workspace.',
 	record_label: 'record.email',
 	fields: {

@@ -2,9 +2,9 @@
 // the record. Delivered in order per record (`seq`), coalesced while queued, sent with its `key` as the Idempotency-Key;
 // retried 8 times over about 6 hours (`attempts`, `next_attempt_at`), then `dead`. A later acknowledged change retires older dead rows. `result` is the remote's
 // acknowledgement (`$id`, `$version`). Engine only: not exposed (the integration page reads it through the engine).
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_outbox', {
+export default bind_model('sys_outbox')({
 	description: 'A record change waiting to be written to another system by a sync.',
 	record_label: 'record.key',
 	fields: {

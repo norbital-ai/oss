@@ -93,7 +93,7 @@ const front = Effect.fn('bolt.front')(function* (
 	stage('discover');
 	const { files, errors: layout } = yield* discover(root);
 	errors.push(...layout);
-	yield* writeTypeSetup(root);
+	yield* writeTypeSetup(root, files);
 
 	stage('bundle');
 	const code = files.filter((f) => f.path.endsWith('.ts'));
@@ -360,7 +360,15 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 				configFile: false,
 				logLevel: 'silent',
 				root,
-				resolve: { alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }] },
+				resolve: {
+					alias: [
+						{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX },
+						{
+							find: /^@norbital-ai\/bolt\/declarations$/,
+							replacement: join(BOLT, `declarations${EXT}`)
+						}
+					]
+				},
 				plugins: [
 					{
 						name: 'bolt:guest',

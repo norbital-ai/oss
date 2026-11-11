@@ -1,9 +1,9 @@
 // A conversation (§5.9, rules 57–63): an in-app agent thread, a sub-agent's, one chat or mail thread of an
 // integration instance (`integration`, deleted with it), or an automation run's inference transcript (`run`). Grantable;
 // written through the agent panel's actions.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_conversation', {
+export default bind_model('sys_conversation')({
 	description:
 		"A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.",
 	record_label: 'record.title',

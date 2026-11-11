@@ -1187,18 +1187,16 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * `src/data/model/<name>/+model.ts`: one entity. Its storage (`fields`, `ref` fields that relate it to other models, keys,
  * checks, computed fields, `search`), its exposure (`outputs`; `create`, `update` and `delete` with their column
  * layers and write callbacks), `notify`, `effect` and `syncs`. Every callback sits on what triggers it, inside the literal, and is
- * typed from the generated names by `name` (`bolt sync`; `bolt check` refuses a name that is not the folder's): until the
- * next sync a body does not see a field just added. Returns the name, the literal and the bodies.
+ * typed by the binding generated for this file. Until the next sync a body does not see a field just added.
  * Declaring an exposure makes the operation available; policies still decide which callers and rows may use it.
  * Native surfaces derive from this one declaration: `Table` and `Form` render the permitted columns and defaults, a
  * declared file sync adds Import/Export/Template to the toolbar, record history is automatic, `notify` receives every
  * write and approval event, and a policy check returning `ctx.approve` holds the write for its flow. Pages and agents
  * must not wire those again.
- * @param name The model folder's name, also used by generated row and write types.
- * @param spec Storage, read outputs, guarded write layers and their callbacks; omit operations the model must not expose.
  * @returns Declaration metadata and attached callback bodies. Calling model does not read or write records.
  * @example
- * export default model('orders', {
+ * import { model } from '../../../../.norbital/models/orders.ts';
+ * export default model({
  * 	description: 'Customer orders.',
  * 	record_label: 'record.number',
  * 	fields: {
@@ -1219,12 +1217,20 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * 	}
  * });
  */
+export interface ModelDeclaration<K extends string> {
+	/** @param spec Storage, read outputs, guarded write layers and their callbacks. */
+	<const S extends ModelLiteral>(spec: ModelLiteralInput<K, S>): Model<K, S>;
+}
+
+/** A model binding's literal with its model-specific checks and callback context. */
+export type ModelLiteralInput<K, S extends ModelLiteral> = S &
+	NoInfer<Checked<ModelLiteral, S, Exact<S, ModelFor<K, S>>>> &
+	NoInfer<BodiesFor<K>>;
+
+/** Binds the discovered model path for generated declarations and the built-in layer. */
 /* @__NO_SIDE_EFFECTS__ */
-export function model<const K extends string, const S extends ModelLiteral>(
-	name: K,
-	spec: S & NoInfer<Checked<ModelLiteral, S, Exact<S, ModelFor<K, S>>>> & NoInfer<BodiesFor<K>>
-): Model<K, S> {
-	return { name, spec, bodies: bodiesOf(spec) };
+export function bind_model<const K extends string>(name: K): ModelDeclaration<K> {
+	return /* @__NO_SIDE_EFFECTS__ */ (spec) => ({ name, spec, bodies: bodiesOf(spec) });
 }
 
 /** The engine's three manifest parts of one model literal (`projectManifest` and the names generator both read it). */

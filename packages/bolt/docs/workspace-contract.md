@@ -25,11 +25,11 @@ src/
 
 | Declaration               | Owning file                               | Callbacks                                                                                       |
 | ------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `model(name, spec)`       | `data/model/**/<name>/+model.ts`          | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*` |
+| `model(spec)`       | `data/model/**/<name>/+model.ts`          | `create.transform`, `update.transform`, `delete.check`, `search.indexes.*`, `notify`, `syncs.*` |
 | `custom_field(spec)` | `data/custom_field/<name>/+definition.ts` | `validate`                                                                                      |
 | `policy(spec)`            | `access_control/policy/+<name>.policy.ts` | `check` on each `create`, `update` and `delete` grant                                           |
 | `team(spec)`              | `access_control/team/+team.ts`            | none                                                                                            |
-| `integration(name, spec)` | `integration/<name>/+integration.ts`      | `test`                                                                                          |
+| `integration(spec)` | `integration/<name>/+integration.ts`      | `test`                                                                                          |
 | `automation(spec)`  | `automation/+<name>.automation.ts`        | `run`                                                                                           |
 
 Names come from paths. Declarations with bodies repeat that name as their first argument;

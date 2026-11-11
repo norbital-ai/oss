@@ -1,9 +1,9 @@
 // A remote sync's read state per instance and partition (spec §3): its cursor, compared and set in the statement that
 // writes a page; the snapshot cycle and phase; its health; and when it last read, found a change, or got a webhook hint.
 // `digest` is the sync declaration's: a changed declaration starts the cursor over. Engine only: not exposed.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_sync', {
+export default bind_model('sys_sync')({
 	description: "A remote sync's read cursor and health for one integration instance and partition.",
 	record_label: 'record.sync',
 	fields: {

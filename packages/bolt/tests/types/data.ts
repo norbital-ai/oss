@@ -1,6 +1,7 @@
 // Type corpus for the data layer (§3.3.2–§3.3.4, §3.3.9, rules 3–5, 9, 10, P14). Each `@ts-expect-error` line is a
 // planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { automation, custom_field, model } from '../../src/index.ts';
+import { automation, custom_field } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { PlainDate as plainDate } from '@norbital-ai/std/date';
 import type {
@@ -34,7 +35,7 @@ is<Eq<Exact<{ extra: never }, {}>, { extra: never }>>();
 // Array validation precedes function terminals, including values satisfying both types.
 declare const callableJsonObjects: (() => void) & readonly { a: boolean }[];
 declare const callableJsonBools: (() => void) & readonly boolean[];
-model('data_case', {
+bind_model('data_case')({
 	description: 'X',
 	record_label: 'record.j',
 	fields: {
@@ -42,7 +43,7 @@ model('data_case', {
 		j: { kind: 'json', shape: { kind: 'bool', many: true }, default: callableJsonObjects }
 	}
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'X',
 	record_label: 'record.j',
 	fields: {
@@ -192,63 +193,67 @@ void e7;
 void e8;
 
 // ── model() ──
-// @ts-expect-error M1 unknown kind
-model('data_case', { description: 'x', record_label: 'record.a', fields: { a: { kind: 'txt' } } });
-model('data_case', {
+bind_model('data_case')({
+	description: 'x',
+	record_label: 'record.a',
+	// @ts-expect-error M1 unknown kind
+	fields: { a: { kind: 'txt' } }
+});
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M2 unknown text format
 	fields: { a: { kind: 'text', format: 'handle' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M3 vector without a metric
 	fields: { a: { kind: 'vector', dim: 3 } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error M4 state edge names a state that does not exist
 	fields: { s: { kind: 'state', initial: 'a', states: { a: { to: ['zz'] } } } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.s',
 	// @ts-expect-error M5 initial is not a state
 	fields: { s: { kind: 'state', initial: 'q', states: { a: {} } } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M6 a misspelt modifier (options are exact, rule 5)
 	fields: { a: { kind: 'text', optinal: true } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M7 a derived kind takes no `optional`
 	fields: { a: { kind: 'count', of: 'lines', optional: true } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M8 enum default outside its values
 	fields: { a: { kind: 'enum', values: ['x', 'y'], default: 'z' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M9 an input-only kind on a model
 	fields: { a: { kind: 'number' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M10 a system column name
 	fields: { id: { kind: 'text' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -257,7 +262,7 @@ model('data_case', {
 		b: { kind: 'text', computed: { plusDays: [{ field: 'a' }, 1] } }
 	}
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -266,7 +271,7 @@ model('data_case', {
 		b: { kind: 'date', computed: { plusDays: [{ field: 'a' }, 1] } }
 	}
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -275,7 +280,7 @@ model('data_case', {
 		b: { kind: 'date', computed: { round: [{ field: 'a' }, 2] } }
 	}
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -284,7 +289,7 @@ model('data_case', {
 		b: { kind: 'int', computed: { plus: [{ field: 'nope' }, 1] } }
 	}
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -293,7 +298,7 @@ model('data_case', {
 		b: { kind: 'money', computed: { times: [{ field: 'a' }, { field: 'a' }] } }
 	}
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'int' } },
@@ -301,62 +306,62 @@ model('data_case', {
 	indexes: { find: { text: ['a'] } }
 });
 // a patterned seq is text in storage and in the search document
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'seq', pattern: 'P-{yyyy}-{0000}' }, b: { kind: 'text' } },
 
 	indexes: { find: { text: ['a', 'b'] } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'seq' } },
 	// @ts-expect-error M16b a seq without a pattern is a number
 	indexes: { find: { text: ['a'] } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'json' } },
 	// @ts-expect-error M17 a json field in a key (not btree)
 	key: ['a']
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'date' } },
 	// @ts-expect-error M18 no_overlap over a field that is not a period
 	constraints: { no_overlapping_dates: { no_overlap: 'a', per: [] } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'int' }, d: { kind: 'date' } },
 	// @ts-expect-error M19 a check comparing an int to a date field
 	constraints: { c: { check: { a: { lte: { field: 'd' } } } } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M20 money currency naming a field that is not a currency
 	fields: { a: { kind: 'money', currency: 'b' }, b: { kind: 'text' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: { a: { kind: 'text' } },
 	// @ts-expect-error M21 an unknown top-level option
 	temporal: true
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M22 a json shape with an unknown member kind
 	fields: { a: { kind: 'json', shape: { kind: 'object', fields: { b: { kind: 'strin' } } } } }
 });
 // a time field's precision: the unit its picker offers and snaps to; a date or a date period has no hour
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.m',
 	fields: {
@@ -371,25 +376,25 @@ is<Eq<ValueOf<{ kind: 'date'; precision: 'month' }>, PlainDate>>(); // precision
 is<Eq<ValueOf<{ kind: 'time'; precision: 'hour' }>, PlainTime>>();
 is<PlainTime extends string ? true : false>();
 is<string extends PlainTime ? false : true>();
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M23 a date has no hour precision
 	fields: { a: { kind: 'date', precision: 'hour' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M24 a time has no month precision
 	fields: { a: { kind: 'time', precision: 'month' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M25 a date period has no minute precision
 	fields: { a: { kind: 'period', of: 'date', precision: 'minute' } }
 });
-model('data_case', {
+bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error M26 precision on a kind that is not a time
@@ -397,12 +402,12 @@ model('data_case', {
 });
 
 // ── refs live on the model's fields ──
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error R2 unknown ref target
 	fields: { ...m.orders.spec.fields, customer: { kind: 'ref', to: 'custmers' } }
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	fields: {
 		...m.orders.spec.fields,
@@ -410,7 +415,7 @@ model('orders', {
 		customer: { kind: 'ref', to: 'customers', on_delete: 'set_null' }
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	fields: {
 		...m.orders.spec.fields,
@@ -418,13 +423,13 @@ model('orders', {
 		customer: { kind: 'ref', to: 'customers', inverse: 'outputs' }
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error R5 an inverse colliding with a field of the target
 	fields: { ...m.orders.spec.fields, customer: { kind: 'ref', to: 'customers', inverse: 'name' } }
 });
 // R6 (two inverses of one name on one target) fails the generated `__verify` line.
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	fields: {
 		...m.orders.spec.fields,
@@ -432,7 +437,7 @@ model('orders', {
 		customer: { kind: 'ref', to: 'customers', where: { nope: { eq: 1 } } }
 	}
 });
-model('order_lines', {
+bind_model('order_lines')({
 	...m.order_lines.spec,
 	fields: {
 		...m.order_lines.spec.fields,
@@ -440,7 +445,7 @@ model('order_lines', {
 		order: { kind: 'ref', to: 'orders', owned: true, on_delete: 'restrict' }
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	fields: {
 		...m.orders.spec.fields,
@@ -478,7 +483,7 @@ custom_field({
 
 // ── exposure is part of the model ──
 // A model mirrored by a sync still validates edits to its local fields.
-model('products', {
+bind_model('products')({
 	...m.products.spec,
 	update: {
 		...m.products.spec.update,
@@ -488,20 +493,23 @@ model('products', {
 	}
 });
 // @ts-expect-error C6 a misspelt create column
-model('orders', { ...m.orders.spec, create: { columns: { orders: ['nte'] } } });
+bind_model('orders')({ ...m.orders.spec, create: { columns: { orders: ['nte'] } } });
 // @ts-expect-error C7 a derived field in an allowlist
-model('orders', { ...m.orders.spec, update: { columns: { orders: ['total'] } } });
+bind_model('orders')({ ...m.orders.spec, update: { columns: { orders: ['total'] } } });
 // @ts-expect-error C8 a flat column list: write columns are a layer map
-model('orders', { ...m.orders.spec, update: { columns: ['note'] } });
-// @ts-expect-error C9 `with` relation-action allowlists are gone: a write layer is a `columns` path
-model('orders', { ...m.orders.spec, update: { columns: { orders: [] }, with: { lines: {} } } });
+bind_model('orders')({ ...m.orders.spec, update: { columns: ['note'] } });
+bind_model('orders')({
+	...m.orders.spec,
+	// @ts-expect-error C9 `with` relation-action allowlists are gone: a write layer is a `columns` path
+	update: { columns: { orders: [] }, with: { lines: {} } }
+});
 // @ts-expect-error C10 an unexposable read field
-model('orders', { ...m.orders.spec, outputs: { default: { fields: ['nope'] } } });
+bind_model('orders')({ ...m.orders.spec, outputs: { default: { fields: ['nope'] } } });
 // @ts-expect-error C10b a read without its path key (`relations` is gone)
-model('orders', { ...m.orders.spec, read: { fields: ['note'], relations: ['lines'] } });
+bind_model('orders')({ ...m.orders.spec, read: { fields: ['note'], relations: ['lines'] } });
 // @ts-expect-error C11 declared queries are gone: read the layers, transform in a src/lib helper
-model('orders', { ...m.orders.spec, queries: {} });
-model('orders', {
+bind_model('orders')({ ...m.orders.spec, queries: {} });
+bind_model('orders')({
 	...m.orders.spec,
 	indexes: {
 		...m.orders.spec.indexes,
@@ -509,14 +517,14 @@ model('orders', {
 		by_colour: { ...m.orders.spec.indexes.by_colour, candidates: 32 }
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error C15 a notification team must be a source handle
 	notify: function* () {
 		return [{ title: 't', to: [{ team: 42 }] }];
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error C16 a field name is not a user's branded id
 	notify: function* () {
@@ -524,10 +532,10 @@ model('orders', {
 	}
 });
 // @ts-expect-error C18 an unknown model option
-model('orders', { ...m.orders.spec, hooks: {} });
+bind_model('orders')({ ...m.orders.spec, hooks: {} });
 
 // ── each callback lives on what triggers it ──
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	update: {
 		...m.orders.spec.update,
@@ -654,7 +662,7 @@ automation({
 		return ctx.target.id.length;
 	}
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	indexes: {
 		...m.orders.spec.indexes,
@@ -672,7 +680,7 @@ automation({
 });
 
 // Native sequence labels may be selected explicitly for retained business documents.
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -696,13 +704,13 @@ model('orders', {
 
 // ── named read outputs: each a fixed layer map beside `read` (the `default` output) ──
 // prettier-ignore
-model('probe', { description: 'x', record_label: "record.a", fields: { a: { kind: 'text' }, b: { kind: 'int' } }, outputs: { default: { fields: 'all' }, narrow: { fields: ['a'] }, whole: { fields: 'all' } } });
+bind_model('probe')({ description: 'x', record_label: "record.a", fields: { a: { kind: 'text' }, b: { kind: 'int' } }, outputs: { default: { fields: 'all' }, narrow: { fields: ['a'] }, whole: { fields: 'all' } } });
 // prettier-ignore
 // @ts-expect-error O1 `default` is the model's `read`, never a named output
-model('probe', { description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { default: { fields: 'all' }, default: { fields: ['a'] } } });
+bind_model('probe')({ description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { default: { fields: 'all' }, default: { fields: ['a'] } } });
 // prettier-ignore
 // @ts-expect-error O2 an output field the model lacks
-model('probe', { description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { default: { fields: 'all' }, narrow: { fields: ['zone'] } } });
+bind_model('probe')({ description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { default: { fields: 'all' }, narrow: { fields: ['zone'] } } });
 // prettier-ignore
 // @ts-expect-error O3 outputs need the model's `read`
-model('probe', { description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { narrow: { probe: { fields: ['a'] } } } });
+bind_model('probe')({ description: 'x', record_label: "record.a", fields: { a: { kind: 'text' } }, outputs: { narrow: { probe: { fields: ['a'] } } } });

@@ -1,6 +1,6 @@
-import { integration } from '../../../decl/runtime/integration.ts';
+import { bind_integration } from '../../../declarations.ts';
 
-export default integration('telegram', {
+export default bind_integration('telegram')({
 	description: 'Telegram: a bot, its chats and groups.',
 	driver: 'telegram'
 });

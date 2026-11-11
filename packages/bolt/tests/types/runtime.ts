@@ -1,6 +1,7 @@
 // Type corpus for the runtime roles (§3.3.1, §3.3.5, §3.3.6, §3.3.8, §3.4, rules 50–63b). Each `@ts-expect-error` line
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { app, automation, id_of, model, group, mcp, secrets, workspace } from '../../src/index.ts';
+import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import { currency } from '@norbital-ai/std/decimal';
 import type { Actor, CurrencyCode, FileRef, Id, Instant } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
@@ -367,7 +368,7 @@ void skill;
 void skill2;
 
 // ── file syncs: parsed records, context, findings, related rows and document exports ──
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -418,7 +419,7 @@ model('notice_notes', {
 declare const remoteSync: SyncCtx<'kingdee'>;
 // @ts-expect-error a remote sync writer has no file facilities
 void remoteSync.files;
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -446,7 +447,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -456,7 +457,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -466,7 +467,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -478,7 +479,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -490,7 +491,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {

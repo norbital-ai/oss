@@ -6,10 +6,15 @@ A source definition declares an external system's behavior. A native `sys_integr
 
 ## Source declarations
 
-Author `src/integration/<name>/+integration.ts` with `integration('<name>', spec)`. Its name
+Author `src/integration/<name>/+integration.ts` with `integration(spec)`. Its name
 matches the folder. The literal contains the driver, typed configuration, credentials or OAuth,
 `webhook: { verify }`, optional `rate`, and an inline `test` callback. The models declare what is
 exchanged under their own `syncs`; see [syncs](./syncs.md).
+
+`bolt check` generates its typed `integration` binding in
+`.norbital/integrations/<name>.ts`. A definition in `src/integration/crm/+integration.ts` imports
+`integration` from `../../../.norbital/integrations/crm.ts` and calls `integration(spec)`.
+The compiler checks the binding against the definition's folder name.
 
 The driver kinds are `http`, `sqlserver`, `calendar`, `whatsapp`, `email`, `telegram`, `slack`,
 `discord` and `wechat`. A host provider implements the transport, pairing and conversation codec.

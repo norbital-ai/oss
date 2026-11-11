@@ -1,4 +1,4 @@
-// `integration('<name>', literal)`: one definition per `src/integration/<name>/+integration.ts` (the folder is the name).
+// One path-bound integration per `src/integration/<name>/+integration.ts`.
 // A definition is the connection only: one driver kind, its typed configuration and credential, OAuth, the HTTP base and
 // auth, webhook verification, a request rate and an inline `test` body. What a connection exchanges is declared on the
 // models it syncs (`model(…).syncs`, `./sync.ts`). Bolt's conversation definitions (whatsapp, email, telegram, slack,
@@ -389,8 +389,8 @@ export interface TestCtx<S> {
 type SpecOf<N> = [IntegrationSpecOf<N>] extends [never] ? IntegrationSpec : IntegrationSpecOf<N>;
 /** Checks a freshly paired instance (the host's `test` verb): fails with any failure to refuse the pairing. */
 type TestBody<N> = (ctx: TestCtx<SpecOf<N>>) => BodyReturn<void>;
-/** The literal `integration(N, …)` takes: its data and the inline `test` body, typed from the generated names. */
-type IntegrationLiteral<N> = IntegrationSpec & { test?: TestBody<N> };
+/** The literal an integration takes, with its inline test typed by the path-derived binding. */
+export type IntegrationLiteral<N> = IntegrationSpec & { test?: TestBody<N> };
 interface IntegrationFor<N, S, D = DriverIn<S>> {
 	description: string;
 	driver: DriverName;
@@ -417,9 +417,11 @@ export type Integration<N extends string, S> = {
  * `src/integration/<name>/+integration.ts`: one external system's connection: its driver, configuration, credential,
  * OAuth client, HTTP base and auth, webhook verification and request `rate`, with an optional `test` body run when an
  * instance is paired. Its instances are `sys_integration` rows (a `+workspace.ts` connection names one). What it
- * exchanges is declared on models: `model(…, { syncs: { <s>: { with: '<name>', read?, write? } } })`.
+ * exchanges is declared on models: `model({ syncs: { <s>: { with: '<name>', read?, write? } } })`.
+ * @returns Declaration metadata and its attached pairing-test body.
  * @example
- * export default integration('crm', {
+ * import { integration } from '../../../.norbital/integrations/crm.ts';
+ * export default integration({
  * 	description: 'The CRM account.',
  * 	driver: 'http',
  * 	http: { baseUrl: 'https://api.crm.example', auth: { bearer: 'api_key' } },
@@ -431,13 +433,25 @@ export type Integration<N extends string, S> = {
  * 	}
  * });
  */
-export function integration<const N extends IntegrationName, const S extends IntegrationLiteral<N>>(
-	name: N,
-	spec: S & NoInfer<Checked<IntegrationLiteral<N>, S, Exact<S, IntegrationFor<N, S>>>>
-): Integration<N, S> {
-	return {
+export interface IntegrationDeclaration<N extends IntegrationName> {
+	/** @param spec Driver, configuration, credentials and the optional pairing test. */
+	<const S extends IntegrationLiteral<N>>(spec: IntegrationLiteralInput<N, S>): Integration<N, S>;
+}
+
+/** An integration binding's literal with its driver-specific checks. */
+export type IntegrationLiteralInput<
+	N extends IntegrationName,
+	S extends IntegrationLiteral<N>
+> = S & NoInfer<Checked<IntegrationLiteral<N>, S, Exact<S, IntegrationFor<N, S>>>>;
+
+/** Binds the discovered integration path for generated declarations and the built-in layer. */
+/* @__NO_SIDE_EFFECTS__ */
+export function bind_integration<const N extends IntegrationName>(
+	name: N
+): IntegrationDeclaration<N> {
+	return /* @__NO_SIDE_EFFECTS__ */ (spec) => ({
 		name,
 		spec,
 		bodies: spec.test === undefined ? {} : { test: attached(spec.test, 0) }
-	};
+	});
 }

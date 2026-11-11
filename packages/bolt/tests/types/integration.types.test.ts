@@ -1,14 +1,8 @@
 // Connections are integration declarations; model syncs own their adapters. Checked, never executed.
 import { Effect } from 'effect';
 import { expectTypeOf } from '@effect/vitest';
-import {
-	integration,
-	instance_id,
-	is_instance,
-	model,
-	policy,
-	workspace
-} from '../../src/index.ts';
+import { instance_id, is_instance, policy, workspace } from '../../src/index.ts';
+import { bind_integration, bind_model } from '../../src/declarations.ts';
 import type {
 	AutomationCtx,
 	CalendarEvent,
@@ -92,7 +86,7 @@ const onAny: Where<'notice_notes'> = { integration: { eq: { var: 'requestor.inst
 void onHotline;
 void onAny;
 
-model('products', {
+bind_model('products')({
 	...m.products.spec,
 	syncs: {
 		ledger: {
@@ -113,7 +107,7 @@ model('products', {
 		}
 	}
 });
-model('entries', {
+bind_model('entries')({
 	...m.entries.spec,
 	syncs: {
 		calendar: {
@@ -128,7 +122,7 @@ model('entries', {
 		}
 	}
 });
-model('orders', {
+bind_model('orders')({
 	description: m.orders.spec.description,
 	record_label: m.orders.spec.record_label,
 	fields: m.orders.spec.fields,
@@ -145,7 +139,7 @@ model('orders', {
 		}
 	}
 });
-integration('kingdee', {
+bind_integration('kingdee')({
 	...rt.kingdee.spec,
 	test: function* (ctx) {
 		expectTypeOf(ctx.configuration.maxLagMinutes).toEqualTypeOf<number>();
@@ -181,15 +175,15 @@ Effect.gen(function* () {
 
 // @ts-expect-error no declaration has this integration name
 workspace({ tz: 'UTC', locale: 'en', connections: { mail: { integration: 'emial' } } });
-integration('support_mail', {
+bind_integration('support_mail')({
 	description: 'x',
 	driver: 'email',
 	// @ts-expect-error conversation credentials belong to the provider
 	credential: { password: { kind: 'text' } }
 });
 // @ts-expect-error an HTTP base URL is https or a text configuration field
-integration('erp', { description: 'x', driver: 'http', http: { baseUrl: 'ftp://erp' } });
-integration('erp', {
+bind_integration('erp')({ description: 'x', driver: 'http', http: { baseUrl: 'ftp://erp' } });
+bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
 	credential: { token: { kind: 'text' } },
@@ -197,10 +191,10 @@ integration('erp', {
 	http: { baseUrl: 'https://erp', auth: { bearer: 'tokn' } }
 });
 // @ts-expect-error drivers are enumerated
-integration('erp', { description: 'x', driver: 'ftp' });
+bind_integration('erp')({ description: 'x', driver: 'ftp' });
 // @ts-expect-error the declaration name must be known
-integration('erpp', { description: 'x', driver: 'http' });
-integration('erp', {
+bind_integration('erpp')({ description: 'x', driver: 'http' });
+bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
 	http: { baseUrl: 'https://erp' },
@@ -211,26 +205,26 @@ integration('erp', {
 		token: 'https://idp/token'
 	}
 });
-integration('kingdee', {
+bind_integration('kingdee')({
 	description: 'x',
 	driver: 'sqlserver',
 	// @ts-expect-error a database driver offers no OAuth grant
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' }
 });
-integration('erp', {
+bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
 	http: { baseUrl: 'https://erp' },
 	// @ts-expect-error an HTTP OAuth grant needs its endpoints
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' }
 });
-integration('calendar', {
+bind_integration('calendar')({
 	description: 'x',
 	driver: 'calendar',
 	// @ts-expect-error OAuth credentials name secrets
 	oauth: { client: 'calendar-client', secret: 'CALENDAR_SECRET' }
 });
-integration('erp', {
+bind_integration('erp')({
 	description: 'x',
 	driver: 'http',
 	credential: { s: { kind: 'text' } },
@@ -238,7 +232,7 @@ integration('erp', {
 	// @ts-expect-error webhook schemes are enumerated
 	webhook: { verify: { scheme: 'google-calendar', secret: 's' } }
 });
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	fields: {
 		...m.orders.spec.fields,

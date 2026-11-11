@@ -2,7 +2,7 @@
 // sit in the same namespace as a workspace's `src/data/custom_field/<f>/` (here the registry's `rating`), so a model
 // references either as `{ kind: 'custom', of }`, the value type flows from the shape, and a renderer's view is typed by
 // the name. Each `@ts-expect-error` is a planted mistake `bolt check` must refuse.
-import { model } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import type {
 	CustomFieldName,
 	CustomFieldView,
@@ -36,7 +36,7 @@ is<
 	>
 >();
 
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
 	fields: {
@@ -46,19 +46,19 @@ model('probe', {
 		r: { kind: 'custom', of: 'rating', optional: true }
 	}
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error B1 a misspelt built-in
 	fields: { a: { kind: 'text' }, m: { kind: 'custom', of: 'phnoe' } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error B2 a misspelt workspace custom field
 	fields: { a: { kind: 'text' }, r: { kind: 'custom', of: 'ratng' } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
 	record_label: 'record.a',
 	// @ts-expect-error B3 a built-in's default of the wrong type

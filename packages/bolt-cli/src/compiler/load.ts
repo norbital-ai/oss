@@ -3,6 +3,7 @@
 import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
+import { writeDeclarations } from './declarations.ts';
 import { ROLES, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
 import { treeDigest } from '@norbital-ai/bolt/artifact';
@@ -59,6 +60,8 @@ const skillTree = Effect.fnUntraced(function* (
 export const load = Effect.fn('bolt.load')(function* (root: string, files: readonly Discovered[]) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
+	if (files.some((file) => file.role === 'model' || file.role === 'integration_definition'))
+		yield* writeDeclarations(root, files);
 	const manifest = Object.fromEntries(ROLES.map((r) => [r.role, {}])) as Manifest;
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
@@ -114,7 +117,7 @@ export function manifestErrors(
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
 		errors.push({ code, path, message: `${path}: ${message}` });
-	// A declaration typed by its own name takes it first (`model('<m>', …)`), and it must be the path's (`load/name-path`).
+	// A generated declaration binding carries its path-derived name, checked against the file being loaded.
 	for (const role of NAMED) {
 		for (const [name, d] of Object.entries(manifest[role] ?? {})) {
 			const declared = Predicate.isObject(d) ? d['name'] : undefined;
@@ -122,7 +125,7 @@ export function manifestErrors(
 				fail(
 					'load/name-path',
 					sourcePath(role, name, files),
-					`declares ${CALLS[role]}('${String(declared)}'); its path names it '${name}'`
+					`uses the ${CALLS[role]} binding for '${String(declared)}'; its path names it '${name}'`
 				);
 		}
 	}
@@ -264,7 +267,7 @@ export function spec(d: unknown): { readonly [key: string]: unknown } {
 	return (o.spec ?? o) as { readonly [key: string]: unknown };
 }
 
-/** The roles whose declaration takes its name first, and the call each is. */
+/** Roles whose generated declaration binding carries a path identity. */
 const NAMED = ['model', 'integration_definition'] as const;
 const CALLS: { readonly [R in (typeof NAMED)[number]]: string } = {
 	model: 'model',

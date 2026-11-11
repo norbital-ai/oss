@@ -1,11 +1,11 @@
 // An approval request (rules 44–47, §3.8): today's readable face of an approval — its status, the step it waits on, the
 // names of every step, and the teams and members that decide — kept under its name (R3). Read by its participants;
 // written by the approvals engine. At most one open request per record: the lock refuses a second.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
 const names = { kind: 'json', shape: { kind: 'text', many: true } } as const;
 
-export default model('approval_request', {
+export default bind_model('approval_request')({
 	description:
 		'An approval request on a record: its status, its steps, and the teams and members that approve or supersede.',
 	fields: {

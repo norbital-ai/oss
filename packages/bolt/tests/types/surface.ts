@@ -1,6 +1,7 @@
 // Type corpus for the declarations the P1 review added (§3.3.1 `team` and `messages`, §3.3.10 signature helpers).
 // Each `@ts-expect-error` line is a planted mistake; a clean tsc proves both the passes and the rejections.
-import { messages, model, team } from '../../src/index.ts';
+import { messages, team } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import type {
 	BtreeField,
 	FileField,
@@ -50,7 +51,7 @@ is<
 >();
 
 // ── model search: the semantic model is one +workspace.ts declares, at the width it declares ──
-model('semantic_case', {
+bind_model('semantic_case')({
 	description: 'x',
 	record_label: 'record.body',
 	fields: { body: { kind: 'text' } },
@@ -62,10 +63,10 @@ model('semantic_case', {
 });
 // @ts-expect-error S1 an embedding model +workspace.ts does not declare
 // prettier-ignore
-model('semantic_case', { description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } } });
+bind_model('semantic_case')({ description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } } });
 // @ts-expect-error the embedding column's width is stated, never guessed
 // prettier-ignore
-model('semantic_case', { description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_small' } } } });
+bind_model('semantic_case')({ description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_small' } } } });
 
 // ── signature helpers ──
 is<Eq<State<'orders'>, 'draft' | 'submitted' | 'ordered'>>();

@@ -1,7 +1,7 @@
 // Engine configuration by key (the session signing secret, `ip_mac`, the integrations epoch, sealed secrets, the sign-up switch, the assistant's settings). Engine only.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_config', {
+export default bind_model('sys_config')({
 	description: 'An engine setting by key.',
 	record_label: 'record.key',
 	fields: {

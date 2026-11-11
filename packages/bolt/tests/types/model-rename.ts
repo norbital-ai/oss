@@ -1,6 +1,6 @@
-import { model } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 
-const renamed = model('current_table', {
+const renamed = bind_model('current_table')({
 	description: 'Renamed records',
 	was: 'prior_table',
 	record_label: 'record.title',
@@ -11,7 +11,7 @@ void previous;
 const previousField: 'prior_title' = renamed.spec.fields.title.was;
 void previousField;
 
-model('invalid_rename', {
+bind_model('invalid_rename')({
 	description: 'Invalid rename metadata',
 	// @ts-expect-error a previous model name is text
 	was: 123,

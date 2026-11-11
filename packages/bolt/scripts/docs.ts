@@ -39,7 +39,15 @@ const REFERENCE = (ns: string) =>
 /** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
 const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
 	model: {
-		bolt: ['model', 'FieldCommon', 'StoredArm', 'RefField', 'TableSpec', 'ReadLayers', 'LayerColumns']
+		bolt: [
+			'ModelDeclaration',
+			'FieldCommon',
+			'StoredArm',
+			'RefField',
+			'TableSpec',
+			'ReadLayers',
+			'LayerColumns'
+		]
 	},
 	access: {
 		bolt: [
@@ -56,10 +64,20 @@ const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: reado
 		]
 	},
 	automation: {
-		bolt: ['automation', 'Trigger', 'AutomationCtx', 'ReadRequestBase', 'OutputKind', 'Act', 'Verdict'],
+		bolt: [
+			'automation',
+			'Trigger',
+			'AutomationCtx',
+			'ReadRequestBase',
+			'OutputKind',
+			'Act',
+			'Verdict'
+		],
 		'bolt/errors': ['Refusal']
 	},
-	sync: { bolt: ['integration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput'] },
+	sync: {
+		bolt: ['IntegrationDeclaration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput']
+	},
 	tool: { bolt: ['tool', 'ToolRun', 'ToolFiles'] },
 	page: {
 		bolt: ['app', 'Page', 'group'],
@@ -108,12 +126,12 @@ In a test, \`t.clock.set('<instant>')\` then \`const { failed } = yield* t.runDu
 	model: `\`src/data/model/<name>/+model.ts\`. A model takes only the writes it declares:
 
 \`\`\`ts
-import { model } from '@norbital-ai/bolt';
+import { model } from '../../../../.norbital/models/<name>.ts';
 
-export default model('<name>', {
+export default model({
 	description: '<what one record is>',
 	icon: 'lucide:<icon>',
-	label: '<field>',
+	record_label: 'record.<field>',
 	fields: {
 		<field>: { kind: 'text' },
 		<other>: { kind: 'ref', to: '<model>', inverse: '<field on it>', on_delete: 'restrict' }
@@ -526,7 +544,10 @@ export const generateDocs = Effect.try({
 			} else if (f & ts.SymbolFlags.Interface) {
 				kind = 'interface';
 				signature = declarationText(d, name);
-				members = membersOf(checker.getDeclaredTypeOfSymbol(sym), d);
+				const type = checker.getDeclaredTypeOfSymbol(sym);
+				members = membersOf(type, d);
+				const call = checker.getSignaturesOfType(type, ts.SignatureKind.Call)[0];
+				if (call !== undefined) params = paramsOf(call, d);
 			} else if (f & ts.SymbolFlags.TypeAlias) {
 				kind = 'type';
 				signature = declarationText(d, name);
@@ -670,7 +691,9 @@ export const generateDocs = Effect.try({
 		};
 		const roles = Object.entries(CONTRACT).map(([role, named]) => ({
 			path: `${role}.md`,
-			text: `# ${role}\n\n${CONTRACT_HEAD[role] === undefined ? '' : `${CONTRACT_HEAD[role]}\n\n`}${Object.entries(named)
+			text: `# ${role}\n\n${CONTRACT_HEAD[role] === undefined ? '' : `${CONTRACT_HEAD[role]}\n\n`}${Object.entries(
+				named
+			)
 				.flatMap(([namespace, names]) =>
 					names.map((name) => {
 						const found = contractSymbols.get(`${namespace}#${name}`);
@@ -692,7 +715,10 @@ export const generateDocs = Effect.try({
 				...roles
 			]
 		};
-		writeFileSync(join(out, skillFile(CONTRACT_SKILL)), `${JSON.stringify(contract, null, '\t')}\n`);
+		writeFileSync(
+			join(out, skillFile(CONTRACT_SKILL)),
+			`${JSON.stringify(contract, null, '\t')}\n`
+		);
 		index.skills.push({
 			name: CONTRACT_SKILL,
 			description,

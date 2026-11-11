@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { install } from '../src/decl/runtime/guest.ts';
-import { app, automation, group, integration, mcp, model, workspace } from '../src/index.ts';
+import { app, automation, group, mcp, workspace } from '../src/index.ts';
+import { bind_integration, bind_model } from '../src/declarations.ts';
 import * as rt from './types/fixture/runtime.ts';
 import * as models from './types/fixture/models.ts';
 import './types/registry.ts';
@@ -43,11 +44,11 @@ describe('runtime declarations', () => {
 
 	it('wraps an integration pairing test from its inline literal', () => {
 		const test = function* () {};
-		const declared = integration('kingdee', { ...rt.kingdee.spec, test });
+		const declared = bind_integration('kingdee')({ ...rt.kingdee.spec, test });
 		expect(declared.name).toBe('kingdee');
 		expect(declared.spec.driver).toBe('sqlserver');
 		expect(original(declared.bodies.test)).toBe(test);
-		expect(integration('support_mail', rt.support_mail.spec).bodies).toEqual({});
+		expect(bind_integration('support_mail')(rt.support_mail.spec).bodies).toEqual({});
 	});
 
 	it('keeps file sync bodies on their model and remote connection data on the integration', () => {
@@ -57,7 +58,7 @@ describe('runtime declarations', () => {
 		const write = function* () {
 			return [];
 		};
-		const declared = model('notice_notes', {
+		const declared = bind_model('notice_notes')({
 			...models.notice_notes.spec,
 			syncs: {
 				sheet: {

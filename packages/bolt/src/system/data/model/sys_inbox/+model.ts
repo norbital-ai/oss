@@ -1,9 +1,9 @@
 // A verified webhook delivery (spec §3): a hint that a sync's next read has news, or the data itself for a provider with
 // no list API; passed to the sync's `read` as a delivery and marked consumed by the act that read it. Deduplicated by the
 // provider's delivery id per instance, so a delivery sent twice is stored once. Engine only: not exposed.
-import { model } from '../../../../decl/model.ts';
+import { bind_model } from '../../../../declarations.ts';
 
-export default model('sys_inbox', {
+export default bind_model('sys_inbox')({
 	description: "A webhook delivery received for an integration instance, awaiting its sync's read.",
 	record_label: 'record.delivery',
 	fields: {

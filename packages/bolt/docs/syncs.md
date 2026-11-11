@@ -1,7 +1,7 @@
 # Syncs: files and integrations
 
 A model's `syncs` declares exchange with files or remote systems. All read/write/parser callbacks
-live on that sync inside `model(name, spec)`. [Integration definitions](./integration-providers.md)
+live on that sync inside `model(spec)`. [Integration definitions](./integration-providers.md)
 provide the connection, authentication and transport.
 
 ## Remote system

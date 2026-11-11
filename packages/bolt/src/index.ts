@@ -1,7 +1,6 @@
 // @norbital-ai/bolt: the declaration functions and their types. Nothing else is a runtime value (P29).
 export { custom_field } from './decl/custom-field.ts';
 export type { CustomField } from './decl/custom-field.ts';
-export { model } from './decl/model.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
 export type { SourceTeam, TeamData, TeamEntries, TeamEntry, TeamSpec } from './decl/access/team.ts';
@@ -14,7 +13,7 @@ export { automation } from './decl/runtime/automation.ts';
 export { browser_start } from './decl/runtime/facilities.ts';
 export { seeder, type Seeder } from './decl/seeder.ts';
 export { id_of } from './decl/id.ts';
-export { integration, instance_id, is_instance } from './decl/runtime/integration.ts';
+export { instance_id, is_instance } from './decl/runtime/integration.ts';
 /** Pure: what changed between two JSON values, keyed list items matched by key (a reviewed draft's changes). */
 export type { JsonChange } from './engine/agent/draft.ts';
 
@@ -48,6 +47,7 @@ export type {
 	Model,
 	ModelBodies,
 	ModelLiteral,
+	ModelDeclaration,
 	ModelParts,
 	ModelSpec,
 	ReadLayers,
@@ -271,6 +271,7 @@ export type {
 	InboundChat,
 	InboundMail,
 	Integration,
+	IntegrationDeclaration,
 	IntegrationSpec,
 	MessageDelivery,
 	MessageItem,

@@ -1,6 +1,6 @@
-import { model } from '../../../../../../../src/index.ts';
+import { bind_model } from '../../../../../../../src/declarations.ts';
 
-export default model('notices', {
+export default bind_model('notices')({
 	description: 'Mirrored notices',
 	record_label: 'record.subject',
 	key: ['inbox', 'message_id'],

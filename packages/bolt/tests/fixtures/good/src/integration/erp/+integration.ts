@@ -1,6 +1,6 @@
-import { integration } from '../../../../../../src/index.ts';
+import { bind_integration } from '../../../../../../src/declarations.ts';
 
-export default integration('erp', {
+export default bind_integration('erp')({
 	description: 'The ERP API',
 	driver: 'http',
 	credential: { token: { kind: 'text', label: 'API token' } },

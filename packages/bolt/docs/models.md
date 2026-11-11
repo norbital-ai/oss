@@ -3,14 +3,20 @@
 Declare the entity in `src/data/model/<name>/+model.ts`. Reads, policies, views, the agent and
 seeds all name that model. Its optional `+representation.svelte` receives `RecordView<'name'>`.
 Model folders may nest under other models or ordinary grouping folders. For example,
-`src/data/model/payroll/payroll_run/payslip/+model.ts` declares `model('payslip', …)`;
+`src/data/model/payroll/payroll_run/payslip/+model.ts` declares `model(spec)`;
 the leaf name remains unique across the workspace. Grouping folders need no declaration, and a
 representation stays beside its own `+model.ts`.
 
-```ts
-import { model } from '@norbital-ai/bolt';
+`bolt check` generates one typed binding per model under `.norbital/models/`. Import the
+binding for this file and call `model(spec)`. The binding supplies the row and callback types,
+and the compiler verifies that it matches the file's leaf name. The relative path below is
+for `src/data/model/orders/+model.ts`. Nested model folders need the corresponding extra
+parent segments.
 
-export default model('orders', {
+```ts
+import { model } from '../../../../.norbital/models/orders.ts';
+
+export default model({
 	description: 'Customer orders.',
 	record_label: 'record.number',
 	fields: {

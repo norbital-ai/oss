@@ -82,8 +82,9 @@ export default automation({ description: 'Facilities', policies: ['edge'], input
 `;
 
 const model = (name: string) => ({
-	[`src/data/model/${name}/+model.ts`]: `import { model } from '@norbital-ai/bolt';
-export default model('${name}', { description: 'A ${name}', record_label: 'record.title', fields: { title: { kind: 'text' } }, outputs: { default: { fields: 'all' } } });
+	[`src/data/model/${name}/+model.ts`]: `import { model } from "../../../../.norbital/models/${name}.ts";
+
+export default model({ description: 'A ${name}', record_label: 'record.title', fields: { title: { kind: 'text' } }, outputs: { default: { fields: 'all' } } });
 `
 });
 

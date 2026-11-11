@@ -1258,8 +1258,8 @@ describe('working-source tools', () => {
 });
 describe('reading the source is every staff member’s; changing it is an administrator’s', () => {
 	const source: { [path: string]: string } = {
-		'src/data/model/tasks/+model.ts': "model('tasks', {})",
-		'src/data/model/payroll/+model.ts': "model('payroll', {})",
+		'src/data/model/tasks/+model.ts': 'model({})',
+		'src/data/model/payroll/+model.ts': 'model({})',
 		'src/access_control/team/+team.ts': 'export default {}'
 	};
 	const workspace: WorkspacePort = {

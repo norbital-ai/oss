@@ -11,12 +11,12 @@ A `+` file is a compiler role, default-exporting its declaration; its path is it
 
 - `+workspace.ts` `workspace(spec)`: zone, locale, currency, apps, AI, connections
 - `+secrets.ts` `secrets(spec)`: secret names
-- `data/model/<name>/+model.ts` `model(name, spec)`: fields, reads, writes, state, search, syncs, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view
+- `data/model/<name>/+model.ts` `model(spec)`: fields, reads, writes, state, search, syncs, `effect` (work after a committed write). Folders nest; the leaf names it. `+representation.svelte` beside it: record view
 - `data/custom_field/<name>/+definition.ts` `custom_field(spec)`, `+renderer.svelte`: value type
 - `access_control/policy/+<name>.policy.ts` `policy(spec)`: what holders may do
 - `access_control/team/+team.ts` `team(spec)`: team handles to policies
 - `automation/+<name>.automation.ts` `automation(spec)`: job with its own policies
-- `integration/<name>/+integration.ts` `integration(name, spec)`, `+integration.svelte`: connection, setup
+- `integration/<name>/+integration.ts` `integration(spec)`, `+integration.svelte`: connection, setup
 - `app/<app>/+app.ts` `app(spec)`: label and `pages`; `+group.ts` `group(spec)`
 - `app/<app>/+<page>.page.svelte`: page with a `ctx` prop
 - `app/<k>/+app.ts` with `shell: 'kiosk'`: shared-device surface with fixed policies

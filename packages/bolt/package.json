@@ -69,6 +69,10 @@
 		"./tooling/browser": {
 			"types": "./build/tooling/browser.d.ts",
 			"default": "./build/tooling/browser.js"
+		},
+		"./declarations": {
+			"types": "./build/declarations.d.ts",
+			"default": "./build/declarations.js"
 		}
 	},
 	"files": [

@@ -2,7 +2,8 @@
 // `@ts-expect-error` line is a planted mistake; a clean tsc proves every valid line compiles.
 import { Effect } from 'effect';
 import { Refusal } from '../../src/decl/errors.ts';
-import { automation, model } from '../../src/index.ts';
+import { automation } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import type { Actor, AutomationCtx, EffectCtx, WriteCtx } from '../../src/index.ts';
 import type {
 	ActConflict,
@@ -22,10 +23,12 @@ const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		const open = yield* ctx.query({ orders: {
-			where: { status: { ne: 'ordered' } },
-			fields: ['total']
-		} });
+		const open = yield* ctx.query({
+			orders: {
+				where: { status: { ne: 'ordered' } },
+				fields: ['total']
+			}
+		});
 		return open.orders.rows.length;
 	}
 });
@@ -38,7 +41,9 @@ automation({
 		const [orders, customer] = yield* Effect.all(
 			[
 				ctx.query({ orders: {} }),
-				first === undefined ? Effect.succeed(null) : ctx.query({ customers: { where: { id: { eq: first.id } }, limit: 1 } })
+				first === undefined
+					? Effect.succeed(null)
+					: ctx.query({ customers: { where: { id: { eq: first.id } }, limit: 1 } })
 			],
 			{ concurrency: 'unbounded' }
 		);
@@ -51,7 +56,7 @@ automation({
 	...rt.orders_renote.spec,
 	// @ts-expect-error E1 an unyielded effect returned as the output
 	run: function* (_, ctx) {
-		return ctx.query({ orders: { } });
+		return ctx.query({ orders: {} });
 	}
 });
 automation({
@@ -63,7 +68,7 @@ automation({
 });
 
 // ── refuse is an Effect failing with Refusal: `return yield*` it ──
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -74,7 +79,7 @@ model('orders', {
 	}
 });
 is<Eq<Effect.Error<ReturnType<WriteCtx<'orders'>['refuse']>>, Refusal>>();
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
@@ -90,13 +95,16 @@ model('orders', {
 automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* ctx.refuse('Choose an existing orders record.');
-		const submit = ctx.act('orders.update', [{
-			target: target.id,
-			set: { status: 'submitted' }
-		}]);
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		const submit = ctx.act('orders.update', [
+			{
+				target: target.id,
+				set: { status: 'submitted' }
+			}
+		]);
 		is<Eq<Effect.Error<typeof submit>, ActRefused | ActConflict | ActUnknown>>();
 		const kept = submit.pipe(
 			Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code))
@@ -108,9 +116,10 @@ automation({
 automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* ctx.refuse('Choose an existing orders record.');
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
 		yield* ctx.act('orders.update', [{ target: target.id, set: {} }]).pipe(
 			// @ts-expect-error E4 a tag act never fails with
 			Effect.catchTag('Refusal', () => Effect.void)
@@ -134,14 +143,14 @@ automation({
 	}
 });
 
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error E5 ctx-bearing bodies must be generators
 	create: { ...m.orders.spec.create, transform: async () => [] }
 });
 declare const automationCtx: AutomationCtx;
 // @ts-expect-error E6 ctx members have no Promise facet
-const promiseRead: Promise<unknown> = automationCtx.query({ orders: { } });
+const promiseRead: Promise<unknown> = automationCtx.query({ orders: {} });
 automation({
 	description: 'x',
 	policies: ['sales_rep'],

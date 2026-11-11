@@ -1,4 +1,4 @@
-// A model's syncs (spec §3): `model(…, { syncs: { <s>: FileSync | RemoteSync } })`. A sync says "these rows are exchanged
+// A model's syncs (spec §3): `model({ syncs: { <s>: FileSync | RemoteSync } })`. A sync says "these rows are exchanged
 // with X": a file someone uploads or downloads, or another system through an integration instance. The author writes at
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated

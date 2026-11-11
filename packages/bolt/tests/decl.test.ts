@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { install } from '../src/decl/runtime/guest.ts';
-import { custom_field, model, policy } from '../src/index.ts';
+import { custom_field, policy } from '../src/index.ts';
+import { bind_model } from '../src/declarations.ts';
 import { splitModel } from '../src/decl/model.ts';
 import { salesRep } from './types/access.ts';
 import * as fixtures from './types/fixture/models.ts';
@@ -24,7 +25,7 @@ describe('declarations', () => {
 
 	it('keeps one named model literal and wraps every inline guest body at its own path', () => {
 		const spec = fixtures.orders.spec;
-		const declared = model('orders', spec);
+		const declared = bind_model('orders')(spec);
 		expect(declared.name).toBe('orders');
 		expect(declared.spec).toBe(spec);
 		expect(original(declared.bodies.create)).toBe(spec.create.transform);

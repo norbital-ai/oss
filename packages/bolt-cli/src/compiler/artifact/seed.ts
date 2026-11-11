@@ -54,7 +54,15 @@ const seederOf = Effect.fn('bolt.seederOf')(function* (root: string, cache: stri
 				configFile: false,
 				logLevel: 'silent',
 				root,
-				resolve: { alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }] },
+				resolve: {
+					alias: [
+						{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX },
+						{
+							find: /^@norbital-ai\/bolt\/declarations$/,
+							replacement: join(BOLT, `declarations${EXT}`)
+						}
+					]
+				},
 				build: {
 					write: false,
 					ssr: join(root, 'seed/+seeder.ts'),

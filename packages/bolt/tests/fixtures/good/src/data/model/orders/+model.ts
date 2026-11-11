@@ -1,6 +1,6 @@
-import { model } from '../../../../../../../src/index.ts';
+import { bind_model } from '../../../../../../../src/declarations.ts';
 
-export default model('orders', {
+export default bind_model('orders')({
 	description: 'Sales orders',
 	record_label: 'record.number',
 	fields: {

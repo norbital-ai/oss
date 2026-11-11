@@ -1,6 +1,6 @@
-import { model } from '../../../../../../../src/index.ts';
+import { bind_model } from '../../../../../../../src/declarations.ts';
 
-export default model('customers', {
+export default bind_model('customers')({
 	description: 'Buyers',
 	record_label: 'record.name',
 	fields: {
