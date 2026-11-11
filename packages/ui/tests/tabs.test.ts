@@ -4,35 +4,45 @@ import { expect, it } from 'vitest';
 import Tabs from '../src/primitives/tabs/tabs.svelte';
 import TabStrip from '../src/primitives/tabs/tab-strip.svelte';
 
-it('arrow and End keys move the selected tab', async () => {
-	const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
-	const tabs = ['Overview', 'Measurements', 'History'].map((title) => ({
-		name: title,
-		title,
-		body
-	}));
-	const target = document.body.appendChild(document.createElement('div'));
-	const view = mount(Tabs, { target, props: { tabs } });
-	await tick();
-	const selected = () =>
-		target.querySelector('[role=tab][aria-selected=true]')?.textContent?.trim();
-	const press = async (key: string) => {
-		document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+it.each([
+	{ orientation: 'horizontal', side: 'start', arrow: 'ArrowRight' },
+	{ orientation: 'vertical', side: 'start', arrow: 'ArrowDown' },
+	{ orientation: 'vertical', side: 'end', arrow: 'ArrowDown' }
+] as const)(
+	'$orientation tabs at $side retain keyboard navigation and panel links',
+	async ({ orientation, side, arrow }) => {
+		const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
+		const tabs = ['Overview', 'Measurements', 'History'].map((title) => ({
+			name: title,
+			title,
+			body
+		}));
+		const target = document.body.appendChild(document.createElement('div'));
+		const view = mount(Tabs, { target, props: { tabs, orientation, side } });
 		await tick();
-		flushSync();
-	};
-	target.querySelector<HTMLButtonElement>('[role=tab]')?.focus();
-	await press('ArrowRight');
-	expect(selected()).toBe('Measurements');
-	await press('End');
-	expect(selected()).toBe('History');
-	const active = target.querySelector('[role=tab][aria-selected=true]');
-	const panel = target.querySelector('[role=tabpanel]:not([hidden])');
-	expect(active?.getAttribute('aria-controls')).toBe(panel?.id);
-	expect(panel?.getAttribute('aria-labelledby')).toBe(active?.id);
-	expect(panel?.textContent?.trim()).toBe('Tab content');
-	await unmount(view);
-});
+		const selected = () =>
+			target.querySelector('[role=tab][aria-selected=true]')?.textContent?.trim();
+		const press = async (key: string) => {
+			document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+			await tick();
+			flushSync();
+		};
+		target.querySelector<HTMLButtonElement>('[role=tab]')?.focus();
+		expect(target.querySelector('[role=tablist]')?.getAttribute('aria-orientation')).toBe(
+			orientation
+		);
+		await press(arrow);
+		expect(selected()).toBe('Measurements');
+		await press('End');
+		expect(selected()).toBe('History');
+		const active = target.querySelector('[role=tab][aria-selected=true]');
+		const panel = target.querySelector('[role=tabpanel]:not([hidden])');
+		expect(active?.getAttribute('aria-controls')).toBe(panel?.id);
+		expect(panel?.getAttribute('aria-labelledby')).toBe(active?.id);
+		expect(panel?.textContent?.trim()).toBe('Tab content');
+		await unmount(view);
+	}
+);
 
 it.each([250, 100])(
 	'page navigation keeps overflow links and the active page under More at %ipx',

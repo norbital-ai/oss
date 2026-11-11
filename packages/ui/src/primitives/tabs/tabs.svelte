@@ -34,10 +34,12 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		 */
 		level?: TabLevel;
 		/**
-		 * `vertical`: a rail of tabs on the left, the body on the right (a compact scroller on a narrow container). Omitted,
+		 * `vertical`: a rail beside the body (a compact scroller on a narrow container). Omitted,
 		 * horizontal: the body keeps the full width.
 		 */
 		orientation?: 'horizontal' | 'vertical';
+		/** Which side holds a vertical rail. Defaults to `start`. */
+		side?: 'start' | 'end';
 	};
 
 	// the vertical rail: chips on a narrow container, a column of full-width rows on a wide one (`@2xl`)
@@ -66,13 +68,15 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		trailing,
 		leading,
 		level: explicit,
-		orientation
+		orientation,
+		side = 'start'
 	}: TabsProps = $props();
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
 	const hasInset = insetReader();
 	const placed = $derived(tabLevel(parent?.level, explicit));
 	const variant = $derived(tabVariant(placed.level));
 	const vertical = $derived(orientation === 'vertical');
+	const railEnd = $derived(vertical && side === 'end');
 	// `shown`: every tab name and title of the strips around a body, so a record view inside one does not repeat them
 	setContext(TAB_LEVEL, {
 		get level() {
@@ -125,8 +129,11 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		class={cn(
 			// one column of the container's width: a strip measured against its own contents would shrink as tabs move to More
 			'grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3',
+			vertical && '@2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-4',
 			vertical &&
-				'@2xl:grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] @2xl:grid-rows-[minmax(0,1fr)] @2xl:gap-4',
+				(railEnd
+					? '@2xl:grid-cols-[minmax(0,1fr)_minmax(9rem,13rem)]'
+					: '@2xl:grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)]'),
 			className
 		)}
 		data-tabs-orientation={vertical ? 'vertical' : 'horizontal'}
@@ -136,6 +143,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				'flex w-full min-w-0 items-center gap-2',
 				leading && 'flex-wrap items-end',
 				vertical && '@2xl:flex-col @2xl:items-stretch',
+				railEnd && '@2xl:col-start-2 @2xl:row-start-1',
 				!hasInset() && INSET_X_CLASS
 			)}
 		>
@@ -206,7 +214,11 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 			{@render trailing?.()}
 		</div>
 		{#each tabs as tab (tab.name)}
-			<TabPanel value={tab.name} label={tab.title}>
+			<TabPanel
+				value={tab.name}
+				label={tab.title}
+				class={railEnd ? '@2xl:col-start-1 @2xl:row-start-1' : ''}
+			>
 				{#if tab.name === active || (tab.keepAlive && visited[tab.name])}
 					{@render tab.body()}
 				{/if}
