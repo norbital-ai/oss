@@ -499,7 +499,7 @@ type InferRequest<O, Tools> = {
  * answer.
  */
 type InferSchemaOutput = {
-	readonly jsonSchema: Json;
+	readonly json_schema: Json;
 	readonly rules?: readonly { readonly expression: string; readonly message: string }[];
 };
 type InferSchemaRequest<Tools> = Omit<InferRequest<{ kind: 'text' }, Tools>, 'output'> & {

@@ -50,7 +50,7 @@ Inspect its readers, writers, policies, automations, seeds and syncs. Preserve:
 
 ## Runtime schemas and formulas
 
-- `ctx.ai.sys_2.infer` accepts `output: { jsonSchema, rules? }`; rules are CEL `{ expression, message }` checks. Validate with the same selected version when correcting stored results.
+- `ctx.ai.sys_2.infer` accepts `output: { json_schema, rules? }`; rules are CEL `{ expression, message }` checks. Validate with the same selected version when correcting stored results.
 - `StructuredData` renders schema-driven values, edits, schema documents and inline diffs. Rendering is not validation: keep server schema and rule checks authoritative. Remote references are not fetched.
 - A schema property picks a Bolt datatype explicitly with `format: '<datatype>'` (a custom datatype: `"x-norbital": { "datatype": "<name>" }`), or implicitly when an object's shape is exactly a period or point, all keys required. Explicit wins. JSON Schema's own string formats keep their meaning.
 - `bolt check` and `bolt build` hold every seed value declaring `$schema` to this: a `format` naming no datatype, or the wrong shape, fails with its path.

@@ -1122,11 +1122,23 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			})
 	);
 
+	it.effect('sys_2.infer rejects the retired schema output key before calling the provider', () =>
+		Effect.gen(function* () {
+			const { p, requests } = port([done('unused')]);
+			for (const output of [{ jsonSchema: {} }, { json_schema: {}, jsonSchema: {} }]) {
+				expect(yield* Effect.flip(inferFacility(p)(at({ prompt: 'q', output })))).toMatchObject({
+					kind: 'invalid'
+				});
+			}
+			expect(requests).toHaveLength(0);
+		})
+	);
+
 	it.effect(
 		'sys_2.infer with a JSON Schema output: the schema checks structure (if/then included), CEL rules check logic, both come back by path',
 		() =>
 			Effect.gen(function* () {
-				const jsonSchema = {
+				const json_schema = {
 					type: 'object',
 					required: ['test'],
 					properties: {
@@ -1163,9 +1175,9 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					),
 					tool('submit', {}, 's2')
 				]);
-				expect(yield* inferFacility(p)(at({ prompt: 'q', output: { jsonSchema, rules } }))).toEqual(
-					{ ok: true, value: { test: { status: 'unable', reason: 'VTs connected' } } }
-				);
+				expect(
+					yield* inferFacility(p)(at({ prompt: 'q', output: { json_schema, rules } }))
+				).toEqual({ ok: true, value: { test: { status: 'unable', reason: 'VTs connected' } } });
 				expect(requests[0]!.messages[0]!.content).toContain('an unperformed test has no reading');
 				const back = JSON.stringify(requests[2]!.messages.at(-1));
 				expect(back).toContain('/test/reading');
@@ -1176,7 +1188,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					yield* inferFacility(port([]).p)(
 						at({
 							prompt: 'q',
-							output: { jsonSchema, rules: [{ expression: 'test.(', message: 'x' }] }
+							output: { json_schema, rules: [{ expression: 'test.(', message: 'x' }] }
 						})
 					)
 				).toMatchObject({
@@ -1244,7 +1256,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						loads.push(id);
 						return { mime: 'image/png', bytes: new Uint8Array(1) };
 					});
-				const jsonSchema = {
+				const json_schema = {
 					type: 'object',
 					required: ['rows'],
 					properties: { rows: { type: 'array', minItems: 2, items: { type: 'string' } } }
@@ -1257,7 +1269,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				]);
 				const files = Array.from({ length: MODEL_FILES.count + 2 }, (_, i) => ({ id: `f${i}` }));
 				expect(
-					yield* inferFacility(p, { load })(at({ prompt: 'q', files, output: { jsonSchema } }))
+					yield* inferFacility(p, { load })(at({ prompt: 'q', files, output: { json_schema } }))
 				).toEqual({ ok: true, value: { rows: ['a', 'b'] } });
 				expect(requests.map((r) => r.files?.length)).toEqual([
 					MODEL_FILES.count,

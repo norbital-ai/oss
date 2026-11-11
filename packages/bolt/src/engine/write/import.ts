@@ -1,7 +1,6 @@
-import { Array as EffectArray, Effect, Result } from 'effect';
 // Import: one atomic act through the ordinary per-verb callbacks. This file owns its options,
 // references given by the target's key values and the `prune` read.
-import { Predicate } from 'effect';
+import { Array as EffectArray, Effect, Option, Predicate, Result, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Authority, Bindings, Outcome, Reader } from '../contracts.ts';
 import type { Pred } from '@norbital-ai/store';
@@ -20,13 +19,16 @@ import { composable } from '../query/reader.ts';
 import type { Item } from './flatten.ts';
 import { modelKey } from './flatten.ts';
 import { databaseValue } from '@norbital-ai/store';
+const ImportConflict = Schema.Literals(['update', 'keep', 'refuse']);
+const decodeConflict = Schema.decodeUnknownOption(ImportConflict);
+
 export type ImportPlan = {
 	rows: readonly Json[];
 	/** Required on a keyed model; `refuse` refuses a row already on file. */
-	on_conflict?: 'update' | 'keep' | 'refuse';
+	on_conflict?: typeof ImportConflict.Type;
 	/** `skip` only updates rows already on file (enrichment). */
-	onMissing?: 'create' | 'skip';
-	dryRun?: true;
+	on_missing?: 'create' | 'skip';
+	dry_run?: true;
 	/** The ids to delete: caller-readable rows inside the `Where` whose key the import does not name. */
 	prune?: (
 		db: TenantDb,
@@ -44,7 +46,7 @@ const bad = (message: string, field?: string): Outcome => ({
 	message,
 	...(field === undefined ? {} : { field })
 });
-/** Decodes `{ rows, on_conflict?, onMissing?, prune?, dryRun? }` (final-models §2.4). */
+/** Decodes `{ rows, on_conflict?, on_missing?, prune?, dry_run? }` (final-models §2.4). */
 export function importPlan(
 	m: EngineManifest,
 	model: string,
@@ -52,8 +54,8 @@ export function importPlan(
 	key: readonly string[]
 ): ImportPlan | Outcome {
 	if (!Predicate.isObject(input) || !EffectArray.isArray<Json | undefined>(input['rows']))
-		return bad('an import is { rows, on_conflict?, onMissing?, prune?, dryRun? }');
-	const { rows, on_conflict, onMissing, prune, dryRun, ...rest } = input;
+		return bad('an import is { rows, on_conflict?, on_missing?, prune?, dry_run? }');
+	const { rows, on_conflict, on_missing, prune, dry_run, ...rest } = input;
 	const extra = Object.keys(rest)[0];
 	if (extra !== undefined) return bad(`'${extra}' is not an import option`, extra);
 	if (rows.length > LIMITS.act.rows)
@@ -64,14 +66,15 @@ export function importPlan(
 		};
 	if (
 		key.length === 0 &&
-		(on_conflict !== undefined || onMissing !== undefined || prune !== undefined)
+		(on_conflict !== undefined || on_missing !== undefined || prune !== undefined)
 	)
-		return bad(`${model} has no key: on_conflict, onMissing and prune need one`);
-	if (key.length > 0 && !['update', 'keep', 'refuse'].includes(on_conflict as string))
+		return bad(`${model} has no key: on_conflict, on_missing and prune need one`);
+	const conflict = decodeConflict(on_conflict);
+	if (key.length > 0 && Option.isNone(conflict))
 		return bad('on_conflict is required: update, keep or refuse', 'on_conflict');
-	if (onMissing !== undefined && onMissing !== 'create' && onMissing !== 'skip')
-		return bad('onMissing is create or skip', 'onMissing');
-	if (dryRun !== undefined && dryRun !== true) return bad('dryRun is true', 'dryRun');
+	if (on_missing !== undefined && on_missing !== 'create' && on_missing !== 'skip')
+		return bad('on_missing is create or skip', 'on_missing');
+	if (dry_run !== undefined && dry_run !== true) return bad('dry_run is true', 'dry_run');
 	let where: Pred | undefined;
 	if (prune !== undefined) {
 		if (m.exposures[model]?.delete === undefined)
@@ -90,11 +93,9 @@ export function importPlan(
 	}
 	return {
 		rows,
-		...(on_conflict === undefined
-			? {}
-			: { on_conflict: on_conflict as 'update' | 'keep' | 'refuse' }),
-		...(onMissing === undefined ? {} : { onMissing }),
-		...(dryRun === true ? { dryRun } : {}),
+		...(Option.isSome(conflict) ? { on_conflict: conflict.value } : {}),
+		...(on_missing === undefined ? {} : { on_missing }),
+		...(dry_run === true ? { dry_run } : {}),
 		...(where === undefined
 			? {}
 			: { prune: (db, auth, b, items) => pruned(m, model, key, where, db, auth, b, items) })

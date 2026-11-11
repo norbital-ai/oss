@@ -699,9 +699,9 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 						: { kind: 'pending_approval', requestId: request, records }
 				);
 			}
-			if (imp?.dryRun)
+			if (imp?.dry_run)
 				return none(
-					yield* dryRun(
+					yield* dry_run(
 						e.db,
 						compileCommit(m, cat, { ...planned.commit, ...common }),
 						planned.lock,
@@ -1320,7 +1320,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 					outcome: refused('notFound', `No ${c.model} has this id.`, [...c.path, 'id'])
 				};
 			const id = found === undefined ? c.id : String(found['id']);
-			const skip = found === undefined && root && imp.onMissing === 'skip';
+			const skip = found === undefined && root && imp.on_missing === 'skip';
 			if (r.verb === 'upsert' && item.parent === undefined) upsertOutput.push(id);
 			if (root)
 				importRows.push({
@@ -2704,7 +2704,7 @@ export function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError
 			return Effect.fail(error);
 	}
 }
-const dryRun = Effect.fn('Bolt.dryRun')(function* (
+const dry_run = Effect.fn('Bolt.dry_run')(function* (
 	db: TenantDb,
 	statements: readonly Sql[],
 	lock: Lock | undefined,

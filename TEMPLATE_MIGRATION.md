@@ -61,3 +61,7 @@
 | Actor `teamPath`, kind `apiKey`, MCP `clientId` and `clientSecret` | Use `team_path`, `api_key`, `client_id`, `client_secret`. |
 
 Apply these entries when relocking the template to the matching Bolt release. For deployed workspaces, create the runtime envoy rows and remap their connections and conversation references before activating the new release.
+
+- Import inputs change `onMissing` to `on_missing`. The retired key is rejected.
+- Import inputs change `dryRun` to `dry_run`. The retired key is rejected.
+- Schema-based inference uses `output: { json_schema, rules? }` in place of `output: { jsonSchema, rules? }`.

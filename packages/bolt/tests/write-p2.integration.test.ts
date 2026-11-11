@@ -715,7 +715,7 @@ describe('engine/write: import (rule 30)', () => {
 								{ code: 'p9', name: 'N' }
 							],
 							on_conflict: 'update',
-							onMissing: 'skip'
+							on_missing: 'skip'
 						})).outcome
 					)
 				).toEqual(['0:updated', '1:skipped']);
@@ -735,7 +735,31 @@ describe('engine/write: import (rule 30)', () => {
 			}).pipe(Effect.provide(P2FixtureLive))
 	);
 
-	it.effect('prune deletes the absent keys inside its Where; dryRun writes nothing', () =>
+	it.effect('rejects retired import options before writing', () =>
+		Effect.gen(function* () {
+			for (const [name, value] of [
+				['onMissing', 'skip'],
+				['dryRun', true]
+			] as const) {
+				expect(
+					(yield* imp({
+						rows: [{ code: 'old', name: 'Unwritten' }],
+						on_conflict: 'update',
+						[name]: value
+					})).outcome
+				).toMatchObject({
+					kind: 'refused',
+					code: 'invalidInput',
+					field: name
+				});
+			}
+			expect(
+				yield* rows(Schema.Struct({ code: Schema.String }), 'select code from people')
+			).toEqual([]);
+		}).pipe(Effect.provide(P2FixtureLive))
+	);
+
+	it.effect('prune deletes the absent keys inside its Where; dry_run writes nothing', () =>
 		Effect.gen(function* () {
 			ok(
 				(yield* imp({
@@ -761,7 +785,7 @@ describe('engine/write: import (rule 30)', () => {
 			count.writes = 0;
 			expect(
 				report(
-					(yield* imp({ rows: [{ code: 'p9', name: 'x' }], on_conflict: 'update', dryRun: true }))
+					(yield* imp({ rows: [{ code: 'p9', name: 'x' }], on_conflict: 'update', dry_run: true }))
 						.outcome
 				)
 			).toEqual(['0:created']);

@@ -117,7 +117,7 @@ ctx
 	.act('notice_notes.import', {
 		rows: [{ notice, note: 'x' }],
 		on_conflict: 'update',
-		dryRun: true
+		dry_run: true
 	})
 	.pipe(
 		Effect.map((o) => {

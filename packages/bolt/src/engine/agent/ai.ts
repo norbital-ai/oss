@@ -532,11 +532,19 @@ const FINAL_TURNS = 3;
 /** A rule the answer must hold beside its shape: CEL over the answer's top-level properties, and what to say when it fails. */
 type Rule = { expression: string; message: string };
 /** `output` as a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the logic, instead of a declared kind. */
-type SchemaOutput = { jsonSchema: Json; rules?: readonly Rule[] };
+type SchemaOutput = { json_schema: Json; rules?: readonly Rule[] };
 
 const Rules = Schema.Array(Schema.Struct({ expression: Schema.String, message: Schema.String }));
 const InferOutput = Schema.Union([
-	Schema.Struct({ jsonSchema: Schema.Json, rules: Schema.optionalKey(Rules) }),
+	Schema.StructWithRest(
+		Schema.Struct({ json_schema: Schema.Json, rules: Schema.optionalKey(Rules) }),
+		[
+			Schema.Record(
+				Schema.String.check(Schema.makeFilter((key) => key !== 'json_schema' && key !== 'rules')),
+				Schema.Never
+			)
+		]
+	),
 	RequestOutput
 ]);
 /** `ai.sys_2.infer`'s arguments; `tools` names the host tools a run lends it (the run's gate, `runs/index.ts`). */
@@ -555,9 +563,9 @@ export const InferArgs = Schema.Struct({
 export const inferArgsOf = Schema.decodeUnknownOption(InferArgs);
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
 function schemaChecker(output: SchemaOutput): (value: Json) => string[] {
-	const schema = output.jsonSchema;
+	const schema = output.json_schema;
 	if (typeof schema !== 'boolean' && !Predicate.isObject(schema))
-		throw new Error('jsonSchema must be an object or boolean');
+		throw new Error('json_schema must be an object or boolean');
 	const validator = new Validator(schema, '2020-12', false);
 	return (value) => [
 		...new Set(
@@ -623,7 +631,7 @@ function ruleChecker(
 /**
  * `ctx.ai.sys_2.infer` for automations (rule 63, L-BOLT-371/372): a prompt, optional files and an `output`, continued
  * across cut steps while it progresses (STALL_MS of silence ends it). Files are FileRefs the host loads. A
- * structured `output` — a declared kind, or `{ jsonSchema, rules }` — is built, not written in one piece: the model edits a
+ * structured `output` — a declared kind, or `{ json_schema, rules }` — is built, not written in one piece: the model edits a
  * draft with `edit` (keyed pointers: a keyed list's items by key) as it finds each part, inspects it with `read`, `find`
  * and `diff`, and hands it in with `submit`. A submission is checked against `output` and every rule (the schema's and
  * the request's own `rules`); one that does not match gets every offending field (and broken rule) back and the loop goes
@@ -718,7 +726,7 @@ export function inferFacility(
 				ok: false,
 				error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' }
 			};
-		const schemaOut = a.output !== undefined && 'jsonSchema' in a.output ? a.output : undefined;
+		const schemaOut = a.output !== undefined && 'json_schema' in a.output ? a.output : undefined;
 		const out =
 			a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text'
 				? a.output
@@ -740,7 +748,7 @@ export function inferFacility(
 						message: error instanceof Error ? error.message : String(error)
 					})
 			});
-		const root = Predicate.isObject(schemaOut?.jsonSchema) ? schemaOut.jsonSchema : {};
+		const root = Predicate.isObject(schemaOut?.json_schema) ? schemaOut.json_schema : {};
 		const rules = [...(schemaOut?.rules ?? []), ...(a.rules ?? [])];
 		const ruled = ruleChecker(
 			Object.keys(
@@ -777,7 +785,7 @@ export function inferFacility(
 		const beat = () => {
 			progressed = clock.currentTimeMillisUnsafe();
 		};
-		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.jsonSchema;
+		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.json_schema;
 		const rulesText =
 			rules.length === 0
 				? ''
