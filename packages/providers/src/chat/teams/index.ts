@@ -2,6 +2,7 @@
 // network through axios and MSAL, past the host's fetch, so the token and the Connector are plain calls here. Teams has
 // no dedupe key on a send. Nothing installed names a Graph delta endpoint, and reading a chat back takes a Graph
 // permission a bot does not hold by default and per-thread ids a delivery does not leave here, so this is webhook-only.
+import { tokenCache } from '../token.ts';
 import { Schema } from 'effect';
 import { parse as parseJson, json } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
@@ -87,9 +88,7 @@ export const teams: ChatPlatform = {
 		const { InboundActivityTokenValidator } =
 			await import('@microsoft/teams.apps/dist/middleware/auth/inbound-activity-token-validator.js');
 		const validator = new InboundActivityTokenValidator(appId, appTenantId || undefined);
-		let token: { readonly value: string; readonly until: number } | null = null;
-		const bearer = async () => {
-			if (token !== null && Date.now() < token.until) return token.value;
+		const tokens = tokenCache(async () => {
 			const response = await host.fetch(
 				`https://login.microsoftonline.com/${encodeURIComponent(appTenantId || DEFAULT_TENANT)}/oauth2/v2.0/token`,
 				{
@@ -111,13 +110,9 @@ export const teams: ChatPlatform = {
 			)(await response.json().catch(() => ({})));
 			if (!response.ok || answer.access_token === undefined)
 				throw new PlatformError(`Teams token answered ${response.status}`, response.status);
-			token = {
-				value: answer.access_token,
-				until: Date.now() + (answer.expires_in ?? 0) * 1000 - TOKEN_EARLY_MS
-			};
-			return answer.access_token;
-		};
-		await bearer();
+			return { token: answer.access_token, ttl: (answer.expires_in ?? 0) * 1000 - TOKEN_EARLY_MS };
+		});
+		await tokens.get();
 		const connector = async <A>(
 			schema: Schema.Decoder<A>,
 			serviceUrl: string,
@@ -130,7 +125,7 @@ export const teams: ChatPlatform = {
 			const response = await host.fetch(url, {
 				method: 'POST',
 				headers: {
-					authorization: `Bearer ${await bearer()}`,
+					authorization: `Bearer ${await tokens.get()}`,
 					'content-type': 'application/json'
 				},
 				body: JSON.stringify(body)
@@ -172,7 +167,7 @@ export const teams: ChatPlatform = {
 						const own = !download && new URL(url).origin === new URL(serviceUrl).origin;
 						const response = await host.fetch(
 							url,
-							own ? { headers: { authorization: `Bearer ${await bearer()}` } } : {}
+							own ? { headers: { authorization: `Bearer ${await tokens.get()}` } } : {}
 						);
 						if (!response.ok)
 							throw new PlatformError(`Teams answered ${response.status}`, response.status);

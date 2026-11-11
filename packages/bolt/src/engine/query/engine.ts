@@ -1,5 +1,6 @@
 // The read engine (A4, rule 12): one batch = one pipelined round trip. Identical reads run once; an index search's
 // probe runs before the round trip and its re-rank after. Nothing is clamped (rule 9): `all` past its cap is `tooLarge`.
+import { uuid } from '../port.ts';
 import {
 	Cache,
 	Context,
@@ -904,13 +905,7 @@ export const ReadsLive = Layer.effect(
 		const guest = yield* Guest;
 		const ai = yield* Ai;
 		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto
-			.randomUUIDv4()
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-				)
-			);
+		const newId = uuid(crypto);
 		const held = new Set<string>();
 		db.owe(
 			heldModels(db).pipe(
@@ -929,7 +924,7 @@ export const ReadsLive = Layer.effect(
 			input: Json,
 			bindings: Bindings
 		) {
-			const id = yield* uuid;
+			const id = yield* newId;
 			const outcome = yield* guest.invoke(
 				{
 					id,

@@ -1,3 +1,4 @@
+import { uuid } from '../engine/port.ts';
 // Each body enters one decoded route; all engine calls remain in the activation's Effect graph.
 import {
 	Clock,
@@ -530,18 +531,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
 				authority,
 				bindings: b,
-				invocationId: yield* (yield* Crypto.Crypto)
-					.randomUUIDv4()
-					.pipe(
-						Effect.mapError((error) =>
-							BoltError.make(
-								'unavailable',
-								'facility',
-								'Secure random UUID generation failed.',
-								error
-							)
-						)
-					)
+				invocationId: yield* uuid(yield* Crypto.Crypto)
 			});
 			return { outcome: restored.outcome, v: restored.v ?? (yield* live.v) };
 		} else {
@@ -599,13 +589,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 		...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
 		authority,
 		bindings: b,
-		invocationId: yield* (yield* Crypto.Crypto)
-			.randomUUIDv4()
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-				)
-			)
+		invocationId: yield* uuid(yield* Crypto.Crypto)
 	};
 	if (callable._tag === 'Verb')
 		return yield* (yield* Writes).act({

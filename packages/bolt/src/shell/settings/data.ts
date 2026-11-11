@@ -1,4 +1,5 @@
 // Administrator settings reads and decoded identity/secret operations.
+import { sql } from '../../engine/db/sql.ts';
 import { Effect, Schema } from 'effect';
 import type { EngineError } from '../../engine/errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -14,8 +15,6 @@ import * as members from '../../engine/identity/members.ts';
 import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identity/session.ts';
 import { AgentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
 import { AuditRow, InvitationRow, KeyRow, Member } from '../api-types.ts';
-
-const q = (text: string, ...params: Json[]) => ({ text, params });
 
 const nullableText = Schema.NullOr(Schema.String);
 const DeliveryRow = Schema.Struct({
@@ -142,19 +141,19 @@ export const settings = Effect.fn('shell.settings')(function* (
 	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
 		[
 			// administrators first, then staff, then external members; by name, else address (L-BOLT-516). Anonymous visitors are no members.
-			q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
+			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
 			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
-			q(
+			sql(
 				`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
 			WHEN expires_at <= $1::timestamptz THEN 'expired' ELSE 'open' END AS status, expires_at::text AS expires_at FROM sys_invitation ORDER BY expires_at DESC`,
 				now.toISOString()
 			),
-			q(
+			sql(
 				'SELECT id, name, prefix, team, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'
 			),
-			q(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
+			sql(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
 			WHERE collection IN ('sys_user', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
-			q(
+			sql(
 				`SELECT integration, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
 			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained'))::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
 			min(next_attempt_at) FILTER (WHERE status = 'queued' AND attempts > 0)::text AS next_retry,
@@ -162,11 +161,11 @@ export const settings = Effect.fn('shell.settings')(function* (
 			FROM sys_message WHERE direction = 'outbound' AND created_at > $1::timestamptz - interval '1 day' GROUP BY integration`,
 				now.toISOString()
 			),
-			q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
-			q(
+			sql(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
+			sql(
 				'SELECT id, name, integration, owner, named, envoy, active, status, configuration FROM sys_integration ORDER BY name, id'
 			),
-			q(
+			sql(
 				'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
 			)
 		]

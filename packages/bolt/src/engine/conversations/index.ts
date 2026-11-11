@@ -1,4 +1,3 @@
-const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => ({ text, params });
 // Conversations (§4.3, rule 61): what a conversation instance's link hands the engine, and the messages it sends. Each
 // inbound message is one statement keyed by its instance: the conversation (a DM or a group), the message by
 // `(instance, provider_id)` — a newer version converges it, a revoke tombstones it, an admitted row keeps the transcript
@@ -11,6 +10,7 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // or deleted chat tombstones its rows up to the clear in one statement, under the same admitted-transcript rule.
 // A webhook is a hint, not the state: `recent` names the threads a link reconciles and `repair` passes what differs
 // from the platform's view of one through this same path.
+import { sql } from '../db/sql.ts';
 import { Clock, Crypto, Effect, Layer, Option, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { teams } from '../manifest.ts';
@@ -18,7 +18,7 @@ import { enqueue, nextDue } from '../runs/queue.ts';
 import type { Json } from '../../decl/values.ts';
 import type { Bindings, DriverEvent, ReconcilePage, RowData } from '../contracts.ts';
 import { Drivers, Files, Logs, type LogsShape } from '../ports.ts';
-import { Port } from '../port.ts';
+import { Port, uuid } from '../port.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { DbError } from '../errors.ts';
 import {
@@ -105,13 +105,7 @@ const StoredMessage = Schema.Struct({
 const decodeInbound = Schema.decodeUnknownOption(InboundMessage);
 export function conversations(cfg: ConversationsConfig) {
 	const { manifest: m, db } = cfg.engine;
-	const uuid = cfg.crypto
-		.randomUUIDv4()
-		.pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+	const newId = uuid(cfg.crypto);
 	const clock =
 		cfg.clock ?? Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString()));
 	const instanceOf = Effect.fn('Agents.instanceOf')(function* (id: string) {
@@ -697,7 +691,7 @@ export function conversations(cfg: ConversationsConfig) {
 			return yield* Effect.fail(BoltError.make('invalidInput', 'decode', prepared.error));
 		const now = yield* clock,
 			c = new Chain(),
-			id = options.id ?? (yield* uuid);
+			id = options.id ?? (yield* newId);
 		const sent = sendPiece(
 			c,
 			{ ...prepared, id, ...(options.kind === undefined ? {} : { kind: options.kind }) },

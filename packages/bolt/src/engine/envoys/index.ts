@@ -1,5 +1,3 @@
-import type { RowData } from '../contracts.ts';
-const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => ({ text, params });
 // Envoys (§4.4, P22, rules 57–60; authority by P32). An envoy is a runtime `sys_envoy` row
 // deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
 // `envoy` actor on that instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
@@ -12,6 +10,8 @@ const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => 
 // `envoys.receive` per sender and per subject, `agent` desk-wide. An admitted row becomes the agent's queued input with its
 // sender header (a steer: the running turn takes it at its next step); its turn holds the authority `identity/actor.ts`
 // compiles — a group's the envoy's policies alone, a linked member's DM theirs joined (`dm: 'union'`) or bound (`'envoy'`).
+import type { RowData } from '../contracts.ts';
+import { sql } from '../db/sql.ts';
 import { Clock, Context, Effect, FiberSet, Layer, Predicate, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import type { HandleKind } from '../../decl/runtime/integration.ts';

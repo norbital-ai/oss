@@ -1,3 +1,4 @@
+import { uuid } from '../port.ts';
 // Syncs (spec §3): a model's rows exchanged with another system through an integration instance. A remote sync's
 // author writes at most two guest bodies — `read` (their rows → the model's) and `write` (one committed change → a call
 // to them) — and the engine owns the rest in the tenant's own Postgres: the read run (`read.ts`: one act per page with
@@ -362,18 +363,7 @@ export const SyncsLive = Layer.effect(
 						BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
 					);
 				if (manifest.integrations[inst.integration]?.test !== true) return;
-				const id = yield* e.crypto
-					.randomUUIDv4()
-					.pipe(
-						Effect.mapError((error) =>
-							BoltError.make(
-								'unavailable',
-								'facility',
-								'Secure random UUID generation failed.',
-								error
-							)
-						)
-					);
+				const id = yield* uuid(e.crypto);
 				yield* integrationBody(e, {
 					id,
 					actor: { kind: 'system', run: id, by: { platform: `${inst.integration}.test` } },

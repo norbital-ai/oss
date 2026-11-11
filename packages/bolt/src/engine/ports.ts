@@ -93,6 +93,15 @@ import { Port, type PortFailure } from './port.ts';
 import { corpus, skillFile, type DocsCorpus } from './docs-corpus.ts';
 import { isOff, type Off } from '../facilities/off.ts';
 
+/** Adapt typed ABI methods whose last argument is the interruption signal. */
+const lift =
+	<Args extends readonly unknown[], A>(
+		facility: string,
+		call: (...args: [...Args, AbortSignal]) => PromiseLike<A>
+	) =>
+	(...args: Args): Effect.Effect<A, PortFailure> =>
+		Port.attempt(facility, (signal) => call(...args, signal));
+
 const turnedOff = (facility: string) =>
 	Port.unavailable(facility, 'the host turned this facility off');
 
@@ -114,12 +123,11 @@ export class Files extends Context.Service<
 >()('bolt/Files') {
 	static fromAbi(port: FilesPort): Layer.Layer<Files> {
 		return Layer.succeed(Files, {
-			put: (bytes, meta) => Port.attempt('files', (signal) => port.put(bytes, meta, signal)),
-			get: (key, max) => Port.attempt('files', (signal) => port.get(key, max, signal)),
-			url: (key, expiresInS) =>
-				Port.attempt('files', (signal) => port.url(key, expiresInS, signal)),
-			remove: (key) => Port.attempt('files', (signal) => port.remove(key, signal)),
-			download: (url) => Port.attempt('files', (signal) => port.download(url, signal))
+			put: lift('files', port.put.bind(port)),
+			get: lift('files', port.get.bind(port)),
+			url: lift('files', port.url.bind(port)),
+			remove: lift('files', port.remove.bind(port)),
+			download: lift('files', port.download.bind(port))
 		});
 	}
 }
@@ -168,18 +176,11 @@ export class Convert extends Context.Service<
 				? { targets: [], convert: () => turnedOff('convert') }
 				: {
 						targets: port.targets,
-						convert: (source, to, options) =>
-							Port.attempt('convert', (signal) => port.convert(source, to, options, signal)),
+						convert: lift('convert', port.convert.bind(port)),
 						...(previewPdf === undefined
 							? {}
 							: {
-									previewPdf: (
-										source: ConvertSource,
-										options: Pick<ConvertSettings, 'page' | 'landscape'>
-									) =>
-										Port.attempt('convert', (signal) =>
-											previewPdf.call(port, source, options, signal)
-										)
+									previewPdf: lift('convert', previewPdf.bind(port))
 								})
 					}),
 			...(ingester === undefined
@@ -283,29 +284,23 @@ export class Browser extends Context.Service<
 					)
 			});
 		}
-		const open = port.openWorkspace,
-			close = port.close,
+		const open = port.openWorkspace?.bind(port),
+			close = port.close?.bind(port),
 			shape = {
 				navigate: (profile: string, to: BrowserTarget, find?: string) =>
 					Port.attempt('browser', (signal) => port.navigate(profile, to, find, signal)),
-				snapshot: (profile: string, options: { find?: string; from?: number }) =>
-					Port.attempt('browser', (signal) => port.snapshot(profile, options, signal)),
-				act: (profile: string, steps: readonly BrowserStep[]) =>
-					Port.attempt('browser', (signal) => port.act(profile, steps, signal)),
-				evaluate: (profile: string, expression: string) =>
-					Port.attempt('browser', (signal) => port.evaluate(profile, expression, signal)),
-				screenshot: (profile: string) =>
-					Port.attempt('browser', (signal) => port.screenshot(profile, signal)),
-				download: (profile: string, url: string) =>
-					Port.attempt('browser', (signal) => port.download(profile, url, signal))
+				snapshot: lift('browser', port.snapshot.bind(port)),
+				act: lift('browser', port.act.bind(port)),
+				evaluate: lift('browser', port.evaluate.bind(port)),
+				screenshot: lift('browser', port.screenshot.bind(port)),
+				download: lift('browser', port.download.bind(port))
 			};
 		return Layer.succeed(Browser, {
 			...shape,
 			...(open === undefined
 				? {}
 				: {
-						openWorkspace: (profile, target, caller) =>
-							Port.attempt('browser', (signal) => open(profile, target, caller, signal))
+						openWorkspace: lift('browser', open)
 					}),
 			...(close === undefined
 				? {}
@@ -342,8 +337,8 @@ export class Geo extends Context.Service<
 		return isOff(port)
 			? Layer.succeed(Geo, { search: () => turnedOff('geo'), reverse: () => turnedOff('geo') })
 			: Layer.succeed(Geo, {
-					search: (query) => Port.attempt('geo', (signal) => port.search(query, signal)),
-					reverse: (point) => Port.attempt('geo', (signal) => port.reverse(point, signal))
+					search: lift('geo', port.search.bind(port)),
+					reverse: lift('geo', port.reverse.bind(port))
 				});
 	}
 }
@@ -357,7 +352,7 @@ export class Logs extends Context.Service<Logs, LogsShape>()('bolt/Logs') {
 		return Layer.succeed(Logs, {
 			write: (event) =>
 				Effect.try({ try: () => port.write(event), catch: (error) => error }).pipe(Effect.ignore),
-			query: (query) => Port.attempt('logs', (signal) => port.query(query, signal))
+			query: lift('logs', port.query.bind(port))
 		});
 	}
 }
@@ -568,11 +563,7 @@ export class Drivers extends Context.Service<
 										try: (signal) => request(instance, op, signal),
 										catch: linkFailure(instance)
 									}),
-					read:
-						read === undefined
-							? () => Port.unavailable('link')
-							: (instance, sync, partition, cursor) =>
-									Port.attempt('link', (signal) => read(instance, sync, partition, cursor, signal)),
+					read: read === undefined ? () => Port.unavailable('link') : lift('link', read),
 					changed:
 						changed === undefined
 							? () => Port.unavailable('link')
@@ -628,10 +619,7 @@ export class Ai extends Context.Service<
 			embed = isOff(ports.embed) ? undefined : ports.embed;
 		const catalog = sys2?.catalog?.bind(sys2);
 		return Layer.succeed(Ai, {
-			ask:
-				sys1 === undefined
-					? Ai.noSystem1
-					: (request) => Port.attempt('sys_1', (signal) => sys1.ask(request, signal)),
+			ask: sys1 === undefined ? Ai.noSystem1 : lift('sys_1', sys1.ask.bind(sys1)),
 			maxChoices: sys1?.maxChoices,
 			models: sys2?.models ?? [],
 			catalog: catalog === undefined ? turnedOff('ai') : Port.attempt('ai', () => catalog()),
@@ -681,9 +669,9 @@ export class ArtifactFiles extends Context.Service<
 >()('bolt/ArtifactFiles') {
 	static fromAbi(port: ArtifactPort): Layer.Layer<ArtifactFiles> {
 		return Layer.succeed(ArtifactFiles, {
-			read: (path) => Port.attempt('artifact', (signal) => port.read(path, signal)),
-			list: (dir) => Port.attempt('artifact', (signal) => port.list(dir, signal)),
-			stat: (path) => Port.attempt('artifact', (signal) => port.stat(path, signal))
+			read: lift('artifact', port.read.bind(port)),
+			list: lift('artifact', port.list.bind(port)),
+			stat: lift('artifact', port.stat.bind(port))
 		});
 	}
 	/**
@@ -792,7 +780,7 @@ export class Keys extends Context.Service<
 >()('bolt/Keys') {
 	static fromAbi(port: KeysPort): Layer.Layer<Keys> {
 		return Layer.succeed(Keys, {
-			seal: (plain, aad) => Port.attempt('keys', (signal) => port.seal(plain, aad, signal)),
+			seal: lift('keys', port.seal.bind(port)),
 			open: (sealed, aad) =>
 				Port.attempt('keys', (signal) => port.open(sealed, aad, signal)).pipe(
 					Effect.map(Option.fromNullOr)
@@ -910,8 +898,7 @@ export class Http extends Context.Service<
 		return isOff(port)
 			? Layer.succeed(Http, { fetch: () => turnedOff('http') })
 			: Layer.succeed(Http, {
-					fetch: (request, options) =>
-						Port.attempt('http', (signal) => port.fetch(request, options, signal))
+					fetch: lift('http', port.fetch.bind(port))
 				});
 	}
 }
@@ -926,7 +913,7 @@ export class Bundler extends Context.Service<
 >()('bolt/Bundler') {
 	static fromAbi(port: BundlerPort): Layer.Layer<Bundler> {
 		return Layer.succeed(Bundler, {
-			bundle: (request) => Port.attempt('bundler', (signal) => port.bundle(request, signal))
+			bundle: lift('bundler', port.bundle.bind(port))
 		});
 	}
 }
@@ -947,12 +934,10 @@ export class Images extends Context.Service<
 >()('bolt/Images') {
 	static fromAbi(port: ImagesPort): Layer.Layer<Images> {
 		return Layer.succeed(Images, {
-			facts: (bytes) => Port.attempt('files.image', (signal) => port.facts(bytes, signal)),
-			jpeg: (bytes, maxEdge) =>
-				Port.attempt('files.image', (signal) => port.jpeg(bytes, maxEdge, signal)),
-			crop: (bytes, box) => Port.attempt('files.image', (signal) => port.crop(bytes, box, signal)),
-			preview: (bytes, mime, maxEdge) =>
-				Port.attempt('files.image', (signal) => port.preview(bytes, mime, maxEdge, signal))
+			facts: lift('files.image', port.facts.bind(port)),
+			jpeg: lift('files.image', port.jpeg.bind(port)),
+			crop: lift('files.image', port.crop.bind(port)),
+			preview: lift('files.image', port.preview.bind(port))
 		});
 	}
 }

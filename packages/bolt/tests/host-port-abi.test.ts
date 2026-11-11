@@ -2,7 +2,13 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Cause, Context, Effect, Exit, Fiber, Layer, Stream } from 'effect';
 import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
-import type { AiPort, DeadlinesPort, LinksPort, TransportPort } from '../src/engine/contracts.ts';
+import type {
+	AiPort,
+	BrowserPort,
+	DeadlinesPort,
+	LinksPort,
+	TransportPort
+} from '../src/engine/contracts.ts';
 import { SendRefused } from '../src/engine/conversations/status.ts';
 import {
 	Conflict,
@@ -17,6 +23,7 @@ import { BoltError } from '../src/protocol/errors.ts';
 import { Port } from '../src/engine/port.ts';
 import {
 	Ai,
+	Browser,
 	Convert,
 	DeadlinePort,
 	Drivers,
@@ -71,7 +78,10 @@ describe('fromAbi', () => {
 			const files = Files.fromAbi({
 				put: async (bytes, meta) => ({ ...blob, bytes: bytes.length, mime: meta.mime }),
 				get: async () => new Uint8Array([1]),
-				url: async (key) => `https://files/${key}`,
+				async url(key) {
+					expect(this.download).toBeTypeOf('function');
+					return `https://files/${key}`;
+				},
 				remove: async () => {},
 				download: async (url) =>
 					url.endsWith('.png')
@@ -91,6 +101,69 @@ describe('fromAbi', () => {
 			expect(
 				yield* Effect.flip(using(Files, files, (f) => f.download('https://law.example/a.ts')))
 			).toMatchObject({ _tag: 'FacilityFailure', kind: 'invalid', message: 'not media' });
+		})
+	);
+
+	it.effect('Browser optional methods and lifted methods keep their port receiver', () =>
+		Effect.gen(function* () {
+			const closed: string[] = [];
+			const port: BrowserPort = {
+				async navigate() {
+					return null;
+				},
+				async snapshot(profile) {
+					expect(this).toBe(port);
+					return profile;
+				},
+				async act() {
+					return null;
+				},
+				async evaluate() {
+					return null;
+				},
+				async screenshot() {
+					return new Uint8Array();
+				},
+				async download() {
+					return { ...blob, name: 'file.txt' };
+				},
+				async openWorkspace(profile) {
+					expect(this).toBe(port);
+					return profile;
+				},
+				async close(profile) {
+					expect(this).toBe(port);
+					closed.push(profile);
+				}
+			};
+			yield* Effect.gen(function* () {
+				const browser = yield* Browser;
+				expect(yield* browser.snapshot('reader', {})).toBe('reader');
+				expect(
+					yield* browser.openWorkspace?.(
+						'reader',
+						{ environment: 'live' },
+						{
+							actor: {
+								kind: 'member',
+								id: 'member',
+								external: false,
+								admin: false,
+								team_path: [],
+								email: null,
+								phone: null,
+								party: null,
+								teams: []
+							},
+							conversation: 'conversation'
+						}
+					) ?? Effect.die('openWorkspace missing')
+				).toBe('reader');
+				const session = yield* browser.scoped('scoped');
+				expect(yield* session.snapshot({})).toBe('scoped');
+				yield* browser.close?.('reader') ?? Effect.die('close missing');
+			}).pipe(Effect.provide(Browser.fromAbi(port)), Effect.scoped);
+			expect(closed).toEqual(['reader', 'scoped']);
 		})
 	);
 

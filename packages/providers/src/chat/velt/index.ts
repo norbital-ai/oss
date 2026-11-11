@@ -4,13 +4,12 @@
 import { Schema } from 'effect';
 import { parse as parseJson, json, download as downloadFile } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
-import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, same } from '../verify.ts';
+import { nothing, PlatformError } from '../adapter.ts';
+import { standardWebhook } from '../verify.ts';
 
 const API = 'https://api.velt.dev';
 /** A generated token's working life, as Velt's own adapter keeps one. */
 const TOKEN_MS = 40 * 3_600_000;
-const TOLERANCE_S = 5 * 60;
 const COMMENT_EVENTS = new Set([
 	'comment.add',
 	'comment_annotation.add',
@@ -87,18 +86,6 @@ const Hook = Schema.Struct({
 	})
 });
 
-/** Standard Webhooks: an HMAC of `id.timestamp.body` under the decoded key, its timestamp recent. */
-const verify = (headers: Headers, body: string, key: Buffer) => {
-	const id = headers.get('webhook-id'),
-		at = headers.get('webhook-timestamp'),
-		want = hmac(key, `${id}.${at}.${body}`, 'base64');
-	const fresh = Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S;
-	const matches = headers
-		.get('webhook-signature')
-		?.split(' ')
-		.some((one) => same(one.slice(one.indexOf(',') + 1), want));
-	if (id === null || !fresh || matches !== true) throw new Unverified('bad signature');
-};
 const place = (thread: string) => {
 	const [organizationId = '', documentId = '', annotationId = ''] = thread
 		.split(':')
@@ -247,7 +234,7 @@ export const velt: ChatPlatform = {
 		const connection: ChatConnection = {
 			account: botUserName,
 			async deliver(request, body) {
-				verify(request.headers, body, key);
+				standardWebhook(request.headers, body, key);
 				const { event, data } = await parseJson(Hook, body);
 				if (event === undefined || !COMMENT_EVENTS.has(event)) return nothing();
 				const { metadata, commentAnnotation, targetComment } = data;

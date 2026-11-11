@@ -1,6 +1,6 @@
 // Actor resolution: membership chooses an authored team handle; its policies and hierarchy come from source.
 // Descendants scope teamTree without inheriting grants. Static actors hold their declared policies.
-import type { Json } from '../../decl/values.ts';
+import { sql } from '../db/sql.ts';
 import type { SourceTeam } from '../../decl/access/team.ts';
 import { compileAuthority, type Holder } from '../access/authority.ts';
 import type { Authority, EngineActor } from '../contracts.ts';
@@ -40,7 +40,6 @@ type UserRow = typeof UserSchema.Type;
 type TeamGraph = {
 	readonly [handle: string]: SourceTeam;
 };
-const q = (text: string, ...params: Json[]) => ({ text, params });
 /** How long a caller's row or session is trusted unread; a statement on either ends it at once. */
 export const MEMO_MS = 900_000;
 export class Authorities {
@@ -137,7 +136,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 				if (held !== undefined && held.stamp === stamp && now - held.at < MEMO_MS) return held.row;
 				this.rows.delete(userId);
 				const [users] = yield* db.read([
-					q(
+					sql(
 						'SELECT id, email, phone, kind, active, admin, team, party, signup, revision FROM sys_user WHERE id = $1',
 						userId
 					)
@@ -236,7 +235,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 		return Effect.gen(
 			function* (this: Authorities) {
 				const [keys] = yield* db.read([
-					q(
+					sql(
 						'SELECT id, team, revision FROM sys_api_key WHERE id = $1 AND revoked_at IS NULL',
 						keyId
 					)
@@ -281,7 +280,7 @@ SELECT (SELECT (n->>'revision')::int FROM bound) AS revision`
 						BoltError.make('unknownEnvoy', 'admission', `no envoy '${o.envoy}'`)
 					);
 				const [rows] = yield* db.read([
-					q(
+					sql(
 						'SELECT revision FROM sys_integration WHERE id = $1 AND envoy = $2 AND active AND owner IS NULL',
 						o.instance,
 						o.envoy

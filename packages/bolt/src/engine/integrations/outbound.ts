@@ -1,4 +1,5 @@
 // Outbound conversation messages: queued once, delivered in order, and reported through the sync inbox.
+import { sql } from '../db/sql.ts';
 import { Clock, Effect, Layer, Predicate, Result, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
@@ -144,7 +145,6 @@ const PARKED_MS = 86_400_000;
 /** A sync's queued sends wait until its id map and acknowledgement commit, so their reports have a destination. */
 const RELEASED = (row: string) =>
 	`(${row}.meta ->> 'sync_write' IS NULL OR EXISTS (SELECT 1 FROM sys_outbox o WHERE o.key = ${row}.meta ->> 'sync_write' AND o.status = 'acked'))`;
-const sql = (text: string, ...params: Json[]) => ({ text, params });
 type OutboundConfig = {
 	engine: { manifest: EngineManifest; db: TenantDbShape; live: Live['Service'] };
 	send: Links['Service']['send'];

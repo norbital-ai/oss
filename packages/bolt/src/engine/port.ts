@@ -1,6 +1,7 @@
 // Port calls (L-BOLT-288, 289): every host port call runs under its wall, and a port's throw or bad answer is a typed
 // facility failure, never a throw. `Port.fromPromise` is for Promise ports across an ABI (providers and host services).
-import { Duration, Effect, Option, Predicate, Schema } from 'effect';
+import { Crypto, Duration, Effect, Option, Predicate, Schema } from 'effect';
+import { BoltError } from '../protocol/errors.ts';
 import { FACILITY_KINDS, FacilityFailure, Unavailable } from '../decl/errors.ts';
 
 /** What a port call fails with: the facility's own failure, or the host providing none. */
@@ -93,3 +94,13 @@ export const Port = {
 		reason = `the host provides no ${facility}`
 	): Effect.Effect<never, Unavailable> => Effect.fail(new Unavailable({ facility, reason }))
 };
+
+/** Secure native identifiers keep the host crypto service's failure as the cause. */
+export const uuid = (crypto: Crypto.Crypto) =>
+	crypto
+		.randomUUIDv4()
+		.pipe(
+			Effect.mapError((error) =>
+				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
+			)
+		);

@@ -1,3 +1,4 @@
+import { uuid } from '../port.ts';
 import {
 	Clock,
 	Crypto,
@@ -194,13 +195,7 @@ export const integrationLinks = (
 ): Effect.Effect<LinkManager, never, Scope.Scope | Crypto.Crypto> =>
 	Effect.gen(function* () {
 		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto
-			.randomUUIDv4()
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-				)
-			);
+		const newId = uuid(crypto);
 		const f = h.fetch ?? fetch;
 		const callbacks = yield* FiberSet.make<unknown, LinkError>();
 		// one instant of the day per manager: a workspace's links reconcile in one wake, and workspaces spread out
@@ -616,7 +611,7 @@ export const integrationLinks = (
 						provider.importStart?.kind === 'timestamp' ? provider.importStart.precision : undefined
 					)
 				);
-				const key = yield* uuid;
+				const key = yield* newId;
 				const outcome = yield* h.enter(
 					Effect.gen(function* () {
 						const writes = yield* Writes,
@@ -1282,7 +1277,7 @@ export const integrationLinks = (
 													'name where the test message goes'
 												)
 											);
-										const id = yield* uuid;
+										const id = yield* newId;
 										yield* held.calls.send(
 											x.definition.driver === 'email'
 												? {

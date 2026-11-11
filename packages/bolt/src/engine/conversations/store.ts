@@ -2,10 +2,10 @@
 // `sys_message` rows in a `sys_conversation` (one per provider chat or mail thread of an instance), the system models the
 // agents area shares. A notice on a conversation connection is delivered by the run the engine's trigger queues
 // (`engine/schema/engine.ts`).
+import { uuid } from '../port.ts';
 import type { Json } from '../../decl/values.ts';
 import * as EffectArray from 'effect/Array';
 import { Crypto, Effect, Option, Schema } from 'effect';
-import { BoltError } from '../../protocol/errors.ts';
 import { TenantDb } from '../db/tenant-db.ts';
 import { Chain } from '../write/sql.ts';
 import { sha256Hex } from '@norbital-ai/store';
@@ -156,19 +156,7 @@ export const threadOf = Effect.fn('Messages.threadOf')(function* (
 	if (kind === 'email')
 		return typeof message['thread'] === 'string'
 			? message['thread']
-			: (fallback ??
-					(yield* crypto
-						.randomUUIDv4()
-						.pipe(
-							Effect.mapError((error) =>
-								BoltError.make(
-									'unavailable',
-									'facility',
-									'Secure random UUID generation failed.',
-									error
-								)
-							)
-						)));
+			: (fallback ?? (yield* uuid(crypto)));
 	const to = String(message['to']);
 	const db = yield* TenantDb;
 	const found = yield* db.one(Schema.Struct({ thread: Schema.String }), {

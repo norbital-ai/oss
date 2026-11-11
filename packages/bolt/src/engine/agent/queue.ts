@@ -4,6 +4,7 @@
 // back: `schedule` keeps it until a time (its own run) or until the running work has finished, one message per finish, after
 // the plan's verifier cleared, with no sub-agent running and no card awaiting the person. A stop cancels what waits for
 // the finish, never what waits for a time.
+import { sql } from '../db/sql.ts';
 import { Context, Effect, PubSub, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -34,7 +35,6 @@ type QueueConfig = {
 	/** Runs the conversation's turn, now or once the running one ends; never waits for it. */
 	readonly start: (conversation: string) => Effect.Effect<void>;
 };
-const q = (text: string, ...params: Json[]) => ({ text, params });
 const Written = Schema.Struct({
 	messages: Schema.Array(Message),
 	conversations: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
@@ -75,7 +75,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 	);
 	const stored = Effect.fn('MessageQueue.stored')(function* (message: string) {
 		const [r] = yield* rowsOf(
-			(yield* db.read([q(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, message)]))[0]!.rows
+			(yield* db.read([sql(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, message)]))[0]!.rows
 		);
 		return r;
 	});
@@ -87,7 +87,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 			Schema.Array(Schema.Record(Schema.String, Schema.Json))
 		)(
 			(yield* db.write(
-				q(
+				sql(
 					`UPDATE sys_conversation AS c SET status = CASE WHEN status = 'stopped' THEN 'idle' ELSE status END, title = coalesce(title, left($2, 80))
 					WHERE id = $1 AND (status = 'stopped' OR title IS NULL) RETURNING to_jsonb(c) AS r`,
 					o.conversation,
@@ -197,7 +197,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 					const rings = yield* PubSub.subscribe(steers);
 					for (;;) {
 						const [waiting] = yield* db.read([
-							q(
+							sql(
 								`SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'queued' LIMIT 1`,
 								conversation
 							)
@@ -212,7 +212,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		/** Input is waiting for the conversation. */
 		waiting: Effect.fn('MessageQueue.waiting')(function* (conversation: string) {
 			const [left] = yield* db.read([
-				q(
+				sql(
 					`SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'queued' LIMIT 1`,
 					conversation
 				)
@@ -234,7 +234,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 					new AgentRefusal({ message: 'only its author revises a message' })
 				);
 			const [newer] = (yield* db.read([
-				q(`SELECT 1 FROM sys_message WHERE supersedes = $1 LIMIT 1`, messageId)
+				sql(`SELECT 1 FROM sys_message WHERE supersedes = $1 LIMIT 1`, messageId)
 			]))[0]!.rows;
 			if (newer !== undefined)
 				return yield* Effect.fail(
@@ -288,7 +288,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		) {
 			const queued = yield* rowsOf(
 				(yield* db.read([
-					q(
+					sql(
 						`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND state = 'queued' AND id IN (SELECT jsonb_array_elements_text($2::jsonb))`,
 						conversation,
 						JSON.stringify(ids)

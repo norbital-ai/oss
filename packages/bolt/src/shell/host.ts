@@ -1,3 +1,4 @@
+import { uuid } from '../engine/port.ts';
 import { activeEnvoys } from '../engine/envoys/spec.ts';
 // The shell's host half (§5.10, §5.11.2, §3.9, rules 38a, 38d, 39): the session routes (`/__bolt/session/*`), the
 // caller's Authority for every data route (session cookie, API key, visitor, preview-as), the visitor gates in front
@@ -378,13 +379,7 @@ const makeShell = Effect.gen(function* () {
 	const names = cookieNames(secure);
 	const credentialNames: ReadonlySet<string> = new Set(Object.values(names));
 	const crypto = yield* Crypto.Crypto;
-	const uuid = crypto
-		.randomUUIDv4()
-		.pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+	const newId = uuid(crypto);
 	const cookie = (name: string, value: string, maxAge: number | null) =>
 		`${name}=${encodeURIComponent(value)}; Path=${basePath(c.publicUrl) || '/'}; HttpOnly; ${cookieSite(secure)}${maxAge === null ? '' : `; Max-Age=${maxAge}`}`;
 	const publicApp = (name: string | null): string | null =>
@@ -467,7 +462,7 @@ const makeShell = Effect.gen(function* () {
 						Effect.catchTag('IdentityRefusal', () => Effect.succeed(null))
 					);
 		return s === null || token === null
-			? ({ id: yield* uuid, anonymous: false, token: null } satisfies Visitor)
+			? ({ id: yield* newId, anonymous: false, token: null } satisfies Visitor)
 			: ({ id: s.user, anonymous: true, token } satisfies Visitor);
 	});
 	/** Opening a public surface without an identity mints an anonymous user, at most `register` per IP; past it, none. */

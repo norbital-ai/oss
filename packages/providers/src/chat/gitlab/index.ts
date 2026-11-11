@@ -4,13 +4,12 @@
 import { Schema } from 'effect';
 import { parse as parseJson, json, request as requestHttp } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
-import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, same } from '../verify.ts';
+import { nothing, PlatformError } from '../adapter.ts';
+import { standardWebhook } from '../verify.ts';
 
 const API = 'https://gitlab.com/api/v4';
 const THREAD = /^\d+\/(merge_requests|issues)\/\d+$/;
 const SIGNING_KEY = /^[A-Za-z0-9+/]{43}=$/;
-const TOLERANCE_S = 5 * 60;
 
 const Written = Schema.Struct({
 	id: Schema.Number,
@@ -61,22 +60,6 @@ const Hook = Schema.Struct({
 });
 type Hook = typeof Hook.Type;
 
-/** Standard Webhooks: an HMAC of `id.timestamp.body` under the decoded key, its timestamp recent. */
-const verify = (headers: Headers, body: string, key: Buffer) => {
-	const id = headers.get('webhook-id'),
-		at = headers.get('webhook-timestamp'),
-		want = `v1,${hmac(key, `${id}.${at}.${body}`, 'base64')}`;
-	const fresh = Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S;
-	if (
-		id === null ||
-		!fresh ||
-		!headers
-			.get('webhook-signature')
-			?.split(' ')
-			.some((one) => same(one, want))
-	)
-		throw new Unverified('bad signature');
-};
 /** A system note is GitLab's own, and an internal one is not for a bot to repeat. */
 const hidden = (note: Written) =>
 	note.system === true || note.internal === true || note.confidential === true;
@@ -135,7 +118,7 @@ export const gitlab: ChatPlatform = {
 		const connection: ChatConnection = {
 			account: me.username,
 			async deliver(request, body) {
-				verify(request.headers, body, key);
+				standardWebhook(request.headers, body, key, 'v1');
 				if (request.headers.get('x-gitlab-event') !== 'Note Hook') return nothing();
 				const hook = await parseJson(Hook, body);
 				const attributes = hook.object_attributes;

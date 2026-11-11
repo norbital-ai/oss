@@ -1,3 +1,4 @@
+import { uuid } from '../port.ts';
 import {
 	Crypto,
 	Cause,
@@ -492,13 +493,7 @@ export const RunsLive = Layer.effect(
 			logs = yield* Logs,
 			agentHost = yield* AgentHost;
 		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto
-			.randomUUIDv4()
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-				)
-			);
+		const newId = uuid(crypto);
 		const crons = [...triggersOf(m).crons, ...(drivers.available ? syncTriggers(m) : [])];
 		const tenant = yield* ConfigProvider.ConfigProvider;
 		const stopping = new Set<string>();
@@ -1261,7 +1256,7 @@ export const RunsLive = Layer.effect(
 									return fail('invalidInput', 'ctx.send names its connection or instance');
 								const prepared = yield* prepareSend(m, db, call.to, call.message, crypto);
 								if ('error' in prepared) return fail('invalidInput', prepared.error);
-								const id = yield* uuid;
+								const id = yield* newId;
 								const value = yield* effect(
 									(c) => {
 										const sent = sendPiece(c, { ...prepared, id }, b.now, true);
@@ -1780,7 +1775,7 @@ export const RunsLive = Layer.effect(
 				const key = `webhook:${trigger.automation}:${verified.delivery}`,
 					due = iso(now),
 					c = new Chain(),
-					id = yield* uuid;
+					id = yield* newId;
 				c.cte(
 					'idem',
 					`INSERT INTO bolt_idem (key, digest, issued_at, run) VALUES (${c.p(key)}, '', ${c.p(due)}::timestamptz, ${c.p(id)}) ON CONFLICT (key) DO NOTHING RETURNING key`

@@ -1,3 +1,4 @@
+import { sql } from '../db/sql.ts';
 import { Crypto, Effect, Schema } from 'effect';
 // A message already built (`ctx.send`, an envoy's notice, a connection notice): a queued `message` row in its
 // conversation on one instance, delivered by `integrations.deliver` (engine/integrations/outbound.ts). Record-bound
@@ -11,7 +12,6 @@ import { sendInputSchema, deliverRun, EPOCH, QUEUED } from '../integrations/outb
 import { conversationOf, definitionOf } from '../integrations/instances.ts';
 import { conversationId, preview, threadOf, msg as messagePiece } from './store.ts';
 import type { RowData } from '../contracts.ts';
-const sql = (text: string, ...params: Json[]) => ({ text, params });
 /** A message already built: one queued row in its conversation on `instance`. */
 type Send = {
 	id: string;

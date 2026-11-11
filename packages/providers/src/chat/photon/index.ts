@@ -7,7 +7,7 @@ import { Predicate, Schema } from 'effect';
 import type { imessage } from '@spectrum-ts/imessage';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, signed } from '../verify.ts';
+import { fresh, hmac, signed } from '../verify.ts';
 
 type Lines = Awaited<
 	ReturnType<ReturnType<typeof imessage.config>['__def']['lifecycle']['createClient']>
@@ -63,7 +63,6 @@ const Message = Schema.Struct({
 });
 
 const SHARED = 'shared',
-	TOLERANCE_S = 300,
 	/** Apple's placeholder for an attachment inside a message's text. */
 	OBJECT = /\uFFFC/g;
 const isGroup = (chat: string) => chat.includes(';+;');
@@ -196,8 +195,7 @@ export const photon: ChatPlatform = {
 			account: first.phone === SHARED ? projectId : first.phone,
 			async deliver(request, body) {
 				const at = request.headers.get('x-spectrum-timestamp') ?? '';
-				if (!(Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S))
-					throw new Unverified('stale timestamp');
+				if (!fresh(at)) throw new Unverified('stale timestamp');
 				signed(
 					request.headers.get('x-spectrum-signature'),
 					`v0=${hmac(webhookSecret, `v0:${at}:${body}`, 'hex')}`

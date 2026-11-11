@@ -1,3 +1,4 @@
+import { uuid } from '../port.ts';
 import { Crypto, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
@@ -52,13 +53,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 	codec: SecretsCodec
 ): Effect.fn.Return<Credentials, never, Crypto.Crypto> {
 	const crypto = yield* Crypto.Crypto;
-	const uuid = crypto
-		.randomUUIDv4()
-		.pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+	const newId = uuid(crypto);
 	const opened = (instance: string, rows: readonly (typeof Sealed.Type)[]) =>
 		Effect.forEach(rows, (r) =>
 			Effect.gen(function* () {
@@ -88,7 +83,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 				const { epoch: previous, sealed, ...row } = found.value;
 				// Key service work finishes before a database connection or row lock is acquired.
 				const values = yield* opened(instance, sealed);
-				const epoch = yield* uuid;
+				const epoch = yield* newId;
 				const result = yield* db.transaction({
 					statements: [
 						{ text: 'SELECT id FROM sys_integration WHERE id = $1 FOR UPDATE', params: [instance] },
@@ -134,7 +129,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 							.pipe(Effect.map((sealed) => ({ name, sealed })))
 				);
 				const unset = [...changes].flatMap(([name, value]) => (value === null ? [name] : []));
-				const next = rotate ? yield* uuid : epoch;
+				const next = rotate ? yield* newId : epoch;
 				const rows = yield* db.returning(Fence, {
 					text: `WITH fence AS (SELECT id FROM sys_integration WHERE id = $1 AND epoch IS NOT DISTINCT FROM $2 FOR UPDATE),
 			moved AS (UPDATE sys_integration SET epoch = $5::text WHERE $6::boolean AND id IN (SELECT id FROM fence) RETURNING 1),

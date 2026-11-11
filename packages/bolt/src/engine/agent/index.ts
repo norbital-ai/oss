@@ -5,6 +5,8 @@
 // child conversation run under the delegating turn's `as`, never wider. Hosts drive `drain`; nothing here names a host.
 // A claimed turn holds a one-minute lease its heartbeat renews and queues the platform run `agent.turn`, so a turn
 // whose process died is taken over once the lease lapses (rule 48), and never runs twice at once.
+import { sql } from '../db/sql.ts';
+import type { Sql } from '../contracts.ts';
 import {
 	Cause,
 	Clock,
@@ -444,7 +446,6 @@ export const ANSWERED = 'This was already answered.';
 const NO_AI = 'the host provides no ai';
 const CONV_COLS =
 	'id, title, owner, envoy, integration, thread, parent, status, model, plan, goals';
-const q = (text: string, ...params: Json[]) => ({ text, params });
 /** A step's reply as it streams (`drain`'s `streamer`). */
 type Streamer = {
 	delta(x: string): void;
@@ -479,7 +480,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	);
 	const resolve =
 		config.resolve ??
-		Effect.fn('Agents.work1')(function* (as: As) {
+		Effect.fn('Agents.authority')(function* (as: As) {
 			if ('member' in as) {
 				const own = yield* authorities.member(db, as.member);
 				return as.team === undefined || own === null || own.actor.kind !== 'member'
@@ -516,13 +517,17 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	/** The conversations inside a step: a planned close waits for none, and holds each turn at its next step. */
 	const stepping = makeParking();
 	/** A shared message piece: the rows reach live transcripts as written, with no re-read (rule 65). */
-	const changed = Effect.fn('Agents.changed')(function* (
-		statement: { text: string; params: readonly Json[] },
-		deleted: boolean = false
-	) {
+	const changed = Effect.fn('Agents.changed')(function* (statement: Sql, deleted: boolean = false) {
 		const chain = new Chain();
 		chain.params.push(...statement.params);
 		const source = messagePiece(chain, statement.text);
+		return yield* messageStatement(chain, source, deleted);
+	});
+	const messageStatement = Effect.fn('Agents.messageStatement')(function* (
+		chain: Chain,
+		source: string,
+		deleted = false
+	) {
 		const [result] = yield* db.returning(
 			Schema.Struct({ messages: Schema.Array(Message) }).annotate({ identifier: 'sys_message' }),
 			chain.sql(`(SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM ${source}) AS messages`)
@@ -534,30 +539,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		if (result.messages.length > 0) e.live.publish(messageCommit(result.messages, deleted));
 		return result.messages;
 	});
-	const messageStatement = Effect.fn('Agents.messageStatement')(function* (
-		chain: Chain,
-		source: string
-	) {
-		const [result] = yield* db.returning(
-			Schema.Struct({ messages: Schema.Array(Message) }).annotate({ identifier: 'sys_message' }),
-			chain.sql(`(SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM ${source}) AS messages`)
-		);
-		if (result === undefined)
-			return yield* Effect.fail(
-				BoltError.make('corrupt', 'commit', 'a message statement returned no result')
-			);
-		if (result.messages.length > 0) e.live.publish(messageCommit(result.messages));
-		return result.messages;
-	});
 	const cancelQueued = (conversation: string) => {
 		const chain = new Chain();
 		return messageStatement(chain, cancelMessage(chain, conversation, null));
 	};
 	/** The same for `sys_conversation` (`to_jsonb(c) AS r`): the panel's list, status, plan and goals follow live. */
-	const convChanged = Effect.fn('Agents.work3')(function* (sql: { text: string; params: Json[] }) {
+	const convChanged = Effect.fn('Agents.conversationChanged')(function* (statement: Sql) {
 		const rows = yield* Schema.decodeUnknownEffect(
 			Schema.Array(Schema.Record(Schema.String, Schema.Json))
-		)((yield* db.write(sql)).rows.map((x) => x['r'])).pipe(
+		)((yield* db.write(statement)).rows.map((x) => x['r'])).pipe(
 			Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
 		);
 		if (rows.length > 0) e.live.publish(conversationCommit(rows));
@@ -565,11 +555,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	});
 	/** A row the step wrote that must not stay (a failed step's partial reply): its removal reaches live transcripts too. */
 	const discard = (row: MessageRow) =>
-		changed(q('DELETE FROM sys_message m WHERE id = $1', row.id), true);
+		changed(sql('DELETE FROM sys_message m WHERE id = $1', row.id), true);
 	/** A reply or a call a turn left unfinished (a stop, a closed generation, a dead process) is finished as interrupted. */
 	const unfinished = (conversation: string, of?: string) =>
 		changed(
-			q(
+			sql(
 				`UPDATE sys_message m SET state = NULL, meta = CASE WHEN role = 'assistant' THEN coalesce(meta, '{"tag":"cut"}'::jsonb) ELSE meta END,
 				content = CASE WHEN role = 'tool' THEN content || '{"result":{"error":"The turn ended before this call finished."}}'::jsonb ELSE content END
 				WHERE conversation = $1 AND state IN ('streaming', 'running') ${of === undefined ? '' : 'AND turn = $2'}`,
@@ -579,8 +569,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			Effect.tapCause(Effect.logWarning),
 			Effect.catch(() => Effect.succeed([]))
 		);
-	const conversation = Effect.fn('Agents.work5')(function* (id: string) {
-		const [r] = yield* db.read([q(`SELECT ${CONV_COLS} FROM sys_conversation WHERE id = $1`, id)]);
+	const conversation = Effect.fn('Agents.conversation')(function* (id: string) {
+		const [r] = yield* db.read([
+			sql(`SELECT ${CONV_COLS} FROM sys_conversation WHERE id = $1`, id)
+		]);
 		const row = r!.rows[0];
 		if (row === undefined)
 			return yield* Effect.fail(new AgentRefusal({ message: `no conversation '${id}'` }));
@@ -589,7 +581,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		);
 	});
 	/** A conversation's messages in `seq` order: all, those `from` a seq on, or the `limit` just `before` one (a panel's older page). */
-	const transcript = Effect.fn('Agents.work6')(function* (
+	const transcript = Effect.fn('Agents.transcript')(function* (
 		id: string,
 		page?:
 			| {
@@ -603,14 +595,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		return yield* rowsOf(
 			(yield* db.read([
 				page === undefined
-					? q(`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 ORDER BY seq`, id)
+					? sql(`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 ORDER BY seq`, id)
 					: 'from' in page
-						? q(
+						? sql(
 								`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND seq >= $2 ORDER BY seq`,
 								id,
 								page.from
 							)
-						: q(
+						: sql(
 								`SELECT x.r FROM (SELECT ${MSG}, m.seq FROM sys_message m WHERE conversation = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3) x ORDER BY x.seq`,
 								id,
 								page.before,
@@ -619,7 +611,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			]))[0]!.rows
 		);
 	});
-	const insert = Effect.fn('Agents.work7')(function* (row: {
+	const insert = Effect.fn('Agents.insert')(function* (row: {
 		conversation: string;
 		role: MessageRow['role'];
 		content: Json;
@@ -663,7 +655,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		)?.default ?? 'default'; // hook:agent-ui
 	const setConv = (id: string, set: string, ...params: Json[]) =>
 		convChanged(
-			q(
+			sql(
 				`UPDATE sys_conversation AS c SET ${set}, revision = revision + 1, updated_at = now() WHERE id = $1 RETURNING to_jsonb(c) AS r`,
 				id,
 				...params
@@ -672,7 +664,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const start = Effect.fn('Agents.start')(function* (o: Parameters<AgentsShape['start']>[0]) {
 		const id = globalThis.crypto.randomUUID();
 		yield* convChanged(
-			q(
+			sql(
 				`INSERT INTO sys_conversation AS c (id, title, owner, envoy, integration, parent, model) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING to_jsonb(c) AS r`,
 				id,
 				o.title ?? null,
@@ -748,7 +740,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		Effect.gen(function* () {
 			const now = (yield* config.bindings).now;
 			const moved = yield* db.write(
-				q(
+				sql(
 					`WITH c AS (UPDATE sys_conversation SET lease_until = $2::timestamptz WHERE id = $1 AND status = 'running' RETURNING id)
 					UPDATE sys_run SET due_at = $2::timestamptz WHERE automation = '${TURN_RUN}' AND state = 'queued' AND input->>'conversation' = $1
 					AND EXISTS (SELECT 1 FROM c) RETURNING id`,
@@ -759,11 +751,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (moved.rows.length > 0) yield* config.announce?.(now) ?? Effect.void;
 		}).pipe(Effect.timeout(2000), Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/** Idle only when nothing is queued; otherwise the turn goes on (a message landed as it finished). */
-	const settle = Effect.fn('Agents.work9')(function* (id: string) {
+	const settle = Effect.fn('Agents.settle')(function* (id: string) {
 		if (yield* queue.finished(id)) return false;
 		return (
 			(yield* convChanged(
-				q(
+				sql(
 					`WITH s AS (UPDATE sys_conversation SET status = 'idle', lease_until = NULL
 		WHERE id = $1 AND status = 'running' AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'queued') RETURNING *),
 		d AS (${UNTURN} AND EXISTS (SELECT 1 FROM s)) SELECT to_jsonb(s) AS r FROM s`,
@@ -863,7 +855,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (events === undefined) return [];
 			const since = yield* db.value(
 				Schema.NullOr(Schema.String),
-				q(
+				sql(
 					`SELECT to_json(coalesce(max((meta->>'at')::timestamptz) FILTER (WHERE meta->>'tag' = 'event'), min(created_at)))#>>'{}'
 					 FROM sys_message WHERE conversation = $1`,
 					conversation
@@ -886,7 +878,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		const turn = globalThis.crypto.randomUUID();
 		const declined = { declined: true, reason: 'A new turn started before approval.' };
 		yield* changed(
-			q(
+			sql(
 				`UPDATE sys_message m SET state = NULL,
 			 content = content || jsonb_build_object('result', $2::jsonb, 'resumed', true)
 			 WHERE conversation = $1 AND role = 'tool' AND state = 'confirm' AND meta->>'tag' = 'confirm'`,
@@ -907,7 +899,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const approval = transcriptRow(row, true, false)?.tool?.approval;
 				if (row.role !== 'tool' || approval === undefined || !ids.has(approval)) continue;
 				yield* changed(
-					q(
+					sql(
 						`UPDATE sys_message m SET content = content || jsonb_build_object('result', $2::jsonb),
 					 meta = CASE WHEN meta->>'tag' = 'output' THEN NULL ELSE meta END WHERE id = $1`,
 						row.id,
@@ -919,7 +911,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		yield* Effect.gen(function* () {
 			const now = (yield* config.bindings).now;
 			yield* db.write(
-				q(
+				sql(
 					`UPDATE sys_conversation SET lease_until = $2::timestamptz WHERE id = $1 AND status = 'running'`,
 					id,
 					new Date(Date.parse(now) + AGENT_LIMITS.leaseMs).toISOString()
@@ -974,7 +966,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		 * L-BOLT-432: each provider call is one immutable `ai.call` observation: its call id (the metering key), model, tokens
 		 * and charge, `settlement: 'pending'` for the meter; a call reported without a charge or id is `attention`, never a guessed cost.
 		 */
-		const used = Effect.fn('Agents.work11')(function* (r: AiResponse, request: string) {
+		const used = Effect.fn('Agents.recordUsage')(function* (r: AiResponse, request: string) {
 			add(r.usage, 1);
 			const { cost, call } = r.usage,
 				over = cost !== undefined && cost > AI_GAUGE_USD,
@@ -1134,7 +1126,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				yield* options.onWrite(row).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 			return row;
 		});
-		const write = Effect.fn('Agents.work13')(function* (r: Parameters<typeof insert>[0]) {
+		const write = Effect.fn('Agents.write')(function* (r: Parameters<typeof insert>[0]) {
 			return yield* wrote(yield* insert({ ...r, turn }));
 		});
 		/** Rewrites a row the step already wrote (its streamed reply, its running tool call) as finished, in one statement. */
@@ -1218,7 +1210,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			};
 		});
 		let streaming: Streamer | null = null;
-		const fail = Effect.fn('Agents.work16')(function* (
+		const fail = Effect.fn('Agents.fail')(function* (
 			conv: ConversationRow,
 			text: string,
 			code: string,
@@ -1254,7 +1246,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		});
 		/** L-BOLT-425: the four-row table; an empty summary is asked for once more before the checkpoint is skipped. */
 		/** L-BOLT-546: `origin` says who asked (`/compact` or the window); input still waiting stays after the boundary. */
-		const compact = Effect.fn('Agents.work17')(function* (
+		const compact = Effect.fn('Agents.compact')(function* (
 			conv: ConversationRow,
 			rows: readonly MessageRow[],
 			keep: string[],
@@ -1545,7 +1537,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					files,
 					jobs: work,
 					inlineMs: config.hostInlineMs,
-					setPlan: Effect.fn('Agents.work18')(function* (body) {
+					setPlan: Effect.fn('Agents.setPlan')(function* (body) {
 						return yield* setConv(
 							id,
 							'plan = $2::jsonb',
@@ -1558,7 +1550,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							} satisfies Plan)
 						).pipe(Effect.map(() => {}));
 					}),
-					setGoals: Effect.fn('Agents.work19')(function* (goals: Goal[]) {
+					setGoals: Effect.fn('Agents.setGoals')(function* (goals: Goal[]) {
 						return yield* setConv(id, 'goals = $2::jsonb', j(goals)).pipe(Effect.map(() => {}));
 					}),
 					ask: (text) => {
@@ -1572,7 +1564,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					}) {
 						if (o.unread) {
 							const marked = yield* changed(
-								q(
+								sql(
 									`UPDATE sys_message m SET read_by = $2 WHERE id IN (SELECT id FROM sys_message WHERE conversation = $1 AND addressed = false AND deleted_at IS NULL AND (read_by IS NULL OR read_by = $2) ORDER BY seq LIMIT $3) `,
 									id,
 									o.key,
@@ -1582,7 +1574,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							return [...marked].sort((left, right) => left.seq - right.seq);
 						}
 						const [result] = yield* db.read([
-							q(
+							sql(
 								`SELECT ${MSG} FROM sys_message m WHERE conversation = $1 AND deleted_at IS NULL AND refused IS NULL AND coalesce(role, 'user') IN ('user', 'assistant') AND coalesce(state, '') <> 'scheduled' AND ($2::bigint IS NULL OR seq < $2) ORDER BY seq DESC LIMIT $3`,
 								id,
 								o.before ?? null,
@@ -1591,10 +1583,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						]);
 						return yield* rowsOf(result?.rows ?? []);
 					}),
-					output: Effect.fn('Agents.work22')(function* (call) {
+					output: Effect.fn('Agents.toolOutput')(function* (call) {
 						return (
 							(yield* db.read([
-								q(
+								sql(
 									`SELECT meta->'full' AS full FROM sys_message WHERE conversation = $1 AND role = 'tool'
 						AND ($2::text IS NULL OR content->>'id' = $2) AND meta->>'tag' = 'output' ORDER BY seq DESC LIMIT 1`,
 									id,
@@ -1603,7 +1595,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							]))[0]!.rows[0]?.['full'] ?? undefined
 						);
 					}),
-					history: Effect.fn('Agents.work23')(function* (text, scope, limit) {
+					history: Effect.fn('Agents.history')(function* (text, scope, limit) {
 						const a = authority.actor,
 							member =
 								a.kind === 'member' ? a.id : a.kind === 'envoy' ? (a.linked?.id ?? null) : null; // a group turn searches no one's own
@@ -1613,7 +1605,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								? a.instance
 								: null;
 						const [r] = yield* db.read([
-							q(
+							sql(
 								`SELECT m.conversation, m.seq, m.role, coalesce(m.author, m.sender_name, m.sender) AS author, left(m.text, 500) AS text, m.created_at::text AS at
 							FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
 							WHERE strpos(lower(m.text), lower($1)) > 0 AND m.role IN ('user', 'assistant') AND m.deleted_at IS NULL
@@ -1632,10 +1624,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					heard: queue.heard(id),
 					subagent: {
 						// a sub-agent runs detached: this turn goes on (or ends), and its report arrives as a message here
-						spawn: Effect.fn('Agents.work24')(function* (task, agent, done, format) {
+						spawn: Effect.fn('Agents.spawnChild')(function* (task, agent, done, format) {
 							// each child is a full agent loop in this host: cap the fan-out, not only the token spend
 							const [active] = yield* db.read([
-								q(
+								sql(
 									`SELECT count(*)::int AS n FROM sys_conversation WHERE parent = $1 AND status = 'running'`,
 									id
 								)
@@ -1673,7 +1665,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						}),
 						list: Effect.fn('Agents.subagentList')(function* () {
 							const [r] = yield* db.read([
-								q(
+								sql(
 									`SELECT id, title, status, goals FROM sys_conversation WHERE parent = $1 ORDER BY created_at`,
 									id
 								)
@@ -1681,7 +1673,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							return { subagents: r?.rows ?? [] };
 						}),
 						// what it did so far: its status and checklist, its last messages, the tool calls it made, what it changed
-						read: Effect.fn('Agents.work25')(function* (child) {
+						read: Effect.fn('Agents.readChild')(function* (child) {
 							if (!(yield* ownChild(id, child))) return { error: 'Not one of your sub-agents.' };
 							const kid = yield* conversation(child);
 							const rows = (yield* transcript(child)).flatMap((r) => {
@@ -1719,7 +1711,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								files: rows.flatMap((r) => (r.role === 'tool' ? (r.files ?? []) : []))
 							};
 						}),
-						message: Effect.fn('Agents.work26')(function* (child, text) {
+						message: Effect.fn('Agents.messageChild')(function* (child, text) {
 							if (!(yield* ownChild(id, child))) return { error: 'Not one of your sub-agents.' };
 							yield* post({ conversation: child, as: as!, text, author: 'delegating agent' });
 							yield* FiberSet.run(detached, kick(child));
@@ -1728,14 +1720,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								note: 'It carries on; its next report arrives as a message here.'
 							};
 						}),
-						stop: Effect.fn('Agents.work27')(function* (child) {
+						stop: Effect.fn('Agents.stopChild')(function* (child) {
 							return (yield* ownChild(id, child))
 								? (yield* api.stop(child), { stopped: true })
 								: { error: 'Not one of your sub-agents.' };
 						}),
 						running: Effect.fn('Agents.subagentsRunning')(function* () {
 							const [r] = yield* db.read([
-								q(
+								sql(
 									`SELECT count(*)::int AS n FROM sys_conversation WHERE parent = $1 AND status = 'running'`,
 									id
 								)
@@ -1748,7 +1740,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								Effect.gen(function* () {
 									const subscription = yield* PubSub.subscribe(reports);
 									const [pending] = yield* db.read([
-										q(
+										sql(
 											`SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'queued' AND meta->>'tag' = 'report' LIMIT 1`,
 											id
 										)
@@ -2281,7 +2273,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					// a reload). The turn keeps its lapsing lease and its queued agent.turn run, so the next owner answers (rule 48)
 					if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return;
 					yield* convChanged(
-						q(
+						sql(
 							`WITH s AS (UPDATE sys_conversation SET status = 'idle', lease_until = NULL WHERE id = $1 AND status = 'running' RETURNING *),
 				d AS (${UNTURN} AND EXISTS (SELECT 1 FROM s)) SELECT to_jsonb(s) AS r FROM s`,
 							id
@@ -2343,7 +2335,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	 */
 	const resumeSettled = Effect.gen(function* () {
 		const rows = yield* changed(
-			q(
+			sql(
 				`UPDATE sys_message m SET content = content || '{"resumed":true}'::jsonb
 				WHERE m.role = 'tool' AND m.state IS NULL AND m.meta->>'tag' = 'confirm' AND NOT m.content ? 'resumed'
 				AND m.content->'result'->>'error' = $1
@@ -2394,7 +2386,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		yield* PubSub.publish(reports, conv.parent);
 		yield* FiberSet.run(detached, kick(conv.parent));
 	});
-	const ownChild = Effect.fn('Agents.work29')(function* (parent: string, child: string) {
+	const ownChild = Effect.fn('Agents.ownChild')(function* (parent: string, child: string) {
 		return (
 			(yield* conversation(child).pipe(
 				Effect.tapCause(Effect.logWarning),
@@ -2438,7 +2430,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			yield* conversation(id);
 			// A follow-up may already have restarted it while the client still showed Resume.
 			const reopened = yield* convChanged(
-				q(
+				sql(
 					`UPDATE sys_conversation AS c SET status = 'idle', revision = revision + 1, updated_at = now()
 					 WHERE id = $1 AND status = 'stopped' RETURNING to_jsonb(c) AS r`,
 					id
@@ -2516,7 +2508,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if ((yield* run(id, conv.envoy !== null && conv.integration !== null)).ran)
 				return { conversation: id, ran: true };
 			const [live] = (yield* db.read([
-				q(
+				sql(
 					`SELECT (extract(epoch FROM lease_until) * 1000)::float8 AS until FROM sys_conversation WHERE id = $1 AND status = 'running'`,
 					id
 				)
@@ -2540,7 +2532,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (conv.plan === null)
 				return yield* Effect.fail(new AgentRefusal({ message: 'there is no plan to execute' }));
 			const [top] = (yield* db.read([
-				q(`SELECT coalesce(max(seq), 0)::int AS s FROM sys_message WHERE conversation = $1`, id)
+				sql(`SELECT coalesce(max(seq), 0)::int AS s FROM sys_message WHERE conversation = $1`, id)
 			]))[0]!.rows;
 			yield* setConv(
 				id,
@@ -2575,7 +2567,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		}),
 		markRead: Effect.fn('Agents.markRead')(function* (id: string, member: string) {
 			yield* db.write(
-				q(
+				sql(
 					`UPDATE sys_conversation SET read = read || jsonb_build_object($2::text, (SELECT coalesce(max(seq), 0) FROM sys_message WHERE conversation = $1)) WHERE id = $1`,
 					id,
 					member
@@ -2585,7 +2577,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		claimPageAction: Effect.fn('Agents.claimPageAction')(function* (messageId: string) {
 			const rows = yield* db.returning(
 				Schema.Struct({ id: Schema.String }).annotate({ identifier: 'sys_message' }),
-				q(
+				sql(
 					`UPDATE sys_message SET content = jsonb_set(content, '{result,pageClaim}', 'true'::jsonb, true)
 					WHERE id = $1 AND role = 'tool' AND content->'result'->'pageClaim' IS NULL
 					RETURNING id`,
@@ -2598,7 +2590,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		}),
 		pageResult: Effect.fn('Agents.pageResult')(function* (messageId: string, result: PageResult) {
 			yield* db.write(
-				q(
+				sql(
 					`UPDATE sys_message m SET content = jsonb_set(content, '{result,pageResult}', $2::jsonb, true)
 					WHERE m.id = $1 AND m.role = 'tool' AND jsonb_typeof(m.content->'result') = 'object'`,
 					messageId,
@@ -2613,7 +2605,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			by: Authority
 		) {
 			const [r] = yield* rowsOf(
-				(yield* db.read([q(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, messageId)]))[0]!.rows
+				(yield* db.read([sql(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, messageId)]))[0]!
+					.rows
 			);
 			if (r === undefined || r.meta?.tag !== 'confirm')
 				return yield* Effect.fail(
@@ -2634,7 +2627,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			// one answer per card: the claim moves it out of `confirm` first, so a second press never runs the call again
 			if (
 				(yield* changed(
-					q(
+					sql(
 						`UPDATE sys_message m SET state = 'approved' WHERE id = $1 AND state = 'confirm' `,
 						messageId
 					)
@@ -2645,7 +2638,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const receipts: Receipt[] = [];
 			const settle = (result: Json) =>
 				changed(
-					q(
+					sql(
 						`UPDATE sys_message m SET state = NULL, content = $2::jsonb WHERE id = $1 AND state = 'approved' `,
 						messageId,
 						j({

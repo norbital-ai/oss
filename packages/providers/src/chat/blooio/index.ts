@@ -4,7 +4,7 @@ import { Schema } from 'effect';
 import { parse as parseJson, json, request as requestHttp, fileOf } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, signed } from '../verify.ts';
+import { fresh, hmac, signed } from '../verify.ts';
 
 const Delivered = Schema.Struct({
 	event: Schema.optionalKey(Schema.String),
@@ -57,7 +57,6 @@ const Me = Schema.Struct({
 
 const API = 'https://backend.blooio.com/v2/api',
 	GROUP = 'group:',
-	TOLERANCE_S = 300,
 	HISTORY_PAGES = 20;
 const chatOf = (thread: string) =>
 	encodeURIComponent(thread.startsWith(GROUP) ? thread.slice(GROUP.length) : thread);
@@ -90,8 +89,7 @@ export const blooio: ChatPlatform = {
 					request.headers.get('x-blooio-signature')?.replaceAll(',', '&')
 				);
 				const at = signature.get('t') ?? '';
-				if (!(Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S))
-					throw new Unverified('stale timestamp');
+				if (!fresh(at)) throw new Unverified('stale timestamp');
 				signed(signature.get('v1'), hmac(webhookSecret, `${at}.${body}`, 'hex'));
 				const envelope = await parseJson(
 					Schema.Struct({ event: Schema.optionalKey(Schema.String) }),

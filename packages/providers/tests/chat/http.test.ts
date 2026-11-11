@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
+import { hmac, fresh, standardWebhook } from '../../src/chat/verify.ts';
 import { download, fileOf, json, parse, request } from '../../src/chat/http.ts';
 
 describe('chat wire boundaries', () => {
@@ -57,5 +58,41 @@ describe('chat wire boundaries', () => {
 		const inline = fileOf('data:image/png;base64,AQI=', fetch);
 		expect(inline.mime).toBe('image/png');
 		expect(await inline.fetch?.()).toEqual(new Uint8Array([1, 2]));
+	});
+});
+
+describe('shared webhook verification', () => {
+	it('accepts rotated signatures and preserves each platform version rule', () => {
+		const key = Buffer.alloc(32, 7);
+		const at = String(Math.floor(Date.now() / 1000));
+		const body = '{"event":"message"}';
+		const signature = hmac(key, `delivery.${at}.${body}`, 'base64');
+		const headers = new Headers({
+			'webhook-id': 'delivery',
+			'webhook-timestamp': at,
+			'webhook-signature': `v1,old v1,${signature}`
+		});
+		expect(() => standardWebhook(headers, body, key, 'v1')).not.toThrow();
+		headers.set('webhook-signature', `v2,${signature}`);
+		expect(() => standardWebhook(headers, body, key)).not.toThrow();
+		expect(() => standardWebhook(headers, body, key, 'v1')).toThrow('bad signature');
+	});
+
+	it('refuses changed payloads, missing delivery ids and stale timestamps', () => {
+		const key = Buffer.alloc(32, 7);
+		const body = '{"event":"message"}';
+		const headers = new Headers({ 'webhook-id': 'delivery' });
+		const sign = (at: string) => {
+			headers.set('webhook-timestamp', at);
+			headers.set('webhook-signature', `v1,${hmac(key, `delivery.${at}.${body}`, 'base64')}`);
+		};
+		sign(String(Math.floor(Date.now() / 1000)));
+		expect(() => standardWebhook(headers, body + ' ', key, 'v1')).toThrow('bad signature');
+		headers.delete('webhook-id');
+		expect(() => standardWebhook(headers, body, key, 'v1')).toThrow('bad signature');
+		headers.set('webhook-id', 'delivery');
+		sign(String(Math.floor(Date.now() / 1000) - 301));
+		expect(() => standardWebhook(headers, body, key, 'v1')).toThrow('bad signature');
+		expect(fresh('bad')).toBe(false);
 	});
 });

@@ -5,7 +5,7 @@ import { Schema } from 'effect';
 import { parse as parseJson, json, fileOf } from '../http.ts';
 import type { ChatConnection, ChatPlatform } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, signed } from '../verify.ts';
+import { fresh, hmac, signed } from '../verify.ts';
 
 const Delivered = Schema.Struct({
 	event: Schema.String,
@@ -26,8 +26,7 @@ const Delivered = Schema.Struct({
 });
 
 const API = 'https://api.agentphone.ai',
-	TEXT_MAX = 1600,
-	TOLERANCE_S = 300;
+	TEXT_MAX = 1600;
 
 export const agentphone: ChatPlatform = {
 	id: 'agentphone',
@@ -58,8 +57,7 @@ export const agentphone: ChatPlatform = {
 			account: agentId,
 			async deliver(request, body) {
 				const at = request.headers.get('x-webhook-timestamp') ?? '';
-				if (!(Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S))
-					throw new Unverified('stale timestamp');
+				if (!fresh(at)) throw new Unverified('stale timestamp');
 				signed(
 					request.headers.get('x-webhook-signature'),
 					`sha256=${hmac(webhookSecret, `${at}.${body}`, 'hex')}`

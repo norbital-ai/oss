@@ -2,6 +2,7 @@
 // a key derived from the app secret. Webhooks only: it offers no history, edits or deletes.
 // A reply names the message it answers, for five minutes, each with a new `msg_seq`. Past that, or after a restart, a
 // send goes out as a message of the bot's own, which QQ limits.
+import { tokenCache } from '../token.ts';
 import { Schema } from 'effect';
 import { parse as parseJson, download as downloadFile } from '../http.ts';
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
@@ -132,9 +133,7 @@ export const qq: ChatPlatform = {
 				type: 'pkcs8'
 			}),
 			publicKey = createPublicKey(privateKey);
-		let cached: { readonly token: string; readonly until: number } | null = null;
-		const token = async () => {
-			if (cached !== null && Date.now() < cached.until) return cached.token;
+		const tokens = tokenCache(async () => {
 			const response = await host.fetch(TOKEN, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
@@ -152,14 +151,10 @@ export const qq: ChatPlatform = {
 					answer.message ?? 'QQ refused the app credentials',
 					response.ok ? 401 : response.status
 				);
-			cached = {
-				token: answer.access_token,
-				until: Date.now() + Number(answer.expires_in) * 1000 - 300_000
-			};
-			return answer.access_token;
-		};
+			return { token: answer.access_token, ttl: Number(answer.expires_in) * 1000 - 300_000 };
+		});
 		const content = (url: string) => downloadFile(host.fetch, url);
-		await token();
+		await tokens.get();
 		const answering = recent<{ readonly id: string; readonly at: number; seq: number }>();
 		const connection: ChatConnection = {
 			account: appId,
@@ -212,7 +207,7 @@ export const qq: ChatPlatform = {
 					{
 						method: 'POST',
 						headers: {
-							authorization: `QQBot ${await token()}`,
+							authorization: `QQBot ${await tokens.get()}`,
 							'content-type': 'application/json'
 						},
 						body: JSON.stringify({ content: text, msg_type: 0, ...answers })
