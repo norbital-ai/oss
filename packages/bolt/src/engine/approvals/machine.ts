@@ -1,9 +1,11 @@
 // The approval state machine (rules 44–46, spec §8): the one table the engine enforces and the approval view's buttons
 // read. A routed write is committed at once (provisional); the request decides whether that change stands or rolls back.
 
-export type ApprovalState = 'Pending' | 'ChangesRequested' | 'Approved' | 'Rejected' | 'Superseded';
+export type ApprovalState =
+	'Pending' | 'ChangesRequested' | 'Approved' | 'Rejected' | 'Superseded' | 'Withdrawn';
 /** `resubmit` is the engine's own move: the requester's save in ChangesRequested takes it (approvals.ts `resubmit`). */
-export type ApprovalMove = 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede';
+export type ApprovalMove =
+	'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede' | 'withdraw';
 /**
  * Who takes a move: the current step's approver (its teams or users), the requester, a superseder (an administrator or a
  * `supersededBy` team).
@@ -19,27 +21,32 @@ type Edge = {
 };
 const DECIDERS: readonly ApprovalRole[] = ['approver', 'superseder'];
 const reject: Edge = { by: DECIDERS, to: 'Rejected', reason: 'required', rollback: true };
+/** The requester takes their own open request back: the same restore as a rejection. */
+const withdraw: Edge = { by: ['requester'], to: 'Withdrawn', reason: 'optional', rollback: true };
 
 export const MACHINE: { readonly [S in ApprovalState]: { readonly [M in ApprovalMove]?: Edge } } = {
 	Pending: {
 		approve: { by: ['approver'], to: 'next', reason: 'optional' },
 		reject,
 		requestChanges: { by: DECIDERS, to: 'ChangesRequested', reason: 'required' },
-		supersede: { by: ['superseder'], to: 'Superseded', reason: 'required' }
+		supersede: { by: ['superseder'], to: 'Superseded', reason: 'required' },
+		withdraw
 	},
 	ChangesRequested: {
 		resubmit: { by: ['requester'], to: 'Pending', reason: 'optional' },
-		reject
+		reject,
+		withdraw
 	},
 	Approved: {},
 	Rejected: {},
-	Superseded: {}
+	Superseded: {},
+	Withdrawn: {}
 };
 /** Pending and ChangesRequested hold the record's lock; every other state is terminal. */
 export const OPEN: readonly ApprovalState[] = ['Pending', 'ChangesRequested'];
 
-/** What a person decides (`bolt.approvals.decide`): the approve button is a superseder's supersede. */
-export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges';
+/** What a caller decides (`bolt.approvals.decide`): the approve button is a superseder's supersede; `withdraw` is the requester's. */
+export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges' | 'withdraw';
 /** The move `decision` takes for `roles`: an approver approves, a superseder who is not one supersedes. */
 export const moveOf = (
 	decision: ApprovalDecision,
@@ -50,7 +57,7 @@ export const moveOf = (
 		: decision;
 /** The decisions `roles` may take from `state`, with their reason requirement: the approval view's buttons. */
 export const decisionsFor = (state: ApprovalState, roles: ReadonlySet<ApprovalRole>) =>
-	(['approve', 'reject', 'requestChanges'] as const).flatMap((decision) => {
+	(['approve', 'reject', 'requestChanges', 'withdraw'] as const).flatMap((decision) => {
 		const edge = MACHINE[state][moveOf(decision, roles)];
 		return edge !== undefined && edge.by.some((role) => roles.has(role))
 			? [{ decision, reason: edge.reason }]

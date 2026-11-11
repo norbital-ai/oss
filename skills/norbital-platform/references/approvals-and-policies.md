@@ -55,8 +55,10 @@ A routed write commits at once, held by its request; `pendingApproval` carries `
 | Ongoing | `requestChanges` | ChangesRequested: data stays |
 | ChangesRequested | requester's Save | resubmits the same request |
 | Open | authorized superseder approves with a reason | Superseded: data stays |
+| Open | `withdraw` by the requester | Withdrawn: restore the checkpoint |
 
-- `bolt.approvals.decide(id, { decision, reason? })`; reject and requestChanges need a reason. Comments exist only as decision reasons. A requester cannot withdraw. Render the view's `moves`; never infer eligibility.
+- `bolt.approvals.decide(id, { decision, reason? })`; reject and requestChanges need a reason. Comments exist only as decision reasons. Render the view's `moves`; never infer eligibility.
+- Only the requester withdraws an open request: the member who asked, or any run of the automation that asked through `ctx.approvals.withdraw(requestId, reason?)`. An approver rejects instead. Automations take no other decision.
 - Rollback restores updates, deletes creates, re-creates deletes, as `restored` history. Missing fields are reported and skipped. Roll-ups follow their rows.
 - Finished requests stay. `bolt.approvals.list({ model, records, all: true })` gives a record's history.
 - The submitter cannot review their own request, even if named, on a reviewing team, an administrator, a linked envoy sender, or previewing. Others on the same team can.
@@ -67,7 +69,7 @@ A routed write commits at once, held by its request; `pendingApproval` carries `
 - While open, held records and owned children change only through the request: current approvers while Ongoing, the requester in ChangesRequested. Every other writer is refused `locked`, including administrators, automations, syncs, the agent, cascades and restore. Outbound sends wait for approval.
 - A pending request keeps its snapshot and lock through releases.
 - Each held read row carries `$approval: { requestId, state, step, steps, requestedBy, waitingOn }`. Views accent it; a custom list renders it. Use the shared approval panel and `RecordShell`. Display `teamNames`; eligibility uses handles.
-- `notify` gets `kind: 'approval'` with move `request`, `approve`, `reject`, `requestChanges`, `resubmit` or `supersede`; `to` may hold `requester`, `approvers`, teams, users, policies. Never build separate inboxes or counters.
+- `notify` gets `kind: 'approval'` with move `request`, `approve`, `reject`, `requestChanges`, `resubmit`, `supersede` or `withdraw`; `to` may hold `requester`, `approvers`, teams, users, policies. Never build separate inboxes or counters.
 
 ## Preview and evidence
 

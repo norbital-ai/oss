@@ -199,11 +199,15 @@ export interface PageBolt {
 		/**
 		 * Decides the request's current step as the viewer: `approve` (a superseder's approve supersedes, reason
 		 * required), `reject` (rolls the held change back), or `requestChanges` (the requester edits and saves to
-		 * resubmit); `reason` is required for the last two.
+		 * resubmit); `reason` is required for the last two. `withdraw` is the requester's own: it takes their open
+		 * request back, restoring the record as a rejection does. Offer what the view's `moves` lists.
 		 */
 		decide(
 			id: RequestId,
-			decision: { decision: 'approve' | 'reject' | 'requestChanges'; reason?: string }
+			decision: {
+				decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw';
+				reason?: string;
+			}
 		): PageAct<undefined>;
 		/** One request's view (its steps, timeline and the viewer's moves); `null` when not visible. */
 		get(id: RequestId): PageCall<ApprovalView | null, TransportFailed | ProtocolFailed>;

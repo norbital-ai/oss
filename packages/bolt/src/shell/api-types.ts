@@ -556,7 +556,7 @@ const InboxRequestAnswer: Schema.Decoder<InboxRequest> = Schema.Struct({
 	canSupersede: Schema.Boolean,
 	moves: Schema.Array(
 		Schema.Struct({
-			decision: Schema.Literals(['approve', 'reject', 'requestChanges']),
+			decision: Schema.Literals(['approve', 'reject', 'requestChanges', 'withdraw']),
 			reason: Schema.Literals(['required', 'optional'])
 		})
 	)

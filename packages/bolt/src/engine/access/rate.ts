@@ -254,12 +254,15 @@ export function chargesFor(
 	kinds: readonly (RateKind | string)[],
 	who: Who
 ): Charge[] {
-	const out: Charge[] = [];
+	// two policies of one holder may declare the same limit: it is one bucket, charged once (the upsert of a statement
+	// cannot touch one row twice)
+	const out = new Map<string, Charge>();
 	for (const rule of auth.limits) {
 		if (!kinds.includes(rule.key)) continue;
 		const bucket = who[rule.per];
 		if (bucket === undefined) continue;
-		out.push({ rule: `${rule.key}:${rule.rate}:${rule.per}`, bucket, ...parseRate(rule.rate) });
+		const name = `${rule.key}:${rule.rate}:${rule.per}`;
+		out.set(`${name}\u0000${bucket}`, { rule: name, bucket, ...parseRate(rule.rate) });
 	}
-	return out;
+	return [...out.values()];
 }

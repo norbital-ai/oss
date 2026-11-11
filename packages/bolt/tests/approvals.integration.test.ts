@@ -28,7 +28,9 @@ const manifest: EngineManifest = {
 				name: { kind: 'text' },
 				amount: { kind: 'money' },
 				manager: { kind: 'text' },
-				manager_name: { kind: 'text', default: 'Manager' }
+				manager_name: { kind: 'text', default: 'Manager' },
+				// declared for create, granted to nobody below: a stored row carries it empty
+				cost_centre: { kind: 'text', optional: true }
 			},
 			computed: { display_name: { kind: 'text', expr: { upper: { field: 'name' } } } }
 		},
@@ -42,7 +44,10 @@ const manifest: EngineManifest = {
 		expenses: {
 			read: { expenses: { fields: 'all' } },
 			create: {
-				columns: { expenses: ['name', 'amount', 'manager'], 'expenses.lines': ['name'] },
+				columns: {
+					expenses: ['name', 'amount', 'manager', 'cost_centre'],
+					'expenses.lines': ['name']
+				},
 				transform: true
 			},
 			update: {
@@ -64,7 +69,14 @@ const manifest: EngineManifest = {
 			description: 'Requests',
 			grants: {
 				sys_user: { read: true },
-				expenses: { read: true, create: { check: true }, update: { check: true } }
+				expenses: {
+					read: true,
+					create: {
+						columns: { expenses: ['name', 'amount', 'manager'], 'expenses.lines': ['name'] },
+						check: true
+					},
+					update: { check: true }
+				}
 			}
 		},
 		reviewer: {
@@ -89,6 +101,7 @@ export default { model: { expenses: { bodies: {
 		return material.length === 0 ? ctx.allow() : ctx.approve((flow) => flow.step('Manager',{users:[...new Set(material.map(({ before, set }) => set.manager ?? before.manager))]}).if(material.some(({ before, set }) => Decimal.of(String(set.amount ?? before.amount)).gte(Decimal.of(100))),(f) => f.step('Finance',{teams:['finance']})));
 	} }
 } } } } };`;
+const WITHDRAW = { decision: 'withdraw', reason: 'optional' };
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
 	id,
@@ -137,7 +150,7 @@ const fixture = Effect.gen(function* () {
 	};
 	const decide = (
 		requestId: string,
-		decision: 'approve' | 'reject' | 'requestChanges',
+		decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw',
 		authority = manager,
 		reason?: string
 	) =>
@@ -156,6 +169,12 @@ const fixture = Effect.gen(function* () {
 	const request = (id: string) =>
 		t.db.value(Schema.Json, {
 			text: "SELECT jsonb_build_object('state',state,'step',step,'route',route,'log',log) FROM bolt_approvals WHERE id=$1::uuid",
+			params: [id]
+		});
+	/** The readable face (`approval_request`) of a request. */
+	const face = (id: string) =>
+		t.db.value(Schema.Json, {
+			text: "SELECT jsonb_build_object('status',status,'closed_by',closed_by) FROM approval_request WHERE id=$1::uuid",
 			params: [id]
 		});
 	const search = (query: string, authority = manager) =>
@@ -187,7 +206,7 @@ const fixture = Effect.gen(function* () {
 				params: []
 			});
 		});
-	return { t, requester, manager, finance, act, decide, row, request, search, notices };
+	return { t, requester, manager, finance, act, decide, row, request, face, search, notices };
 });
 
 layer(workspace, { excludeTestServices: true })('approval snapshots and saves', (it) => {
@@ -251,7 +270,11 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				);
 				const preview = { ...f.manager, preview: { by: id, team: null } };
 				const approvals = yield* Approvals;
-				for (const auth of [admin, preview]) {
+				// the requester's own identity is offered withdraw alone; a previewer nothing
+				for (const [auth, moves] of [
+					[admin, [WITHDRAW]],
+					[preview, []]
+				] as const) {
 					expect(yield* f.decide(requestId, 'approve', auth, 'Override')).toMatchObject({
 						kind: 'refused',
 						code: 'forbidden'
@@ -259,7 +282,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 					expect(
 						Option.getOrThrow(yield* approvals.view(requestId, auth, () => Effect.succeed(true)))
 							.moves
-					).toEqual([]);
+					).toEqual(moves);
 				}
 				const [open] = yield* f.t.db.read([openRequests]);
 				expect(inboxRequests(open?.rows ?? [], admin)).toContainEqual(
@@ -268,7 +291,7 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 						mine: true,
 						canDecide: false,
 						canSupersede: false,
-						moves: []
+						moves: [WITHDRAW]
 					})
 				);
 				expect(yield* f.request(requestId)).toMatchObject({ state: 'Pending', step: 0 });
@@ -377,6 +400,27 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				status: 'Approved'
 			});
 		})
+	);
+	it.effect(
+		'a created record resubmits though its row holds columns the requester was never granted',
+		() =>
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const proposed = (yield* f.act('create', [
+					{ name: 'New expense', amount: 80, manager: managerId }
+				])).outcome;
+				if (proposed.kind !== 'pendingApproval') throw new Error(JSON.stringify(proposed));
+				const id = proposed.records[0]?.id;
+				if (id === undefined) throw new Error('Missing expense');
+				yield* f.decide(proposed.requestId, 'requestChanges', f.manager, 'The receipt shows 60');
+				// `cost_centre` is a create column the requester's policy does not hold; it is empty on the stored row
+				const resubmitted = (yield* f.act('update', [{ target: id, set: { amount: 60 } }])).outcome;
+				expect(resubmitted).toMatchObject({
+					kind: 'pendingApproval',
+					requestId: proposed.requestId
+				});
+				expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(60);
+			})
 	);
 	it.effect('keeps resubmission pending even when the requester now has direct permission', () =>
 		Effect.gen(function* () {
@@ -655,6 +699,163 @@ layer(workspace, { excludeTestServices: true })('approval snapshots and saves', 
 				).toBe('First');
 			})
 		)
+	);
+	it.effect(
+		'the requester withdraws a pending create: the record is removed and the request closes as withdrawn',
+		() =>
+			Effect.gen(function* () {
+				const f = yield* fixture,
+					approvals = yield* Approvals;
+				const submitted = (yield* f.act('create', [
+					{ name: 'Withdrawn trip', amount: 50, manager: managerId }
+				])).outcome;
+				if (submitted.kind !== 'pendingApproval') throw new Error(JSON.stringify(submitted));
+				const requestId = submitted.requestId,
+					id = submitted.records[0]!.id;
+				const view = (authority: Authority) =>
+					approvals
+						.view(requestId, authority, () => Effect.succeed(true))
+						.pipe(Effect.map(Option.getOrThrow));
+				// the requester alone is offered it
+				expect((yield* view(f.requester)).moves).toEqual([WITHDRAW]);
+				expect((yield* view(f.manager)).moves.map((move) => move.decision)).not.toContain(
+					'withdraw'
+				);
+				expect(yield* f.decide(requestId, 'withdraw', f.manager)).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden',
+					message: 'Only the requester may withdraw.'
+				});
+				expect(Option.isSome(yield* f.row(id))).toBe(true);
+				expect(yield* f.decide(requestId, 'withdraw', f.requester)).toMatchObject({
+					kind: 'decided',
+					status: 'Withdrawn'
+				});
+				expect(Option.isNone(yield* f.row(id))).toBe(true);
+				const closed = yield* view(f.requester);
+				expect(closed).toMatchObject({ status: 'Withdrawn', moves: [] });
+				expect(closed.log.at(-1)).toMatchObject({
+					move: 'withdraw',
+					by: { ref: `member:${requesterId}`, name: 'Requester' },
+					from: 'Pending',
+					to: 'Withdrawn',
+					reason: null,
+					rolledBack: [{ model: 'expenses', id, action: 'removed' }]
+				});
+				expect(yield* f.face(requestId)).toEqual({
+					status: 'WITHDRAWN',
+					closed_by: `member:${requesterId}`
+				});
+				expect((yield* f.notices()).map((n) => n.title)).toContain('approval:withdraw');
+				// closed: nobody decides it again, and withdrawing it again changes nothing
+				expect(yield* f.decide(requestId, 'approve')).toMatchObject({ kind: 'refused' });
+				expect(yield* f.decide(requestId, 'withdraw', f.requester)).toMatchObject({
+					kind: 'decided',
+					status: 'Withdrawn'
+				});
+				expect((yield* view(f.requester)).log.filter((e) => e.move === 'withdraw')).toHaveLength(1);
+			})
+	);
+	it.effect(
+		'the requester withdraws a pending update back to its checkpoint, also after changes were requested',
+		() =>
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const created = (yield* f.act('create', [
+					{ name: 'Standing', amount: 50, manager: managerId }
+				])).outcome;
+				if (created.kind !== 'pendingApproval') throw new Error(JSON.stringify(created));
+				const id = created.records[0]!.id;
+				yield* f.decide(created.requestId, 'approve');
+				for (const changes of [false, true]) {
+					const updated = (yield* f.act('update', [{ target: id, set: { amount: 80 } }])).outcome;
+					if (updated.kind !== 'pendingApproval') throw new Error(JSON.stringify(updated));
+					expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(80);
+					if (changes) yield* f.decide(updated.requestId, 'requestChanges', f.manager, 'Why?');
+					expect(
+						yield* f.decide(updated.requestId, 'withdraw', f.requester, 'No longer needed')
+					).toMatchObject({ kind: 'decided', status: 'Withdrawn' });
+					expect(Option.getOrThrow(yield* f.row(id)).amount).toBe(50);
+					expect(yield* f.face(updated.requestId)).toMatchObject({ status: 'WITHDRAWN' });
+				}
+				// the record is free again: the next change opens a fresh request
+				const again = (yield* f.act('update', [{ target: id, set: { amount: 90 } }])).outcome;
+				expect(again).toMatchObject({ kind: 'pendingApproval' });
+			})
+	);
+	it.effect('the requester cannot withdraw a request that was already decided', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			for (const decision of ['approve', 'reject'] as const) {
+				const submitted = (yield* f.act('create', [
+					{ name: `Decided ${decision}`, amount: 50, manager: managerId }
+				])).outcome;
+				if (submitted.kind !== 'pendingApproval') throw new Error(JSON.stringify(submitted));
+				const decided = yield* f.decide(submitted.requestId, decision, f.manager, 'Decided');
+				if (decided.kind !== 'decided') throw new Error(JSON.stringify(decided));
+				expect(yield* f.decide(submitted.requestId, 'withdraw', f.requester)).toMatchObject({
+					kind: 'refused',
+					code: 'invalidInput',
+					message: `This request is ${decided.status}; it no longer changes.`
+				});
+				expect(Option.isSome(yield* f.row(submitted.records[0]!.id))).toBe(decision === 'approve');
+			}
+		})
+	);
+	it.effect(
+		'any run of the automation that asked withdraws its request; an automation decides nothing else',
+		() =>
+			Effect.gen(function* () {
+				const f = yield* fixture;
+				const run = (automation: string, id = randomUUID()): Authority =>
+					compileAuthority(
+						manifest,
+						{
+							actor: { kind: 'system', run: id, by: { automation } },
+							policies: ['requester'],
+							admin: false
+						},
+						id
+					);
+				const raised = (yield* f.act(
+					'create',
+					[{ name: 'Cash out', amount: 50, manager: managerId }],
+					run('offboard')
+				)).outcome;
+				if (raised.kind !== 'pendingApproval') throw new Error(JSON.stringify(raised));
+				const id = raised.records[0]!.id;
+				expect(yield* f.decide(raised.requestId, 'withdraw', run('payroll'))).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden'
+				});
+				for (const decision of ['approve', 'reject', 'requestChanges'] as const)
+					expect(
+						yield* f.decide(raised.requestId, decision, run('offboard'), 'Automated')
+					).toMatchObject({
+						kind: 'refused',
+						code: 'forbidden',
+						message: 'Only a member may decide an approval.'
+					});
+				expect(Option.isSome(yield* f.row(id))).toBe(true);
+				// a later run of the same automation: the cause disappeared
+				const later = run('offboard');
+				expect(
+					yield* f.decide(raised.requestId, 'withdraw', later, 'The employee stays')
+				).toMatchObject({ kind: 'decided', status: 'Withdrawn' });
+				expect(Option.isNone(yield* f.row(id))).toBe(true);
+				expect(yield* f.face(raised.requestId)).toMatchObject({ status: 'WITHDRAWN' });
+
+				// a person's request is never an automation's to withdraw
+				const personal = (yield* f.act('create', [
+					{ name: 'Personal', amount: 50, manager: managerId }
+				])).outcome;
+				if (personal.kind !== 'pendingApproval') throw new Error(JSON.stringify(personal));
+				expect(yield* f.decide(personal.requestId, 'withdraw', later)).toMatchObject({
+					kind: 'refused',
+					code: 'forbidden'
+				});
+				expect(yield* f.request(personal.requestId)).toMatchObject({ state: 'Pending' });
+			})
 	);
 });
 

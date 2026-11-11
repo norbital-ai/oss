@@ -243,8 +243,9 @@ export type Readable = (model: string, id: string) => Effect.Effect<boolean, Eng
 export type ApprovalsShape = {
 	/**
 	 * One decision on a request (`bolt.approvals.decide`): `approve`, `reject` or `requestChanges` (a reason required for
-	 * the last two); a superseder's `approve` supersedes (reason required). `resubmit` is never decided here: it is the
-	 * requester's save (`ApprovalHook.resubmit`).
+	 * the last two); a superseder's `approve` supersedes (reason required); `withdraw` is the requester's (a member, or
+	 * a run of the automation that asked). `resubmit` is never decided here: it is the requester's save
+	 * (`ApprovalHook.resubmit`).
 	 */
 	readonly decide: (input: DecideInput) => Effect.Effect<Decision, EngineError>;
 	readonly view: (
@@ -707,6 +708,8 @@ export type CrossCall =
 	| { readonly _tag: 'request'; readonly to: string | null; readonly operation: Json }
 	/** `ctx.progress` (automations only). */
 	| { readonly _tag: 'progress'; readonly progress: Json }
+	/** `ctx.approvals.withdraw`: the run's identity takes back a request it asked for. */
+	| { readonly _tag: 'withdraw'; readonly requestId: string; readonly reason?: string | undefined }
 	| FacilityCall;
 /** The host half of a crossing: answers in call order. Interrupting it ends the crossing (no signal). */
 export type Bridge = {

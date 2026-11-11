@@ -63,7 +63,14 @@ export type SystemNames = {
 				};
 				status: {
 					kind: 'enum';
-					values: readonly ['ONGOING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUPERSEDED'];
+					values: readonly [
+						'ONGOING',
+						'CHANGES_REQUESTED',
+						'APPROVED',
+						'REJECTED',
+						'SUPERSEDED',
+						'WITHDRAWN'
+					];
 				};
 				step: {
 					kind: 'int';

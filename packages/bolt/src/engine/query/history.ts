@@ -96,7 +96,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 					ELSE jsonb_build_object('start',to_char(lower((e.value #>> '{}')::tstzrange) AT TIME ZONE 'UTC',${ISO}),
 						'end',to_char(upper((e.value #>> '{}')::tstzrange) AT TIME ZONE 'UTC',${ISO})) END
 				ELSE e.value END),'{}'::jsonb) FROM jsonb_each(h.sanitised) e) AS changes,
-			h.request::text AS request, ap.state AS request_state
+			h.request::text AS request, coalesce(ap.log->-1->>'to', ap.state) AS request_state
 			FROM visible h LEFT JOIN bolt_approvals ap ON ap.id = h.request LEFT JOIN bolt_history_schema s ON s.id::text=h.meta->>'schema'
 		WHERE (h.sanitised<>'{}'::jsonb OR h.cause='erased' OR h.changes='{}'::jsonb) ${cut} ORDER BY h.revision`,
 			params

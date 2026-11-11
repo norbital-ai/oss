@@ -63,7 +63,8 @@ export function approvalStatus(bolt: Pick<ViewBolt, 't'>, status: string): strin
 		ChangesRequested: 'Changes requested',
 		Approved: 'Approved',
 		Rejected: 'Rejected',
-		Superseded: 'Superseded'
+		Superseded: 'Superseded',
+		Withdrawn: 'Withdrawn'
 	};
 	return msg(bolt, `approval.status.${status}`, words[status] ?? status);
 }

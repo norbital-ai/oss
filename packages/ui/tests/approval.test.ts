@@ -274,6 +274,44 @@ it.live('approve takes an optional reason; a superseder sees the same three deci
 	})
 );
 
+it.live(
+	'the requester withdraws with an optional reason; a withdrawn request never reads as rejected',
+	() =>
+		Effect.gen(function* () {
+			const sent: unknown[] = [];
+			const { target } = yield* panel(
+				[{ ...request, mine: true, moves: [{ decision: 'withdraw', reason: 'optional' }] }],
+				(_callable, input) => sent.push(input)
+			);
+			assert.deepEqual(
+				decisions(target).map((b) => textOf(b).trim()),
+				['Withdraw']
+			);
+			required(decisions(target)[0]).click();
+			yield* browser(() => settle());
+			const confirm = element<HTMLButtonElement>(target, '[data-confirm]');
+			assert.equal(confirm.disabled, false);
+			confirm.click();
+			yield* browser(() => settle());
+			assert.deepEqual(sent, [{ requestId: 'r1', decision: 'withdraw' }]);
+
+			const closed = yield* panel([
+				{
+					...request,
+					status: 'Withdrawn',
+					mine: true,
+					log: [
+						...request.log,
+						entry('withdraw', 'Bob', '2026-10-14T12:00:00Z', { to: 'Withdrawn' })
+					]
+				}
+			]);
+			assert.equal(element(closed.target, '[data-view=approval]').dataset['status'], 'Withdrawn');
+			assert.equal(nodes(closed.target)[1]?.dataset['look'], 'withdrawn');
+			assert.equal(closed.target.querySelector('[data-view=approval-controls]'), null);
+		})
+);
+
 it.live('the requester of a request that asks for changes is told that saving resubmits', () =>
 	Effect.gen(function* () {
 		const { target } = yield* panel([

@@ -14,7 +14,7 @@ export default model('approval_request', {
 		action: { kind: 'enum', values: ['create', 'update', 'delete'] },
 		status: {
 			kind: 'enum',
-			values: ['ONGOING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUPERSEDED']
+			values: ['ONGOING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUPERSEDED', 'WITHDRAWN']
 		},
 		/** The step it waits on (0-based), of `steps`. */
 		step: { kind: 'int' },

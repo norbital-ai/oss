@@ -267,11 +267,11 @@ export interface Caller {
 		field: `${string}.${string}`,
 		file: { name: string; mime: string; bytes: Uint8Array; id?: string }
 	): Effect.Effect<Committed<FileRef> | PendingApproval, ActFailure>;
-	/** `bolt.approvals.decide`: approve, reject or request changes on a request this caller may decide now (a reason for the last two). */
+	/** `bolt.approvals.decide`: approve, reject or request changes on a request this caller may decide now (a reason for the last two), or withdraw their own. */
 	readonly approvals: {
 		decide(
 			requestId: string,
-			input: { decision: 'approve' | 'reject' | 'requestChanges'; reason?: string }
+			input: { decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw'; reason?: string }
 		): Effect.Effect<void, ActFailure>;
 	};
 }

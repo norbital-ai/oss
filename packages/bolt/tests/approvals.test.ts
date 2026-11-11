@@ -52,7 +52,7 @@ const request: Request = {
 };
 
 describe('approval flows', () => {
-	it('shows requesters their pending status without giving them a decision or exposing it to strangers', () => {
+	it('shows requesters their pending status with only withdraw, without exposing it to strangers', () => {
 		const row = {
 			id: 'request',
 			state: 'Pending',
@@ -69,7 +69,13 @@ describe('approval flows', () => {
 		for (const state of ['Pending', 'ChangesRequested']) {
 			const rows = [{ ...row, state }];
 			expect(inboxRequests(rows, as('requester', 'staff'))).toMatchObject([
-				{ id: 'request', mine: true, canDecide: false, canSupersede: false, moves: [] }
+				{
+					id: 'request',
+					mine: true,
+					canDecide: false,
+					canSupersede: false,
+					moves: [{ decision: 'withdraw', reason: 'optional' }]
+				}
 			]);
 			expect(inboxRequests(rows, as('stranger', 'staff'))).toEqual([]);
 		}
@@ -158,7 +164,9 @@ describe('approval flows', () => {
 			expect(canApprove(mine, auth)).toBe(false);
 			expect(canSupersede(mine, auth)).toBe(false);
 			const roles = rolesOf(mine, auth);
-			expect(decisionsFor('Pending', roles)).toEqual([]);
+			expect(decisionsFor('Pending', roles)).toEqual([
+				{ decision: 'withdraw', reason: 'optional' }
+			]);
 			expect(transition(mine, 1, moveOf('approve', roles), roles, 'Override')).toMatchObject({
 				refused: 'forbidden'
 			});
@@ -174,7 +182,12 @@ describe('approval flows', () => {
 			]) {
 				expect(canApprove(r, auth)).toBe(false);
 				expect(canSupersede(r, auth)).toBe(false);
-				expect(decisionsFor('Pending', rolesOf(r, auth))).toEqual([]);
+				// the requester's own identity alone withdraws: never a linked sender's member or a previewer
+				expect(decisionsFor('Pending', rolesOf(r, auth))).toEqual(
+					r.requestor === 'member:requester' && auth.preview === undefined
+						? [{ decision: 'withdraw', reason: 'optional' }]
+						: []
+				);
 			}
 		}
 		const rows = [
@@ -196,7 +209,12 @@ describe('approval flows', () => {
 			}
 		];
 		expect(inboxRequests(rows, as('requester', 'finance', true))).toMatchObject([
-			{ mine: true, canDecide: false, canSupersede: false, moves: [] }
+			{
+				mine: true,
+				canDecide: false,
+				canSupersede: false,
+				moves: [{ decision: 'withdraw', reason: 'optional' }]
+			}
 		]);
 	});
 	it('uses supersede for a superseder’s approve and requires its reason', () => {
@@ -248,5 +266,29 @@ describe('approval flows', () => {
 			refused: 'invalidMove'
 		});
 		expect(participant({ ...request, state: 'Rejected' }, as('manager', 'staff'))).toBe(false);
+	});
+	it('withdraws only for the requester, from either open state, with an optional reason and a rollback', () => {
+		const mine = rolesOf(request, as('requester', 'staff'));
+		for (const state of ['Pending', 'ChangesRequested'] as const)
+			expect(transition({ state, step: 1 }, 2, 'withdraw', mine, '')).toMatchObject({
+				next: { state: 'Withdrawn', step: 1 },
+				edge: { rollback: true }
+			});
+		for (const auth of [
+			as('manager', 'staff'),
+			as('leader', 'leadership'),
+			as('admin', 'staff', true)
+		]) {
+			const roles = rolesOf(request, auth);
+			expect(decisionsFor('Pending', roles).map((d) => d.decision)).not.toContain('withdraw');
+			expect(transition(request, 2, 'withdraw', roles, '')).toMatchObject({
+				refused: 'forbidden',
+				message: 'Only the requester may withdraw.'
+			});
+		}
+		for (const state of ['Approved', 'Rejected', 'Superseded', 'Withdrawn'] as const)
+			expect(transition({ state, step: 0 }, 2, 'withdraw', mine, '')).toMatchObject({
+				refused: 'invalidMove'
+			});
 	});
 });

@@ -125,8 +125,8 @@ export type RunRow = {
 	started?: string | null;
 };
 
-/** A decision on a request's current step (`approvals.decide`); a superseder's `approve` supersedes. */
-export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges';
+/** A decision on a request's current step (`approvals.decide`); a superseder's `approve` supersedes; `withdraw` is the requester's. */
+export type ApprovalDecision = 'approve' | 'reject' | 'requestChanges' | 'withdraw';
 /** One step of a request's flow as it was snapshotted when the request opened (or was resubmitted): decided by any of its teams or users. */
 export type ApprovalStep = {
 	readonly name: string;
@@ -141,7 +141,7 @@ export type ApprovalView = {
 	record: string;
 	action: string;
 	at: string;
-	/** Pending, ChangesRequested, Approved, Rejected or Superseded. */
+	/** Pending, ChangesRequested, Approved, Rejected, Superseded or Withdrawn. */
 	status: string;
 	/** The current step (from 0). */
 	step: number;
@@ -153,7 +153,8 @@ export type ApprovalView = {
 	requestor: ApprovalWho;
 	/** Every move, oldest first, each on the step it was taken at, with what a rollback did. */
 	log: readonly {
-		move: 'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede';
+		move:
+			'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede' | 'withdraw';
 		by: ApprovalWho;
 		at: string;
 		from: string | null;
@@ -167,7 +168,7 @@ export type ApprovalView = {
 			| undefined;
 		skipped?: readonly { model: string; id: string; field: string; reason: string }[] | undefined;
 	}[];
-	/** The records the provisional change holds: committed already, rolled back on rejection. */
+	/** The records the provisional change holds: committed already, rolled back on rejection or withdrawal. */
 	records: readonly { model: string; id: string; op: 'create' | 'update' | 'delete' }[];
 	/** The decisions this viewer may take now, straight from the host's transition table. */
 	moves: readonly { decision: ApprovalDecision; reason: 'required' | 'optional' }[];
@@ -259,7 +260,7 @@ export type ViewBolt = {
 		}[]
 	): Effect.Effect<{ fields: readonly Offer[] }, Error>;
 	approvals: {
-		/** Decides the request's current step; `reason` is required for `reject` and `requestChanges` (and a superseder's approve). */
+		/** Decides the request's current step; `reason` is required for `reject` and `requestChanges` (and a superseder's approve); the requester may `withdraw`. */
 		decide(
 			requestId: string,
 			decision: { decision: ApprovalDecision; reason?: string }

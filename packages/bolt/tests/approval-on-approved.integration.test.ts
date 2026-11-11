@@ -130,11 +130,16 @@ const fixture = Effect.gen(function* () {
 			})
 			.pipe(Effect.map((result) => result.outcome));
 	};
-	const decide = (requestId: string, decision: 'approve' | 'reject', reason?: string) =>
+	const decide = (
+		requestId: string,
+		decision: 'approve' | 'reject' | 'withdraw',
+		reason?: string,
+		authority = manager
+	) =>
 		approvals.decide({
 			requestId,
 			decision,
-			authority: manager,
+			authority,
 			now: t.clock.now(),
 			...(reason === undefined ? {} : { reason })
 		});
@@ -206,6 +211,19 @@ layer(workspace, { excludeTestServices: true })('onApproved', (it) => {
 		})
 	);
 
+	it.effect('is never written when the requester withdraws, and its with rows roll back', () =>
+		Effect.gen(function* () {
+			const f = yield* fixture;
+			const request = held(yield* f.act('create', [{ name: 'unpaid' }]));
+			expect(yield* f.decide(request, 'withdraw', undefined, f.requester)).toMatchObject({
+				status: 'Withdrawn'
+			});
+			expect(yield* f.names('leaves', 'unpaid')).toEqual([]);
+			expect(yield* f.names('holds', 'hold unpaid')).toEqual([]);
+			expect(yield* f.postings('unpaid')).toEqual([]);
+		})
+	);
+
 	it.effect(
 		'waits too for an approver change to the held record, which the decision asks again',
 		() =>
@@ -228,9 +246,7 @@ layer(workspace, { excludeTestServices: true })('onApproved', (it) => {
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const request = held(
-				yield* f.act('create', [
-					{ name: 'stepped', steps: [{ label: 'one' }, { label: 'two' }] }
-				])
+				yield* f.act('create', [{ name: 'stepped', steps: [{ label: 'one' }, { label: 'two' }] }])
 			);
 			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });
 			expect(yield* f.postings('stepped')).toEqual([{ source: 'stepped', carrier: 'leaves' }]);

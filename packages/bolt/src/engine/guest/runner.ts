@@ -248,6 +248,14 @@ const lower = (
 					: { _tag: 'send', to: null, message: args[0] ?? null };
 			case 'progress':
 				return { _tag: 'progress', progress: args[0] ?? null };
+			case 'approvals.withdraw': {
+				const reason = yield* decode(Schema.UndefinedOr(Schema.String), args[1] ?? undefined);
+				return {
+					_tag: 'withdraw',
+					requestId: yield* decode(Schema.String, args[0]),
+					...(reason === undefined ? {} : { reason })
+				};
+			}
 			default:
 				return {
 					_tag: yield* decode(facility, member),
@@ -530,7 +538,10 @@ const run = (
 							}).pipe(
 								Effect.catch((error) =>
 									Effect.succeed(
-										member === 'act' || member === 'acts' || member.startsWith('transaction.')
+										member === 'act' ||
+											member === 'acts' ||
+											member === 'approvals.withdraw' ||
+											member.startsWith('transaction.')
 											? ({
 													ok: false,
 													error: { kind: 'refused', code: error.code, message: error.message }

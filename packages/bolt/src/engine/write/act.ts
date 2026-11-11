@@ -1047,15 +1047,7 @@ export const storedTrees = (
 	ids: readonly (string | null)[],
 	b: Bindings,
 	paths = Object.keys(m.exposures[model]?.update?.columns ?? {})
-) =>
-	wireRows(
-		db,
-		cat,
-		model,
-		ids,
-		b,
-		treeSelect(cat, paths, model, model)
-	);
+) => wireRows(db, cat, model, ids, b, treeSelect(cat, paths, model, model));
 /** Rule 13: the caller's read scope admits the row, as the act's own native read found it (an administrator reads all). */
 function readableBy(
 	auth: Authority,
@@ -1866,6 +1858,8 @@ const plan = Effect.fn('Bolt.plan')(function* (
 			!('columns' in arm) ||
 			(Object.keys(verb === 'create' ? values : pending).every(
 				(field) =>
+					// a create's stored row carries every column; one still empty was never the requester's to be granted
+					(verb === 'create' && values[field] == null) ||
 					relations.includes(field) ||
 					!declared.includes(field) ||
 					(arm.columns[request.model]?.includes(field) ?? false)

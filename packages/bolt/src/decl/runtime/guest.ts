@@ -344,6 +344,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 				cause: raw['cause'],
 				// an automation run's id and trigger; an effect has none
 				...(raw['run'] === undefined ? {} : { run: raw['run'] }),
+				approvals: { withdraw: cross('approvals.withdraw', 'act') },
 				send: cross('send'),
 				progress: cross('progress'),
 				request: cross('request', 'facility'),

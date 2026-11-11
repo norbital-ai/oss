@@ -649,7 +649,7 @@ const VERBS = ['create', 'update', 'delete', 'upsert'] as const;
 const APPROVE = 'approvals.decide';
 const Decide = Schema.Struct({
 	requestId: Schema.String,
-	decision: Schema.Literals(['approve', 'reject', 'requestChanges']),
+	decision: Schema.Literals(['approve', 'reject', 'requestChanges', 'withdraw']),
 	reason: Schema.optionalKey(Schema.String)
 });
 /** `act { callable: 'automation.<name>' }` starts an automation now; `<model>.sync.<sync>` runs a sync now. */
@@ -913,7 +913,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		const d = Option.getOrUndefined(Schema.decodeUnknownOption(Decide)(input));
 		if (d === undefined)
 			return {
-				error: `${APPROVE} takes { requestId, decision: approve | reject | requestChanges, reason? }`
+				error: `${APPROVE} takes { requestId, decision: approve | reject | requestChanges | withdraw, reason? }`
 			};
 		return encodeWire(
 			yield* x.engine.approvals.decide({

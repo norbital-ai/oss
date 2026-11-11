@@ -1024,7 +1024,10 @@ export const createBolt = (config: BoltConfig) =>
 			approvals: {
 				decide: (
 					requestId: string,
-					decision: { decision: 'approve' | 'reject' | 'requestChanges'; reason?: string }
+					decision: {
+						decision: 'approve' | 'reject' | 'requestChanges' | 'withdraw';
+						reason?: string;
+					}
 				) => act('approvals.decide', { requestId, ...decision }),
 				get: (requestId: string) =>
 					getValue(

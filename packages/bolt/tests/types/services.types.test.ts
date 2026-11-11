@@ -293,6 +293,7 @@ is<
 		| 'send'
 		| 'request'
 		| 'progress'
+		| 'withdraw'
 		| 'transactionBegin'
 		| 'transactionRead'
 		| 'transactionAct'

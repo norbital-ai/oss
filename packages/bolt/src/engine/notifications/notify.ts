@@ -69,7 +69,8 @@ export const NotifyWire = Schema.Union([
 			'reject',
 			'requestChanges',
 			'resubmit',
-			'supersede'
+			'supersede',
+			'withdraw'
 		]),
 		step: Schema.Number,
 		steps: Snapshot.fields.steps,

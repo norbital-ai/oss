@@ -53,6 +53,7 @@ import { Ai, Browser, Drivers, Logs, RunUnits } from '../ports.ts';
 import { automationBrowserProfile } from '../agent/browser.ts';
 import {
 	Activation,
+	Approvals,
 	Callables,
 	Deadlines,
 	Facilities,
@@ -326,6 +327,7 @@ const EFFECTS = new Set([
 	'send',
 	'request',
 	'progress',
+	'withdraw',
 	'transactionBegin'
 ]);
 /**
@@ -493,6 +495,7 @@ export const RunsLive = Layer.effect(
 			guest = yield* Guest,
 			reads = yield* Reads,
 			writes = yield* Writes,
+			approvals = yield* Approvals,
 			calls = yield* Callables,
 			identity = yield* Identity,
 			live = yield* Live,
@@ -1204,6 +1207,22 @@ export const RunsLive = Layer.effect(
 								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
 								return { ok: true, value: result.outcome };
 							}
+							case 'withdraw': {
+								const decision = yield* approvals.decide({
+									requestId: call.requestId,
+									decision: 'withdraw',
+									...(call.reason === undefined ? {} : { reason: call.reason }),
+									authority,
+									now: b.now
+								});
+								return {
+									ok: true,
+									value:
+										decision.kind === 'decided'
+											? { requestId: decision.requestId, status: decision.status }
+											: encodeWire(decision)
+								};
+							}
 							case 'acts': {
 								const acts: ActsRequest['acts'][number][] = [];
 								for (const act of call.acts) {
@@ -1361,7 +1380,10 @@ export const RunsLive = Layer.effect(
 							}
 						}
 					});
-					return call._tag === 'act' || call._tag === 'acts' || call._tag.startsWith('transaction')
+					return call._tag === 'act' ||
+						call._tag === 'acts' ||
+						call._tag === 'withdraw' ||
+						call._tag.startsWith('transaction')
 						? writeLane.withPermit(work)
 						: work;
 				};

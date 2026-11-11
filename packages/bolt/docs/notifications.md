@@ -20,8 +20,8 @@ notify: function* (event, ctx) {
 
 Write events carry `{ kind: 'write', action, records, previous, actor }`, where action is a write
 verb. Approval events carry `{ kind: 'approval', move, step, steps, done, request,
-records, requester, approvers }`; moves include request, approve, reject, requestChanges, resubmit
-and supersede. Ordinary code decides wording, grouping, plurals and which events should notify.
+records, requester, approvers }`; moves include request, approve, reject, requestChanges, resubmit,
+supersede and withdraw. Ordinary code decides wording, grouping, plurals and which events should notify.
 
 Use `to: ['approvers']` in the request event to notify reviewers. Delivery resolves the active
 request's current step against active staff members, excludes its requester, and sends nothing

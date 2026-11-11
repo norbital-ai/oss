@@ -135,7 +135,10 @@ grant matches nothing there and a ref's `requestor.id` default does not apply. C
 starter checks the trigger explicitly — "a customer cancels only their own booking" reads the booking
 and refuses unless its customer is `trigger.actor.party`. A policy's `automations` grants manual starts
 only (a person or the agent), rate limited per starter by the automation's `limit`; code that
-schedules needs no start grant. Automations cannot approve requests. The Command center's
+schedules needs no start grant. Automations cannot approve, reject or request changes on a request.
+`ctx.approvals.withdraw(requestId, reason?)` takes back an open request the same automation asked for
+(any of its runs; in a model effect, its writer's own), restoring the held records as a rejection does;
+it fails `ActRefused` for anyone else's request or a decided one. The Command center's
 Automations list and run detail show each run's trigger.
 
 A model's `effect` (`created`, `updated`, `deleted`) is the work that follows a committed write: a

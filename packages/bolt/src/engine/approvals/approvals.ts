@@ -1,7 +1,8 @@
 // Approval requests (rules 44–46, spec §8), the provisional-commit model: a routed write is committed at once and held by
 // its request; each move of the state machine (machine.ts) is one guarded statement with every effect it has — the log
 // entry, the readable `approval_request` face, the queued notify event (H1) and on rejection the rollback of every held
-// record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`).
+// record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`); the
+// requester's `withdraw` of their own open request is the same rollback.
 import { Clock, Effect, Layer, Option, Result, Schema } from 'effect';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
@@ -90,14 +91,20 @@ const STATUS = {
 	ChangesRequested: 'CHANGES_REQUESTED',
 	Approved: 'APPROVED',
 	Rejected: 'REJECTED',
-	Superseded: 'SUPERSEDED'
+	Superseded: 'SUPERSEDED',
+	Withdrawn: 'WITHDRAWN'
 } as const satisfies { [S in ApprovalState]: string };
+// ponytail: `bolt_approvals.state` keeps `Rejected` for a withdrawn request (closed, rolled back) and its last log
+// entry's `to` names `Withdrawn` (`toStored`, history's `request_state`): migrations evolve engine functions only
+// (bolt-cli `runtimeFunctions`), never a source table's CHECK. Store the state itself once a table constraint can migrate.
+const storedState = (state: ApprovalState) => (state === 'Withdrawn' ? 'Rejected' : state);
 const State = Schema.Literals([
 	'Pending',
 	'ChangesRequested',
 	'Approved',
 	'Rejected',
-	'Superseded'
+	'Superseded',
+	'Withdrawn'
 ]);
 
 // stored `records` entries keep their `collection` key (the audit trigger reads it); the engine speaks `model`
@@ -114,9 +121,12 @@ const LogEntry = Schema.Struct({
 		'reject',
 		'requestChanges',
 		'resubmit',
-		'supersede'
+		'supersede',
+		'withdraw'
 	]),
 	by: Schema.String,
+	/** The automation whose run asked (`by` names only that run): any of its runs may withdraw the request. */
+	automation: Schema.optionalKey(Schema.String),
 	at: Schema.String,
 	from: Schema.NullOr(State),
 	to: State,
@@ -265,7 +275,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	const notifies = (model: string) => m.exposures[model]?.notify === true;
 	const toStored = (r: typeof StoredRow.Type): Stored => ({
 		id: r.id,
-		state: r.state,
+		state: r.log.at(-1)?.to ?? r.state,
 		step: r.step,
 		requestor: r.requestor,
 		user: r.requestor_user,
@@ -382,7 +392,10 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				from: null,
 				to: 'Pending',
 				step: 0,
-				reason: null
+				reason: null,
+				...(auth.actor.kind === 'system' && 'automation' in auth.actor.by
+					? { automation: auth.actor.by.automation }
+					: {})
 			};
 			const shown = face(route, { state: 'Pending', step: 0 });
 			const runs = notified(
@@ -529,23 +542,35 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 	/**
 	 * One decision: the guarded state change, its log entry, the readable face, the notify event and (reject) the
 	 * rollback. A superseder's approve supersedes; a request whose record or model a release removed ends by reject.
+	 * `withdraw` is the requester's alone: the member who asked, or any run of the automation that did.
 	 */
 	const decide = Effect.fn('Approvals.decide')(function* (
 		x: DecideInput
 	): Effect.fn.Return<Decision, EngineError> {
-		if (x.authority.actor.kind !== 'member')
+		const actor = x.authority.actor;
+		const automation =
+			x.decision === 'withdraw' && actor.kind === 'system' && 'automation' in actor.by
+				? actor.by.automation
+				: undefined;
+		if (actor.kind !== 'member' && automation === undefined)
 			return refused('forbidden', 'Only a member may decide an approval.');
 		const a = yield* load(x.requestId);
 		if (a === null) return refused('notFound', 'No approval request has this id.');
 		const auth =
-			x.authority.actor.kind === 'member'
-				? yield* currentMember(x.authority.actor, x.authority.preview, x.authority.admin)
+			actor.kind === 'member'
+				? yield* currentMember(actor, x.authority.preview, x.authority.admin)
 				: x.authority;
 		if (auth === null)
 			return refused('forbidden', 'You are no longer authorized to act on this request.');
-		const roles = rolesOf(a, auth),
+		const roles =
+				automation !== undefined && a.log[0]?.automation === automation
+					? new Set([...rolesOf(a, auth), 'requester' as const])
+					: rolesOf(a, auth),
 			move = moveOf(x.decision, roles),
 			reason = x.reason?.trim() ?? '';
+		// a rerun's withdraw of what its earlier attempt withdrew
+		if (move === 'withdraw' && a.state === 'Withdrawn' && roles.has('requester'))
+			return { kind: 'decided', requestId: a.id, status: a.state };
 		const t = transition(a, a.route.steps.length, move, roles, reason);
 		if ('refused' in t)
 			return t.refused === 'forbidden'
@@ -648,7 +673,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			pieces: (c) => {
 				c.cte(
 					'up',
-					`UPDATE bolt_approvals SET state = ${c.p(next.state)}, step = ${next.step}, log = log || jsonb_build_array(${c.p(entry)}::jsonb),
+					`UPDATE bolt_approvals SET state = ${c.p(storedState(next.state))}, step = ${next.step}, log = log || jsonb_build_array(${c.p(entry)}::jsonb),
 	closed_at = ${c.p(open ? null : now)}::timestamptz${readGuards === undefined ? '' : `, route = jsonb_set(route, '{__boltReadGuardRefresh}', to_jsonb(${c.p(refreshKey)}::text))`} WHERE id IN (SELECT id FROM ap_authorize) RETURNING id`
 				);
 				c.cte(

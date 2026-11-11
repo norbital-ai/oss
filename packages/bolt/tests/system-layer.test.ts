@@ -168,7 +168,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			"(action in ('create', 'update', 'delete'))",
 			'(isfinite(closed_at))',
 			'(isfinite(created_at))',
-			"(status in ('ONGOING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUPERSEDED'))"
+			"(status in ('ONGOING', 'CHANGES_REQUESTED', 'APPROVED', 'REJECTED', 'SUPERSEDED', 'WITHDRAWN'))"
 		]
 	},
 	requestor: {

@@ -3,6 +3,7 @@
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
 import type { Act, BodyReturn, CallerQuery, Clock, Eff } from '../ctx.ts';
+import type { ActConflict, ActRefused, ActUnknown } from '../errors.ts';
 import type { Transaction } from '../transaction.ts';
 import type {
 	Checked,
@@ -16,7 +17,7 @@ import type {
 	ValueOf
 } from '../fields.ts';
 import type { AutomationName, ModelName, PolicyName } from '../names.ts';
-import type { Duration, IanaZone, Id, NonEmpty, Rate } from '../values.ts';
+import type { Duration, IanaZone, Id, NonEmpty, Rate, RequestId } from '../values.ts';
 import type {
 	Ai,
 	Browser,
@@ -149,6 +150,19 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		cause: RunCause;
 		progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
 		act: Act;
+		/**
+		 * Takes back an open approval request this identity asked for (an automation: any of its runs; an effect: its
+		 * writer), restoring the held records as a rejection does. Anyone else's request fails `ActRefused`.
+		 */
+		approvals: {
+			withdraw(
+				requestId: RequestId,
+				reason?: string
+			): Eff<
+				{ readonly requestId: RequestId; readonly status: 'Withdrawn' },
+				ActRefused | ActConflict | ActUnknown
+			>;
+		};
 		/** Caller-scoped model reads and guarded CRUD in one fixed five-second native transaction. */
 		transaction: Transaction;
 		schedule: Schedule;

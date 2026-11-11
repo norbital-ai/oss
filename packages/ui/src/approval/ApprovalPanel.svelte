@@ -2,7 +2,8 @@
 @component
 A record's approval requests (spec §7): a scope selector when there are several, the chosen request's timeline (one
 node for the request, one per step; each node a button whose popover holds that step's back-and-forth) and, for whoever
-may decide now, a two-step form: pick Approve, Reject or Request changes, then give the reason and confirm.
+may decide now, a two-step form: pick Approve, Reject, Request changes or (the requester) Withdraw, then give the
+reason and confirm.
 -->
 <script lang="ts" module>
 	import type { ApprovalView, Outcome } from '../client/contract.js';
@@ -34,7 +35,7 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 	const ids = $props.id();
 	type Entry = ApprovalView['log'][number];
 	type Move = ApprovalView['moves'][number];
-	type Look = 'done' | 'active' | 'changes' | 'rejected' | 'later';
+	type Look = 'done' | 'active' | 'changes' | 'rejected' | 'withdrawn' | 'later';
 	type Node = {
 		key: string;
 		label: string;
@@ -53,7 +54,13 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 		}).format(new Date(value));
 	const who = (p: { ref: string; name: string | null }) => p.name ?? p.ref.replace(/^[a-z]+:/i, '');
 	const OPEN = new Set(['Pending', 'ChangesRequested']);
-	const DECISIVE = new Set<Entry['move']>(['approve', 'reject', 'requestChanges', 'supersede']);
+	const DECISIVE = new Set<Entry['move']>([
+		'approve',
+		'reject',
+		'requestChanges',
+		'supersede',
+		'withdraw'
+	]);
 
 	// oldest first: a request's number is its place in the record's history
 	const ordered = $derived([...requests].sort((a, b) => a.at.localeCompare(b.at)));
@@ -71,18 +78,21 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 		reject: 'Rejected',
 		requestChanges: 'Requested changes',
 		resubmit: 'Resubmitted',
-		supersede: 'Superseded'
+		supersede: 'Superseded',
+		withdraw: 'Withdrew'
 	};
 	const DECISION_TEXT: Readonly<Record<Move['decision'], string>> = {
 		approve: 'Approve',
 		reject: 'Reject',
-		requestChanges: 'Request changes'
+		requestChanges: 'Request changes',
+		withdraw: 'Withdraw'
 	};
 	const LOOK_TEXT: Readonly<Record<Look, string>> = {
 		done: 'Done',
 		active: 'Waiting',
 		changes: 'Changes requested',
 		rejected: 'Rejected',
+		withdrawn: 'Withdrawn',
 		later: 'Later'
 	};
 	const lookText = (look: Look) => msg(bolt, `approval.look.${look}`, LOOK_TEXT[look]);
@@ -111,7 +121,9 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 								? 'active'
 								: v.status === 'ChangesRequested'
 									? 'changes'
-									: 'rejected';
+									: v.status === 'Withdrawn'
+										? 'withdrawn'
+										: 'rejected';
 				const last = [...entries].reverse().find((e) => DECISIVE.has(e.move));
 				return {
 					key: `step-${i}`,
@@ -133,12 +145,13 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 		active: 'border-brand bg-background text-brand',
 		changes: 'border-warning bg-warning text-warning-foreground',
 		rejected: 'border-destructive bg-destructive text-destructive-foreground',
+		withdrawn: 'border-border bg-muted text-muted-foreground',
 		later: 'border-border bg-muted text-muted-foreground'
 	};
 	const glyph = (look: Look): GlyphName | null =>
 		look === 'done' ? 'check' : look === 'changes' ? 'alert' : look === 'rejected' ? 'x' : null;
-	const DECISIONS = ['approve', 'reject', 'requestChanges'] as const;
-	/** The viewer's decisions in the form's order: Approve, Reject, Request changes. */
+	const DECISIONS = ['approve', 'reject', 'requestChanges', 'withdraw'] as const;
+	/** The viewer's decisions in the form's order: Approve, Reject, Request changes, Withdraw. */
 	const decisions = (v: ApprovalView) =>
 		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
 	const changedText = (v: ApprovalView, e: Entry) =>
@@ -200,8 +213,7 @@ may decide now, a two-step form: pick Approve, Reject or Request changes, then g
 			<p class="text-caption" data-rolled-back>
 				{msg(bolt, 'approval.rolledBack', 'Rolled back')}: {e.rolledBack
 					.map(
-						(r) =>
-							`${label(bolt, r.model)} ${msg(bolt, `approval.action.${r.action}`, r.action)}`
+						(r) => `${label(bolt, r.model)} ${msg(bolt, `approval.action.${r.action}`, r.action)}`
 					)
 					.join(', ')}
 			</p>

@@ -884,7 +884,8 @@ export type NotifyEvent<M> =
 	  }
 	| {
 			readonly kind: 'approval';
-			readonly move: 'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede';
+			readonly move:
+				'request' | 'approve' | 'reject' | 'requestChanges' | 'resubmit' | 'supersede' | 'withdraw';
 			readonly step: number;
 			readonly steps: readonly ApprovalStep[];
 			readonly done: boolean;

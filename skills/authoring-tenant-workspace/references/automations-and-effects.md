@@ -12,7 +12,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[1]`, `i
 
 ## Automations
 
-- A job the reserved system identity runs with its declared `policies` (required, non-empty), on cron, webhook, manual start or `ctx.schedule`. Every run holds exactly those policies. Automations cannot approve. A run has 10,000 crossings.
+- A job the reserved system identity runs with its declared `policies` (required, non-empty), on cron, webhook, manual start or `ctx.schedule`. Every run holds exactly those policies. Automations cannot approve; `ctx.approvals.withdraw(requestId, reason?)` takes back an open request the same automation asked for. A run has 10,000 crossings.
 - `ctx.run.trigger` records `{ kind: 'person', actor, agent? }` or `{ kind: 'system', cause }` (cron, webhook, effect, schedule). It is never authority: `requestor.*` names the system identity, so a requestor-scoped grant matches nothing and a ref default does not apply.
 - A rule about the starter is an explicit check of the trigger in the body. Refs the run writes are set explicitly.
 - `policy.automations` grants manual starts only; code needs none. Delegations lend explicit generated verbs.
