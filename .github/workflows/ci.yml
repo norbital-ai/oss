@@ -41,12 +41,6 @@ jobs:
       - name: Install Convert test dependencies
         run: pnpm --dir services/convert install --ignore-workspace --frozen-lockfile --ignore-scripts
 
-      # Bolt's Vitest browser project (https://vitest.dev/guide/browser/) needs Playwright Chromium.
-      # Without the browser those tests fail as "Executable doesn't exist", which is a runner
-      # gap rather than a driver verdict; a skip would make the suite green without the proof.
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
-
       # Public and private templates have their own repositories and CI; this repository gates the
       # publishable package graph plus the one oss suite (`pnpm test`). Each phase is its own step so a
       # stalled phase names itself in the run summary instead of disappearing inside one long step.
@@ -91,8 +85,22 @@ jobs:
       - name: Install Convert test dependencies
         run: pnpm --dir services/convert install --ignore-workspace --frozen-lockfile --ignore-scripts
 
+      # Bolt's Vitest browser project (https://vitest.dev/guide/browser/) needs Playwright Chromium.
+      # Without the browser those tests fail as "Executable doesn't exist", which is a runner
+      # gap rather than a driver verdict; a skip would make the suite green without the proof.
+      # The binary is cached by Playwright version and downloaded from Playwright's own host. No
+      # `--with-deps`: that runs `apt-get`, which stalled every job to its timeout when the runner
+      # could not reach Ubuntu's mirrors; the hosted image already carries Chromium's system libraries.
+      - name: Cache Playwright Chromium
+        id: playwright
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        if: steps.playwright.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium
 
       # A fresh test runner has no package build outputs; bolt's source imports sibling packages.
       - name: Build packages
