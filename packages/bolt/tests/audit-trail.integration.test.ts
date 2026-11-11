@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { Audit, auditFromAbi } from '../src/engine/audit.ts';
 import { recoverAudit } from '../src/engine/audit-operation.ts';
 import { pruneHistory, readHistory } from '../src/engine/query/history.ts';
-import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { Writes } from '../src/engine/services.ts';
 import { TestWorkspace, memoryAudit } from '../../bolt-cli/src/test/index.ts';
 import type { AuditPort } from '../src/protocol/audit.ts';
@@ -296,7 +296,7 @@ it.live(
 						params: []
 					});
 				const epoch = yield* grace();
-				yield* applyPlan(f.t.db, yield* plan(yield* readApplied(f.t.db), layered(manifest)));
+				yield* TestDb.migrate(f.t.db, layered(manifest));
 				expect(yield* grace()).toBe(epoch);
 				lookupOffline = true;
 				for (const operation of ids) store.records.delete(`${operation}:prepared`);

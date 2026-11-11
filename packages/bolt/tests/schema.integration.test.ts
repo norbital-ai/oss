@@ -1,14 +1,15 @@
 /// <reference types="node" />
-// Schema on a real Postgres (PGlite 18): the empty-DB plan, one test per §5.2 / rule 68–69 guarantee.
+// Schema on a real Postgres (PGlite 18): verified SQL migrations, one test per §5.2 / rule 68–69 guarantee.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { BoltError, fromStore } from '../src/protocol/errors.ts';
+import { fromStore } from '../src/protocol/errors.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { constraintIndex } from '@norbital-ai/store';
-import { applyPlan, plan, readApplied, type SchemaSlice } from '../src/engine/schema/plan.ts';
+import { plan, readApplied, type SchemaSlice } from '../src/engine/schema/plan.ts';
+import { applyMigrations } from '../src/engine/schema/migrations.ts';
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
 let db: TenantDb;
@@ -26,7 +27,7 @@ const refusal = Effect.fnUntraced(function* (p: Effect.Effect<unknown, DbError>)
 });
 const migrate = Effect.fnUntraced(function* (s: SchemaSlice, accept?: true | readonly string[]) {
 	const p = yield* plan(yield* readApplied(db), s);
-	yield* applyPlan(db, p, accept === undefined ? {} : { accept });
+	yield* TestDb.migrate(db, s, accept === undefined ? {} : { accept });
 	return p;
 });
 const seed = Effect.fnUntraced(function* () {
@@ -348,7 +349,7 @@ describe('source:connections: a connection is its named instance', () => {
 // Last: its DDL changes the catalogs, so the pooled database reloads afresh for whatever runs after it.
 describe('schema changes on a populated database', () => {
 	it.live(
-		'refuses a populated required column, applies it with a default and refuses a stale plan',
+		'refuses a populated required column, applies it with a default and refuses a stale SQL history',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -372,9 +373,9 @@ describe('schema changes on a populated database', () => {
 				expect(p.steps.find((x) => x.id === 'create:notNull:notes.pinned')?.class).toBe(
 					'validating'
 				);
-				const e = yield* applyPlan(db, p).pipe(Effect.catch((x) => Effect.succeed(x)));
-				expect(e).toBeInstanceOf(BoltError);
-				expect((e as BoltError).message).toBe('notNull:notes.pinned refuses 2 existing rows');
+				const e = yield* Effect.flip(TestDb.migrate(db, next));
+				expect(e).toBeInstanceOf(DbError);
+				expect(e.message).toContain('notNull:notes.pinned refuses 2 existing row');
 				expect(yield* readApplied(db)).toEqual(JSON.parse(JSON.stringify(s)));
 				// with a default the same change applies
 				const withDefault: SchemaSlice = {
@@ -392,10 +393,13 @@ describe('schema changes on a populated database', () => {
 					{ text: 'select count(*)::int as n from notes where pinned = false', params: [] }
 				]);
 				expect(r?.rows[0]?.n).toBe(2);
-				// destructive acceptance is plan-level (schema.test); a plan from a schema that moved since is refused here
-				const stale = yield* plan(yield* readApplied(db), { ...withDefault, tz: 'UTC' });
+				// A prepared SQL history refuses a database that applied a different successor in the meantime.
+				const target = { ...withDefault, tz: 'UTC' };
+				const stale = yield* TestDb.prepareMigrations(db, target);
 				yield* migrate({ ...withDefault, tz: 'Europe/Paris' });
-				expect(yield* Effect.flip(applyPlan(db, stale))).toMatchObject({ code: 'schemaMoved' });
+				expect(yield* Effect.flip(applyMigrations(db, target, stale))).toMatchObject({
+					code: 'migrationChanged'
+				});
 			})
 	);
 });

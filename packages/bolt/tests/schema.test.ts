@@ -1,6 +1,10 @@
 /// <reference types="node" />
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Result, Schema } from 'effect';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
+import { PgliteDb } from '../src/node/db/pglite.ts';
+import { applyMigrations } from '../src/engine/schema/migrations.ts';
+import { checksumOf } from '@norbital-ai/store';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { BoltError, storeSync } from '../src/protocol/errors.ts';
@@ -9,7 +13,7 @@ import { inline } from '../src/engine/db/wire.ts';
 import { parse } from '../src/engine/db/wire.ts';
 import { SchemaSliceSchema, type SchemaSlice } from '../src/engine/schema/plan.ts';
 import { constraintIndex, schemaObjects } from '@norbital-ai/store';
-import { applyPlan, engineBeside, fingerprint, plan } from '../src/engine/schema/plan.ts';
+import { engineBeside, fingerprint, plan } from '../src/engine/schema/plan.ts';
 import { SYSTEM } from '../src/system/index.ts';
 import { refusalOf } from '../src/engine/schema/refusal.ts';
 import { slice } from './schema-fixture.ts';
@@ -347,7 +351,7 @@ describe('next schema: fingerprint and plan', () => {
 		expect(storeSync(plan(s, s)).steps).toEqual([]);
 	});
 
-	it.effect('refuses an unaccepted destructive step before touching the database', () =>
+	it.live('refuses an unaccepted destructive SQL file before touching the database', () =>
 		Effect.gen(function* () {
 			const s = slice();
 			const { notes: _, ...tables } = s.tables;
@@ -361,11 +365,24 @@ describe('next schema: fingerprint and plan', () => {
 					throw new Error('touched');
 				}
 			});
-			const refusal = yield* Effect.result(
-				applyPlan(untouchable, yield* plan(s, { ...s, tables }))
-			);
+			const db = PgliteDb.make(yield* TestDb.open(s));
+			const target = { ...s, tables };
+			const prepared = yield* TestDb.prepareMigrations(db, target, { accept: true });
+			const files = prepared.files.map((file) => ({
+				...file,
+				sql: file.sql.replace(/^-- accept: .*\n/gm, '')
+			}));
+			const bundle = {
+				...prepared,
+				files,
+				lock: {
+					...prepared.lock,
+					files: Object.fromEntries(files.map((file) => [file.name, checksumOf(file)]))
+				}
+			};
+			const refusal = yield* Effect.result(applyMigrations(untouchable, target, bundle));
 			expect(Result.isFailure(refusal) && refusal.failure).toMatchObject({
-				code: 'destructiveNotAccepted'
+				code: 'migrationInvalid'
 			});
 		})
 	);

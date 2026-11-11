@@ -1,7 +1,8 @@
-// The kit's databases. A schema is planned once per machine into a checkpoint (`images/<hash>.zst` and its shape); a
+// The kit's databases. Verified SQL migrations build each schema once per machine into a checkpoint (`images/<hash>.zst` and its shape); a
 // worker loads a checkpoint into one in-memory PGlite and pools it, and every later acquisition restores that database
 // to its checkpoint in place: the tables a test changed emptied and refilled, sequences rewound, session state reset.
 // A database whose catalogs changed (a test ran DDL or kept a temp table) is closed and loaded afresh instead.
+import { APPLIED, AppliedRow } from '@norbital-ai/store';
 import type { PGlite } from '@electric-sql/pglite';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import { Effect, Exit, FileSystem, Layer, Option, Schema, Scope } from 'effect';
@@ -10,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib';
-import { TenantDb, applyPlan, plan } from '@norbital-ai/bolt/engine';
+import { TenantDb, applyMigrations, type MigrationBundle } from '@norbital-ai/bolt/engine';
 import {
 	dbError,
 	schemaSlice,
@@ -19,8 +20,15 @@ import {
 	PgliteDb,
 	Pristine
 } from '@norbital-ai/bolt/tooling';
-import type { DbError, EngineManifest, BoltError } from '@norbital-ai/bolt/engine';
+import type { DbError, EngineManifest, BoltError, TenantDbShape } from '@norbital-ai/bolt/engine';
 import { CHECKPOINTS, inputs, keep, prune } from './checkpoint.ts';
+import {
+	migrate,
+	prepareTestMigrations,
+	rememberMigrations,
+	type MigrationOptions
+} from './migrations.ts';
+import * as NodePath from '@effect/platform-node/NodePath';
 
 export type TestDbFailure = BoltError | DbError | PlatformError;
 /** The PGlite build (its versioned store path): an image from another build is another key. */
@@ -64,18 +72,20 @@ const shapeOf = async (pg: PGlite): Promise<Shape> => {
 /** A database to load: its dump, uncompressed (PGlite only untars it), and for a schema image its shape. */
 type Checkpoint = { readonly blob: Blob; readonly shape?: Shape };
 
-/** The plan for one schema, from the pristine dump: paid once per schema and machine, then a checkpoint. */
-const freshImage = (slice: SchemaSlice) =>
+/** A migrated schema, from the pristine dump, built once per schema and machine. */
+const freshImage = (slice: SchemaSlice, migrations?: MigrationBundle) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const pg = yield* PgliteDb.open().pipe(Effect.provide(Pristine.layer));
-			yield* applyPlan(PgliteDb.make(pg), yield* plan(null, slice), { accept: true });
+			const db = PgliteDb.make(pg);
+			if (migrations === undefined) yield* migrate(db, slice, { accept: true });
+			else yield* applyMigrations(db, slice, migrations);
 			const shape = yield* Effect.tryPromise({ try: () => shapeOf(pg), catch: dbError });
 			return { blob: yield* PgliteDb.dump(pg), shape };
 		})
 	);
 /** The schema's checkpoint (`<hash>.zst`, its shape `<hash>.json`), else built once and kept (newest few hundred). */
-const image = (slice: SchemaSlice, key: string) =>
+const image = (slice: SchemaSlice, key: string, migrations?: MigrationBundle) =>
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
 		const dir = join(CHECKPOINTS, 'images');
@@ -97,7 +107,7 @@ const image = (slice: SchemaSlice, key: string) =>
 				shape: kept.value.shape
 			} satisfies Checkpoint;
 		return yield* Effect.gen(function* () {
-			const made = yield* freshImage(slice);
+			const made = yield* freshImage(slice, migrations);
 			// the shape first, so an image on disk has its shape beside it
 			yield* keep(shapeFile, JSON.stringify(made.shape));
 			yield* keep(
@@ -107,7 +117,7 @@ const image = (slice: SchemaSlice, key: string) =>
 			yield* prune(dir, KEPT_IMAGES);
 			return made satisfies Checkpoint;
 		});
-	}).pipe(Effect.provide(NodeFileSystem.layer));
+	}).pipe(Effect.provide(NodeFileSystem.layer), Effect.provide(NodePath.layer));
 
 // Every catalog DDL writes: a create or alter leaves a newer xmin, a drop a smaller count. The write buffers exist
 // before the baseline. Only objects created after initdb (oid 16384 on) can change, so each catalog is read
@@ -287,18 +297,46 @@ const pristine = Pristine.pipe(
 );
 /** A test's database: in-memory PGlite at `schema`'s checkpoint (empty without one), exclusive to the scope. */
 const open = (
-	schema?: EngineManifest | SchemaSlice
+	schema?: EngineManifest | SchemaSlice,
+	migrations?: MigrationBundle
 ): Effect.Effect<PGlite, TestDbFailure, Scope.Scope> => {
 	const slice =
 		schema === undefined ? undefined : 'workspace' in schema ? schemaSlice(schema) : schema;
-	const key = slice === undefined ? 'pristine' : JSON.stringify(slice);
+	const key = slice === undefined ? 'pristine' : JSON.stringify([slice, migrations?.lock]);
 	return Effect.acquireRelease(
-		acquire<never>(key, slice === undefined ? pristine : image(slice, key)),
+		acquire<never>(key, slice === undefined ? pristine : image(slice, key, migrations)),
 		release
-	).pipe(Effect.map((e) => e.pg));
+	).pipe(
+		Effect.tap(({ pg }) =>
+			migrations === undefined
+				? Effect.void
+				: PgliteDb.make(pg)
+						.rows(AppliedRow, { text: APPLIED, params: [] })
+						.pipe(Effect.flatMap((ledger) => rememberMigrations(migrations, ledger)))
+		),
+		Effect.map((e) => e.pg)
+	);
 };
 export const TestDb = {
 	open,
+	prepareMigrations: (
+		db: TenantDbShape,
+		next: EngineManifest | SchemaSlice,
+		options: MigrationOptions = {}
+	) =>
+		prepareTestMigrations(db, next, options).pipe(
+			Effect.provide(NodeFileSystem.layer),
+			Effect.provide(NodePath.layer)
+		),
+	migrate: (
+		db: TenantDbShape,
+		next: EngineManifest | SchemaSlice,
+		options: MigrationOptions = {}
+	) =>
+		migrate(db, next, options).pipe(
+			Effect.provide(NodeFileSystem.layer),
+			Effect.provide(NodePath.layer)
+		),
 	/**
 	 * An empty database `prepare` fills (DDL, rows) once per worker, then restored to that state on every acquisition.
 	 * `key` names the preparation: one key, one `prepare`, across every file a worker runs.
@@ -310,6 +348,9 @@ export const TestDb = {
 		Effect.acquireRelease(acquire(`prepared:${key}`, pristine, prepare), release).pipe(
 			Effect.map((e) => e.pg)
 		),
-	layer: (schema?: EngineManifest | SchemaSlice): Layer.Layer<TenantDb, TestDbFailure> =>
-		Layer.effect(TenantDb, Effect.map(open(schema), PgliteDb.make))
+	layer: (
+		schema?: EngineManifest | SchemaSlice,
+		migrations?: MigrationBundle
+	): Layer.Layer<TenantDb, TestDbFailure> =>
+		Layer.effect(TenantDb, Effect.map(open(schema, migrations), PgliteDb.make))
 };

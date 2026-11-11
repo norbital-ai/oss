@@ -2,6 +2,9 @@
 import { inputSchema, type Kind } from '@norbital-ai/std/kind';
 import {
 	auditFromAbi,
+	applyMigrations,
+	readMigrations,
+	readApplied,
 	outputSchema,
 	auditShape,
 	compileAuthority,
@@ -48,9 +51,6 @@ import {
 	WebRead,
 	Browser,
 	type TransportMessage,
-	applyPlan,
-	plan,
-	readApplied,
 	lowerRead,
 	Activation,
 	Callables,
@@ -112,7 +112,9 @@ import {
 	nodePorts,
 	tenantDbPort,
 	keysPort,
-	loopbackTcpPort
+	loopbackTcpPort,
+	schemaSlice,
+	fingerprint
 } from '@norbital-ai/bolt/tooling';
 import type {
 	AuditRecord,
@@ -1133,6 +1135,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 			Effect.gen(function* () {
 				let { manifest, guest, transforms } = options;
 				const artifact = options.artifact;
+				let migrations = artifact?.migrations;
 				if (artifact !== undefined) ({ manifest, guest } = artifact);
 				// a template's tests seed from its own `test` pack (`seed/test/`) unless they pass rows or 'none'; the public
 				// `base` and the bank's `sample` are product seeds, never test fixtures
@@ -1156,6 +1159,13 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							})
 						);
 					({ manifest, guest, transforms } = built);
+					const fs = yield* FileSystem.FileSystem.pipe(Effect.provide(node));
+					const directory = join(options.root, 'migrations');
+					if (yield* fs.exists(join(directory, 'snapshot.json')).pipe(Effect.mapError(invalid)))
+						migrations = yield* readMigrations(directory).pipe(
+							Effect.provide(node),
+							Effect.mapError(invalid)
+						);
 				}
 				if (manifest === undefined)
 					return yield* Effect.fail(
@@ -1177,7 +1187,7 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 							count.writes = 0;
 						}
 					};
-				const dbContext = yield* Layer.build(options.db ?? TestDb.layer(m)),
+				const dbContext = yield* Layer.build(options.db ?? TestDb.layer(m, migrations)),
 					inner = Context.get(dbContext, TenantDb);
 				const members = yield* Semaphore.make(1),
 					pending: Sql[] = [];
@@ -1512,8 +1522,11 @@ export class TestWorkspace extends Context.Service<TestWorkspace, Kit>()(
 					overrides === undefined ? ports : Layer.merge(ports, Layer.succeedContext(overrides));
 				// Identity loads its keys from native tables, including on an injected database.
 				if (options.db !== undefined) {
-					const p = yield* plan(yield* readApplied(db), m);
-					if (p.from !== p.to) yield* applyPlan(db, p, { accept: true });
+					const applied = yield* readApplied(db);
+					if (applied === null || fingerprint(applied) !== fingerprint(schemaSlice(m))) {
+						if (migrations === undefined) yield* TestDb.migrate(db, m, { accept: true });
+						else yield* applyMigrations(db, m, migrations);
+					}
 				}
 				const identityHost: IdentityHost = yield* makeIdentityHost({
 					audit: yield* auditShape(auditStore.port).pipe(Effect.provide(NodeCrypto.layer)),

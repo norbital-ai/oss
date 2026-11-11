@@ -22,9 +22,9 @@ import {
 	physicalHash,
 	type Applied,
 	type MigrationFile,
-	type MigrationLock,
+	MigrationLock,
 	type SchemaObject,
-	type SchemaSpec
+	SchemaSpec
 } from '@norbital-ai/store';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { Rows, Sql } from '../contracts.ts';
@@ -34,19 +34,21 @@ import { BoltError, fromStore } from '../../protocol/errors.ts';
 import { auditTriggers } from './audit.ts';
 import { engineOwned, engineOwns, sourceObjects } from './engine.ts';
 import { historySchemaObjects } from './history.ts';
-import { engineBeside, fingerprint, schemaSlice } from './plan.ts';
+import { engineBeside, fingerprint, schemaSlice, type SchemaSlice } from './plan.ts';
 import { impactText, type MigrationImpact } from '../../protocol/migration-impact.ts';
 
-export type MigrationBundle = {
-	readonly files: readonly MigrationFile[];
-	readonly squashes: readonly MigrationFile[];
-	readonly snapshotText: string;
-	readonly snapshot: SchemaSpec;
-	readonly lock: MigrationLock;
-	readonly physical: Readonly<Record<string, readonly string[]>>;
-};
-export const migrationSchema = (manifest: EngineManifest): SchemaSpec => {
-	const { tables, tz, currency } = schemaSlice(manifest);
+const MigrationFileSchema = Schema.Struct({ name: Schema.String, sql: Schema.String });
+export const MigrationBundleSchema = Schema.Struct({
+	files: Schema.Array(MigrationFileSchema),
+	squashes: Schema.Array(MigrationFileSchema),
+	snapshotText: Schema.String,
+	snapshot: SchemaSpec,
+	lock: MigrationLock,
+	physical: Schema.Record(Schema.String, Schema.Array(Schema.String))
+});
+export type MigrationBundle = typeof MigrationBundleSchema.Type;
+export const migrationSchema = (next: EngineManifest | SchemaSlice): SchemaSpec => {
+	const { tables, tz, currency } = 'workspace' in next ? schemaSlice(next) : next;
 	return { tables, tz, currency };
 };
 
@@ -319,10 +321,10 @@ type Measured = {
 export const applyMigrations = /*#__PURE__*/ (() =>
 	Effect.fn('Bolt.applyMigrations')(function* (
 		db: TenantDbShape,
-		manifest: EngineManifest,
+		next: EngineManifest | SchemaSlice,
 		bundle: MigrationBundle
 	) {
-		yield* current(bundle.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
+		yield* current(bundle.snapshot, migrationSchema(next)).pipe(Effect.mapError(fromStore));
 		yield* pending(bundle.files, bundle.lock, [], bundle.snapshotText, bundle.squashes).pipe(
 			Effect.mapError(fromStore)
 		);
@@ -360,7 +362,7 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 					)
 				);
 			} else {
-				const slice = schemaSlice(manifest);
+				const slice = 'workspace' in next ? schemaSlice(next) : next;
 				for (const object of engineBeside(slice))
 					for (const text of object.create) statements.push({ text, params: [] });
 				statements.push({

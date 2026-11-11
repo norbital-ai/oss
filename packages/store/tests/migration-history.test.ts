@@ -542,6 +542,29 @@ describe('safe baseline authoring', () => {
 			})
 	);
 
+	it.live('preserves function owners longer than a PostgreSQL identifier', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const pg = yield* database;
+				const owner =
+					'history_owner(metadata jsonb, original_model text, current_model text, columns text[])';
+				yield* script(
+					pg,
+					`create function ${owner} returns boolean language sql as $$ select true $$`
+				);
+				const rows = yield* exec(pg)({ text: INTROSPECT, params: [] }).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(IntrospectRow)))
+				);
+				expect(owner.length).toBeGreaterThan(63);
+				expect(
+					rows.find(
+						(row) => row.kind === 'function' && row.line.startsWith('function history_owner ')
+					)?.owner
+				).toBe(owner);
+			})
+		)
+	);
+
 	it.live('introspects empty tables, view definitions and identity sequence configuration', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

@@ -106,9 +106,10 @@ export { assignTeam, membershipRun } from './identity/members.ts'; // Source-tea
 export { MEMBERSHIP } from './identity/session.ts';
 /** Host control-plane identity reads use the system table contract without loading a tenant artifact or guest. */
 export { directory as memberDirectory } from './identity/maintenance.ts';
-export { applyPlan, managedTables, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
+export { managedTables, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
 export {
 	applyMigrations,
+	MigrationBundleSchema,
 	migrationObjects,
 	migrationSchema,
 	readMigrations,

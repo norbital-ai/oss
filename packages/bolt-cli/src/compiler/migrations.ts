@@ -29,6 +29,7 @@ import {
 	type SquashReceipt
 } from '@norbital-ai/store';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
+import type { SchemaSlice } from '@norbital-ai/bolt/tooling';
 import {
 	migrationLines,
 	readMigrationSources,
@@ -126,9 +127,9 @@ const OTHER_SCHEMAS = `select nspname as name from pg_namespace
 /** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
 export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	root: string,
-	manifest: EngineManifest,
+	manifest: EngineManifest | SchemaSlice,
 	mode: 'generate' | 'verify',
-	options: { readonly squash?: string } = {}
+	options: { readonly squash?: string; readonly accept?: true | readonly string[] } = {}
 ) {
 	if (mode !== 'generate' && options.squash !== undefined)
 		return yield* BoltError.make(
@@ -181,7 +182,10 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			next,
 			{
 				number: files.length + 1,
-				name: files.length === 0 ? 'initial' : 'schema'
+				name: files.length === 0 ? 'initial' : 'schema',
+				...(options.accept !== undefined && options.accept !== true
+					? { accept: options.accept }
+					: {})
 			},
 			migrationObjects
 		).pipe(Effect.mapError(fromStore));
@@ -219,7 +223,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 		// a Studio build runs on a copy of live's data, and its merge approval accepts these steps: a generated file a failed
 		// build would discard could never carry its accept lines otherwise
 		const accepted =
-			process.env['BOLT_ACCEPT_DESTRUCTIVE'] === '1'
+			options.accept === true || process.env['BOLT_ACCEPT_DESTRUCTIVE'] === '1'
 				? upgraded.sql.replace(/^-- step (\S+) \(destructive\)\s*$/gm, '$&\n-- accept: $1')
 				: upgraded.sql;
 		const file = path.join(directory, upgraded.name);

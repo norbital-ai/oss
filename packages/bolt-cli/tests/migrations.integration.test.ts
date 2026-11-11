@@ -97,6 +97,69 @@ const legacyAudit: Parameters<typeof generate>[3] = (schema) => [
 ];
 
 describe('committed workspace migrations', () => {
+	it.live('test checkpoints retain committed backfills through transitions and resets', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fs = yield* FileSystem.FileSystem;
+				const directory = yield* root;
+				const source = join(directory, 'migrations');
+				yield* prepareMigrations(directory, initial, 'generate');
+				const baseline = yield* readMigrations(source);
+				const file = baseline.files[0];
+				if (file === undefined) return yield* Effect.die('initial migration missing');
+				yield* fs.writeFileString(
+					join(source, file.name),
+					`${file.sql}\ninsert into entry(id,name) values('${ID}','Committed backfill');\n`
+				);
+				yield* prepareMigrations(directory, initial, 'generate');
+				const bundle = yield* readMigrations(source);
+				yield* Effect.scoped(
+					Effect.gen(function* () {
+						const db = PgliteDb.make(yield* TestDb.open(initial, bundle));
+						expect(
+							yield* db.value(Schema.String, {
+								text: 'select name from entry where id=$1',
+								params: [ID]
+							})
+						).toBe('Committed backfill');
+						yield* TestDb.migrate(db, extended);
+						expect(
+							yield* db.rows(
+								Schema.Struct({ name: Schema.String, note: Schema.NullOr(Schema.String) }),
+								{
+									text: 'select name,note from entry where id=$1',
+									params: [ID]
+								}
+							)
+						).toEqual([{ name: 'Committed backfill', note: null }]);
+						const ledger = yield* db.rows(AppliedRow, { text: APPLIED, params: [] });
+						expect(ledger).toHaveLength(2);
+						expect(ledger[0]).toEqual({
+							name: file.name,
+							checksum: checksumOf(bundle.files[0] ?? file)
+						});
+						yield* db.write({
+							text: "update entry set name='Changed in the test' where id=$1",
+							params: [ID]
+						});
+					})
+				);
+				yield* Effect.scoped(
+					Effect.gen(function* () {
+						const db = PgliteDb.make(yield* TestDb.open(initial, bundle));
+						expect(
+							yield* db.value(Schema.String, {
+								text: 'select name from entry where id=$1',
+								params: [ID]
+							})
+						).toBe('Committed backfill');
+						expect(yield* receipts(db)).toEqual([{ n: 1 }]);
+					})
+				);
+			})
+		).pipe(Effect.provide(NodeServices.layer))
+	);
+
 	it.live('upgrades the legacy audit body before schema backfills write history', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

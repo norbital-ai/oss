@@ -1,7 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { PgliteDb, Pristine } from '../src/node/db/pglite.ts';
-import { plan, applyPlan } from '../src/engine/schema/plan.ts';
+import { schemaSlice } from '../src/engine/schema/plan.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { readHistory, pruneHistory } from '../src/engine/query/history.ts';
 import { acknowledgeAudit, drainAuditErases } from '../src/engine/audit-retention.ts';
 import { HistorySnapshotSchema } from '../src/protocol/record-contracts.ts';
@@ -75,14 +76,14 @@ describe('versioned record history', () => {
 				Effect.gen(function* () {
 					const pg = yield* PgliteDb.open();
 					const db = PgliteDb.make(pg);
-					const initial = yield* plan(null, before);
-					yield* applyPlan(db, initial);
+					const initial = schemaSlice(before);
+					yield* TestDb.migrate(db, initial);
 					yield* db.write({
 						text: "INSERT INTO documents(id,title) VALUES ($1,'Earlier')",
 						params: [ID]
 					});
 					const checkpoint = yield* PgliteDb.dump(pg);
-					yield* applyPlan(db, yield* plan(initial.slice, after), { accept: true });
+					yield* TestDb.migrate(db, after, { accept: true });
 					yield* db.write({
 						text: "INSERT INTO articles(id,heading) VALUES (gen_random_uuid(),'Later')",
 						params: []
@@ -126,13 +127,13 @@ describe('versioned record history', () => {
 						...old,
 						workspace: { ...old.workspace, currency: 'SGD' }
 					};
-					const initial = yield* plan(null, old);
-					yield* applyPlan(db, initial);
+					const initial = schemaSlice(old);
+					yield* TestDb.migrate(db, initial);
 					yield* db.write({
 						text: "insert into items(id,title,price) values($1,'Money',12.50)",
 						params: [ID]
 					});
-					yield* applyPlan(db, yield* plan(initial.slice, current));
+					yield* TestDb.migrate(db, current);
 					const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
 						yield* readHistory(
 							db,
@@ -158,8 +159,8 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
+				const initial = schemaSlice(before);
+				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title) values($1,'Legacy')",
 					params: [ID]
@@ -168,7 +169,7 @@ describe('versioned record history', () => {
 					text: "update bolt_history set meta=meta-'schema' where record=$1",
 					params: [ID]
 				});
-				yield* applyPlan(db, yield* plan(initial.slice, before));
+				yield* TestDb.migrate(db, before);
 				yield* db.write({
 					text: "update documents set title='First versioned write' where id=$1",
 					params: [ID]
@@ -179,7 +180,7 @@ describe('versioned record history', () => {
 						params: [ID]
 					})
 				).toBe(true);
-				yield* applyPlan(db, yield* plan(initial.slice, after), { accept: true });
+				yield* TestDb.migrate(db, after, { accept: true });
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
 					yield* readHistory(
 						db,
@@ -227,8 +228,8 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
+				const initial = schemaSlice(before);
+				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title) values($1,'Kept')",
 					params: [ID]
@@ -241,9 +242,7 @@ describe('versioned record history', () => {
 					text: "insert into bolt_audit_erase(operation,collection,record,revision,mode,purge,keep_marker) values('pending-schema','documents',$1,1,'anonymise',array['title'],true)",
 					params: [ID]
 				});
-				const failure = yield* Effect.flip(
-					applyPlan(db, yield* plan(initial.slice, after), { accept: true })
-				);
+				const failure = yield* Effect.flip(TestDb.migrate(db, after, { accept: true }));
 				expect(failure.message).toContain('pending erasure');
 				expect(
 					yield* db.value(Schema.String, {
@@ -285,8 +284,8 @@ describe('versioned record history', () => {
 						}
 					}
 				};
-				const initial = yield* plan(null, old);
-				yield* applyPlan(db, initial);
+				const initial = schemaSlice(old);
+				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into items(id,title,amount,location,span) values($1,'Original',9007199254740993.1234,'(103.8,1.3)','[2026-01-01,2026-01-31]')",
 					params: [ID]
@@ -312,7 +311,7 @@ describe('versioned record history', () => {
 						}
 					}
 				};
-				yield* applyPlan(db, yield* plan(initial.slice, current));
+				yield* TestDb.migrate(db, current);
 				yield* db.write({
 					text: "update items set total=1.5000,location='(100,2)',span='[2026-02-01,)' where id=$1",
 					params: [ID]
@@ -364,8 +363,8 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
+				const initial = schemaSlice(before);
+				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title,quantity) values($1,'Original','42')",
 					params: [ID]
@@ -374,7 +373,7 @@ describe('versioned record history', () => {
 					text: "update documents set title='Before rename' where id=$1",
 					params: [ID]
 				});
-				yield* applyPlan(db, yield* plan(initial.slice, after), { accept: true });
+				yield* TestDb.migrate(db, after, { accept: true });
 				yield* db.write({
 					text: "update articles set heading='New schema',quantity=7 where id=$1",
 					params: [ID]
@@ -416,13 +415,13 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
+				const initial = schemaSlice(before);
+				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title,quantity) values($1,'Sensitive title','42')",
 					params: [ID]
 				});
-				yield* applyPlan(db, yield* plan(initial.slice, after), { accept: true });
+				yield* TestDb.migrate(db, after, { accept: true });
 				yield* db.write({
 					text: "update articles set heading='Redacted' where id=$1",
 					params: [ID]
@@ -466,8 +465,8 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
+				const initial = schemaSlice(before);
+				yield* TestDb.migrate(db, initial);
 				yield* db.write({
 					text: "insert into documents(id,title,quantity,removed,secret) values($1,'Original','42','Retired private','Secret')",
 					params: [ID]
@@ -490,7 +489,7 @@ describe('versioned record history', () => {
 						}
 					}
 				};
-				yield* applyPlan(db, yield* plan(initial.slice, narrow), { accept: true });
+				yield* TestDb.migrate(db, narrow, { accept: true });
 				// History is granted through the narrow output.
 				const caller = compileAuthority(
 					narrow,
@@ -526,9 +525,9 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				const initial = yield* plan(null, before);
-				yield* applyPlan(db, initial);
-				const table = initial.slice.tables.documents;
+				const initial = schemaSlice(before);
+				yield* TestDb.migrate(db, initial);
+				const table = initial.tables.documents;
 				if (table === undefined) throw new Error('The native schema did not define documents.');
 				const definition = JSON.stringify(table);
 				const register = () =>
@@ -556,7 +555,7 @@ describe('versioned record history', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const db = PgliteDb.make(yield* PgliteDb.open());
-					yield* applyPlan(db, yield* plan(null, before));
+					yield* TestDb.migrate(db, before);
 					yield* db.write({
 						text: 'insert into documents(id,title,quantity,removed,secret) values($1,$2,$3,$4,$5)',
 						params: [ID, 'Original', '42', 'Retired value', 'Private']
@@ -569,7 +568,7 @@ describe('versioned record history', () => {
 							params: []
 						}
 					);
-					yield* applyPlan(db, yield* plan((yield* plan(null, before)).slice, after), {
+					yield* TestDb.migrate(db, after, {
 						accept: true
 					});
 					const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
@@ -643,12 +642,12 @@ describe('versioned record history', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const db = PgliteDb.make(yield* PgliteDb.open());
-				yield* applyPlan(db, yield* plan(null, before));
+				yield* TestDb.migrate(db, before);
 				yield* db.write({
 					text: 'insert into documents(id,title,quantity,removed) values($1,$2,$3,$4)',
 					params: [ID, 'Original', 'not a number', 'Old meaning']
 				});
-				yield* applyPlan(db, yield* plan((yield* plan(null, before)).slice, after), {
+				yield* TestDb.migrate(db, after, {
 					accept: true
 				});
 				const readded: EngineManifest = {
@@ -664,7 +663,7 @@ describe('versioned record history', () => {
 						}
 					}
 				};
-				yield* applyPlan(db, yield* plan((yield* plan(null, after)).slice, readded));
+				yield* TestDb.migrate(db, readded);
 				const snapshot = yield* Schema.decodeUnknownEffect(HistorySnapshotSchema)(
 					yield* readHistory(
 						db,

@@ -28,7 +28,7 @@ export const ArtifactJsonSchema = Schema.Struct({
 	/** The tenant handle (`norbital.template.json` `key`, else the directory name) and the display name. */
 	handle: Schema.String,
 	name: Schema.String,
-	/** The schema fingerprint `plan`/`applyPlan` record (rule 69). */
+	/** The schema fingerprint `plan`/`applyMigrations` record (rule 69). */
 	schema: Schema.String,
 	client: Schema.Struct({ entry: Schema.String, css: Schema.Array(Schema.String) }),
 	/** Public routes carry their own browser entry and a private, bounded server program. */

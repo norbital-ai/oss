@@ -15,7 +15,6 @@ import { DbError } from '../src/engine/errors.ts';
 import { compileAuthority } from '../src/engine/access/authority.ts';
 import { toPred } from '../src/engine/access/pred.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
-import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
 import { Keys } from '../src/engine/ports.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { keysPort } from '../src/node/keys.ts';
@@ -535,7 +534,7 @@ describe('one configuration shape, however an instance is made', () => {
 				...m,
 				connections: { ...m.connections, ledger: { integration: 'erp' } }
 			};
-			yield* applyPlan(db, yield* plan(yield* readApplied(db), slotted), { accept: true });
+			yield* TestDb.migrate(db, slotted, { accept: true });
 			const id = yield* created({
 				integration: 'erp',
 				name: 'Ledger 2',

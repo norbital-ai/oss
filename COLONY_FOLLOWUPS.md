@@ -21,3 +21,4 @@
 - Update native host type imports to `ImageMetadata`, `ConvertSettings` and `ParsedCallable`. Notice inserts use their owning `NoticeInsert` contract. The author-facing `ImageFacts`, `ConvertOptions` and string `Callable` names keep their distinct roles.
 
 - Import `HostPorts` from `@norbital-ai/bolt/host-api`. The unused engine `HostPorts`, `SecretsPort` and `TenancyPort` definitions are removed.
+- Native schema execution now accepts verified SQL migration bundles through `applyMigrations`; remove any host imports of the deleted `applyPlan` executor.
