@@ -63,6 +63,27 @@ const SOURCE = Object.entries({
 	replacement: fileURLToPath(new URL(`./src/${file}.ts`, import.meta.url))
 }));
 
+/** What the browser tests import from `node_modules`, optimized before the first file runs. */
+const BROWSER_DEPS = [
+	'runed',
+	'@codemirror/lang-javascript',
+	'@codemirror/lang-json',
+	'@codemirror/language',
+	'@codemirror/state',
+	'@codemirror/view',
+	'@iconify/svelte',
+	'@internationalized/date',
+	'@lezer/highlight',
+	'bits-ui',
+	'codemirror',
+	'layerchart',
+	'leaflet',
+	'marked',
+	'qrcode',
+	'tailwind-merge',
+	'tailwind-variants'
+];
+
 // One Node project (unit and PGlite files alike, a minute's hang guard) and the browser project
 // (https://vitest.dev/guide/browser/): one headless Chromium browser shared by its files.
 // Agent web browsing uses its separate Obscura fleet. Each project is self-contained
@@ -112,7 +133,11 @@ export default defineConfig({
 				extends: false,
 				plugins: [liveFixture(), svelte(), tailwindcss()],
 				resolve: { alias: SOURCE },
-				optimizeDeps: { include: ['@norbital-ai/ui > leaflet'] },
+				// this project inherits nothing (`extends: false`): without the list a dependency found mid-run is
+				// optimized late, Vite reloads, and every file after it fails to import
+				optimizeDeps: {
+					include: [...BROWSER_DEPS, '@norbital-ai/ui > leaflet', '@norbital-ai/ui > codemirror']
+				},
 				test: {
 					name: 'browser',
 					include: ['tests/**/*.browser.{test,spec}.ts'],
@@ -130,26 +155,6 @@ export default defineConfig({
 			}
 		]
 	},
-	optimizeDeps: {
-		include: [
-			'runed',
-			'@codemirror/lang-javascript',
-			'@codemirror/lang-json',
-			'@codemirror/language',
-			'@codemirror/state',
-			'@codemirror/view',
-			'@iconify/svelte',
-			'@internationalized/date',
-			'@lezer/highlight',
-			'bits-ui',
-			'codemirror',
-			'layerchart',
-			'leaflet',
-			'marked',
-			'qrcode',
-			'tailwind-merge',
-			'tailwind-variants'
-		]
-	},
+	optimizeDeps: { include: BROWSER_DEPS },
 	server: { fs: { strict: true, allow: [fileURLToPath(new URL('../..', import.meta.url))] } }
 });
