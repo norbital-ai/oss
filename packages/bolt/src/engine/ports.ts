@@ -1016,14 +1016,31 @@ export class Docs extends Context.Service<
 				Effect.cached(
 					Effect.gen(function* () {
 						const files = new Map<string, unknown>([['index.json', yield* read('index.json')]]);
-						const index = corpus(<T>(file: string) => files.get(file) as T).index();
+						const documents = corpus((file) => {
+							const value = files.get(file);
+							files.delete(file);
+							return value;
+						});
+						const index = yield* Effect.try({
+							try: () => documents.index(),
+							catch: Port.failure('docs')
+						});
 						for (const n of index.namespaces) {
 							const file = `${n.namespace.replaceAll('/', '.')}.json`;
 							files.set(file, yield* read(file));
+							yield* Effect.try({
+								try: () => documents.namespace(n.namespace),
+								catch: Port.failure('docs')
+							});
 						}
-						for (const k of index.skills)
+						for (const k of index.skills) {
 							files.set(skillFile(k.name), yield* read(skillFile(k.name)));
-						return corpus(<T>(file: string) => files.get(file) as T);
+							yield* Effect.try({
+								try: () => documents.skill(k.name),
+								catch: Port.failure('docs')
+							});
+						}
+						return documents;
 					})
 				),
 				(loaded) => ({ corpus: loaded })

@@ -3,6 +3,86 @@
 // declaration functions carry their option shapes; `workspace_lang` reads the same source JSDoc through the compiler.
 import { expect, it } from '@effect/vitest';
 import { docs } from '../src/docs/index.ts';
+import { corpus } from '../src/engine/docs-corpus.ts';
+
+it('validates and caches each documentation document once', () => {
+	const files: Record<string, unknown> = {
+		'index.json': {
+			namespaces: [
+				{
+					namespace: 'bolt',
+					module: '@norbital-ai/bolt',
+					summary: 'Bolt',
+					symbols: 1,
+					reference: true
+				}
+			],
+			missing: [],
+			guides: [],
+			skills: [{ name: 'authoring', description: 'Authoring', files: ['SKILL.md'] }]
+		},
+		'bolt.json': {
+			namespace: 'bolt',
+			module: '@norbital-ai/bolt',
+			summary: 'Bolt',
+			symbols: [
+				{
+					name: 'Row',
+					kind: 'type',
+					signature: 'type Row = {}',
+					summary: 'A row',
+					source: 'row.ts:1'
+				}
+			]
+		},
+		'skill.authoring.json': {
+			name: 'authoring',
+			description: 'Authoring',
+			files: [{ path: 'SKILL.md', text: 'Guide' }]
+		}
+	};
+	const reads: string[] = [];
+	const local = corpus((file) => {
+		reads.push(file);
+		return files[file];
+	});
+	expect(local.index()).toBe(local.index());
+	expect(local.namespace('bolt')).toBe(local.namespace('bolt'));
+	expect(local.skill('authoring')).toBe(local.skill('authoring'));
+	expect(local.search('row')[0]).toMatchObject({ name: 'Row', kind: 'type' });
+	expect(local.namespace('missing')).toBeNull();
+	expect(local.skill('missing')).toBeNull();
+	expect(reads).toEqual(['index.json', 'bolt.json', 'skill.authoring.json']);
+});
+
+it('rejects malformed documents and mismatched document identities', () => {
+	const index = {
+		namespaces: [
+			{
+				namespace: 'bolt',
+				module: '@norbital-ai/bolt',
+				summary: 'Bolt',
+				symbols: 0,
+				reference: true
+			}
+		],
+		missing: [],
+		guides: [],
+		skills: [{ name: 'authoring', description: 'Authoring', files: [] }]
+	};
+	expect(() => corpus(() => ({ ...index, namespaces: 'bad' })).index()).toThrow();
+	for (const document of [
+		{ namespace: 'other', module: 'other', summary: '', symbols: [] },
+		{ namespace: 'bolt', module: 'bolt', summary: '', symbols: [{ name: 7 }] }
+	]) {
+		const local = corpus((file) => (file === 'index.json' ? index : document));
+		expect(() => local.namespace('bolt')).toThrow();
+	}
+	const local = corpus((file) =>
+		file === 'index.json' ? index : { name: 'other', description: '', files: [] }
+	);
+	expect(() => local.skill('authoring')).toThrow();
+});
 
 it('one namespace per public entry, with its module and the entry summary', () => {
 	const names = docs.index().namespaces.map((n) => n.namespace);

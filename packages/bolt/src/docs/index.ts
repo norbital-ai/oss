@@ -10,13 +10,11 @@ export * from '../engine/docs-corpus.ts';
 
 // `src/docs` and `build/docs` are both two levels under the package root, so this resolves from either
 export const DOCS_DIR = new URL('../../build/docs/', import.meta.url);
-const cache = new Map<string, unknown>();
 /**
  * The docs corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)`, `guide(slug)` and `skill(name)`.
  * @example
- * docs.symbol('bolt', 'model')?.signature
+ * docs.symbol('bolt', 'ModelDeclaration')?.signature
  */
-export const docs = corpus(<T>(file: string): T => {
-	if (!cache.has(file)) cache.set(file, JSON.parse(readFileSync(new URL(file, DOCS_DIR), 'utf8')));
-	return cache.get(file) as T;
-});
+export const docs = corpus((file): unknown =>
+	JSON.parse(readFileSync(new URL(file, DOCS_DIR), 'utf8'))
+);

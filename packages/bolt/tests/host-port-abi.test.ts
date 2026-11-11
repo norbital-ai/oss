@@ -20,6 +20,7 @@ import {
 	Convert,
 	DeadlinePort,
 	Drivers,
+	Docs,
 	Files,
 	Geo,
 	Transport,
@@ -36,6 +37,35 @@ const using = <I, S, A, E>(
 const blob = { key: 'k1', bytes: 2, sha256: 'ab', mime: 'text/plain' };
 
 describe('fromAbi', () => {
+	it.effect('Docs rejects a malformed namespace through the typed failure channel', () =>
+		Effect.gen(function* () {
+			const loaded = Docs.fromAbi({
+				read: async (file) =>
+					JSON.stringify(
+						file === 'index.json'
+							? {
+									namespaces: [
+										{
+											namespace: 'bolt',
+											module: '@norbital-ai/bolt',
+											summary: 'Bolt',
+											symbols: 1,
+											reference: true
+										}
+									],
+									missing: [],
+									guides: [],
+									skills: []
+								}
+							: { namespace: 'bolt', module: '@norbital-ai/bolt', summary: 'Bolt', symbols: 'bad' }
+					)
+			});
+			expect(yield* Effect.flip(using(Docs, loaded, (d) => d.corpus))).toMatchObject({
+				_tag: 'FacilityFailure',
+				kind: 'upstream'
+			});
+		})
+	);
 	it.effect('Files: a call round-trips; a refusal keeps its kind', () =>
 		Effect.gen(function* () {
 			const files = Files.fromAbi({
@@ -69,7 +99,9 @@ describe('fromAbi', () => {
 			const convert = Convert.fromAbi({
 				targets: ['pdf'],
 				convert: async (source, to) =>
-					new TextEncoder().encode(`${to}:${'html' in source ? source.html : 'markdown' in source ? source.markdown : ''}`)
+					new TextEncoder().encode(
+						`${to}:${'html' in source ? source.html : 'markdown' in source ? source.markdown : ''}`
+					)
 			});
 			expect(yield* using(Convert, convert, (c) => Effect.succeed(c.targets))).toEqual(['pdf']);
 			expect(

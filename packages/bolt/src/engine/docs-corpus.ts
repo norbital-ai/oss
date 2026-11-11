@@ -2,66 +2,99 @@
 // `index.json`, written by `scripts/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them
 // through `Docs`.
 
-/** A property, prop or parameter field: its declared type, summary and optional complete guidance and examples. */
-export type DocMember = {
-	name: string;
-	type: string;
-	optional?: true;
-	summary?: string;
-	docs?: string;
-	examples?: string[];
-};
-/** A parameter; `fields` are the properties of an options object (a declaration function's spec). */
-export type DocParam = DocMember & { fields?: DocMember[] };
-/** What an exported symbol is. */
-export type DocKind =
-	'function' | 'component' | 'const' | 'class' | 'interface' | 'type' | 'enum' | 'namespace';
-/** One exported symbol. `source` is `packages/<pkg>/src/<file>:<line>` in the oss repository. */
-export type DocSymbol = {
-	name: string;
-	kind: DocKind;
-	signature: string;
-	summary: string;
-	docs?: string;
-	params?: DocParam[];
-	props?: DocMember[];
-	members?: DocMember[];
-	examples?: string[];
-	source: string;
-};
-/** One entry point: `bolt/page` is `@norbital-ai/bolt/page`. */
-export type DocNamespace = {
-	namespace: string;
-	module: string;
-	summary: string;
-	symbols: DocSymbol[];
-};
-/** A maintained mechanism guide shipped from the package's docs directory. */
-export type DocGuide = { slug: string; title: string; source: string; text: string };
-/** One authoring skill compiled from `oss/skills/<name>/`: its `SKILL.md` and references, by relative path. */
-export type DocSkill = {
-	name: string;
-	description: string;
-	files: { path: string; text: string }[];
-};
-/**
- * The combined index: every namespace (`reference` marks what a workspace author imports: bolt's root, `/client` and
- * `/test`, ui's authoring entries and std), and the reference symbols that still lack a summary (`namespace#name`).
- */
-export type DocIndex = {
-	namespaces: {
-		namespace: string;
-		module: string;
-		summary: string;
-		symbols: number;
-		reference: boolean;
-	}[];
-	missing: string[];
-	/** Maintained mechanism guides, with their source path and complete Markdown. */
-	guides: DocGuide[];
-	/** Every authoring skill: its name, description and file paths (`SKILL.md` first). */
-	skills: { name: string; description: string; files: string[] }[];
-};
+import { Schema, Struct } from 'effect';
+
+/** A property, prop or parameter field with its authoring guidance. */
+const DocMemberSchema = Schema.Struct({
+	name: Schema.String,
+	type: Schema.String,
+	optional: Schema.optionalKey(Schema.Literal(true)),
+	summary: Schema.optionalKey(Schema.String),
+	docs: Schema.optionalKey(Schema.String),
+	examples: Schema.optionalKey(Schema.Array(Schema.String).pipe(Schema.mutable))
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocMember = typeof DocMemberSchema.Type;
+/** An options parameter includes its field descriptions. */
+const DocParamSchema = Schema.Struct({
+	...DocMemberSchema.fields,
+	fields: Schema.optionalKey(Schema.Array(DocMemberSchema).pipe(Schema.mutable))
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocParam = typeof DocParamSchema.Type;
+/** The kind of an exported symbol. */
+const DocKindSchema = Schema.Literals([
+	'function',
+	'component',
+	'const',
+	'class',
+	'interface',
+	'type',
+	'enum',
+	'namespace'
+]);
+export type DocKind = typeof DocKindSchema.Type;
+/** The exported symbol and its repository source location. */
+const DocSymbolSchema = Schema.Struct({
+	name: Schema.String,
+	kind: DocKindSchema,
+	signature: Schema.String,
+	summary: Schema.String,
+	docs: Schema.optionalKey(Schema.String),
+	params: Schema.optionalKey(Schema.Array(DocParamSchema).pipe(Schema.mutable)),
+	props: Schema.optionalKey(Schema.Array(DocMemberSchema).pipe(Schema.mutable)),
+	members: Schema.optionalKey(Schema.Array(DocMemberSchema).pipe(Schema.mutable)),
+	examples: Schema.optionalKey(Schema.Array(Schema.String).pipe(Schema.mutable)),
+	source: Schema.String
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocSymbol = typeof DocSymbolSchema.Type;
+/** One package entry point and its complete exported symbol list. */
+const DocNamespaceSchema = Schema.Struct({
+	namespace: Schema.String,
+	module: Schema.String,
+	summary: Schema.String,
+	symbols: Schema.Array(DocSymbolSchema).pipe(Schema.mutable)
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocNamespace = typeof DocNamespaceSchema.Type;
+/** A maintained mechanism guide shipped by the package. */
+const DocGuideSchema = Schema.Struct({
+	slug: Schema.String,
+	title: Schema.String,
+	source: Schema.String,
+	text: Schema.String
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocGuide = typeof DocGuideSchema.Type;
+/** An authoring skill and its source files. */
+const DocSkillSchema = Schema.Struct({
+	name: Schema.String,
+	description: Schema.String,
+	files: Schema.Array(
+		Schema.Struct({ path: Schema.String, text: Schema.String }).mapFields(
+			Struct.map(Schema.mutableKey)
+		)
+	).pipe(Schema.mutable)
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocSkill = typeof DocSkillSchema.Type;
+/** The release's namespace, guide and authoring skill inventory. */
+const DocIndexSchema = Schema.Struct({
+	namespaces: Schema.Array(
+		Schema.Struct({
+			namespace: Schema.String,
+			module: Schema.String,
+			summary: Schema.String,
+			symbols: Schema.Number,
+			reference: Schema.Boolean
+		}).mapFields(Struct.map(Schema.mutableKey))
+	).pipe(Schema.mutable),
+	missing: Schema.Array(Schema.String).pipe(Schema.mutable),
+	guides: Schema.Array(DocGuideSchema).pipe(Schema.mutable),
+	skills: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			description: Schema.String,
+			files: Schema.Array(Schema.String).pipe(Schema.mutable)
+		}).mapFields(Struct.map(Schema.mutableKey))
+	).pipe(Schema.mutable)
+}).mapFields(Struct.map(Schema.mutableKey));
+export type DocIndex = typeof DocIndexSchema.Type;
 /** A search hit: the namespace, name, kind and summary of one symbol. */
 export type DocHit = { namespace: string; name: string; kind: DocKind; summary: string };
 
@@ -73,12 +106,24 @@ export const skillFile = (name: string) => `skill.${name}.json`;
 /**
  * The API reference corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)` and `guide(slug)`.
  * @example
- * docs.symbol('bolt', 'model')?.signature
+ * docs.symbol('bolt', 'ModelDeclaration')?.signature
  */
-export const corpus = (load: <T>(file: string) => T) => {
+export const corpus = (load: (file: string) => unknown) => {
+	let index: DocIndex | undefined;
+	const namespaces = new Map<string, DocNamespace>();
+	const skills = new Map<string, DocSkill>();
+	const namespaceOf = (name: string): DocNamespace => {
+		const held = namespaces.get(name);
+		if (held !== undefined) return held;
+		const document = Schema.decodeUnknownSync(DocNamespaceSchema)(load(docFile(name)));
+		if (document.namespace !== name)
+			throw new Error(`docs namespace ${name} answered ${document.namespace}`);
+		namespaces.set(name, document);
+		return document;
+	};
 	const docs = {
 		/** Every namespace with its module specifier, summary and symbol count. */
-		index: (): DocIndex => load<DocIndex>('index.json'),
+		index: (): DocIndex => (index ??= Schema.decodeUnknownSync(DocIndexSchema)(load('index.json'))),
 		/** One mechanism guide, or null for an unknown slug. */
 		guide(slug: string): DocGuide | null {
 			return docs.index().guides.find((guide) => guide.slug === slug) ?? null;
@@ -86,7 +131,7 @@ export const corpus = (load: <T>(file: string) => T) => {
 		/** One namespace's symbols, or `null` for an unknown one. */
 		namespace(namespace: string): DocNamespace | null {
 			return docs.index().namespaces.some((n) => n.namespace === namespace)
-				? load<DocNamespace>(docFile(namespace))
+				? namespaceOf(namespace)
 				: null;
 		},
 		/** One symbol by namespace and exported name. */
@@ -95,9 +140,13 @@ export const corpus = (load: <T>(file: string) => T) => {
 		},
 		/** One authoring skill with its files' text, or `null` for an unknown one. */
 		skill(name: string): DocSkill | null {
-			return docs.index().skills.some((k) => k.name === name)
-				? load<DocSkill>(skillFile(name))
-				: null;
+			if (!docs.index().skills.some((k) => k.name === name)) return null;
+			const held = skills.get(name);
+			if (held !== undefined) return held;
+			const document = Schema.decodeUnknownSync(DocSkillSchema)(load(skillFile(name)));
+			if (document.name !== name) throw new Error(`docs skill ${name} answered ${document.name}`);
+			skills.set(name, document);
+			return document;
 		},
 		/**
 		 * Symbols whose name, summary or signature contain any word of `text`, best first: an exact name, then a name that
@@ -119,7 +168,7 @@ export const corpus = (load: <T>(file: string) => T) => {
 			const hits: (DocHit & { score: number })[] = [];
 			for (const n of docs.index().namespaces) {
 				if (!within(n.namespace)) continue;
-				for (const s of load<DocNamespace>(docFile(n.namespace)).symbols) {
+				for (const s of namespaceOf(n.namespace).symbols) {
 					const name = s.name.toLowerCase(),
 						tokens = s.name
 							.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
