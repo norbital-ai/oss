@@ -4,6 +4,7 @@ import { it as test, afterEach } from '@effect/vitest';
 import type { Component } from 'svelte';
 import type { Value } from '@norbital-ai/std/kind';
 import { element } from './elements.ts';
+import { bare_ctx } from './bare-ctx.ts';
 const { mount, unmount, flushSync, tick } = await import('svelte');
 const { default: TimeInput } = await import('../src/kinds/time-input.svelte');
 const { default: TimeRangeInput } = await import('../src/kinds/time-range-input.svelte');
@@ -38,9 +39,10 @@ test('a day picker opens on its first activation after its native mount complete
 	const app = mount(TimeInput, {
 		target,
 		props: {
+			ctx: bare_ctx(),
 			id: 'report-day',
 			value: '2026-10-15',
-			onChange: (next: Value) => changes.push(next)
+			on_change: (next: Value) => changes.push(next)
 		}
 	});
 	mounted.push(async () => {
@@ -59,10 +61,11 @@ test('a day picker opens on its first activation after its native mount complete
 test('a date range commits only after both dates are chosen', async () => {
 	const changes: Value[] = [];
 	const target = await show(TimeRangeInput, {
+		ctx: bare_ctx(),
 		of: 'date',
 		precision: 'day',
 		value: { from: '2026-10-01', to: '2026-10-10' },
-		onChange: (v: Value) => changes.push(v)
+		on_change: (v: Value) => changes.push(v)
 	});
 	assert.ok(target.textContent?.includes('2026'));
 	element(target, '[data-period-input]').click();
@@ -77,10 +80,11 @@ test('a date range commits only after both dates are chosen', async () => {
 test('time values accept arrays and expose add/remove only when editable', async () => {
 	const changes: Value[] = [];
 	const target = await show(TimeInput, {
+		ctx: bare_ctx(),
 		of: 'date',
 		precision: 'month',
 		value: ['2026-10-01', '2026-11-01'],
-		onChange: (v: Value) => changes.push(v)
+		on_change: (v: Value) => changes.push(v)
 	});
 	assert.equal(target.querySelectorAll('[data-unit-picker="month"]').length, 2);
 	const remove = [...target.querySelectorAll('button')].find((b) => b.textContent === 'Remove');
@@ -89,11 +93,12 @@ test('time values accept arrays and expose add/remove only when editable', async
 	await settle();
 	assert.deepEqual(changes.at(-1), ['2026-11-01']);
 	const readonly = await show(TimeInput, {
+		ctx: bare_ctx(),
 		of: 'date',
 		precision: 'month',
 		value: ['2026-10-01'],
 		readonly: true,
-		onChange: () => assert.fail('readonly')
+		on_change: () => assert.fail('readonly')
 	});
 	assert.ok(
 		![...readonly.querySelectorAll('button')].some((b) =>
@@ -106,10 +111,11 @@ test('range arrays preserve the other ranges when removing an entry', async () =
 		second = { from: '2026-11-01', to: null };
 	let next: Value | undefined;
 	const target = await show(TimeRangeInput, {
+		ctx: bare_ctx(),
 		of: 'date',
 		precision: 'day',
 		value: [first, second],
-		onChange: (v: Value) => (next = v)
+		on_change: (v: Value) => (next = v)
 	});
 	assert.equal(target.querySelectorAll('[data-period-input]').length, 2);
 	const remove = [...target.querySelectorAll('button')].find((b) => b.textContent === 'Remove');
@@ -122,10 +128,11 @@ test('range arrays preserve the other ranges when removing an entry', async () =
 test('month ranges can move beyond the old end and commit whole units', async () => {
 	const changes: Value[] = [];
 	const target = await show(TimeRangeInput, {
+		ctx: bare_ctx(),
 		of: 'date',
 		precision: 'month',
 		value: { from: '2026-10-01', to: '2026-10-31' },
-		onChange: (v: Value) => changes.push(v)
+		on_change: (v: Value) => changes.push(v)
 	});
 	element(target, '[data-period-input]').click();
 	await settle();
@@ -142,10 +149,11 @@ test('month ranges can move beyond the old end and commit whole units', async ()
 
 test('month ranges expose selected intermediate units', async () => {
 	const target = await show(TimeRangeInput, {
+		ctx: bare_ctx(),
 		of: 'date',
 		precision: 'month',
 		value: { from: '2026-09-01', to: '2026-11-30' },
-		onChange: () => {}
+		on_change: () => {}
 	});
 	element(target, '[data-period-input]').click();
 	await settle();

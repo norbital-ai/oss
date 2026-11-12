@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Effect, Layer, ManagedRuntime } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import Finder from '../src/shell/finder/Finder.svelte';
@@ -10,6 +10,7 @@ import './support/shell.css';
 
 const catalog = {
 	customers: {
+		record_label: 'record.name',
 		label: ['name'],
 		search: ['name', 'code'],
 		output: 'directory',
@@ -18,7 +19,7 @@ const catalog = {
 			code: { kind: 'text' as const }
 		}
 	},
-	notes: { label: ['name'], fields: {} }
+	notes: { record_label: 'record.name', label: ['name'], fields: {} }
 };
 
 const nav = [
@@ -38,7 +39,7 @@ const nav = [
 
 it('Find requires an explicit model, explains search fields and explains unindexed searches', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const requests: Parameters<FinderRead>[0][] = [];
@@ -62,10 +63,10 @@ it('Find requires an explicit model, explains search fields and explains unindex
 			catalog,
 			read,
 			t: (key: string) => key,
-			onAsk: null,
+			on_ask: null,
 			nav,
-			onNavigate: () => {},
-			onOpenRecord: (model: string, id: string) => opened.push(`${model}/${id}`)
+			on_navigate: () => {},
+			on_open_record: (model: string, id: string) => opened.push(`${model}/${id}`)
 		}
 	});
 	try {
@@ -122,13 +123,20 @@ it('Find requires an explicit model, explains search fields and explains unindex
 		expect(document.getElementById('shell-finder-scope-description')?.textContent).toContain(
 			'Search by Customer name, code.'
 		);
-		expect(requests).toEqual([{ customers: { search: 'Acme', limit: 8, output: 'directory' } }]);
+		expect(requests).toEqual([
+			{ customers: { search: 'Acme', limit: 8, output: 'directory', fields: ['name'] } }
+		]);
 		await search.fill('/notes Acme');
 		await expect.element(search).toBeEnabled();
 		await expect.element(page.getByText(/Search is not enabled for this model/)).toBeVisible();
 		expect(requests).toHaveLength(1);
 		await page.getByRole('button', { name: 'Back to all results' }).click();
 		await search.fill('/unknown Acme');
+		await expect
+			.element(page.getByRole('status'))
+			.toHaveTextContent('Scope not found. Search by name or go back to all results.');
+		expect(requests).toHaveLength(1);
+		await search.fill('/customers/Acme');
 		await expect
 			.element(page.getByRole('status'))
 			.toHaveTextContent('Scope not found. Search by name or go back to all results.');
@@ -146,7 +154,7 @@ it('Find requires an explicit model, explains search fields and explains unindex
 
 it('Norbius slash and @ share scopes, skip unavailable models and insert scoped records or apps', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const requests: Parameters<FinderRead>[0][] = [];
@@ -211,7 +219,9 @@ it('Norbius slash and @ share scopes, skip unavailable models and insert scoped 
 		await expect.poll(() => selected()?.textContent?.trim()).toBe('Acme');
 		await userEvent.keyboard('{Enter}');
 		await expect.element(input).toHaveValue('[@Acme](customers/c1) ');
-		expect(requests).toEqual([{ customers: { search: 'Acme', limit: 8, output: 'directory' } }]);
+		expect(requests).toEqual([
+			{ customers: { search: 'Acme', limit: 8, output: 'directory', fields: ['name'] } }
+		]);
 		await input.fill('@sales');
 		await userEvent.keyboard('{Enter}');
 		await expect.element(input).toHaveValue('[@Sales](/app/sales) ');
@@ -231,7 +241,7 @@ it('Norbius slash and @ share scopes, skip unavailable models and insert scoped 
 		await userEvent.keyboard('{Enter}');
 		await expect.element(input).toHaveValue('[@Acme](customers/c1) ');
 		expect(requests.at(-1)).toEqual({
-			customers: { search: 'Acme & Sons', limit: 8, output: 'directory' }
+			customers: { search: 'Acme & Sons', limit: 8, output: 'directory', fields: ['name'] }
 		});
 	} finally {
 		await unmount(view);
@@ -242,7 +252,7 @@ it('Norbius slash and @ share scopes, skip unavailable models and insert scoped 
 
 it('Find searches manifest names directly and drills apps into named pages without slash syntax', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const navigated: string[] = [];
@@ -262,9 +272,9 @@ it('Find searches manifest names directly and drills apps into named pages witho
 					href: '/command-center/automations?automation=manufacturing_pipeline'
 				}
 			],
-			onAsk: null,
-			onNavigate: (href: string) => navigated.push(href),
-			onOpenRecord: () => {}
+			on_ask: null,
+			on_navigate: (href: string) => navigated.push(href),
+			on_open_record: () => {}
 		}
 	});
 	try {
@@ -299,7 +309,7 @@ it('Find searches manifest names directly and drills apps into named pages witho
 
 it('Norbius keeps multiword name lookup global and consumes Enter while scoped records load', async () => {
 	const runtime = ManagedRuntime.make(Layer.empty);
-	const dispose = mountEdge(runtime);
+	const dispose = mount_edge(runtime);
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const pending: (() => void)[] = [];

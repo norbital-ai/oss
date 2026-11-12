@@ -3,6 +3,7 @@ import { Option, Schema } from 'effect';
 /** Shared by discovery, the tool and the native client. Opening a form never submits it. */
 export const SYSTEM_UI = {
 	'envoy.create': { path: '/settings/integrations', tab: 'envoys', followUp: 'native envoy form' },
+	'integration.create': { path: '/settings/integrations', tab: 'connections', followUp: 'native connection form, then provider pairing' },
 	'integration.manage': {
 		path: '/settings/integrations',
 		tab: 'envoys',
@@ -41,7 +42,7 @@ export const SYSTEM_UI = {
 } as const;
 export const SystemUiRequest = Schema.Union([
 	Schema.Struct({
-		capability: Schema.Literals(['envoy.create', 'member.invite', 'api_key.create'])
+		capability: Schema.Literals(['envoy.create', 'integration.create', 'member.invite', 'api_key.create'])
 	}),
 	Schema.Struct({
 		capability: Schema.Literals([

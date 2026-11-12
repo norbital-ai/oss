@@ -3,9 +3,9 @@ import { afterAll, beforeAll, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Schema } from 'effect';
 import type { ShellBoot } from '../src/shell/nav.ts';
-import type { IntegrationSetupLoader } from '../src/page/integration.ts';
 import type { InstanceStatus } from '../src/protocol/instance-status.ts';
-import { shellBolt } from '../src/shell/runtime.ts';
+import { shell_bolt } from '../src/shell/runtime.ts';
+import type { IntegrationSetupLoader } from '../src/shell/integration/setup.ts';
 
 // The host serves the workspace under a path; the shell reads it per request.
 const meta = document.createElement('meta');
@@ -72,21 +72,23 @@ it.live(
 				push: null,
 				visitor: null,
 				catalog: {},
-				automations: {}
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} }
 			};
 			const load: IntegrationSetupLoader = async () =>
 				import('../src/page/IntegrationSetup.svelte');
-			const bolt = yield* shellBolt(boot, {
+			const bolt = yield* shell_bolt(boot, {
 				fetch: transport,
-				integrationSetups: { calendar: { load } }
+				integration_setups: { calendar: { load } }
 			});
 			{
-				expect(bolt.integrationSetup('calendar')).toBe(load);
-				expect(bolt.integrationSetup('unknown')).toBeUndefined();
+				expect(bolt.integration_setup('calendar')).toBe(load);
+				expect(bolt.integration_setup('unknown')).toBeUndefined();
 				const account = bolt.integration('calendar/account');
 				expect(yield* account.status()).toEqual(status);
 				yield* account.pair({ provider: 'google' });
-				yield* account.importStart({ kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' });
+				yield* account.import_start({ kind: 'since', date: '2026-10-21', zone: 'Asia/Singapore' });
 				expect(requests[0]).toEqual({
 					path: '/workspaces/hq/__bolt/integrations/calendar%2Faccount',
 					method: 'GET',

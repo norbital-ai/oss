@@ -8,7 +8,7 @@ export const edited: CustomFieldView = {
 	name: 'band',
 	value: null,
 	disabled: false,
-	onChange: () => {}
+	on_change: () => {}
 };
 export const kit: KitView = { mode: 'show', name: 'band', value: null };
 // @ts-expect-error — a view still names its field

@@ -8,7 +8,7 @@ import { Result } from 'effect';
 // A suite may import a model module for its declared fields and bodies; those bodies never run in the test process, so
 // the same allowance the seed bundler's banner gives a build-time reader applies here.
 const SEED_BUILD = Symbol.for('norbital.bolt.seedBuild');
-(globalThis as { [SEED_BUILD]?: boolean })[SEED_BUILD] = true;
+Reflect.set(globalThis, SEED_BUILD, true);
 
 // UI icons use the library's local cache; DOM tests must not leave public-API fetches running at teardown.
 if (typeof document !== 'undefined') addCollection(lucide);

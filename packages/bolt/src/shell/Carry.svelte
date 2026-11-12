@@ -1,4 +1,4 @@
-<!-- Sets an opener's contexts (ui's `carriedContexts`) above what it renders: the record sheet mounts outside the page. -->
+<!-- Sets an opener's contexts (ui's `carried_contexts`) above what it renders: the record sheet mounts outside the page. -->
 <script lang="ts">
 	import { setContext, untrack, type Snippet } from 'svelte';
 

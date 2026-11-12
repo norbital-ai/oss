@@ -9,7 +9,7 @@ Details live in [integration definitions, instances and providers](./integration
 | Word | Means | Lives in | Who writes it |
 | --- | --- | --- | --- |
 | Definition | What an outside system is: its driver, configuration, credential fields and webhooks. | `src/integration/<name>/+integration.ts` | Workspace source |
-| Connection | One account of a definition. The code calls it an instance. | A `sys_integration` row, or a `+workspace.ts` `connections` slot | A person or the agent |
+| Connection | One account of a definition. The code calls it an instance. | A runtime `sys_integration` row | A person or the agent |
 | Driver | A kind of system with a fixed contract: `http`, `sqlserver`, `whatsapp`, `email`, `telegram`, `slack`, `discord`, `wechat`, `chat`, `calendar`. | `DRIVERS` in `src/decl/runtime/integration.ts` | Bolt |
 | Provider | The code that speaks one platform for a driver. `whatsapp` has `baileys`, `twilio` and more. | `@norbital-ai/providers`, registered by the host | Bolt or the host, never a workspace |
 | Link | One provider opened for one connection, holding its socket or webhook registration. | The host's links manager | Opened by the host |
@@ -56,11 +56,11 @@ Only the far end should be pretend. Each layer below replaces less than the one 
 | --- | --- | --- | --- | --- |
 | Provider | The provider: parsing, reconnects, refusals | The socket or `fetch` | `providers/tests/*`, `baileys-fake.ts`, `mail-servers.ts` | No |
 | Links manager | Pairing, sealed credentials, fencing, resume | The provider | `integration-links.integration.test.ts` | No |
-| Workspace logic | Sync bodies, admission, envoy, turn | Everything below `Drivers` | `bolt test`: `t.receive`, `t.syncs.read`, `t.syncs.deliver`, `t.fakes.links` | No |
+| Workspace logic | Sync bodies, admission, envoy, turn | Everything below `Drivers` | `bolt test`: `t.receive`, `t.event`, `t.syncs.read`, `t.syncs.write`, `t.syncs.deliver`, `t.syncs.test`, `t.integrations`, `t.fakes.links` | No |
 | Whole pipeline | All of the above in a running host | The platform only | The channel simulator and `channel_check` | No |
 | Real connection | Everything | Nothing | The connection's test action, or `channel_check { test }` | Yes |
 
-`t.receive` enters at `Conversations.receive`, so it skips the provider. `t.fakes.links` stops at `Drivers`, so it never reaches the provider's `send`. `bolt test` has no webhook helper, so a webhook's signature and a webhook-triggered automation are not covered there.
+`t.receive` and `t.event` enter at `Conversations.receive`, so they skip the provider. `t.integrations.pair` runs the links manager over the providers the layer was given (`providers`). `t.fakes.links` stops at `Drivers`, so it never reaches the provider's `send`. Integration webhook signature verification needs coverage at the native integration route; an automation has no webhook trigger.
 
 ### The channel simulator
 
@@ -129,7 +129,7 @@ No level promises these:
 - A delete means removed from the platform: an agent that already read a message keeps what it saw.
 - Dial, X's post threads and WhatsApp (Twilio) never claim a complete read, so deletes are not found there.
 
-A send is safe to retry only where a platform dedupes on our key: `idempotent` declares it, and a send with an unknown outcome is then repeated. Elsewhere the outcome stays unknown rather than risk a second message.
+A send is safe to retry only where a provider dedupes on our key: `idempotent_sends` declares it, and a send with an unknown outcome is then repeated. Elsewhere the outcome stays unknown rather than risk a second message.
 
 ### Connecting one
 
@@ -170,4 +170,4 @@ A new driver is rarer: add it to `DRIVERS` with `conversation: { kind, handle }`
 
 A workspace cannot supply a provider. A provider holds stored credentials, raw network access and direct `emit`, and it runs in the host outside the compute boundary, so tenant code there would escape the guest wall. An `http` connection cannot host an envoy either.
 
-For a platform nobody supports, a webhook-triggered automation can still answer: `on: { webhook, verify }` receives the delivery, `ctx.ai` writes the reply, and `ctx.request` sends it. That is a one-way automation, not a channel: no conversation or transcript, no sender identity or limits, no typing or attachments, and it runs under fixed policies. `verify` covers the schemes in `WebhookScheme` only.
+For a platform nobody supports, an integration definition may verify incoming webhooks and retain deliveries for a model sync. Committed model changes can then run effects or schedule business jobs using `ctx.ai` and `ctx.request`. This supplies no native channel conversation, sender identity or typing. Verification belongs to the integration's webhook scheme; automations declare only cron triggers.

@@ -20,31 +20,35 @@ const OTHER_DEAD = '0199a000-0000-7000-8000-000000000015';
 const manifest: EngineManifest = {
 	...base,
 	models: {
-		contacts: { description: 'A contact', label: 'name', fields: { name: { kind: 'text' } } }
+		contacts: {
+			description: 'A contact',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		}
 	},
 	relationships: {},
 	exposures: {
 		contacts: {
-			read: { contacts: { fields: 'all' } },
+			outputs: { default: { contacts: { fields: 'all' } } },
 			syncs: { crm: { with: 'crm', read: true, write: true } }
 		}
 	},
 	integrations: {
-		crm: { description: 'CRM', driver: 'http', http: { baseUrl: 'https://crm.test' } }
+		crm: { description: 'CRM', driver: 'http', http: { base_url: 'https://crm.test' } }
 	},
 	policies: {
 		self: {
 			description: 'Manages their own integration instances',
 			grants: {
-				sys_integration: { read: true, update: { check: true } }
+				sys_integration: { outputs: { default: {} }, update: { verdict: true } }
 			}
 		}
 	},
-	teams: { owners: ['self'] }
+	teams: { owners: { policies: ['self'] } }
 };
 /** `self` may update an instance it owns: the update `check`, dry-run on the instance before health or replay. */
 const guest = program(`export default { policy: { self: { grants: { sys_integration: { update: {
-	check: function* (changes, ctx) { return changes.every(({ before }) => before.owner === ctx.actor.id) ? ctx.allow() : ctx.deny('Only your own instances.'); }
+	verdict: function* (changes, ctx) { return changes.every(({ before }) => before.owner === ctx.actor.id) ? ctx.allow() : yield* ctx.refuse('Only your own instances.'); }
 } } } } } };`);
 
 const setup = Effect.gen(function* () {
@@ -53,7 +57,7 @@ const setup = Effect.gen(function* () {
 			manifest,
 			guest: yield* guest,
 			now: NOW,
-			host: { publicUrl: ORIGIN }
+			host: { public_url: ORIGIN }
 		})
 	);
 	const t = Context.get(context, TestWorkspace);
@@ -104,7 +108,7 @@ const setup = Effect.gen(function* () {
 					body: JSON.stringify(body)
 				})
 			),
-		deadLetters: (instance: string) =>
+		dead_letters: (instance: string) =>
 			t.handle(
 				new Request(`${ORIGIN}/__bolt/shell/instance-sync-dead-letters?instance=${instance}`, {
 					headers: { cookie }
@@ -129,7 +133,7 @@ describe('shell integration sync health and replay', () => {
 			Effect.gen(function* () {
 				const f = yield* setup;
 				const before = yield* f.outbox();
-				expect((yield* f.deadLetters(OTHER)).status).toBe(403);
+				expect((yield* f.dead_letters(OTHER)).status).toBe(403);
 				expect((yield* f.retire({ instance: OTHER, id: OTHER_DEAD })).status).toBe(403);
 				expect(yield* json(yield* f.retire({ instance: OWN, id: OTHER_DEAD }))).toEqual({
 					value: { retired: 0 }
@@ -167,7 +171,7 @@ describe('shell integration sync health and replay', () => {
 				expect(yield* json(yield* f.replay({ instance: OWN, ids: [DEAD] }))).toEqual({
 					value: { replayed: 0 }
 				});
-				const listed = yield* json(yield* f.deadLetters(OWN));
+				const listed = yield* json(yield* f.dead_letters(OWN));
 				expect(listed).toMatchObject({ value: [{ id: SECOND_DEAD }] });
 			})
 		)
@@ -189,6 +193,7 @@ describe('shell integration sync health and replay', () => {
 							pending: 1,
 							dead: 2,
 							failed: 1,
+							initialization: null,
 							last_read_at: null,
 							last_change_at: null,
 							last_hint_at: null,
@@ -205,7 +210,7 @@ describe('shell integration sync health and replay', () => {
 						yield* f.replay({ instance: 'missing' })
 					]) {
 						expect(response.status).toBe(404);
-						expect(yield* json(response)).toMatchObject({ error: { code: 'notFound' } });
+						expect(yield* json(response)).toMatchObject({ error: { code: 'not_found' } });
 					}
 				})
 			)

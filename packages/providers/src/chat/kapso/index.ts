@@ -1,62 +1,107 @@
 // WhatsApp through Kapso's REST proxy of the Cloud API, called directly: its client is not installed here. Every thread is
 // the person's WhatsApp ID. Kapso's own webhooks only, not Meta's forwarded format. No dedupe key on a send, no edit or
 // delete event, and typing needs the last inbound message of each thread, which an adapter may not hold.
+import { Schema } from 'effect';
+import { parse as parseJson, json, request as requestHttp } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
 
-type Media = {
-	readonly id?: string;
-	readonly mime_type?: string;
-	readonly filename?: string;
-	readonly caption?: string;
-};
-type MediaData = {
-	readonly content_type?: string;
-	readonly contentType?: string;
-	readonly filename?: string;
-	readonly byte_size?: number;
-	readonly byteSize?: number;
-};
-type Named = { readonly contact_name?: string; readonly contactName?: string };
-type Raw = {
-	readonly id: string;
-	readonly type: string;
-	readonly timestamp: string;
-	readonly from?: string;
-	readonly context?: { readonly id?: string };
-	readonly text?: { readonly body?: string };
-	readonly image?: Media;
-	readonly video?: Media;
-	readonly audio?: Media;
-	readonly document?: Media;
-	readonly sticker?: Media;
-	readonly location?: { readonly name?: string; readonly address?: string };
-	readonly interactive?: {
-		readonly button_reply?: { readonly title?: string };
-		readonly list_reply?: { readonly title?: string };
-	};
-	readonly kapso?: Named & {
-		readonly direction?: string;
-		readonly content?: unknown;
-		readonly media_data?: MediaData;
-		readonly mediaData?: MediaData;
-	};
-};
-type Conversation = {
-	readonly phone_number?: string;
-	readonly phone_number_id?: string;
-	readonly kapso?: Named;
-};
-type Event = {
-	readonly message?: Raw;
-	readonly conversation?: Conversation;
-	readonly phone_number_id?: string;
-};
-type Page = {
-	readonly data: readonly Raw[];
-	readonly paging?: { readonly cursors?: { readonly after?: string | null } };
-};
+const Media = Schema.Struct({
+	id: Schema.optionalKey(Schema.String),
+	mime_type: Schema.optionalKey(Schema.String),
+	filename: Schema.optionalKey(Schema.String),
+	caption: Schema.optionalKey(Schema.String)
+});
+type Media = typeof Media.Type;
+const MediaData = Schema.Struct({
+	content_type: Schema.optionalKey(Schema.String),
+	contentType: Schema.optionalKey(Schema.String),
+	filename: Schema.optionalKey(Schema.String),
+	byte_size: Schema.optionalKey(Schema.Number),
+	byteSize: Schema.optionalKey(Schema.Number)
+});
+type MediaData = typeof MediaData.Type;
+const Named = Schema.Struct({
+	contact_name: Schema.optionalKey(Schema.String),
+	contactName: Schema.optionalKey(Schema.String)
+});
+type Named = typeof Named.Type;
+const Raw = Schema.Struct({
+	id: Schema.String,
+	type: Schema.String,
+	timestamp: Schema.String,
+	from: Schema.optionalKey(Schema.String),
+	context: Schema.optionalKey(
+		Schema.Struct({
+			id: Schema.optionalKey(Schema.String)
+		})
+	),
+	text: Schema.optionalKey(
+		Schema.Struct({
+			body: Schema.optionalKey(Schema.String)
+		})
+	),
+	image: Schema.optionalKey(Media),
+	video: Schema.optionalKey(Media),
+	audio: Schema.optionalKey(Media),
+	document: Schema.optionalKey(Media),
+	sticker: Schema.optionalKey(Media),
+	location: Schema.optionalKey(
+		Schema.Struct({
+			name: Schema.optionalKey(Schema.String),
+			address: Schema.optionalKey(Schema.String)
+		})
+	),
+	interactive: Schema.optionalKey(
+		Schema.Struct({
+			button_reply: Schema.optionalKey(
+				Schema.Struct({
+					title: Schema.optionalKey(Schema.String)
+				})
+			),
+			list_reply: Schema.optionalKey(
+				Schema.Struct({
+					title: Schema.optionalKey(Schema.String)
+				})
+			)
+		})
+	),
+	kapso: Schema.optionalKey(
+		Schema.Struct({
+			...Named.fields,
+			direction: Schema.optionalKey(Schema.String),
+			content: Schema.optionalKey(Schema.Unknown),
+			media_data: Schema.optionalKey(MediaData),
+			mediaData: Schema.optionalKey(MediaData)
+		})
+	)
+});
+type Raw = typeof Raw.Type;
+const Conversation = Schema.Struct({
+	phone_number: Schema.optionalKey(Schema.String),
+	phone_number_id: Schema.optionalKey(Schema.String),
+	kapso: Schema.optionalKey(Named)
+});
+type Conversation = typeof Conversation.Type;
+const Event = Schema.Struct({
+	message: Schema.optionalKey(Raw),
+	conversation: Schema.optionalKey(Conversation),
+	phone_number_id: Schema.optionalKey(Schema.String)
+});
+type Event = typeof Event.Type;
+const Page = Schema.Struct({
+	data: Schema.Array(Raw),
+	paging: Schema.optionalKey(
+		Schema.Struct({
+			cursors: Schema.optionalKey(
+				Schema.Struct({
+					after: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]))
+				})
+			)
+		})
+	)
+});
 
 const API = 'https://api.kapso.ai/meta/whatsapp/v23.0',
 	RECEIVED = 'whatsapp.message.received',
@@ -91,7 +136,7 @@ const parse = (
 	return {
 		id: raw.id,
 		thread: from,
-		sentAt: new Date(Number.isFinite(seconds) ? seconds * 1000 : raw.timestamp).toISOString(),
+		sent_at: new Date(Number.isFinite(seconds) ? seconds * 1000 : raw.timestamp).toISOString(),
 		from: {
 			handle: from,
 			name:
@@ -102,7 +147,7 @@ const parse = (
 				null
 		},
 		text: textOf(raw),
-		replyTo: raw.context?.id ?? null,
+		reply_to: raw.context?.id ?? null,
 		files: KINDS.flatMap((kind): IncomingFile[] => {
 			const media = raw[kind],
 				id = media?.id;
@@ -138,23 +183,21 @@ export const kapso: ChatPlatform = {
 		{ name: 'webhookSecret', label: { en: 'Webhook secret', zh: 'Webhook 密钥' }, secret: true }
 	],
 	async connect({ apiKey = '', phoneNumberId = '', webhookSecret = '' }, host) {
-		const call = async <A>(path: string, init: RequestInit = {}) => {
-			const response = await host.fetch(`${API}/${path}`, {
+		const call = async <A>(schema: Schema.Decoder<A>, path: string, init: RequestInit = {}) => {
+			const response = await requestHttp(host.fetch, `${API}/${path}`, {
 				...init,
 				headers: { 'x-api-key': apiKey, 'content-type': 'application/json' }
 			});
-			if (!response.ok)
-				throw new PlatformError(
-					`${response.status}: ${await response.text()}`,
-					response.status,
-					Number(response.headers.get('retry-after')) * 1000 || undefined
-				);
-			return (await response.json()) as A;
+			return json(schema, response);
 		};
-		await call(`${phoneNumberId}/conversations?limit=1`);
+		await call(Schema.Json, `${phoneNumberId}/conversations?limit=1`);
 		// the key goes only to Kapso's own host: the link can also be a CDN's
 		const download = async (id: string) => {
-			const { url, download_url: direct } = await call<{ url: string; download_url?: string }>(
+			const { url, download_url: direct } = await call(
+				Schema.Struct({
+					url: Schema.String,
+					download_url: Schema.optionalKey(Schema.String)
+				}),
 				`${id}?phone_number_id=${phoneNumberId}`
 			);
 			const target = direct ?? url;
@@ -174,7 +217,13 @@ export const kapso: ChatPlatform = {
 				);
 				const name = request.headers.get('x-webhook-event');
 				if (name !== null && name !== RECEIVED) return nothing();
-				const payload = JSON.parse(body) as Event & { readonly data?: readonly Event[] };
+				const payload = await parseJson(
+					Schema.Struct({
+						...Event.fields,
+						data: Schema.optionalKey(Schema.Array(Event))
+					}),
+					body
+				);
 				// a project's webhook carries all its numbers
 				return {
 					messages: (payload.data ?? [payload]).flatMap(
@@ -187,7 +236,16 @@ export const kapso: ChatPlatform = {
 				};
 			},
 			async send(thread, text, key) {
-				const sent = await call<{ messages?: readonly { id: string }[] }>(
+				const sent = await call(
+					Schema.Struct({
+						messages: Schema.optionalKey(
+							Schema.Array(
+								Schema.Struct({
+									id: Schema.String
+								})
+							)
+						)
+					}),
 					`${phoneNumberId}/messages`,
 					{
 						method: 'POST',
@@ -214,7 +272,7 @@ export const kapso: ChatPlatform = {
 						fields: FIELDS,
 						...(after === '' ? {} : { after })
 					});
-					const { data, paging } = await call<Page>(`${phoneNumberId}/messages?${query}`);
+					const { data, paging } = await call(Page, `${phoneNumberId}/messages?${query}`);
 					messages.push(
 						...data.flatMap((raw) =>
 							raw.from === thread ? (parse(raw, undefined, download) ?? []) : []

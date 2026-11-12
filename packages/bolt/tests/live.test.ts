@@ -17,17 +17,16 @@ import {
 import { TestClock } from 'effect/testing';
 import { Live, Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { get, read, type ReadIR } from '../src/protocol/reads.ts';
-import { storeSync } from '../src/protocol/errors.ts';
-import { catalogFor } from '@norbital-ai/store';
+import { catalog_for } from '@norbital-ai/store';
 import type { Json } from '../src/decl/values.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
+import { catalog_of } from '../src/engine/access/pred.ts';
 import type { Authority, Captured, EngineActor } from '../src/engine/contracts.ts';
 import { LIVE, LiveHubLive } from '../src/engine/live/hub.ts';
-import { createBolt, type BoltConfig, type SyncStatus } from '../src/page/bolt.ts';
+import { create_bolt, type BoltConfig, type SyncStatus } from '../src/page/bolt.ts';
 import { liveStream, type EventSourceLike } from '../src/page/stream.ts';
-import { redact, statusOf, type Frame } from '../src/protocol/wire.ts';
-import { ActBody, LiveBody } from '../src/protocol/schema.ts';
+import { redact, status_of, type Frame } from '../src/protocol/wire.ts';
+import { ActBody, LiveBody, type WireRead } from '../src/protocol/schema.ts';
 import { manifest as fixture } from './engine-fixture.ts';
 import type { EngineManifest, GrantData } from '../src/engine/manifest.ts';
 
@@ -35,9 +34,9 @@ import type { EngineManifest, GrantData } from '../src/engine/manifest.ts';
 // without their checks, so these routing tests reach the patch paths
 const unchecked = (g: GrantData): GrantData => ({
 	...g,
-	...(g.create === undefined ? {} : { create: true }),
-	...(g.update === undefined ? {} : { update: true }),
-	...(g.delete === undefined ? {} : { delete: true })
+	...(g.create === undefined ? {} : { create: {} }),
+	...(g.update === undefined ? {} : { update: {} }),
+	...(g.delete === undefined ? {} : { delete: {} })
 });
 const manifest: EngineManifest = {
 	...fixture,
@@ -51,7 +50,7 @@ const manifest: EngineManifest = {
 		])
 	)
 };
-const cat = catalogOf(manifest);
+const cat = catalog_of(manifest);
 const NOW = '2026-09-25T10:00:00.000Z';
 const bindings = () => ({ now: NOW, today: '2026-09-25', tz: 'UTC' });
 const member = (id: string): EngineActor => ({
@@ -61,20 +60,20 @@ const member = (id: string): EngineActor => ({
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null
 });
-const admin = compileAuthority(
+const admin = Effect.runSync(compile_authority(
 	manifest,
 	{ actor: member('root'), policies: [], admin: true },
 	'admin'
-);
-const rep = compileAuthority(
+));
+const rep = Effect.runSync(compile_authority(
 	manifest,
 	{ actor: member('u1'), policies: ['rep'], admin: false },
 	'rep'
-);
+));
 const order = (over: { [k: string]: Json } = {}) => ({
 	id: 'o1',
 	title: 'desk',
@@ -96,18 +95,19 @@ const cap = (
 		id: String(row['id']),
 		op: old === null ? 'create' : next === null ? 'delete' : 'update',
 		revision: 1,
+		transaction: '1',
 		old,
 		new: next,
 		cause: 'direct'
 	};
 };
 
-const makeHub = (run: ReadsShape['run']) =>
+const makeHub = (run: ReadsShape['run'], source = manifest) =>
 	Effect.map(
 		Layer.build(
 			LiveHubLive.pipe(
 				Layer.provide(
-					Layer.mergeAll(Layer.succeed(Manifest, manifest), Layer.succeed(Reads, { run }))
+					Layer.mergeAll(Layer.succeed(Manifest, source), Layer.succeed(Reads, { run }))
 				)
 			)
 		),
@@ -160,6 +160,78 @@ const answers = (frames: readonly Frame[]) =>
 const patches = (frames: readonly Frame[]) =>
 	frames.flatMap((f) => (f.t === 'patch' ? [[f.view, f.ops] as const] : []));
 const page = (...rows: Json[]) => ({ rows, next: null });
+/** A view's narrow fallback: its one row, read by id as the view reads it. */
+const byId = (id: string) => expect.objectContaining({
+	kind: 'read',
+	page: { _tag: 'Limit', limit: 1 },
+	where: expect.objectContaining({ of: expect.arrayContaining([{ t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } }]) })
+});
+
+describe('engine/live connection recovery', () => {
+	it.effect('disconnects a slow consumer whose frame queue fills', () =>
+		Effect.gen(function* () {
+			const hub = yield* makeHub(() => Effect.succeed([]));
+			const hello = yield* Deferred.make<string>();
+			const resume = yield* Deferred.make<void>();
+			const frames: Frame[] = [];
+			const consumer = yield* hub.connect(admin).pipe(
+				Stream.runForEach((frame) =>
+					frame.t === 'hello'
+						? Deferred.succeed(hello, frame.conn).pipe(Effect.andThen(Deferred.await(resume)))
+						: Effect.sync(() => {
+								frames.push(frame);
+							})
+				),
+				Effect.forkScoped
+			);
+			const id = yield* Deferred.await(hello);
+			for (let n = 0; n <= LIVE.connectionFrames; n++) {
+				hub.publish([cap(null, { id: `pulse-${n}` })]);
+				yield* hub.settled;
+			}
+			expect(yield* hub.authorityOf(id)).toMatchObject({ _tag: 'None' });
+			yield* Deferred.succeed(resume, undefined);
+			yield* Fiber.join(consumer);
+			expect(frames).toEqual([]);
+		})
+	);
+
+	it.effect('resets existing streams and routes later commits after a reader defect', () =>
+		Effect.gen(function* () {
+			let broken = false;
+			let title = 'Initial';
+			const hub = yield* makeHub((batch) =>
+				Effect.suspend(() =>
+					broken
+						? Effect.die('read defect')
+						: Effect.succeed(batch.map(() => page(order({ title }))))
+				)
+			);
+			const view = { read: yield* read(cat, 'orders', { all: true }) };
+			const before = yield* connection(hub, admin, []);
+			yield* hub.register(before.id, 'orders', view);
+			broken = true;
+			hub.publish([cap(null, { id: 'u1', name: title }, 'sys_user')]);
+			yield* hub.settled;
+			yield* Fiber.join(before.fiber);
+			expect(yield* hub.authorityOf(before.id)).toMatchObject({ _tag: 'None' });
+			broken = false;
+			const frames: Frame[] = [];
+			const after = yield* connection(hub, admin, frames);
+			yield* hub.register(after.id, 'orders', view);
+			title = 'After the defect';
+			hub.publish([cap(null, { id: 'u1', name: title }, 'sys_user')]);
+			yield* hub.settled;
+			yield* TestClock.adjust(0);
+			expect(frames).toContainEqual(
+				expect.objectContaining({
+					t: 'answer',
+					value: page(order({ title }))
+				})
+			);
+		})
+	);
+});
 
 describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 	it.effect(
@@ -174,38 +246,51 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 						asked.push({ reads, authority });
 						return reads.map((read) =>
 							read.kind === 'get'
-								? { id: 'o1', $sync: { 'mail.orders': { status, error: null } } }
-								: page({ id: 'o1', $sync: { 'mail.orders': { status, error: null } } })
+								? { id: 'o1', $sync: { mail: { status } } }
+								: page({ id: 'o1', $sync: { mail: { status } } })
 						);
-					})
+					}),
+					{ ...manifest, exposures: { ...manifest.exposures, orders: { ...fixture.exposures.orders, syncs: { mail: { with: 'mail', write: true } } } },
+						integrations: { mail: { description: 'Mail', driver: 'http', http: { base_url: 'https://mail.test' } } } }
 				);
 				const frames: Frame[] = [];
 				const conn = (yield* connection(hub, rep, frames)).id;
-				yield* hub.register(conn, 'record', { read: get(cat, 'orders', 'o1') });
-				yield* hub.register(conn, 'other', { read: get(cat, 'orders', 'o2') });
-				yield* hub.register(conn, 'table', { read: read(cat, 'orders', { all: true }) });
-				yield* hub.register(conn, 'customers', { read: read(cat, 'customers', { all: true }) });
+				yield* hub.register(conn, 'record', { read: yield* get(cat, 'orders', 'o1') });
+				yield* hub.register(conn, 'other', { read: yield* get(cat, 'orders', 'o2') });
+				yield* hub.register(conn, 'table', { read: yield* read(cat, 'orders', { all: true }) });
+				yield* hub.register(conn, 'customers', { read: yield* read(cat, 'customers', { all: true }) });
 				asked.length = 0;
 				yield* TestClock.adjust(0);
 				frames.length = 0;
+				const outbox = (id: string, record: string | undefined) => cap(null, {
+					id, sync: 'orders.sync.mail', instance: 'mail-account', model: 'orders',
+					...(record === undefined ? {} : { record }), seq: 1, op: 'update', record_revision: 1,
+					status: status === 'ok' ? 'acked' : status === 'failed' ? 'dead' : 'queued',
+					preserve_local: false, image: null, writer: null, changed: [], key: id, attempts: 0,
+					next_attempt_at: NOW, claimed_at: null, error: null, epoch: null, acked_at: null, result: null, at: NOW
+				}, 'sys_outbox');
 				status = 'failed';
-				hub.syncChanged('orders', ['o1']);
-				hub.syncChanged('orders', ['o1']);
+				hub.publish([outbox('delivery-1', 'o1')]);
+				hub.publish([outbox('delivery-1', 'o1')]);
 				yield* hub.settled;
 				yield* TestClock.adjust(0);
+				// two captures of one delivery: one crossing, one fetch of the table's row
 				expect(asked).toEqual([
 					{
-						reads: [get(cat, 'orders', 'o1'), read(cat, 'orders', { all: true })],
+						reads: [yield* get(cat, 'orders', 'o1'), byId('o1')],
 						authority: rep
 					}
 				]);
-				expect(answers(frames)).toEqual(['record', 'table']);
+				expect(answers(frames)).toEqual(['record']);
+				expect(patches(frames)).toEqual([
+					['table', [{ op: 'upsert', index: 0, row: { id: 'o1', $sync: { mail: { status: 'failed' } } } }]]
+				]);
 				expect(frames.filter((frame) => frame.t === 'answer')).toEqual(
 					expect.arrayContaining([
 						expect.objectContaining({
 							view: 'record',
 							v: 2,
-							value: { id: 'o1', $sync: { 'mail.orders': { status: 'failed', error: null } } }
+							value: { id: 'o1', $sync: { mail: { status: 'failed' } } }
 						})
 					])
 				);
@@ -213,16 +298,17 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 				yield* TestClock.adjust(0);
 				frames.length = 0;
 				status = 'ok';
-				hub.syncChanged('orders');
-				hub.syncChanged('orders', ['o1']);
+				// An incomplete native capture conservatively refreshes every record of its model.
+				hub.publish([outbox('unresolved-record', undefined)]);
+				hub.publish([outbox('delivery-1', 'o1')]);
 				yield* hub.settled;
 				yield* TestClock.adjust(0);
 				expect(asked).toEqual([
 					{
 						reads: [
-							get(cat, 'orders', 'o1'),
-							get(cat, 'orders', 'o2'),
-							read(cat, 'orders', { all: true })
+							yield* get(cat, 'orders', 'o1'),
+							yield* get(cat, 'orders', 'o2'),
+							yield* read(cat, 'orders', { all: true })
 						],
 						authority: rep
 					}
@@ -237,7 +323,7 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 				const { hub, frames, connect } = yield* setup(() => ({ rows: [], unread: 0 }));
 				const conn = yield* connect(rep);
 				const notice = (id: string, member = 'u1') =>
-					cap(null, { id, member, title: id, at: NOW, read_at: null }, 'sys_notification');
+					cap(null, { id, member, title: id, body: null, link: null, at: NOW, read_at: null }, 'sys_notification');
 				hub.publish([notice('queued-before-boot')]);
 				yield* hub.register(conn, 'inbox', {
 					read: { kind: 'inbox', model: 'sys_notification', member: 'u1' }
@@ -266,24 +352,24 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 				const c = yield* connect();
 				const title = { title: true };
 				yield* hub.register(c, 'submitted', {
-					read: read(cat, 'orders', {
+					read: yield* read(cat, 'orders', {
 						where: { status: { eq: 'submitted' } },
 						select: title,
 						all: true
 					})
 				});
 				yield* hub.register(c, 'all', {
-					read: read(cat, 'orders', { select: title, all: true })
+					read: yield* read(cat, 'orders', { select: title, all: true })
 				});
-				yield* hub.register(c, 'other', { read: get(cat, 'orders', 'o2') });
+				yield* hub.register(c, 'other', { read: yield* get(cat, 'orders', 'o2') });
 				yield* hub.register(c, 'byCustomer', {
-					read: read(cat, 'orders', {
+					read: yield* read(cat, 'orders', {
 						where: { customer: { is: { blocked: { eq: false } } } },
 						select: title,
 						all: true
 					})
 				});
-				yield* hub.register(c, 'customers', { read: read(cat, 'customers', { all: true }) });
+				yield* hub.register(c, 'customers', { read: yield* read(cat, 'customers', { all: true }) });
 				yield* TestClock.adjust(0);
 				frames.length = 0;
 				asked.length = 0;
@@ -293,9 +379,9 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 				expect(patches(frames)).toEqual([
 					['all', [{ op: 'upsert', index: 0, row: { id: 'o1', title: 'desk' } }]]
 				]);
-				expect(asked).toEqual([
-					expect.objectContaining({ where: expect.objectContaining({ t: 'one' }) })
-				]); // re-read; its answer did not change
+				// its one row, read under the view's undecidable where; its answer did not change
+				expect(asked).toEqual([byId('o1')]);
+				expect(asked[0]).toMatchObject({ where: { of: [{ t: 'one', rel: 'customer' }, {}] } });
 				expect(yield* hub.sweep).toEqual({ conservative: 1, views: [`${c}/byCustomer`] });
 			})
 	);
@@ -305,7 +391,7 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 			const { hub, frames, asked, connect } = yield* setup(() => page({ id: 'o1', title: 'desk' }));
 			const c = yield* connect();
 			yield* hub.register(c, 'drafts', {
-				read: read(cat, 'orders', {
+				read: yield* read(cat, 'orders', {
 					where: { status: { eq: 'draft' } },
 					select: { title: true },
 					all: true
@@ -327,7 +413,7 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 			const { hub, frames, connect } = yield* setup(() => page());
 			const c = yield* connect(rep);
 			yield* hub.register(c, 'mine', {
-				read: read(cat, 'orders', { select: { title: true }, all: true })
+				read: yield* read(cat, 'orders', { select: { title: true }, all: true })
 			});
 			yield* TestClock.adjust(0);
 			frames.length = 0;
@@ -349,7 +435,7 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 				const { hub, frames, asked, connect } = yield* setup(() => page());
 				const c = yield* connect();
 				yield* hub.register(c, 'all', {
-					read: read(cat, 'orders', { select: { title: true }, all: true })
+					read: yield* read(cat, 'orders', { select: { title: true }, all: true })
 				});
 				asked.length = 0;
 				yield* TestClock.adjust(0);
@@ -397,8 +483,8 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 		const c = yield* connect(who);
 		const ir =
 			output === undefined
-				? read(cat, 'orders', query)
-				: { ...read(storeSync(catalogFor(cat, 'orders', output)), 'orders', query), output };
+				? yield* read(cat, 'orders', query)
+				: { ...(yield* read(yield* catalog_for(cat, 'orders', output), 'orders', query)), output };
 		yield* hub.register(c, 'v', { read: ir });
 		yield* TestClock.adjust(0);
 		frames.length = 0;
@@ -431,7 +517,7 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 		$t = (h: number) => `2026-09-25T0${h}:00:00.000Z`;
 	const newest = {
 		all: true,
-		orderBy: { created_at: 'desc' },
+		order_by: { created_at: 'desc' },
 		select: { title: true, created_at: true }
 	};
 
@@ -505,7 +591,7 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 		"each output's rows are its granting policies': `default` the caller's own, `audit` every row without `note`",
 		() =>
 			Effect.gen(function* () {
-				const both = compileAuthority(
+				const both = yield* compile_authority(
 					manifest,
 					{ actor: member('u1'), policies: ['rep', 'auditor'], admin: false },
 					'both'
@@ -559,18 +645,26 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 				all: true
 			};
 			const got = { id: O(1), title: 't1', customer: { id: 'c1', name: 'Acme' } };
-			const x = yield* after(withCustomer, page(), [cap(null, row(1))], admin, () => got);
-			expect(x.asked).toEqual([
-				{
-					kind: 'get',
-					model: 'orders',
-					id: O(1),
-					select: { fields: ['title'], relations: { customer: expect.anything() } }
-				}
-			]);
+			const x = yield* after(withCustomer, page(), [cap(null, row(1))], admin, () => page(got));
+			expect(x.asked).toEqual([byId(O(1))]);
+			expect(x.asked[0]).toMatchObject({ model: 'orders', select: { fields: ['title'], relations: { customer: expect.anything() } } });
 			expect(x.frames).toEqual([
 				{ t: 'patch', view: 'v', v: 1, ops: [{ op: 'upsert', index: 0, row: got }] }
 			]);
+			expect(x.sweep.conservative).toBe(1);
+		})
+	);
+
+	// audit bug 46: a view whose narrow read falls back to a whole re-read is one conservative view, not two
+	it.effect('a by-id read that cannot patch falls back to one re-read, counted once', () =>
+		Effect.gen(function* () {
+			const withCustomer = {
+				select: { title: true, customer: { select: { name: true } } },
+				all: true
+			};
+			// the by-id answer is no page: the delta is inexact and the view is read again whole
+			const x = yield* after(withCustomer, page(), [cap(null, row(1))], admin, () => null);
+			expect(x.frames.map((f) => f.t)).toEqual(['answer']);
 			expect(x.sweep.conservative).toBe(1);
 		})
 	);
@@ -650,9 +744,9 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 					page(),
 					[cap(null, row(1, { total: 1.2 }))],
 					admin,
-					() => ({ id: O(1), title: 't1', total: { $dec: '1.20' } })
+					() => page({ id: O(1), title: 't1', total: { $dec: '1.20' } })
 				);
-				expect(x.asked.map((r) => r.kind)).toEqual(['get']);
+				expect(x.asked).toEqual([byId(O(1))]);
 				expect(x.frames).toEqual([
 					{
 						t: 'patch',
@@ -671,7 +765,11 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 	const O = (n: number) => `0199a000-0000-7000-8000-00000000000${n}`;
 	const row = (n: number, over: { [k: string]: Json } = {}) =>
 		order({ id: O(n), title: `t${n}`, customer: 'c1', ...over });
-	const byCustomer = { select: { title: true }, all: true, orderBy: { customer: { name: 'asc' } } };
+	const byCustomer = {
+		select: { title: true },
+		all: true,
+		order_by: { customer: { name: 'asc' } }
+	};
 	const two = page({ id: O(1), title: 't1' }, { id: O(2), title: 't2' });
 	const after = Effect.fn('Test.after')(function* (
 		commit: readonly Captured[],
@@ -682,7 +780,7 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 			answered ? reread : ((answered = true), two)
 		);
 		const c = yield* connect(admin);
-		yield* hub.register(c, 'v', { read: read(cat, 'orders', byCustomer) });
+		yield* hub.register(c, 'v', { read: yield* read(cat, 'orders', byCustomer) });
 		yield* TestClock.adjust(0);
 		frames.length = 0;
 		asked.length = 0;
@@ -754,7 +852,7 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 			Effect.gen(function* () {
 				const { hub, connect, disconnect } = yield* setup();
 				const c = yield* connect();
-				const timed = read(cat, 'orders', {
+				const timed = yield* read(cat, 'orders', {
 					where: { created_at: { gte: '2026-09-24T10:00:00.000Z' } },
 					all: true
 				});
@@ -762,7 +860,7 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 				yield* hub.register(c, 'q', {
 					read: { kind: 'request', roots: [{ root: 'orders', read: timed }] }
 				});
-				const cursor = read(cat, 'orders', { limit: 5 });
+				const cursor = yield* read(cat, 'orders', { limit: 5 });
 				if (cursor.kind !== 'read') throw new Error('The fixture requires a model read');
 				expect(
 					yield* Effect.flip(
@@ -784,11 +882,11 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 					r.kind === 'get' ? big : null
 				);
 				const c = yield* connect();
-				yield* hub.register(c, 'big', { read: get(cat, 'orders', 'o1') });
-				yield* hub.register(c, 'all', { read: read(cat, 'orders', { all: true }) });
+				yield* hub.register(c, 'big', { read: yield* get(cat, 'orders', 'o1') });
+				yield* hub.register(c, 'all', { read: yield* read(cat, 'orders', { all: true }) });
 				yield* TestClock.adjust(0);
 				expect(frames.filter((f) => f.t === 'error')).toEqual([
-					expect.objectContaining({ view: 'big', code: 'subscriptionTooLarge' })
+					expect.objectContaining({ view: 'big', code: 'subscription_too_large' })
 				]);
 				expect(answers(frames)).toEqual(['all']);
 				expect(ended()).toBe(false);
@@ -801,10 +899,10 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 			const { hub, connect, disconnect } = yield* setup();
 			const c = yield* connect();
 			for (let i = 0; i < LIVE.perConnection; i++)
-				yield* hub.register(c, `v${i}`, { read: get(cat, 'orders', `o${i}`) });
+				yield* hub.register(c, `v${i}`, { read: yield* get(cat, 'orders', `o${i}`) });
 			expect(
-				yield* Effect.flip(hub.register(c, 'one-more', { read: get(cat, 'orders', 'x') }))
-			).toMatchObject({ code: 'tooManySubscriptions' });
+				yield* Effect.flip(hub.register(c, 'one-more', { read: yield* get(cat, 'orders', 'x') }))
+			).toMatchObject({ code: 'too_many_subscriptions' });
 		})
 	);
 
@@ -814,7 +912,7 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 			Effect.gen(function* () {
 				const { hub, frames, connect, ended } = yield* setup();
 				const c = yield* connect();
-				yield* hub.register(c, 'all', { read: read(cat, 'orders', { all: true }) });
+				yield* hub.register(c, 'all', { read: yield* read(cat, 'orders', { all: true }) });
 				yield* TestClock.adjust(0);
 				frames.length = 0;
 				yield* hub.authorize(c, rep);
@@ -838,15 +936,15 @@ describe('protocol/wire (rule 32)', () => {
 			field: 'name'
 		} as const;
 		expect([
-			statusOf({ kind: 'committed', output: null, records: [] }),
-			statusOf({ kind: 'pendingApproval', requestId: 'r', records: [] }),
-			statusOf({ kind: 'conflict', records: [] }),
-			statusOf({ kind: 'unknown', invocation: 'i' }),
-			statusOf(refused),
-			statusOf({ ...refused, code: 'forbidden' }),
-			statusOf({ ...refused, code: 'rateLimited' })
+			status_of({ kind: 'committed', output: null, records: [] }),
+			status_of({ kind: 'pending_approval', request_id: 'r', records: [] }),
+			status_of({ kind: 'conflict', records: [] }),
+			status_of({ kind: 'unknown', invocation: 'i' }),
+			status_of(refused),
+			status_of({ ...refused, code: 'forbidden' }),
+			status_of({ ...refused, code: 'rate_limited' })
 		]).toEqual([200, 202, 409, 504, 422, 403, 429]);
-		expect(redact(refused, { kind: 'apiKey', key: 'k' })).toEqual({
+		expect(redact(refused, { kind: 'api_key', key: 'k' })).toEqual({
 			kind: 'refused',
 			code: 'unique',
 			message: 'unique',
@@ -866,6 +964,11 @@ const Page = Schema.Struct({
 });
 /** A page client's read request answer: one root's page. */
 type Orders = { orders: typeof Page.Type };
+const OrdersAnswer = Schema.Struct({ orders: Page });
+const all_orders: { readonly read: WireRead } = { read: { m: 'query', a: [{ orders: {} }] } };
+const north_orders: { readonly read: WireRead } = {
+	read: { m: 'query', a: [{ orders: { where: { region: { eq: 'north' } } } }] }
+};
 const observe = Effect.fn('Test.observeClient')(function* <A, E>(stream: Stream.Stream<A, E>) {
 	const answers = yield* Queue.unbounded<A>();
 	let current: A | undefined;
@@ -902,13 +1005,14 @@ const client = Effect.fn('Test.client')(function* (config: Partial<BoltConfig> =
 		Queue.offerUnsafe(registration, body);
 		return Response.json({ errors: [] });
 	};
-	const bolt = yield* createBolt({
+	const bolt = yield* create_bolt({
 		actor: null,
 		locale: 'en',
 		base: 'http://localhost',
 		fetch,
 		...config,
-		openStream: () => {
+		operation_outputs: { automations: {} },
+		open_stream: () => {
 			const index = sources.length;
 			const source: EventSourceLike = {
 				onmessage: null,
@@ -988,8 +1092,7 @@ describe('$bolt client without a server', () => {
 					if (new URL(request.url).pathname.endsWith('/live')) return Response.json({ errors: [] });
 					const body = Schema.decodeUnknownSync(ActBody)(await request.json());
 					expect(body).toMatchObject({
-						callable: 'orders.create',
-						input: [{ title: 'from live' }]
+						acts: { 'orders.create': [{ title: 'from live' }] }
 					});
 					// a read request's view is re-answered whole on a commit (the hub patches pages and records only)
 					const frame: Frame = {
@@ -1004,7 +1107,7 @@ describe('$bolt client without a server', () => {
 					return Response.json({
 						outcome: {
 							kind: 'committed',
-							output: null,
+							output: { 'orders.create': null },
 							records: [{ model: 'orders', id: written.id, revision: 1 }]
 						},
 						v: 1
@@ -1015,7 +1118,7 @@ describe('$bolt client without a server', () => {
 				const final = (value: Orders) =>
 					value.orders.rows.length === 1 && value.orders.rows[0]?.['id'] === written.id;
 				yield* transportClient.bolt
-					.observe<Orders>(transportClient.bolt.query({ orders: {} }))
+					.observe(all_orders, OrdersAnswer)
 					.pipe(
 						Stream.runForEach((value) =>
 							Effect.gen(function* () {
@@ -1040,17 +1143,17 @@ describe('$bolt client without a server', () => {
 				yield* Deferred.await(ready);
 				let invoked = false;
 				yield* transportClient.bolt
-					.observe<Orders>(transportClient.bolt.query({ orders: {} }))
+					.observe(all_orders, OrdersAnswer)
 					.pipe(
 						Stream.runForEach((value) =>
 							Effect.gen(function* () {
 								if (!invoked) {
 									invoked = true;
-									const result = yield* transportClient.bolt.act('orders.create', [
+									const result = yield* transportClient.bolt.act({ 'orders.create': [
 										{
 											title: 'from live'
 										}
-									]);
+									] });
 									expect(result).toMatchObject({
 										kind: 'committed',
 										records: [{ model: 'orders', id: written.id, revision: 1 }]
@@ -1146,14 +1249,14 @@ describe('$bolt client without a server', () => {
 			Effect.gen(function* () {
 				const arrived: Json[] = [];
 				const c = yield* client({
-					onNotice: (notice) => {
+					on_notice: (notice) => {
 						arrived.push(notice['id'] ?? null);
 					}
 				});
 				const query = { read: { m: 'inbox' as const, a: [] } };
-				const first = yield* observe(c.bolt.observe<unknown>(query));
+				const first = yield* observe(c.bolt.observe(query, Schema.Unknown));
 				const second = yield* observe(
-					c.bolt.observe<unknown>({ read: { m: 'inbox', a: [{ requests: true }] } })
+					c.bolt.observe({ read: { m: 'inbox', a: [{ requests: true }] } }, Schema.Unknown)
 				);
 				yield* c.opened;
 				const notice = (id: string) => ({ id, title: id, read: false });
@@ -1242,7 +1345,7 @@ describe('$bolt client without a server', () => {
 					);
 				};
 				const c = yield* client({ fetch, uuid: () => 'k1' });
-				const view = yield* observe(c.bolt.observe<Orders>(c.bolt.query({ orders: {} })));
+				const view = yield* observe(c.bolt.observe(all_orders, OrdersAnswer));
 				yield* c.opened;
 				yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
 				yield* c.push({
@@ -1253,7 +1356,7 @@ describe('$bolt client without a server', () => {
 				});
 				yield* view.next;
 				const write = yield* c.bolt
-					.act('orders.create', [{ title: 'x' }])
+					.act({ 'orders.create': [{ title: 'x' }] })
 					.pipe(Effect.flip, Effect.forkScoped);
 				yield* view.next;
 				yield* Deferred.succeed(painted, undefined);
@@ -1269,7 +1372,7 @@ describe('$bolt client without a server', () => {
 				yield* view.next;
 				expect([during, view.current().orders.rows.length]).toEqual([2, 1]);
 				offline = true;
-				expect(yield* Effect.flip(c.bolt.act('orders.create', [{ title: 'x' }]))).toMatchObject({
+				expect(yield* Effect.flip(c.bolt.act({ 'orders.create': [{ title: 'x' }] }))).toMatchObject({
 					_tag: 'ActUnknown',
 					invocation: 'k1'
 				});
@@ -1287,7 +1390,7 @@ describe('$bolt client without a server', () => {
 				// a page view (the inbox): the shape the hub patches in place
 				const inbox = { m: 'inbox', a: [{ requests: true }] } as const;
 				const view = yield* observe(
-					c.bolt.observe<{ rows: readonly { [k: string]: Json }[] }>({ read: inbox })
+					c.bolt.observe({ read: inbox }, Page)
 				);
 				const titles = () => view.current().rows.map((row) => row['title']);
 				yield* c.opened;
@@ -1334,7 +1437,7 @@ describe('$bolt client without a server', () => {
 			midpoint(
 				Effect.gen(function* () {
 					const c = yield* client();
-					const view = yield* observe(c.bolt.observe<Orders>(c.bolt.query({ orders: {} })));
+					const view = yield* observe(c.bolt.observe(all_orders, OrdersAnswer));
 					yield* c.opened;
 					expect(c.status.current()).toBe('connecting');
 					yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
@@ -1401,7 +1504,7 @@ describe('$bolt client without a server', () => {
 				};
 				const test = Effect.gen(function* () {
 					const c = yield* client({ signals });
-					const view = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
+					const view = yield* observe(c.bolt.observe(all_orders, Schema.Unknown));
 					yield* c.opened;
 					let conns = 0;
 					const hello = () =>
@@ -1484,7 +1587,7 @@ describe('$bolt client without a server', () => {
 						}
 					};
 					const c = yield* client({ signals });
-					const view = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
+					const view = yield* observe(c.bolt.observe(all_orders, Schema.Unknown));
 					yield* c.opened;
 					yield* c.drop;
 					yield* c.settle;
@@ -1502,13 +1605,13 @@ describe('$bolt client without a server', () => {
 		Effect.gen(function* () {
 			const signals = { hidden: false, addEventListener: () => {} };
 			const c = yield* client({ signals });
-			const first = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
+			const first = yield* observe(c.bolt.observe(all_orders, Schema.Unknown));
 			yield* c.opened;
 			expect(c.sources).toHaveLength(1);
 			yield* TestClock.adjust(300000);
 			expect(c.sources).toHaveLength(1);
 			const next = yield* observe(
-				c.bolt.observe<unknown>(c.bolt.query({ orders: { where: { region: { eq: 'north' } } } }))
+				c.bolt.observe(north_orders, Schema.Unknown)
 			);
 			yield* c.settle;
 			expect(c.sources).toHaveLength(1);
@@ -1539,7 +1642,7 @@ describe('$bolt client without a server', () => {
 							signals.hidden = hidden;
 							for (const run of [...listeners]) run();
 						}).pipe(Effect.andThen(c.settle));
-					const view = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
+					const view = yield* observe(c.bolt.observe(all_orders, Schema.Unknown));
 					yield* c.opened;
 					yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
 					yield* c.registration;
@@ -1578,17 +1681,17 @@ describe('$bolt client without a server', () => {
 						Queue.offerUnsafe(requested, undefined);
 					});
 				const c = yield* client({ fetch });
-				const view = yield* observe(c.bolt.observe<unknown>(c.bolt.query({ orders: {} })));
+				const view = yield* observe(c.bolt.observe(all_orders, Schema.Unknown));
 				yield* c.opened;
 				yield* c.push({ t: 'hello', conn: 'c1', v: 0 });
 				yield* Queue.take(requested);
 				const another = yield* observe(
-					c.bolt.observe<unknown>(c.bolt.query({ orders: { where: { region: { eq: 'north' } } } }))
+					c.bolt.observe(north_orders, Schema.Unknown)
 				);
 				yield* Queue.take(requested);
 				const gone = () =>
 					Response.json({
-						errors: [{ view: 'v1', code: 'notFound', message: 'the live connection is gone' }]
+						errors: [{ view: 'v1', code: 'not_found', message: 'the live connection is gone' }]
 					});
 				present(pending[0])(gone());
 				yield* c.opened;
@@ -1614,15 +1717,18 @@ describe('$bolt client without a server', () => {
 	);
 	it.effect('one committed change reaches subscriptions on both tab connections', () =>
 		Effect.gen(function* () {
-			const { hub } = yield* setup(() => ({ rows: [order()], next: null }));
+			// the store's row: a single-row fetch reads the committed image
+			let stored = order();
+			const { hub } = yield* setup(() => ({ rows: [stored], next: null }));
 			const tabs: Frame[][] = [[], []];
 			for (const frames of tabs) {
 				const conn = (yield* connection(hub, admin, frames)).id;
-				yield* hub.register(conn, 'v1', { read: read(cat, 'orders', { all: true }) });
+				yield* hub.register(conn, 'v1', { read: yield* read(cat, 'orders', { all: true }) });
 				yield* TestClock.adjust(0);
 				frames.length = 0;
 			}
-			hub.publish([cap(order(), order({ title: 'updated in another tab' }))]);
+			stored = order({ title: 'updated in another tab' });
+			hub.publish([cap(order(), stored)]);
 			yield* hub.settled;
 			yield* TestClock.adjust(0);
 			for (const frames of tabs)
@@ -1632,22 +1738,21 @@ describe('$bolt client without a server', () => {
 });
 
 it.effect(
-	'a read request re-answers whole when a model it read changes, keyed by root, and skips a model it never read',
+	'a read request patches the root a commit touches, keyed by root, and skips a model it never read',
 	() =>
 		Effect.gen(function* () {
-			let version = 0;
 			const roots = {
-				orders: read(cat, 'orders', { all: true }),
-				customers: read(cat, 'customers', { all: true })
+				orders: yield* read(cat, 'orders', { all: true }),
+				customers: yield* read(cat, 'customers', { all: true })
 			};
 			const request: ReadIR = {
 				kind: 'request',
 				roots: Object.entries(roots).map(([root, r]) => ({ root, read: r }))
 			};
-			const { hub, connect, asked, frames } = yield* setup(() => ({
-				orders: page({ id: 'orders-row', title: `version ${version}` }),
-				customers: page({ id: 'customers-row', name: `version ${version}` })
-			}));
+			const changed = { id: 'c1', name: 'changed' };
+			const { hub, connect, asked, frames } = yield* setup((r) => r.kind === 'request'
+				? { orders: page({ id: 'orders-row', title: 'kept' }), customers: page({ id: 'customers-row', name: 'kept' }) }
+				: page(changed));
 			const id = yield* connect();
 			yield* hub.register(id, 'group', { read: request });
 			asked.length = 0;
@@ -1657,17 +1762,13 @@ it.effect(
 			yield* hub.settled;
 			yield* TestClock.adjust(0);
 			expect(asked).toEqual([]);
-			version = 1;
-			hub.publish([cap(null, { id: 'c1', name: 'changed' }, 'customers')]);
+			hub.publish([cap(null, changed, 'customers')]);
 			yield* hub.settled;
 			yield* TestClock.adjust(0);
-			expect(asked).toEqual([request]);
-			expect(frames.findLast((frame) => frame.t === 'answer')).toMatchObject({
-				view: 'group',
-				value: {
-					orders: page({ id: 'orders-row', title: 'version 1' }),
-					customers: page({ id: 'customers-row', name: 'version 1' })
-				}
-			});
+			// the customers root alone: its one row read by id, set under its root key
+			expect(asked).toEqual([byId('c1')]);
+			expect(patches(frames)).toEqual([
+				['group', [{ op: 'meta', key: 'customers', value: page(changed, { id: 'customers-row', name: 'kept' }) }]]
+			]);
 		})
 );

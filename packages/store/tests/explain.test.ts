@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { build, schemaObjects, store } from '../src/index.ts';
+import { build, schema_objects, store } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec, script } from './support.ts';
 
@@ -12,7 +12,7 @@ describe('read query plans', () => {
 			// A tiny fixture otherwise prefers a sequential scan, hiding a mismatched index expression.
 			yield* script(pg, 'set enable_seqscan = off');
 			const db = store(shop);
-			const objects = yield* schemaObjects(shop);
+			const objects = yield* schema_objects(shop);
 			const pathIndex = objects.find(
 				(object) =>
 					object.rank === 'index' &&

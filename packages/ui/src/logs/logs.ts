@@ -62,7 +62,7 @@ export function logPreview(message: string): readonly LogToken[] {
 }
 
 /** The lines whose level is not hidden and whose message or source contains `q` (case-insensitive). */
-export function filterLogs(
+export function filter_logs(
 	rows: readonly LogLine[],
 	hidden: Partial<Record<LogLevel, boolean>>,
 	q: string

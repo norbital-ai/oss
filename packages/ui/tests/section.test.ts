@@ -1,3 +1,4 @@
+import { committed, single_act } from './act-envelope.ts';
 import { required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import { Effect } from 'effect';
@@ -16,6 +17,7 @@ const { default: RecordShell } = await import('../src/record/RecordShell.svelte'
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text', help: 'The role’s public name.' },
@@ -35,9 +37,10 @@ const catalog = {
 				optional: true,
 				fields: {
 					rules: {
-						kind: 'list',
-						label: 'Rates',
-						of: { kind: 'object', fields: { a: { kind: 'text' }, b: { kind: 'text' } } }
+						kind: 'object',
+						fields: { a: { kind: 'text' }, b: { kind: 'text' } },
+						many: true,
+						label: 'Rates'
 					}
 				}
 			}
@@ -61,13 +64,15 @@ afterEach(async () => {
 	localStorage.clear();
 });
 async function show(
-	act: ViewScript['act'] = () => ({ kind: 'committed', output: null, records: [] })
+	act: ViewScript['act'] = committed
 ) {
 	const sent: [string, Json][] = [];
 	const { bolt } = await viewFixture({
-		act: (c, input, options) => {
-			sent.push([c, input]);
-			return act(c, input, options);
+		catalog,
+		act: (body, key) => {
+			const { callable, input } = single_act(body);
+			sent.push([callable, input]);
+			return act(body, key);
 		}
 	});
 	const target = document.createElement('div');
@@ -135,7 +140,7 @@ it.live('an icon replaces the heading chevron; a section without one keeps the c
 );
 
 it.live(
-	'defaultOpen={false} starts closed with its summary in the heading; opening hides the summary',
+	'default_open={false} starts closed with its summary in the heading; opening hides the summary',
 	() =>
 		Effect.gen(function* () {
 			const { target } = yield* browser(() => show());
@@ -276,6 +281,7 @@ it.live(
 			const warn = vi.spyOn(console, 'warn');
 			const target = yield* browser(async () => {
 				const { bolt } = await viewFixture({
+		catalog,
 					get: (c) =>
 						c === 'jobs'
 							? { id: 'j1', revision: 1, title: 'Paint', notes: 'Back door', kind: 'a' }

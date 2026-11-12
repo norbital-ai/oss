@@ -1,17 +1,17 @@
 // Optional trusted TDS transport: no source polling, CDC or business submission behavior.
 import { Effect, FiberSet, Result, Scope } from 'effect';
 import mssql from 'mssql';
-import { compileSqlServer } from '@norbital-ai/store/sqlserver';
+import { compile_sql_server } from '@norbital-ai/store/sqlserver';
 import {
 	BoltError,
 	DATABASE_MAX_BYTES,
 	DATABASE_MAX_ROWS,
-	validateDatabaseRequest,
+	validate_database_request,
 	type DatabaseDriver,
 	type DatabaseResult,
 	type Json
 } from '@norbital-ai/bolt/engine';
-import { connectPublic } from '@norbital-ai/bolt/node';
+import { connect_public } from '@norbital-ai/bolt/node';
 
 const QUERY_MS = 8_000;
 const retryableSql = new Set([1205, 1222]); // Deadlock victim and lock timeout.
@@ -47,21 +47,22 @@ export function sqlServerDatabase() {
 		query: (credential: string, given: Parameters<DatabaseDriver['query']>[1]) =>
 			Effect.scoped(
 				Effect.gen(function* () {
+					const validated = yield* validate_database_request(given);
 					const request = yield* Effect.try({
-						try: () => compileSqlServer(validateDatabaseRequest(given)),
+						try: () => compile_sql_server(validated),
 						catch: (cause) =>
 							cause instanceof BoltError
 								? cause
-								: BoltError.make('invalidInput', 'admission', 'Database request is invalid.', cause)
+								: BoltError.make('invalid_input', 'admission', 'Database request is invalid.', cause)
 					});
 					if (!credential.trim())
 						return yield* Effect.fail(
-							BoltError.make('invalidInput', 'admission', 'Database credential is invalid.')
+							BoltError.make('invalid_input', 'admission', 'Database credential is invalid.')
 						);
 					if (Object.keys(request.parameters).length > 2_100)
 						return yield* Effect.fail(
 							BoltError.make(
-								'invalidInput',
+								'invalid_input',
 								'admission',
 								'Database transport parameter limit exceeded.'
 							)
@@ -69,7 +70,7 @@ export function sqlServerDatabase() {
 					const parsed = yield* Effect.try({
 						try: () => mssql.ConnectionPool.parseConnectionString(credential),
 						catch: () =>
-							BoltError.make('invalidInput', 'admission', 'Database credential is invalid.')
+							BoltError.make('invalid_input', 'admission', 'Database credential is invalid.')
 					});
 					if (parsed.options?.instanceName !== undefined)
 						return yield* Effect.fail(
@@ -81,7 +82,7 @@ export function sqlServerDatabase() {
 						);
 					if (typeof parsed.server !== 'string' || parsed.server.trim() === '')
 						return yield* Effect.fail(
-							BoltError.make('invalidInput', 'admission', 'Database server is missing.')
+							BoltError.make('invalid_input', 'admission', 'Database server is missing.')
 						);
 					if (
 						parsed.authentication !== undefined &&
@@ -117,7 +118,7 @@ export function sqlServerDatabase() {
 									serverName: hostname,
 									connector: () =>
 										run(
-											connectPublic(hostname, port).pipe(Effect.provideService(Scope.Scope, scope))
+											connect_public(hostname, port).pipe(Effect.provideService(Scope.Scope, scope))
 										)
 								},
 								beforeConnect: (connection) => {
@@ -131,14 +132,14 @@ export function sqlServerDatabase() {
 													)
 												)
 											: run(
-													connectPublic(hostname, port).pipe(
+													connect_public(hostname, port).pipe(
 														Effect.provideService(Scope.Scope, scope)
 													)
 												);
 								}
 							}),
 						catch: () =>
-							BoltError.make('invalidInput', 'admission', 'Database credential is invalid.')
+							BoltError.make('invalid_input', 'admission', 'Database credential is invalid.')
 					});
 					let closed = false;
 					const close = Effect.tryPromise({
@@ -226,7 +227,7 @@ export function sqlServerDatabase() {
 						if (refusal !== undefined) return;
 						const accepted = Result.try({
 							try: () => {
-								if (rows.length >= (request.maxRows ?? DATABASE_MAX_ROWS))
+								if (rows.length >= (request.max_rows ?? DATABASE_MAX_ROWS))
 									throw BoltError.make(
 										'overflow',
 										'facility',

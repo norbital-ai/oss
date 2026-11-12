@@ -72,11 +72,11 @@ describe('Port', () => {
 			Effect.gen(function* () {
 				const limited = yield* Effect.flip(
 					Port.attempt('speech', () =>
-						Promise.reject({ kind: 'rateLimited', message: 'slow down', status: 429 })
+						Promise.reject({ kind: 'rate_limited', message: 'slow down', status: 429 })
 					)
 				);
 				expect(limited).toBeInstanceOf(FacilityFailure);
-				expect(limited).toMatchObject({ kind: 'rateLimited', message: 'slow down', status: 429 });
+				expect(limited).toMatchObject({ kind: 'rate_limited', message: 'slow down', status: 429 });
 				const absent = yield* Effect.flip(
 					Port.attempt('speech', () =>
 						Promise.reject({ kind: 'unavailable', facility: 'ai.speak', reason: 'no voice' })

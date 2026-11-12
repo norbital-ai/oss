@@ -2,6 +2,8 @@
 // and a bot reads a group room only for the messages that mention it, which is also all its webhook hears of one. The
 // webhook is created by hand with the secret given here. Its `messages` `created` event is the only one parsed: edits
 // and deletes are not in what we could read of the platform, so `history` repairs them, and Webex has no typing call.
+import { Schema } from 'effect';
+import { parse as parseJson, json, request as requestHttp } from '../http.ts';
 import { createHmac } from 'node:crypto';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError } from '../adapter.ts';
@@ -10,25 +12,30 @@ import { signed } from '../verify.ts';
 const API = 'https://webexapis.com/v1';
 const PAGE = 100;
 const PAGES = 10;
-type Message = {
-	readonly id: string;
-	readonly roomId: string;
-	readonly roomType?: string;
-	readonly parentId?: string;
-	readonly personId: string;
-	readonly personEmail?: string;
-	readonly personDisplayName?: string;
-	readonly text?: string;
-	readonly markdown?: string;
-	readonly created: string;
-	readonly mentionedPeople?: readonly string[];
-	readonly files?: readonly string[];
-};
-type Hook = {
-	readonly resource?: string;
-	readonly event?: string;
-	readonly data?: { readonly id?: string };
-};
+const Message = Schema.Struct({
+	id: Schema.String,
+	roomId: Schema.String,
+	roomType: Schema.optionalKey(Schema.String),
+	parentId: Schema.optionalKey(Schema.String),
+	personId: Schema.String,
+	personEmail: Schema.optionalKey(Schema.String),
+	personDisplayName: Schema.optionalKey(Schema.String),
+	text: Schema.optionalKey(Schema.String),
+	markdown: Schema.optionalKey(Schema.String),
+	created: Schema.String,
+	mentionedPeople: Schema.optionalKey(Schema.Array(Schema.String)),
+	files: Schema.optionalKey(Schema.Array(Schema.String))
+});
+type Message = typeof Message.Type;
+const Hook = Schema.Struct({
+	resource: Schema.optionalKey(Schema.String),
+	event: Schema.optionalKey(Schema.String),
+	data: Schema.optionalKey(
+		Schema.Struct({
+			id: Schema.optionalKey(Schema.String)
+		})
+	)
+});
 
 const threadOf = ({ roomId, parentId }: Message) =>
 	parentId === undefined ? roomId : `${roomId}:${parentId}`;
@@ -47,7 +54,7 @@ export const webex: ChatPlatform = {
 	],
 	async connect({ botToken = '', webhookSecret = '' }, host) {
 		const call = async (url: string, body?: object) => {
-			const response = await host.fetch(url, {
+			return requestHttp(host.fetch, url, {
 				method: body === undefined ? 'GET' : 'POST',
 				headers: {
 					authorization: `Bearer ${botToken}`,
@@ -55,21 +62,21 @@ export const webex: ChatPlatform = {
 				},
 				...(body === undefined ? {} : { body: JSON.stringify(body) })
 			});
-			if (response.ok) return response;
-			const wait = Number(response.headers.get('retry-after'));
-			throw new PlatformError(
-				`Webex answered ${response.status}`,
-				response.status,
-				wait > 0 ? wait * 1000 : undefined
-			);
 		};
-		const api = async <A>(path: string, body?: object) =>
-			(await (await call(`${API}/${path}`, body)).json()) as A;
-		const me = await api<{ id: string; nickName?: string; displayName?: string }>('people/me');
+		const api = async <A>(schema: Schema.Decoder<A>, path: string, body?: object) =>
+			json(schema, await call(`${API}/${path}`, body));
+		const me = await api(
+			Schema.Struct({
+				id: Schema.String,
+				nickName: Schema.optionalKey(Schema.String),
+				displayName: Schema.optionalKey(Schema.String)
+			}),
+			'people/me'
+		);
 		const parse = (message: Message): Incoming => ({
 			id: message.id,
 			thread: threadOf(message),
-			sentAt: message.created,
+			sent_at: message.created,
 			from: {
 				handle: message.personId,
 				name: message.personDisplayName ?? message.personEmail ?? null
@@ -78,7 +85,7 @@ export const webex: ChatPlatform = {
 			group: message.roomType !== 'direct',
 			mentioned:
 				message.mentionedPeople?.some((person) => person === me.id || person === 'all') === true,
-			replyTo: message.parentId ?? null,
+			reply_to: message.parentId ?? null,
 			files: (message.files ?? []).map((url) => ({
 				name: new URL(url).pathname.split('/').at(-1) || 'attachment',
 				mime: 'application/octet-stream',
@@ -92,10 +99,10 @@ export const webex: ChatPlatform = {
 					request.headers.get('x-spark-signature'),
 					createHmac('sha1', webhookSecret).update(body).digest('hex')
 				);
-				const { resource, event, data } = JSON.parse(body) as Hook;
+				const { resource, event, data } = await parseJson(Hook, body);
 				if (resource !== 'messages' || event !== 'created' || data?.id === undefined)
 					return nothing();
-				const message = await api<Message>(`messages/${encodeURIComponent(data.id)}`).catch(
+				const message = await api(Message, `messages/${encodeURIComponent(data.id)}`).catch(
 					(error: unknown) => {
 						if (error instanceof PlatformError && error.status === 404) return null;
 						throw error;
@@ -108,19 +115,35 @@ export const webex: ChatPlatform = {
 			// no dedupe key in what the source shows, so a send is not idempotent
 			async send(thread, text) {
 				const [roomId, parentId] = thread.split(':');
-				const sent = await api<{ id: string }>('messages', { roomId, parentId, markdown: text });
+				const sent = await api(
+					Schema.Struct({
+						id: Schema.String
+					}),
+					'messages',
+					{ roomId, parentId, markdown: text }
+				);
 				return { id: sent.id };
 			},
 			// newest first, so a page older than `since` ends it; a page bound leaves the window unfinished
 			async history(thread, since) {
 				const [roomId = ''] = thread.split(':');
-				const room = await api<{ type?: string }>(`rooms/${encodeURIComponent(roomId)}`);
+				const room = await api(
+					Schema.Struct({
+						type: Schema.optionalKey(Schema.String)
+					}),
+					`rooms/${encodeURIComponent(roomId)}`
+				);
 				const query = new URLSearchParams({ roomId, max: String(PAGE) });
 				if (room.type === 'group') query.set('mentionedPeople', 'me');
 				const from = Date.parse(since),
 					messages: Incoming[] = [];
 				for (let page = 0; page < PAGES; page++) {
-					const { items } = await api<{ items: readonly Message[] }>(`messages?${query}`);
+					const { items } = await api(
+						Schema.Struct({
+							items: Schema.Array(Message)
+						}),
+						`messages?${query}`
+					);
 					for (const item of items) {
 						if (Date.parse(item.created) < from) return { messages, complete: true };
 						if (item.personId !== me.id && threadOf(item) === thread) messages.push(parse(item));

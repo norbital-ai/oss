@@ -66,29 +66,31 @@ export const extractDocumentText = Effect.fn('server.extractDocumentText')(funct
 		'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 		'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 	].includes(mime);
-	if (mime !== 'application/pdf' && !office)
-		return yield* Effect.try({
-			try: () => {
-				if (!/^(text\/[\w.+-]+|application\/(csv|json|(?:[\w.-]+\+)?xml))$/.test(mime))
-					throw new Error('Supported documents are PDF, DOCX, XLSX, text, CSV, JSON and XML.');
-				const charset = /charset\s*=\s*["']?([\w-]+)/i;
-				const declared =
-					contentType.match(charset)?.[1] ??
-					(mime === 'text/html'
-						? Buffer.from(bytes.subarray(0, 1024))
-								.toString('latin1')
-								.match(/<meta\b[^>]*>/gi)
-								?.map((tag) => tag.match(charset)?.[1])
-								.find((value) => value !== undefined)
-						: undefined);
-				const body = new TextDecoder(declared ?? 'utf-8', { fatal: true }).decode(bytes);
-				if (body.includes('\u0000')) throw new Error('Document contains binary data.');
-				if (bytes.byteLength > 2 * 1024 * 1024)
-					throw new Error('Document text exceeds the 2 MiB limit.');
-				return { body, sha256 };
-			},
+	if (mime !== 'application/pdf' && !office) {
+		if (!/^(text\/[\w.+-]+|application\/(csv|json|(?:[\w.-]+\+)?xml))$/.test(mime))
+			return yield* Effect.fail(
+				failure(new Error('Supported documents are PDF, DOCX, XLSX, text, CSV, JSON and XML.'))
+			);
+		if (bytes.byteLength > 2 * 1024 * 1024)
+			return yield* Effect.fail(failure(new Error('Document text exceeds the 2 MiB limit.')));
+		const charset = /charset\s*=\s*["']?([\w-]+)/i;
+		const declared =
+			contentType.match(charset)?.[1] ??
+			(mime === 'text/html'
+				? Buffer.from(bytes.subarray(0, 1024))
+						.toString('latin1')
+						.match(/<meta\b[^>]*>/gi)
+						?.map((tag) => tag.match(charset)?.[1])
+						.find((value) => value !== undefined)
+				: undefined);
+		const body = yield* Effect.try({
+			try: () => new TextDecoder(declared ?? 'utf-8', { fatal: true }).decode(bytes),
 			catch: failure
 		});
+		if (body.includes('\u0000'))
+			return yield* Effect.fail(failure(new Error('Document contains binary data.')));
+		return { body, sha256 };
+	}
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
 			const result = yield* inWorker(office ? 'office' : 'pdf', office ? { bytes, mime } : bytes);

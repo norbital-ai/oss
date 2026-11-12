@@ -1,4 +1,5 @@
 // engine/write on PGlite: one guarantee per test (rules 19–29, 34, 40–43, 45 hook, 70).
+import type { Chain } from '../src/engine/write/sql.ts';
 import type { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Layer, Schema, Stream } from 'effect';
@@ -6,13 +7,19 @@ import {
 	TenantDb as TenantDbService,
 	type TenantDbShape as TenantDb
 } from '../src/engine/db/tenant-db.ts';
-import { dbError } from '../src/engine/db/wire.ts';
+import { db_error } from '../src/engine/db/wire.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { ApprovalSnapshot } from '../src/decl/access/policy.ts';
-import type { GuestOutcome, Invocation, Lock, Outcome } from '../src/engine/contracts.ts';
+import {
+	LIMITS,
+	type GuestOutcome,
+	type Invocation,
+	type Lock,
+	type Outcome
+} from '../src/engine/contracts.ts';
 import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
+import { catalog_of } from '../src/engine/access/pred.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import {
 	act,
@@ -21,11 +28,11 @@ import {
 	type WriteEngine
 } from '../src/engine/write/act.ts';
 import { executeCommit, type Commit } from '../src/engine/write/commit.ts';
-import { restorer, restoreSource, seed } from '../src/engine/write/seed.ts';
+import { restorer, restore_source, seed } from '../src/engine/write/seed.ts';
 import { aggregate } from '@norbital-ai/store';
 import type { GuestShape } from '../src/engine/services.ts';
-import { BoltError, fromStore } from '../src/protocol/errors.ts';
-import { bridgeOn, open } from './write-p2.fixture.ts';
+import { BoltError, from_store } from '../src/protocol/errors.ts';
+import { bridge_on, open } from './write-p2.fixture.ts';
 import {
 	admin,
 	arm,
@@ -35,9 +42,13 @@ import {
 	member,
 	NOW,
 	TODAY,
-	writeArm
+	write_arm
 } from './write-fixture.ts';
 
+const required = <A>(value: A | undefined): A => {
+ if (value === undefined) throw new Error('Missing write fixture value.');
+ return value;
+};
 let pg: PGlite, db: TenantDb;
 const count = { reads: 0, writes: 0 };
 const native = { active: 0, batches: 0, streams: 0 };
@@ -71,8 +82,7 @@ const fixtureFor = (schema: EngineManifest) =>
 			db = TenantDbService.typed({
 				read: (statements) => (count.reads++, inner.read(statements)),
 				write: (statement, lock) => (count.writes++, inner.write(statement, lock)),
-				transaction: (batch) => (count.writes++, inner.transaction(batch)),
-				session: inner.session
+				transaction: (batch) => (count.writes++, inner.transaction(batch))
 			});
 			count.reads = 0;
 			count.writes = 0;
@@ -85,7 +95,7 @@ const ext = {
 		...manifest.models,
 		projects: {
 			description: 'A project',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				profile: {
@@ -102,20 +112,25 @@ const ext = {
 				stock: { kind: 'int', default: 0 }
 			},
 			check: {
-				stock_not_negative: {
-					where: { stock: { gte: 0 } },
-					message: 'Stock cannot go below zero.'
-				},
+				stock_not_negative: { stock: { gte: 0 } },
 				bare: { stock: { lte: 1000 } }
 			}
 		},
-		quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } },
+		quotes: {
+			description: 'A quote',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
 		activities: {
 			description: 'An activity',
-			label: 'subject',
+			record_label: 'record.subject',
 			fields: { subject: { kind: 'text' } }
 		},
-		notes: { description: 'A note', label: 'body', fields: { body: { kind: 'text' } } }
+		notes: {
+			description: 'A note',
+			record_label: 'record.body',
+			fields: { body: { kind: 'text' } }
+		}
 	},
 	relationships: {
 		...manifest.relationships,
@@ -126,17 +141,20 @@ const ext = {
 	exposures: {
 		...manifest.exposures,
 		projects: {
-			read: { projects: { fields: 'all' } },
+			outputs: { default: { projects: { fields: 'all' } } },
 			create: { columns: { projects: ['title', 'profile', 'stock', 'owner'] } }
 		},
-		quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } },
+		quotes: {
+			outputs: { default: { quotes: { fields: 'all' } } },
+			create: { columns: { quotes: ['title'] } }
+		},
 		activities: {
-			read: { activities: { fields: 'all' } },
+			outputs: { default: { activities: { fields: 'all' } } },
 			create: { columns: { activities: ['subject', 'regarding'] } },
 			update: { columns: { activities: ['regarding'] } }
 		},
 		notes: {
-			read: { notes: { fields: 'all' } },
+			outputs: { default: { notes: { fields: 'all' } } },
 			create: { columns: { notes: ['body', 'line'] } }
 		}
 	}
@@ -197,12 +215,12 @@ const run = (over: Over, engine: Partial<WriteEngine> = {}) =>
 		}
 	);
 const rows = (sql: string) =>
-	Effect.tryPromise({ try: () => pg.query<Record<string, Json>>(sql), catch: dbError }).pipe(
+	Effect.tryPromise({ try: () => pg.query<Record<string, Json>>(sql), catch: db_error }).pipe(
 		Effect.map((result) => result.rows)
 	);
-const one = (sql: string) => rows(sql).pipe(Effect.map((rows) => rows[0]!));
+const one = (sql: string) => rows(sql).pipe(Effect.map((rows) => required(rows[0])));
 const committed = (o: Outcome) => {
-	if (o.kind !== 'committed' && o.kind !== 'pendingApproval') throw new Error(JSON.stringify(o));
+	if (o.kind !== 'committed' && o.kind !== 'pending_approval') throw new Error(JSON.stringify(o));
 	return o;
 };
 const order = Effect.fn('Test.order')(function* (
@@ -210,10 +228,19 @@ const order = Effect.fn('Test.order')(function* (
 	lines: { label: string; amount: string }[] = []
 ) {
 	const o = committed((yield* run({ verb: 'create', input: [{ title, lines }] })).outcome);
-	return o.records.find((r) => r.model === 'orders')!.id;
+	return required(o.records.find((r) => r.model === 'orders')).id;
 });
 
 describe('engine/write: one statement per act (rule 20)', () => {
+	it.effect('rejects an act whose UTF-8 input exceeds the byte limit before writing', () =>
+		Effect.gen(function* () {
+			const title = '界'.repeat(Math.ceil(LIMITS.act.inputBytes / 3));
+			const { outcome } = yield* run({ verb: 'create', input: [{ title }] });
+			expect(outcome).toMatchObject({ kind: 'refused', code: 'overflow' });
+			expect(count.writes).toBe(0);
+		})
+	);
+
 	it.effect(
 		'a plain create commits in one write statement with its seq, roll-ups and history',
 		() =>
@@ -274,7 +301,7 @@ describe('engine/write: one statement per act (rule 20)', () => {
 				expect(JSON.stringify(marked.outcome)).toBe(JSON.stringify(first.outcome));
 				expect(
 					(yield* run({ verb: 'create', input: [{ title: 'chair' }], key: 'same' })).outcome
-				).toMatchObject({ kind: 'refused', code: 'keyReuse' });
+				).toMatchObject({ kind: 'refused', code: 'key_reuse' });
 			}).pipe(Effect.provide(fixture))
 	);
 
@@ -286,7 +313,7 @@ describe('engine/write: one statement per act (rule 20)', () => {
 				committed((yield* run({ verb: 'create', input: [{ title: 'a' }], rate })).outcome);
 				expect(
 					(yield* run({ verb: 'create', input: [{ title: 'b' }], rate, key: 'r2' })).outcome
-				).toMatchObject({ kind: 'refused', code: 'rateLimited' });
+				).toMatchObject({ kind: 'refused', code: 'rate_limited' });
 				expect(
 					yield* rows(
 						`select 1 from bolt_idem_outcome o join bolt_idem i using (key) where i.key <> ''`
@@ -297,6 +324,24 @@ describe('engine/write: one statement per act (rule 20)', () => {
 });
 
 describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
+	it.effect('a native constraint failure rolls back every root and child in the batch', () =>
+		Effect.gen(function* () {
+			const result = yield* run({
+				verb: 'create',
+				input: [
+					{ title: 'Duplicate', lines: [{ label: 'First child', amount: '12' }] },
+					{ title: 'Duplicate', lines: [{ label: 'Second child', amount: '21' }] }
+				]
+			});
+			expect(result.outcome).toMatchObject({ kind: 'refused', code: 'unique' });
+			expect(yield* rows('select id from orders')).toEqual([]);
+			expect(yield* rows('select id from lines')).toEqual([]);
+			expect(
+				yield* rows("select revision from bolt_history where collection in ('orders', 'lines')")
+			).toEqual([]);
+		}).pipe(Effect.provide(fixture))
+	);
+
 	it.effect(
 		'a child change moves its parent roll-up in one derived write; nothing is deleted by omission',
 		() =>
@@ -318,7 +363,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 							target: id,
 							set: {
 								note: 'm',
-								lines: { update: [{ target: String(a!['id']), set: { amount: '140' } }] }
+								lines: { update: [{ target: String(required(a)['id']), set: { amount: '140' } }] }
 							}
 						}
 					]
@@ -335,7 +380,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 					(yield* run({
 						model: 'lines',
 						verb: 'update',
-						input: [{ target: String(a!['id']), set: { amount: '1' } }]
+						input: [{ target: String(required(a)['id']), set: { amount: '1' } }]
 					})).outcome
 				);
 				expect(yield* one(`select total::text, big_lines, revision from orders`)).toEqual({
@@ -367,7 +412,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 						input: [{ target: id, set: { note: 'b' } }],
 						observed: { [id]: 1 }
 					})).outcome
-				).toEqual({ kind: 'conflict', records: [{ model: 'orders', id, fields: [] }] });
+				).toEqual({ kind: 'conflict', records: [{ model: 'orders', id }] });
 				expect(
 					(yield* run({ verb: 'update', input: [{ target: id, set: { note: 'x' } }] })).outcome
 				).toEqual({
@@ -377,39 +422,40 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 					unchanged: [{ model: 'orders', id }]
 				});
 				const kept = committed(
-					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], onConflict: 'keep' })).outcome
+					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], on_conflict: 'keep' })).outcome
 				);
 				expect(kept).toMatchObject({ output: [id], records: [] });
 				const updated = committed(
-					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], onConflict: 'update' })).outcome
+					(yield* run({ verb: 'upsert', input: [{ id, note: 'y' }], on_conflict: 'update' }))
+						.outcome
 				);
 				expect(updated).toMatchObject({ output: [id], records: [{ id, revision: 3 }] });
 				const made = (yield* run({
 					verb: 'upsert',
 					input: [{ title: 'chair' }],
-					onConflict: 'update'
+					on_conflict: 'update'
 				})).outcome;
 				if (made.kind !== 'committed') throw new Error(JSON.stringify(made));
-				expect(made.output).toEqual([made.records[0]!.id]);
+				expect(made.output).toEqual([required(made.records[0]).id]);
 				expect(
 					(yield* run({
 						verb: 'upsert',
 						input: [{ id: '0199a000-0000-7000-8000-0000000000aa', note: 'x' }],
-						onConflict: 'update'
+						on_conflict: 'update'
 					})).outcome
-				).toMatchObject({ code: 'notFound', field: 'id' });
+				).toMatchObject({ code: 'not_found', field: 'id' });
 			}).pipe(Effect.provide(fixture))
 	);
 });
 
 describe('engine/write: model rules (rules 34, 40, 41)', () => {
 	it.effect(
-		'a create lands in initial; a state moves along `to` and only along the edges a grant lists; per-state edit locks administrators too; a delete is not locked',
+		'state transitions respect grants and explicit model locks protect administrators, children and deletion',
 		() =>
 			Effect.gen(function* () {
 				expect(
 					(yield* run({ verb: 'create', input: [{ title: 'x', status: 'submitted' }] })).outcome
-				).toMatchObject({ code: 'invalidInput', field: 'status' });
+				).toMatchObject({ code: 'invalid_input', field: 'status' });
 				const id = yield* order('desk', [{ label: 'a', amount: '1' }]);
 				expect(
 					(yield* run({
@@ -436,10 +482,12 @@ describe('engine/write: model rules (rules 34, 40, 41)', () => {
 					(yield* run({
 						model: 'lines',
 						verb: 'update',
-						input: [{ target: String(line!['id']), set: { amount: '2' } }]
+						input: [{ target: String(required(line)['id']), set: { amount: '2' } }]
 					})).outcome
 				).toMatchObject({ code: 'locked' });
 				expect(count.writes).toBe(2);
+				expect((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome).toMatchObject({ code: 'locked' });
+                committed((yield* run({ verb: 'update', input: [{ target: id, set: { status: 'draft' } }] })).outcome);
 				committed((yield* run({ verb: 'delete', input: [{ target: id }] })).outcome);
 			}).pipe(Effect.provide(fixture))
 	);
@@ -465,7 +513,7 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 							orders: grants('orders', { read: { default: { orders: [arm(notMine)] } } })
 						})
 					})).outcome
-				).toMatchObject({ code: 'notFound' });
+				).toMatchObject({ code: 'not_found' });
 				const calls: Invocation[] = [];
 				const deny = checking(() => ({ kind: 'deny', message: 'Not this order.' }), calls);
 				expect(
@@ -474,7 +522,7 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 							verb: 'update',
 							input: [{ target: id, set: { note: 'x' } }],
 							authority: authority({
-								orders: grants('orders', { update: [writeArm({ orders: ['title'] }, true)] })
+								orders: grants('orders', { update: [write_arm({ orders: ['title'] }, true)] })
 							})
 						},
 						deny
@@ -487,7 +535,7 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 							verb: 'update',
 							input: [{ target: id, set: { note: 'x' } }],
 							authority: authority({
-								orders: grants('orders', { update: [writeArm(orderColumns, true)] })
+								orders: grants('orders', { update: [write_arm(orderColumns, true)] })
 							})
 						},
 						deny
@@ -510,8 +558,8 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 			const calls: Invocation[] = [];
 			const upperOnly = checking((inv) => {
 				const rows = Schema.decodeUnknownSync(
-					Schema.Array(Schema.Struct({ title: Schema.String }))
-				)(inv.input);
+					Schema.Array(Schema.Struct({ after: Schema.Struct({ title: Schema.String }) }))
+				)(inv.input).map(({ after }) => after);
 				const row = rows.findIndex((r) => r.title !== r.title.toUpperCase());
 				return row < 0
 					? { kind: 'allow' }
@@ -519,7 +567,7 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 			}, calls);
 			const caller = authority({
 				orders: grants('orders', {
-					create: [writeArm(manifest.exposures['orders']?.create?.columns ?? {}, true)]
+					create: [write_arm(manifest.exposures['orders']?.create?.columns ?? {}, true)]
 				})
 			});
 			const batch = [
@@ -531,12 +579,14 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 			).toMatchObject({ kind: 'refused', code: 'refused', row: 1, field: 'title' });
 			expect(yield* rows(`select title from orders`)).toEqual([]);
 			expect(calls).toHaveLength(1);
-			expect(calls[0]).toMatchObject({ kind: 'policy', target: 'p.orders.create', input: batch });
+			// the check reads its rows across the guest wire: decimals travel tagged
+			const wired = batch.map(({ title, lines }) => ({ title, lines: lines.map(({ label, amount }) => ({ label, amount: { $dec: amount } })) }));
+			expect(calls[0]).toMatchObject({ kind: 'policy', target: 'p.orders.create', input: wired.map((set) => ({ before: null, set, after: { ...set, status: 'draft' } })) });
 			committed(
 				(yield* run(
 					{
 						verb: 'create',
-						input: [batch[0]!, { ...batch[1]!, title: 'CHAIR' }],
+						input: [required(batch[0]), { ...required(batch[1]), title: 'CHAIR' }],
 						authority: caller
 					},
 					upperOnly
@@ -552,18 +602,11 @@ describe('engine/write: the caller (rules 13, 19, 35)', () => {
 });
 
 const callbackRows = (invocation: Invocation) =>
-	invocation.kind === 'update'
-		? Schema.decodeUnknownSync(
-				Schema.Array(
-					Schema.Struct({
-						before: Schema.Record(Schema.String, Schema.Json),
-						set: Schema.Record(Schema.String, Schema.Json)
-					})
-				)
-			)(invocation.input).map((change) => change.set)
-		: Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)))(
-				invocation.input
-			);
+ Schema.decodeUnknownSync(Schema.Array(Schema.Struct({
+  before: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
+  set: Schema.Record(Schema.String, Schema.Json),
+  after: Schema.Record(Schema.String, Schema.Json)
+ })))(invocation.input).map(({ set }) => set);
 
 function callbackEngine(
 	body: (inv: Invocation) => GuestOutcome,
@@ -628,15 +671,14 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 				db = TenantDbService.typed({
 					read: inner.read,
 					write: (statement, lock) => (locks.push(lock), inner.write(statement, lock)),
-					transaction: (batch) => (locks.push(batch.lock), inner.transaction(batch)),
-					session: inner.session
+					transaction: (batch) => (locks.push(batch.lock), inner.transaction(batch))
 				});
 				const engine = {
 					...callbackEngine((inv) => ({ kind: 'ok', output: callbackRows(inv) })),
 					bridge: () => ({ cross: () => Effect.succeed([]), tables: () => ['tags'] })
 				};
 				committed((yield* run({ verb: 'create', input: [{ title: 'a' }] }, engine)).outcome);
-				expect(locks).toEqual([{ tables: ['orders', 'tags'], mode: 'SHARE ROW EXCLUSIVE' }]);
+				expect(locks).toEqual([{ tables: ['bolt_approvals', 'lines', 'orders', 'tags'], mode: 'SHARE ROW EXCLUSIVE' }]);
 			}).pipe(Effect.provide(fixture))
 	);
 
@@ -659,7 +701,7 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 						id: 'r1',
 						automation: 'remind',
 						input: { a: 1 },
-						dueAt: NOW,
+						due_at: NOW,
 						cause: 'act',
 						depth: 0,
 						key: 'once'
@@ -678,10 +720,10 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 					}
 				]
 			};
-			yield* executeCommit(db, manifest, catalogOf(manifest), x);
-			yield* executeCommit(db, manifest, catalogOf(manifest), {
+			yield* executeCommit(db, manifest, catalog_of(manifest), x);
+			yield* executeCommit(db, manifest, catalog_of(manifest), {
 				...x,
-				runs: [{ ...x.runs[0]!, id: 'r2' }]
+				runs: [{ ...required(x.runs[0]), id: 'r2' }]
 			});
 			// the mail notice queues its own delivery run, once, like the rest
 			expect(
@@ -697,7 +739,7 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 		'a create its check approves commits provisionally under the request the hook opens',
 		() =>
 			Effect.gen(function* () {
-				const requestId = '0199a000-0000-7000-8000-0000000000aa';
+				const request_id = '0199a000-0000-7000-8000-0000000000aa';
 				const snapshot: Extract<ApprovalSnapshot, { kind: 'steps' }> = {
 					kind: 'steps',
 					steps: [{ name: 'Finance', teams: ['finance'], users: [] }],
@@ -705,7 +747,7 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 				};
 				const routed = authority({
 					orders: grants('orders', {
-						create: [writeArm(manifest.exposures['orders']?.create?.columns ?? {}, true)]
+						create: [write_arm(manifest.exposures['orders']?.create?.columns ?? {}, true)]
 					})
 				});
 				const routes: Parameters<ApprovalHook['route']>[0][] = [];
@@ -713,7 +755,10 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 					route: (request) =>
 						Effect.sync(() => {
 							routes.push(request);
-							return { requestId, route: request.snapshot, pieces: () => {} };
+							return { request_id, route: request.snapshot, pieces: (c: Chain) => {
+				// the commit reads the opened request from the approval engine's `ap_state` piece; this seam persists none
+				c.cte('ap_state', "SELECT NULL::uuid AS id, '[]'::jsonb AS records WHERE false");
+			} };
 						}),
 					resubmit: () => Effect.die('This create does not resubmit an approval request')
 				};
@@ -733,7 +778,7 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 					{ verb: 'create', input: [{ title: 'held' }], authority: routed },
 					engine
 				)).outcome;
-				expect(o).toMatchObject({ kind: 'pendingApproval', requestId });
+				expect(o).toMatchObject({ kind: 'pending_approval', request_id });
 				const [created] = yield* rows(`select id::text from orders`);
 				expect(calls.map(({ kind, target }) => [kind, target])).toEqual([
 					['policy', 'p.orders.create']
@@ -750,7 +795,7 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 					records: [{ model: 'orders', id: created?.['id'], revision: 1 }]
 				});
 				expect(yield* rows(`select request::text from bolt_history`)).toEqual([
-					{ request: requestId }
+					{ request: request_id }
 				]);
 			}).pipe(Effect.provide(fixture))
 	);
@@ -770,7 +815,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 				};
 				// each model is read once, as it is restored, in relationship order (a pack is never in memory whole)
 				const reads: string[] = [];
-				const streamed = restoreSource(pack);
+				const streamed = restore_source(pack);
 				const batches = native.batches;
 				expect(
 					yield* seed(
@@ -790,7 +835,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 				expect(native.batches).toBeGreaterThan(batches);
 				expect(native.active).toBe(0);
 				expect(native.streams).toBe(0);
-				expect(yield* seed(manifest, db, restoreSource(pack), NOW)).toEqual({ inserted: 0 });
+				expect(yield* seed(manifest, db, restore_source(pack), NOW)).toEqual({ inserted: 0 });
 				expect(yield* one(`select status, total::text from orders`)).toEqual({
 					status: 'submitted',
 					total: '5'
@@ -800,10 +845,10 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 						seed(
 							manifest,
 							db,
-							restoreSource({
+							restore_source({
 								orders: [
 									{
-										...pack.orders[0]!,
+										...required(pack.orders[0]),
 										id: '0199a000-0000-4000-8000-000000000003',
 										title: 'x',
 										number: 'PO-2026-0001',
@@ -840,7 +885,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 					}))
 				};
 				const reads: (readonly [string, number])[] = [];
-				const streamed = restoreSource(pack);
+				const streamed = restore_source(pack);
 				const restore = yield* restorer(
 					manifest,
 					db,
@@ -891,10 +936,10 @@ describe('engine/write: references read scopes; mutations answer to their own ch
 				}));
 				const caller = authority({
 					lines: grants('lines', {
-						create: [writeArm({ lines: ['label', 'amount', 'order'] }, true)],
+						create: [write_arm({ lines: ['label', 'amount', 'order'] }, true)],
 						delete: [{ policy: 'p', check: true }]
 					}),
-					notes: grants('notes', { create: [writeArm({ notes: ['body', 'line'] })] })
+					notes: grants('notes', { create: [write_arm({ notes: ['body', 'line'] })] })
 				});
 				const reference = (body: string) =>
 					run(
@@ -947,7 +992,7 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 					owner.id,
 					owner.email
 				]),
-			catch: dbError
+			catch: db_error
 		});
 	});
 	const write = (model: string, verb: 'create' | 'update', input: readonly Json[]) =>
@@ -975,7 +1020,7 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 					(yield* rows(`select id::text, title from quotes`)).map((r) => [r['id'], r['title']])
 				);
 				expect(out.records.map((r) => byId.get(r.id))).toEqual(titles);
-				const q = out.records[0]!.id;
+				const q = required(out.records[0]).id;
 				const p = created(
 					yield* write('projects', 'create', [{ title: 'p', profile: { grade: 'a', weight: 2 } }])
 				);
@@ -996,19 +1041,19 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 					yield* write('activities', 'create', [
 						{ subject: 's', regarding: { model: 'cases', id: q } }
 					])
-				).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'regarding' });
+				).toMatchObject({ kind: 'refused', code: 'invalid_input', field: 'regarding' });
 				expect(
 					yield* write('activities', 'create', [
 						{ subject: 's', regarding: { model: 'projects', id: q } }
 					])
-				).toMatchObject({ kind: 'refused', code: 'notFound', field: 'regarding' });
+				).toMatchObject({ kind: 'refused', code: 'not_found', field: 'regarding' });
 				expect(
 					yield* write('projects', 'create', [{ title: 'p2', profile: { grade: 'a', extra: 1 } }])
-				).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'profile' });
+				).toMatchObject({ kind: 'refused', code: 'invalid_input', field: 'profile' });
 				expect(yield* write('projects', 'create', [{ title: 'p3', stock: -1 }])).toMatchObject({
 					kind: 'refused',
 					code: 'check',
-					message: 'Stock cannot go below zero.'
+					message: "the record breaks the rule 'stock_not_negative'"
 				});
 				expect(yield* write('projects', 'create', [{ title: 'p4', stock: 1001 }])).toMatchObject({
 					kind: 'refused',
@@ -1047,30 +1092,30 @@ it.live(
 						const [a] = yield* bridge.cross([
 							{
 								_tag: 'read',
-								read: yield* aggregate(catalogOf(callbacks), 'orders', { count: true }).pipe(
-									Effect.mapError(fromStore)
+								read: yield* aggregate(catalog_of(callbacks), 'orders', { count: true }).pipe(
+									Effect.mapError(from_store)
 								)
 							}
 						]);
 						if (a?.ok !== true)
 							return yield* Effect.fail(
-								BoltError.make('badAnswer', 'guest', 'The quota read failed.')
+								BoltError.make('bad_answer', 'guest', 'The quota read failed.')
 							);
 						const { count: n } = yield* Schema.decodeUnknownEffect(
 							Schema.Struct({ count: Schema.Number })
 						)(a.value).pipe(
-							Effect.mapError((error) => BoltError.make('badAnswer', 'guest', error.message, error))
+							Effect.mapError((error) => BoltError.make('bad_answer', 'guest', error.message, error))
 						);
 						if (racing) {
 							if (++arrived === 2) yield* Deferred.succeed(both, undefined);
 							yield* Deferred.await(both);
 						}
 						const outcome: GuestOutcome =
-							n >= 2 ? { kind: 'refused', message: 'quota' } : { kind: 'ok', output: inv.input };
+							n >= 2 ? { kind: 'refused', message: 'quota' } : { kind: 'ok', output: callbackRows(inv) };
 						return outcome;
 					}).pipe(Effect.orDie)
 			};
-			const e = { manifest: callbacks, db, guest, bridge: bridgeOn(db, callbacks) };
+			const e = { manifest: callbacks, db, guest, bridge: bridge_on(db, callbacks) };
 			const create = (title: string) =>
 				act(e, {
 					model: 'orders',

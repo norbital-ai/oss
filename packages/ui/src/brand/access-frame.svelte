@@ -17,9 +17,9 @@
 		environment,
 		home,
 		language,
-		onLanguage,
+		on_language,
 		dark,
-		onTheme,
+		on_theme,
 		labels,
 		wide = false,
 		children,
@@ -31,9 +31,9 @@
 		home?: string | undefined;
 		/** The next language's own name; the switch cycles to it. */
 		language: string;
-		onLanguage: () => void;
+		on_language: () => void;
 		dark: boolean;
-		onTheme: () => void;
+		on_theme: () => void;
 		labels: { switchLanguage: string; lightMode: string; darkMode: string; secureAccess: string };
 		wide?: boolean;
 		children: Snippet;
@@ -79,7 +79,7 @@
 				<Inline gap="xs" align="center">
 					<button
 						type="button"
-						onclick={onLanguage}
+						onclick={on_language}
 						aria-label={labels.switchLanguage}
 						class="min-h-11 rounded-sm px-2 py-1 text-tiny font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 					>
@@ -87,7 +87,7 @@
 					</button>
 					<button
 						type="button"
-						onclick={onTheme}
+						onclick={on_theme}
 						aria-label={dark ? labels.lightMode : labels.darkMode}
 						class="size-11 rounded-md text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
 					>

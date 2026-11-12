@@ -5,10 +5,10 @@
 // column is its field name, and each arm of a polymorphic relation is its own column `<fk>__<arm>`. A `period` is a
 // `daterange` (`[from, to+1)`) or `tstzrange`; a `point` is a Postgres `point` (x = lng, y = lat); a list field is
 // `text[]`; the lexical search document is the generated `bolt_search` tsvector ('simple').
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import * as ReadonlyArray from 'effect/Array';
 import { StoreError } from './errors.ts';
-import { labelPaths } from '@norbital-ai/std/label';
+import { label_paths } from '@norbital-ai/std/label';
 
 export type FieldInfo = {
 	name: string;
@@ -18,20 +18,20 @@ export type FieldInfo = {
 	many?: true;
 	email?: true;
 	phone?: true;
-	/** A source team handle (`format: 'team'`): `actor.teams` / `actor.teamTree` compare it. */
+	/** A source team handle (`format: 'team'`): `requestor.teams` / `requestor.team_tree` compare it. */
 	team?: true;
-	periodOf?: 'date' | 'instant';
+	period_of?: 'date' | 'instant';
 	metric?: 'l2' | 'cosine' | 'ip';
 	dim?: number;
 	/** Declared enum values or state names (membership); the model an id points at. */
 	values?: readonly string[];
-	/** A standalone writer enforces these state edges and edit locks over the stored pre-image. */
+	/** A standalone writer enforces these state transitions and entry stamps over the stored pre-image. */
 	state?: {
 		readonly initial: string;
 		readonly states: {
 			readonly [name: string]: {
 				readonly to?: readonly string[];
-				readonly edit?: 'all' | 'none' | readonly string[];
+				readonly stamp?: string;
 			};
 		};
 	};
@@ -63,9 +63,14 @@ export type ModelInfo = {
 	/** The primary key's columns: `id`, or the declared key fields. */
 	key: readonly string[];
 	search: readonly string[];
-	recordLabel?: { readonly fields: readonly string[] };
+	record_label?: {
+		readonly expression: string;
+		readonly paths: readonly string[];
+		readonly fields: readonly string[];
+		readonly stored: boolean;
+	};
 	/** A live polymorphic reference to another row's indexed identifier; never a copied label. */
-	labelLink?: LabelLink;
+	label_link?: LabelLink;
 	/** `search.semantic`: the platform embedding `bolt_embedding`, the model class that fills it, and its width. */
 	semantic?: { model: string; dim: number; fields: readonly string[] };
 	indexes: { readonly [name: string]: IndexInfo };
@@ -115,7 +120,7 @@ export const RECORD_LABEL_COLUMN = 'bolt_record_label';
 export const EMBEDDING_COLUMN = 'bolt_embedding',
 	SEMANTIC = '$semantic';
 /** The hidden vector column maintained by a host's custom search index. */
-export const indexColumn = (index: string): string => `$idx_${index}`;
+export const index_column = (index: string): string => `$idx_${index}`;
 /** The audit columns (`audit: true`), every write's revision first. */
 export const AUDIT_COLUMNS = [
 	'revision',
@@ -126,6 +131,7 @@ export const AUDIT_COLUMNS = [
 ] as const;
 /** The columns a reader always names: the key `id` and the audit columns. */
 export const SYSTEM_COLUMNS = ['id', ...AUDIT_COLUMNS] as const;
+export const SYSTEM_COLUMN_SET: ReadonlySet<string> = new Set(SYSTEM_COLUMNS);
 /** A field kind literal as the catalog reads it: a table's `FieldSpec` and the browser exposure's alike. */
 export type KindSpec = {
 	readonly kind: string;
@@ -145,7 +151,7 @@ export type KindSpec = {
 	readonly states?: {
 		readonly [s: string]: {
 			readonly to?: readonly string[];
-			readonly edit?: 'all' | 'none' | readonly string[];
+			readonly stamp?: string;
 		};
 	};
 	/** An object's fields, a json value's shape, an object's other keys: an inline value's structure. */
@@ -153,47 +159,59 @@ export type KindSpec = {
 	readonly shape?: KindSpec;
 	readonly rest?: KindSpec;
 };
-const INLINE = new Set(['json', 'list', 'object', 'record']);
+/** The exact projection the catalog consumes; other declaration metadata is intentionally not retained here. */
+export const KindSpec: Schema.Codec<KindSpec> = /* @__PURE__ */ (() => {
+	const Nested = Schema.suspend((): Schema.Codec<KindSpec> => KindSpec);
+	const Strings = Schema.Array(Schema.String);
+	return Schema.Struct({
+		kind: Schema.String,
+		optional: Schema.optionalKey(Schema.Boolean), to: Schema.optionalKey(Schema.Union([Schema.String, Strings])),
+		inverse: Schema.optionalKey(Schema.String), many: Schema.optionalKey(Schema.Boolean),
+		format: Schema.optionalKey(Schema.String), of: Schema.optionalKey(Schema.Unknown),
+		metric: Schema.optionalKey(Schema.Literals(['l2', 'cosine', 'ip'])), dim: Schema.optionalKey(Schema.Number),
+		pattern: Schema.optionalKey(Schema.String), values: Schema.optionalKey(Strings), initial: Schema.optionalKey(Schema.String),
+		states: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({
+			to: Schema.optionalKey(Strings), stamp: Schema.optionalKey(Schema.String)
+		}))),
+		fields: Schema.optionalKey(Schema.Record(Schema.String, Nested)),
+		shape: Schema.optionalKey(Nested), rest: Schema.optionalKey(Nested)
+	});
+})();
+const INLINE = new Set(['json', 'object', 'record']);
 /** What the catalog reads of a table: its fields and computed fields, its key and audit columns, and its search. */
-export type CatalogTable = {
-	readonly fields: { readonly [name: string]: KindSpec };
-	readonly recordLabel?: string | undefined;
-	readonly labelLink?: LabelLink | undefined;
-	readonly computed?: { readonly [name: string]: { readonly kind: string } } | undefined;
-	readonly key?: 'uuid' | 'text' | 'identity' | readonly [string, ...string[]] | undefined;
-	readonly audit?: true | undefined;
-	readonly through?:
-		| {
-				readonly [name: string]: {
-					readonly table: string;
-					readonly from: string;
-					readonly to: string;
-				};
-		  }
-		| undefined;
-	readonly search?:
-		| {
-				readonly text?: readonly string[] | undefined;
-				readonly indexes?: { readonly [name: string]: IndexInfo } | undefined;
-				readonly semantic?:
-					| {
-							readonly model: string;
-							readonly dim: number;
-							readonly fields?: readonly string[] | undefined;
-					  }
-					| undefined;
-		  }
-		| undefined;
-};
-/** What the catalog reads of a schema: its tables (each ref field a relation). */
-export type CatalogSchema = { readonly tables: { readonly [table: string]: CatalogTable } };
+const CatalogStrings = Schema.Array(Schema.String);
+const CatalogIndex = Schema.Struct({
+	dim: Schema.Number, metric: Schema.Literals(['l2', 'cosine', 'ip']),
+	field: Schema.optional(Schema.String), candidates: Schema.optional(Schema.Number),
+	rerank: Schema.optional(Schema.Literal(true))
+});
+/** What the catalog reads, independently of the rest of a native table declaration. */
+export const CatalogTable = Schema.Struct({
+	fields: Schema.Record(Schema.String, KindSpec),
+	record_label: Schema.optional(Schema.String),
+	label_link: Schema.optional(Schema.Struct({ model: Schema.String, record: Schema.String, targets: CatalogStrings })),
+	computed: Schema.optional(Schema.Record(Schema.String, Schema.Struct({ kind: Schema.String }))),
+	key: Schema.optional(Schema.Union([Schema.Literals(['uuid', 'text', 'identity']), Schema.NonEmptyArray(Schema.String)])),
+	audit: Schema.optional(Schema.Literal(true)),
+	through: Schema.optional(Schema.Record(Schema.String, Schema.Struct({ table: Schema.String, from: Schema.String, to: Schema.String }))),
+	search: Schema.optional(Schema.Struct({
+		text: Schema.optional(CatalogStrings),
+		indexes: Schema.optional(Schema.Record(Schema.String, CatalogIndex)),
+		semantic: Schema.optional(Schema.Struct({ model: Schema.String, dim: Schema.Number, fields: Schema.optional(CatalogStrings) }))
+	}))
+});
+export type CatalogTable = typeof CatalogTable.Type;
+/** The data the catalog consumes of a schema; unrelated storage metadata remains with its owner. */
+export const CatalogSchema = Schema.Struct({ tables: Schema.Record(Schema.String, CatalogTable) });
+export type CatalogSchema = typeof CatalogSchema.Type;
 /** What the catalog reads of a model: its read layers by path (the root's key is its name). */
-type LayerFields = { readonly [path: string]: { readonly fields: 'all' | readonly string[] } };
-/** A model's read outputs: `read` is its `default` output, `outputs` its named ones, each a layer map. */
-export type CatalogExposure = {
-	readonly read: LayerFields;
-	readonly outputs?: { readonly [output: string]: LayerFields };
-};
+const LayerFields = Schema.Record(Schema.String, Schema.Struct({ fields: Schema.Union([Schema.Literal('all'), CatalogStrings]) }));
+type LayerFields = typeof LayerFields.Type;
+/** A model's read outputs, each a layer map with the model name at its root. */
+export const CatalogExposure = Schema.Struct({ outputs: Schema.StructWithRest(Schema.Struct({ default: LayerFields }), [
+	Schema.Record(Schema.String, LayerFields)
+]) });
+export type CatalogExposure = typeof CatalogExposure.Type;
 /** The output a read names when it names none. */
 export const DEFAULT_OUTPUT = 'default';
 
@@ -204,7 +222,6 @@ const PG: { readonly [kind: string]: string } = {
 	currency: 'text',
 	int: 'int8',
 	count: 'int8',
-	duration: 'int8',
 	number: 'float8',
 	decimal: 'numeric',
 	money: 'numeric',
@@ -215,7 +232,6 @@ const PG: { readonly [kind: string]: string } = {
 	time: 'time',
 	id: 'uuid',
 	json: 'jsonb',
-	list: 'jsonb',
 	object: 'jsonb',
 	file: 'jsonb',
 	custom: 'jsonb',
@@ -224,26 +240,29 @@ const PG: { readonly [kind: string]: string } = {
 };
 
 /** A field of kind `k` as the compilers read it: its column, Postgres type and options. */
-export function fieldInfo(name: string, k: KindSpec, extra: Partial<FieldInfo> = {}): FieldInfo {
+export function field_info(name: string, k: KindSpec, extra: Partial<FieldInfo> = {}): FieldInfo {
 	const kind = k.kind === 'seq' ? (k.pattern === undefined ? 'int' : 'text') : k.kind;
+	const nativeMany = k.many === true && (kind === 'text' || kind === 'enum');
 	const pg =
-		kind === 'period'
-			? k.of === 'date'
-				? 'daterange'
-				: 'tstzrange'
-			: k.many
-				? 'text[]'
-				: (PG[kind] ?? 'text');
+		k.many === true && !nativeMany
+			? 'jsonb'
+			: kind === 'period'
+				? k.of === 'date'
+					? 'daterange'
+					: 'tstzrange'
+				: k.many
+					? 'text[]'
+					: (PG[kind] ?? 'text');
 	return {
 		name,
 		kind,
 		column: name,
 		pg,
-		...(k.many ? { many: true } : {}),
+		...(nativeMany ? { many: true } : {}),
 		...(k.format === 'email' ? { email: true } : {}),
 		...(k.format === 'phone' ? { phone: true } : {}),
 		...(k.format === 'team' ? { team: true } : {}),
-		...(kind === 'period' ? { periodOf: k.of === 'date' ? 'date' : 'instant' } : {}),
+		...(kind === 'period' ? { period_of: k.of === 'date' ? 'date' : 'instant' } : {}),
 		...(kind === 'vector'
 			? { metric: k.metric ?? 'l2', ...(k.dim === undefined ? {} : { dim: k.dim }) }
 			: {}),
@@ -257,26 +276,26 @@ export function fieldInfo(name: string, k: KindSpec, extra: Partial<FieldInfo> =
 			? { state: { initial: k.initial, states: k.states } }
 			: {}),
 		...(kind === 'id' && typeof k.of === 'string' ? { of: k.of } : {}),
-		...(INLINE.has(kind) ? { shape: k } : {}),
+		...(INLINE.has(kind) || (k.many === true && !nativeMany) ? { shape: k } : {}),
 		...extra
 	};
 }
 
 /** The Postgres type of a table's single key column, as an FK to it is typed. */
-export const keyPg = (spec: CatalogTable | undefined): string => {
+export const key_pg = (spec: CatalogTable | undefined): string => {
 	const k = spec?.key;
 	if (spec === undefined || k === 'text') return 'text';
 	if (k === undefined || k === 'uuid') return 'uuid';
 	if (k === 'identity') return 'int8';
 	const f = spec.fields[k[0]];
-	return f === undefined ? 'text' : fieldInfo(k[0], f).pg;
+	return f === undefined ? 'text' : field_info(k[0], f).pg;
 };
 
 /**
  * The query model of a schema. Pure: a `SchemaSpec` has every reference resolved, so a name here always names a table.
  * Without `exposures`, every table is exposed whole.
  */
-export function catalogOf(
+export function catalog_of(
 	schema: CatalogSchema,
 	exposures?: { readonly [model: string]: CatalogExposure }
 ): Catalog {
@@ -288,12 +307,12 @@ export function catalogOf(
 		const f = new Map<string, FieldInfo>();
 		// a declared key is fields of its own; else the key is an `id` column of the declared type
 		if (!ReadonlyArray.isArray<CatalogTable['key']>(spec.key))
-			f.set('id', { ...fieldInfo('id', { kind: 'id', of: name }), pg: keyPg(spec) });
+			f.set('id', { ...field_info('id', { kind: 'id', of: name }), pg: key_pg(spec) });
 		if (spec.audit === true)
 			for (const s of AUDIT_COLUMNS)
 				f.set(
 					s,
-					fieldInfo(
+					field_info(
 						s,
 						s === 'revision'
 							? { kind: 'int' }
@@ -304,16 +323,16 @@ export function catalogOf(
 					)
 				);
 		for (const [n, k] of Object.entries(spec.fields))
-			if (k.kind !== 'ref') f.set(n, fieldInfo(n, k));
+			if (k.kind !== 'ref' || k.many === true) f.set(n, field_info(n, k));
 		for (const [n, c] of Object.entries(spec.computed ?? {}))
-			f.set(n, fieldInfo(n, { kind: c.kind }, { computed: true }));
+			f.set(n, field_info(n, { kind: c.kind }, { computed: true }));
 		fields.set(name, f);
 		one.set(name, new Map());
 		many.set(name, new Map());
 	}
 	for (const [from, spec] of Object.entries(specs))
 		for (const [fk, rel] of Object.entries(spec.fields)) {
-			if (rel.kind !== 'ref' || rel.to === undefined) continue;
+			if (rel.kind !== 'ref' || rel.many === true || rel.to === undefined) continue;
 			const own = fields.get(from);
 			if (own === undefined) continue;
 			const targets = typeof rel.to === 'string' ? [rel.to] : [...rel.to];
@@ -321,13 +340,13 @@ export function catalogOf(
 				fk,
 				targets.length > 1
 					? { name: fk, kind: 'ref', column: fk, pg: 'uuid', arms: targets }
-					: { ...fieldInfo(fk, { kind: 'id', of: targets[0] }), pg: keyPg(specs[targets[0] ?? '']) }
+					: { ...field_info(fk, { kind: 'id', of: targets[0] }), pg: key_pg(specs[targets[0] ?? '']) }
 			);
 			if (targets.length > 1)
 				for (const t of targets)
 					own.set(`${fk}.${t}`, {
-						...fieldInfo(`${fk}.${t}`, { kind: 'id', of: t }),
-						pg: keyPg(specs[t]),
+						...field_info(`${fk}.${t}`, { kind: 'id', of: t }),
+						pg: key_pg(specs[t]),
 						column: `${fk}__${t}`
 					});
 			one.get(from)?.set(fk, { name: fk, targets });
@@ -349,6 +368,10 @@ export function catalogOf(
 		[...fields].map(([name, f]) => {
 			const spec = specs[name];
 			const semantic = spec?.search?.semantic;
+			const expression = spec?.record_label;
+			const paths = label_paths(expression);
+			const label_fields = [...new Set(paths.map((path) => path.split('.')[0] ?? path))];
+			const stored = !paths.some((path) => path.includes('.') && one.get(name)?.has(path.split('.')[0] ?? path));
 			return [
 				name,
 				{
@@ -360,23 +383,13 @@ export function catalogOf(
 					key: ReadonlyArray.isArray<CatalogTable['key']>(spec?.key) ? spec.key : ['id'],
 					search: [
 						...(spec?.search?.text ?? []),
-						// a relation label has no generated column: its target's label is read, not indexed here
-						...(spec?.recordLabel === undefined ||
-						labelPaths(spec.recordLabel).some((path) => path.includes('.'))
-							? []
-							: [RECORD_LABEL_COLUMN])
+						...(expression === undefined ? [] : [RECORD_LABEL_COLUMN])
 					],
-					...(spec?.labelLink === undefined ? {} : { labelLink: spec.labelLink }),
-					...(spec?.recordLabel === undefined
+					...(spec?.label_link === undefined ? {} : { label_link: spec.label_link }),
+					...(expression === undefined
 						? {}
 						: {
-								recordLabel: {
-									fields: [
-										...new Set(
-											labelPaths(spec.recordLabel).map((path) => path.split('.')[0] ?? path)
-										)
-									]
-								}
+								record_label: { expression, paths, fields: label_fields, stored }
 							}),
 					indexes: spec?.search?.indexes ?? {},
 					...(semantic === undefined
@@ -402,11 +415,12 @@ export function catalogOf(
 	}
 	for (const [root, spec] of Object.entries(exposures)) {
 		if (!byName.has(root)) continue;
-		const declared = levels(byName, root, spec.read);
+		const { default: defaultOutput, ...named } = spec.outputs;
+		const declared = levels(byName, root, defaultOutput);
 		if (declared === undefined) continue;
 		exposed.set(root, declared.root);
 		for (const [path, info] of declared.layers) layers.set(path, info);
-		for (const [name, read] of Object.entries(spec.outputs ?? {})) {
+		for (const [name, read] of Object.entries(named)) {
 			const output = levels(byName, root, read);
 			if (output !== undefined)
 				outputs.set(root, (outputs.get(root) ?? new Map()).set(name, output));
@@ -421,9 +435,10 @@ function levels(
 	read: LayerFields
 ): OutputInfo | undefined {
 	const out = new Map<string, ExposureInfo>();
-	const paths = Object.keys(read);
+	const declarations = Object.entries(read).sort(([a], [b]) => a.split('.').length - b.split('.').length);
+	const paths = declarations.map(([path]) => path);
 	// shortest first: a layer's model is its parent's relation target
-	for (const path of paths.sort((a, b) => a.split('.').length - b.split('.').length)) {
+	for (const [path, layer] of declarations) {
 		const at = path.lastIndexOf('.');
 		const parent = at < 0 ? undefined : out.get(path.slice(0, at));
 		const rel = path.slice(at + 1);
@@ -435,7 +450,7 @@ function levels(
 					: parent?.model.many.get(rel)?.child;
 		const model = name === undefined ? undefined : byName.get(name);
 		if (model === undefined || name === undefined || (at < 0 && path !== root)) continue;
-		const f = read[path]!.fields;
+		const f = layer.fields;
 		out.set(path, {
 			name,
 			path,
@@ -458,7 +473,7 @@ const viewed = new WeakMap<Catalog, Map<string, Catalog>>();
  * The catalog a read of `root`'s `output` compiles against: that output's root level and layers in place of the
  * `default` ones (every other root unchanged); an output `root` does not declare is `invalid`.
  */
-export function catalogFor(
+export function catalog_for(
 	cat: Catalog,
 	root: string,
 	output: string | undefined
@@ -483,8 +498,12 @@ export function catalogFor(
 		exposures: new Map(cat.exposures).set(root, info.root),
 		layers
 	};
-	if (!viewed.has(cat)) viewed.set(cat, new Map());
-	viewed.get(cat)!.set(key, view);
+	let views = viewed.get(cat);
+	if (views === undefined) {
+		views = new Map();
+		viewed.set(cat, views);
+	}
+	views.set(key, view);
 	return Effect.succeed(view);
 }
 
@@ -496,10 +515,10 @@ export function family(f: FieldInfo): string {
 }
 
 /** Quotes an identifier; every name reaching SQL has been checked against the catalog first. */
-export const q = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+export { q } from '@norbital-ai/std/sql';
 
 /** The model a read names; an unknown name is `invalid`. */
-export const exposureOf = (cat: Catalog, name: string): Effect.Effect<ExposureInfo, StoreError> => {
+export const exposure_of = (cat: Catalog, name: string): Effect.Effect<ExposureInfo, StoreError> => {
 	const c = cat.exposures.get(name);
 	return c === undefined
 		? Effect.fail(StoreError.of('invalid', 'decode', `unknown model '${name}'`))
@@ -507,27 +526,27 @@ export const exposureOf = (cat: Catalog, name: string): Effect.Effect<ExposureIn
 };
 
 /** Whether a reader may name `field` of model `c`: the key and audit columns always, else the read exposure. */
-export function exposedField(c: ExposureInfo, name: string): boolean {
-	if (SYSTEM_COLUMNS.some((column) => column === name)) return true;
+export function exposed_field(c: ExposureInfo, name: string): boolean {
+	if (SYSTEM_COLUMN_SET.has(name)) return true;
 	const base = name.includes('.') ? name.slice(0, name.indexOf('.')) : name;
 	return c.fields === 'all' ? c.model.fields.has(base) : c.fields.has(base);
 }
-export function exposedRelation(c: ExposureInfo, rel: string): boolean {
+export function exposed_relation(c: ExposureInfo, rel: string): boolean {
 	return c.relations === 'all'
 		? c.model.one.has(rel) || c.model.many.has(rel)
 		: c.relations.has(rel);
 }
 const HEAVY = new Set(['json', 'custom', 'file']);
 /** A scoped reader's default projection: a list leaves out `json`, `custom`, `file` values; a single record keeps them; no polymorphic arm pseudo-fields. */
-export function defaultFields(c: ExposureInfo, heavy = false): string[] {
+export function default_fields(c: ExposureInfo, heavy = false): string[] {
 	return [...c.model.fields.values()]
 		.filter(
-			(f) => !f.name.includes('.') && (heavy || !HEAVY.has(f.kind)) && exposedField(c, f.name)
+			(f) => !f.name.includes('.') && (heavy || !HEAVY.has(f.kind)) && exposed_field(c, f.name)
 		)
 		.map((f) => f.name);
 }
 /** An unscoped default row: stored fields and FKs plus the key and audit columns; no seq, roll-up or computed field. */
-export function storedFields(m: ModelInfo): string[] {
+export function stored_fields(m: ModelInfo): string[] {
 	return [...m.fields.values()]
 		.filter((f) => !f.name.includes('.') && !f.computed && !f.derived)
 		.map((f) => f.name);

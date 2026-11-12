@@ -1,173 +1,19 @@
 import { Effect, Schema } from 'effect';
-import type { Kind, OutputKind } from '@norbital-ai/std/kind';
-import type { Json } from '../decl/values.ts';
+import { KindSchema } from '@norbital-ai/std/kind';
+import type { WireRead } from './wire.ts';
 import type { ShellBoot } from '../shell/nav.ts';
+import { ReadCatalog } from './read-answer.ts';
+import { EngineActorSchema } from './schema.ts';
+import { OperationOutputs } from './output-contract.ts';
 
 const optionalString = Schema.optionalKey(Schema.String);
 const strings = Schema.Array(Schema.String);
 const trueKey = Schema.optionalKey(Schema.Literal(true));
-const common = {
-	optional: trueKey,
-	default: Schema.optionalKey(Schema.Json),
-	unique: trueKey,
-	label: optionalString,
-	help: optionalString,
-	hidden: trueKey
-};
-const range = { min: Schema.optionalKey(Schema.Number), max: Schema.optionalKey(Schema.Number) };
-const datePrecision = Schema.Literals(['year', 'month', 'week', 'day']);
-const precision = Schema.Literals(['year', 'month', 'week', 'day', 'hour', 'minute']);
 const predicate = Schema.Record(Schema.String, Schema.Json);
+const kind = KindSchema;
 const fields = () => Schema.Record(Schema.String, kind);
-const kind: Schema.Codec<Kind, Json> = Schema.suspend(() =>
-	Schema.Union([
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('text'),
-			format: Schema.optionalKey(
-				Schema.Literals(['email', 'phone', 'url', 'zone', 'markdown', 'cel', 'team'])
-			),
-			max: Schema.optionalKey(Schema.Number),
-			many: trueKey
-		}),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('int') }),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('number') }),
-		Schema.Struct({
-			...common,
-			...range,
-			kind: Schema.Literal('decimal'),
-			scale: Schema.Number,
-			precision: Schema.optionalKey(Schema.Number)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('money'),
-			currency: optionalString,
-			scale: Schema.optionalKey(Schema.Number)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('currency') }),
-		Schema.Struct({ ...common, kind: Schema.Literal('bool') }),
-		Schema.Struct({ ...common, kind: Schema.Literal('duration') }),
-		Schema.Struct({ ...common, kind: Schema.Literal('point') }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('date'),
-			precision: Schema.optionalKey(datePrecision)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('instant'),
-			precision: Schema.optionalKey(precision)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('time'),
-			precision: Schema.optionalKey(Schema.Literals(['hour', 'minute']))
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('period'),
-			of: Schema.Literal('date'),
-			precision: Schema.optionalKey(datePrecision)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('period'),
-			of: Schema.Literal('instant'),
-			precision: Schema.optionalKey(precision)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('enum'), values: strings, many: trueKey }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('state'),
-			initial: Schema.String,
-			states: Schema.Record(
-				Schema.String,
-				Schema.Struct({
-					to: Schema.optionalKey(strings),
-					edit: Schema.optionalKey(Schema.Union([Schema.Literals(['all', 'none']), strings]))
-				})
-			)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('seq'),
-			pattern: optionalString,
-			per: Schema.optionalKey(strings)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('sum'),
-			of: Schema.String,
-			where: Schema.optionalKey(predicate),
-			money: Schema.optionalKey(Schema.Struct({ currency: optionalString }))
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('count'),
-			of: Schema.String,
-			where: Schema.optionalKey(predicate)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('json'), shape: Schema.optionalKey(kind) }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('file'),
-			accept: strings,
-			max: Schema.String,
-			multiple: trueKey
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('vector'),
-			dim: Schema.Number,
-			metric: Schema.Literals(['l2', 'cosine', 'ip'])
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('custom'), of: Schema.String, many: trueKey }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('id'),
-			of: Schema.String,
-			where: Schema.optionalKey(predicate)
-		}),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('list'), of: kind }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('object'),
-			fields: fields(),
-			rest: Schema.optionalKey(kind)
-		}),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('union'),
-			by: Schema.String,
-			arms: Schema.Record(Schema.String, fields())
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('union'), of: Schema.Array(kind) }),
-		Schema.Struct({ ...common, kind: Schema.Literal('record'), of: kind })
-	])
-);
 /** Metadata codecs are shared by browser-catalog emission and public hydration. */
 export const FieldsSchema = fields();
-export const OutputKindSchema: Schema.Codec<OutputKind, Json> = Schema.suspend(() =>
-	Schema.Union([
-		kind,
-		Schema.Struct({ ...common, kind: Schema.Literal('row'), of: Schema.String }),
-		Schema.Struct({ ...common, ...range, kind: Schema.Literal('list'), of: OutputKindSchema }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('object'),
-			fields: Schema.Record(Schema.String, OutputKindSchema),
-			rest: Schema.optionalKey(OutputKindSchema)
-		}),
-		Schema.Struct({ ...common, kind: Schema.Literal('record'), of: OutputKindSchema }),
-		Schema.Struct({
-			...common,
-			kind: Schema.Literal('union'),
-			by: Schema.String,
-			arms: Schema.Record(Schema.String, Schema.Record(Schema.String, OutputKindSchema))
-		})
-	])
-);
 const SyncExposureSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('file'),
@@ -186,7 +32,7 @@ const childIdentity = { model: Schema.String, parent: Schema.String, owned: true
 const child = Schema.Struct({
 	...childIdentity,
 	create: Schema.optionalKey(
-		Schema.Struct({ columns: strings, filled: Schema.optionalKey(strings), proposalOnly: trueKey })
+		Schema.Struct({ columns: strings, filled: Schema.optionalKey(strings), proposal_only: trueKey })
 	),
 	update: Schema.optionalKey(Schema.Struct({ columns: strings })),
 	delete: trueKey,
@@ -205,18 +51,12 @@ const relation = {
 const exposure = {
 	label: strings,
 	record_label: optionalString,
-	labelPaths: Schema.optionalKey(strings),
+	label_paths: Schema.optionalKey(strings),
 	search: Schema.optionalKey(strings),
 	semantic: trueKey,
 	audit: Schema.optionalKey(Schema.Literal(false)),
 	indexes: Schema.optionalKey(
 		Schema.Record(Schema.String, Schema.Struct({ input: fields(), description: Schema.String }))
-	),
-	queries: Schema.optionalKey(
-		Schema.Record(
-			Schema.String,
-			Schema.Struct({ input: fields(), output: OutputKindSchema, description: Schema.String })
-		)
 	),
 	fields: fields(),
 	relations: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct(relation))),
@@ -228,13 +68,13 @@ const exposure = {
 		Schema.Struct({
 			columns: strings,
 			filled: Schema.optionalKey(strings),
-			proposalOnly: trueKey,
+			proposal_only: trueKey,
 			with: children
 		})
 	),
 	update: Schema.optionalKey(Schema.Struct({ columns: strings, with: children })),
-	readonlyFields: Schema.optionalKey(
-		Schema.Record(Schema.String, Schema.Literals(['syncOwned', 'ownedParent']))
+	readonly_fields: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Literals(['sync_owned', 'owned_parent']))
 	),
 	description: optionalString,
 	delete: trueKey,
@@ -253,11 +93,12 @@ export const ModelExposureSchema = Schema.Struct({
 		)
 	),
 	layers: Schema.optionalKey(strings),
-	locked: Schema.optionalKey(predicate)
+	locks: Schema.optionalKey(Schema.Array(Schema.Struct({ where: predicate, except: Schema.optionalKey(strings) })))
 });
 /** A declared automation the caller may start (ui's `AutomationExposure`). */
 export const AutomationExposureSchema = Schema.Struct({
 	input: fields(),
+	mode: Schema.optionalKey(Schema.Literals(['job', 'call'])),
 	description: optionalString
 });
 
@@ -271,25 +112,33 @@ export const PublicBoot = Schema.Struct({
 		handle: optionalString,
 		currency: optionalString
 	}),
-	actor: Schema.Json,
+	actor: Schema.NullOr(EngineActorSchema),
+	location: Schema.Struct({ pathname: Schema.String, search: Schema.String }),
 	base: Schema.String,
-	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, siteKey: optionalString })),
+	visitor: Schema.NullOr(Schema.Struct({ app: Schema.String, site_key: optionalString })),
 	kiosk: Schema.NullOr(Schema.String),
 	contract: Schema.String,
 	describe: Schema.Boolean,
 	messages: Schema.Record(Schema.String, Schema.String),
 	catalog: PublicCatalog,
-	automations: Schema.Record(Schema.String, AutomationExposureSchema)
+	read_catalog: ReadCatalog,
+	automations: Schema.Record(Schema.String, AutomationExposureSchema),
+	operation_outputs: OperationOutputs
 });
 export interface PublicBoot extends Schema.Schema.Type<typeof PublicBoot> {}
 
-/** The same validated envelope is written by SSR and read before browser hydration. */
+/** A page query and its first streamed registration use the same request key. */
+export const public_read_key = (read: WireRead) => JSON.stringify(read);
+export const PublicReads = Schema.Record(Schema.String, Schema.Json);
+export type PublicReads = typeof PublicReads.Type;
+
+/** The request-scoped boot and initial reads shared by SSR and browser hydration. */
 export const PublicHydration = Schema.Struct({
 	route: Schema.String,
 	release: Schema.String,
 	locale: Schema.String,
 	boot: PublicBoot,
-	data: Schema.Json
+	reads: PublicReads
 });
 export interface PublicHydration extends Schema.Schema.Type<typeof PublicHydration> {}
 
@@ -300,6 +149,7 @@ export const toPublicBoot = (
 	boot: ShellBoot,
 	options: {
 		readonly base: string;
+		readonly location: PublicBoot['location'];
 		readonly kiosk: string | null;
 		readonly messages?: Readonly<Record<string, string>>;
 		readonly describe?: boolean;
@@ -316,14 +166,17 @@ export const toPublicBoot = (
 			...(options.currency === undefined ? {} : { currency: options.currency })
 		},
 		actor: boot.actor,
+		location: options.location,
 		base: options.base,
 		visitor: boot.visitor,
 		kiosk: options.kiosk,
 		contract: boot.contract,
-		describe: options.describe ?? (boot.visitor === null && boot.aiUnconfigured !== true),
+		describe: options.describe ?? (boot.visitor === null && boot.ai_unconfigured !== true),
 		messages: options.messages ?? {},
 		catalog: boot.catalog,
-		automations: boot.automations
+		read_catalog: boot.read_catalog,
+		automations: boot.automations,
+		operation_outputs: boot.operation_outputs
 	});
 
 export class PublicHydrationFailure extends Schema.TaggedError<PublicHydrationFailure>()(
@@ -333,10 +186,9 @@ export class PublicHydrationFailure extends Schema.TaggedError<PublicHydrationFa
 	}
 ) {}
 
-/** Route, release and locale must agree before any data or tenant component reaches hydration. */
-export const decodePublicHydration = <D>(
+/** Route, release and locale must agree before hydration. */
+export const decodePublicHydration = (
 	text: string,
-	codec: Schema.Codec<D, Json>,
 	expected: { readonly route: string; readonly release: string }
 ) =>
 	Effect.gen(function* () {
@@ -351,6 +203,5 @@ export const decodePublicHydration = <D>(
 			return yield* new PublicHydrationFailure({
 				reason: 'Public page route, release or locale changed before hydration.'
 			});
-		const data = yield* Schema.decodeUnknownEffect(codec)(envelope.data);
-		return { data, boot: envelope.boot };
+		return { reads: envelope.reads, boot: envelope.boot };
 	});

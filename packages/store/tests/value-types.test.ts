@@ -1,16 +1,8 @@
 import { it } from '@effect/vitest';
 import { expectTypeOf } from 'vitest';
-import {
-	schema,
-	table,
-	type Insert,
-	type Json,
-	type Patch,
-	type PlainTime,
-	type Row,
-	type Upsert,
-	type ValueOf
-} from '../src/index.ts';
+import { schema, table, type Json, type Row } from '../src/index.ts';
+import type { Insert, Patch, Upsert, ValueOf } from '../src/types.ts';
+import type { PlainTime } from '../src/values.ts';
 
 it('keeps decoded times string-compatible while retaining their brand', () => {
 	expectTypeOf<ValueOf<{ kind: 'time' }>>().toEqualTypeOf<PlainTime>();
@@ -60,8 +52,8 @@ it('accepts decoder literals in nested atomic patches, appends and removals', ()
 						nested: { kind: 'object', fields: { at: { kind: 'instant' } } }
 					}
 				},
-				amounts: { kind: 'list', of: { kind: 'decimal', scale: 2 } },
-				days: { kind: 'list', of: { kind: 'date' } }
+				amounts: { kind: 'decimal', scale: 2, many: true },
+				days: { kind: 'date', many: true }
 			}
 		})
 	});

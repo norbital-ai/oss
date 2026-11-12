@@ -1,25 +1,24 @@
-// The shell's browser half (§3.5, §5.10): `$bolt` as pages see it (the data client plus `href` and `agent`), the
+// The shell's browser half (§3.5, §5.10): the page context (the data client plus `href` and `agent`), the
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
-// needs one. The generated `$bolt` module re-exports `bolt` (below) with the ui edge (`run`, `fork`, `attach`).
-import { Clock, Context, Effect, Equal, Layer, Option, Queue, Schema, Stream } from 'effect';
-import { encodeWire, type Wired } from '@norbital-ai/std/wire';
+// needs one.
+import { Clock, Context, Effect, Layer, Option, Queue, Schema, Stream } from 'effect';
+import { encode_wire, type Wired } from '@norbital-ai/std/wire';
+import { equal_json } from '@norbital-ai/std/json';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { ModelName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
-import { createBolt, type BoltConfig } from '../page/bolt.ts';
-import { fileRef } from '../page/file-ref.ts';
-import { toast } from '@norbital-ai/ui';
+import { create_bolt, page_live_mode, type BoltConfig } from '../page/bolt.ts';
+import { file_ref } from '../page/file-ref.ts';
+import { toast, type UiContext } from '@norbital-ai/ui';
 import { run } from '@norbital-ai/ui/effect';
 import type { ShellMountConfig } from './mount.ts';
-import { integrationClients, integrationOffers } from '../page/integrations.ts';
-import type { IntegrationSetupEntry } from '../page/integration.ts';
-import { resolveDevice, type DeviceApi } from '../page/device.ts';
+import { integration_clients, integration_offers } from '../page/integrations.ts';
+import type { IntegrationSetupEntry } from './integration/setup.ts';
+import { resolve_device, type DeviceApi } from '../page/device.ts';
 import type { ActOutcome } from '../engine/contracts.ts';
-import type { RunView } from '../engine/runs/index.ts';
 import { BOLT, HEADERS, PATHS, RATE_LIMITED, uuidv7, type PushBody } from '../protocol/wire.ts';
 import {
 	AgentModels,
-	InboxAnswer,
 	InstanceMessage,
 	InstanceSyncHealth,
 	SyncReplayAnswer,
@@ -29,15 +28,15 @@ import {
 	LogRowAnswer,
 	OlderPage,
 	RunDetailAnswer,
+	RunLogAnswer,
+	RunsReadAnswer,
 	RunViewAnswer,
 	SettingsAnswer,
 	ShellBootAnswer,
 	ShellError,
 	ShellWorkspace,
 	SignInMethodsAnswer,
-	StudioBuildAnswer,
 	StudioFileAnswer,
-	StudioUsageAnswer,
 	StudioInspectionAnswer,
 	StudioViewAnswer,
 	Transcript,
@@ -45,7 +44,7 @@ import {
 	type ShellApi
 } from './api-types.ts';
 import { browserTransport } from '../protocol/client.ts';
-import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
+import { ProtocolFailed, TransportFailed } from '../decl/errors/browser.ts';
 import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
 import { AuditPage, AuditRecord } from '../protocol/audit.ts';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
@@ -73,12 +72,16 @@ const requestFailure = (status: number): ShellError =>
 	});
 
 /** Every shell operation returns its value or fails with the route's typed refusal. */
-export function shellApi(
+export function shell_api(
 	f: typeof fetch = (input, init) => fetch(input, init),
-	options: { readonly base?: string } = {}
+	options: {
+		readonly base?: string;
+		/** Refresh the owning snapshot client after a successful native mutation. */
+		readonly after_mutation?: () => Effect.Effect<void, { readonly message: string }>;
+	} = {}
 ): ShellApi {
 	let contract: string | undefined;
-	const instances = integrationClients({ base: based(`${BOLT}/integrations/`), fetch: f });
+	const instances = integration_clients({ base: based(`${BOLT}/integrations/`), fetch: f });
 	const transport = browserTransport({ ...options, fetch: f });
 	const transportError = (error: ProtocolFailed | TransportFailed) =>
 		error instanceof TransportFailed && error.status === 0
@@ -103,8 +106,8 @@ export function shellApi(
 		const refused = Schema.decodeUnknownOption(failureSchema)(body);
 		return Option.isNone(refused) || (status >= 500 && refused.value.error.code === 'internal')
 			? requestFailure(status)
-			: refused.value.error.code === 'rateLimited'
-				? new ShellError({ code: 'rateLimited', message: RATE_LIMITED, status })
+			: refused.value.error.code === 'rate_limited'
+				? new ShellError({ code: 'rate_limited', message: RATE_LIMITED, status })
 				: new ShellError({ ...refused.value.error, status });
 	};
 	/** A route's `{ value }` (`null` on a 204), decoded once by its answer's Schema. */
@@ -148,7 +151,7 @@ export function shellApi(
 				.request(
 					'POST',
 					based(PATHS.act),
-					{ callable, input, issuedAt: new Date(now).toISOString() },
+					{ callable, input, issued_at: new Date(now).toISOString() },
 					{
 						[HEADERS.key]: uuidv7(),
 						...(contract === undefined ? {} : { [HEADERS.contract]: contract })
@@ -158,7 +161,7 @@ export function shellApi(
 			const refusal = Schema.decodeUnknownOption(WireError)(response.body);
 			if (Option.isSome(refusal))
 				return yield* Effect.fail(wireError(response.body, response.status));
-			return (yield* Schema.decodeUnknownEffect(ActReply)(response.body).pipe(
+			const reply = yield* Schema.decodeUnknownEffect(ActReply)(response.body).pipe(
 				Effect.mapError(
 					() =>
 						new ShellError({
@@ -167,7 +170,11 @@ export function shellApi(
 							status: response.status
 						})
 				)
-			)).outcome;
+			);
+			// A failed refresh is already delivered to readers; the acknowledged mutation must remain successful.
+			if ((reply.outcome.kind === 'committed' || reply.outcome.kind === 'pending_approval' || reply.outcome.kind === 'running') && options.after_mutation !== undefined)
+				yield* options.after_mutation().pipe(Effect.ignore);
+			return reply.outcome;
 		});
 	return {
 		boot: (app?: string, kiosk?: string) =>
@@ -185,18 +192,17 @@ export function shellApi(
 				)
 			),
 		methods: () => call(SignInMethodsAnswer, 'GET', PATHS.session.methods),
-		sendCode: (address: string, via: 'sms' | 'whatsapp' = 'sms') =>
+		send_code: (address: string, via: 'sms' | 'whatsapp' = 'sms') =>
 			done('POST', PATHS.session.code, { address, via }),
 		verify: (address: string, code: string) =>
 			call(VerifiedAnswer, 'POST', PATHS.session.verify, { address, code }),
-		signOut: () => done('POST', PATHS.session.signout),
+		sign_out: () => done('POST', PATHS.session.signout),
 		invitation: (id: string) =>
 			call(Invitation, 'GET', `${PATHS.session.invitation}/${encodeURIComponent(id)}`),
 		accept: (id: string) => done('POST', PATHS.session.invitation, { id }),
-		inbox: () => call(InboxAnswer, 'GET', `${SHELL}/inbox`),
-		markNoticesRead: (ids: readonly string[]) =>
-			act('sys_notification.markRead', { ids: [...ids] }), // L-BOLT-354
-		markAllNoticesRead: () => act('sys_notification.markRead', { all: true }),
+		mark_notices_read: (ids: readonly string[]) =>
+			act('sys_notification.mark_read', { ids: [...ids] }), // L-BOLT-354
+		mark_all_notices_read: () => act('sys_notification.mark_read', { all: true }),
 		runs: (o: { automation?: string; limit?: number } = {}) =>
 			call(
 				Schema.Array(RunViewAnswer),
@@ -212,17 +218,18 @@ export function shellApi(
 				}`
 			),
 		run: (id: string) => call(RunDetailAnswer, 'GET', `${SHELL}/runs${q('id', id)}`),
-		stopRun: (id: string) => call(RunViewAnswer, 'POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
+		run_log: (id: string, access: string, after?: string) => call(RunLogAnswer, 'GET', `${SHELL}/runs/log?${new URLSearchParams({ id, access, ...(after === undefined ? {} : { after }) })}`),
+		stop_run: (id: string) => call(RunViewAnswer, 'POST', `${SHELL}/runs/stop`, { id }), // hook:runtime
 		settings: () => call(SettingsAnswer, 'GET', `${SHELL}/settings`),
-		settingsOp: (op: string, input: Json) =>
+		settings_op: (op: string, input: Json) =>
 			call(Schema.Json, 'POST', `${SHELL}/settings`, { op, input }),
 		/** An integration instance's host verbs (`/__bolt/integrations/<instance>/…`); the host authorizes "may update this row". */
 		integration: instances,
-		integrationOffers: () => integrationOffers({ base: based(`${BOLT}/integrations/`), fetch: f }),
+		integration_offers: () => integration_offers({ base: based(`${BOLT}/integrations/`), fetch: f }),
 		/** L-COL-199: the workspace's logo (`null`, an `https:` URL or a `data:image/…` URL), an administrator's. */
 		organization: (logo: string | null) => done('POST', `${SHELL}/organization`, { logo }),
 		/** An instance's raw messages, both directions, newest first (an administrator's; the instance's Messages tab). */
-		instanceMessages: (instance: string, before?: string) =>
+		instance_messages: (instance: string, before?: string) =>
 			call(
 				Schema.Array(InstanceMessage),
 				'GET',
@@ -230,24 +237,24 @@ export function shellApi(
 					before === undefined ? { instance } : { instance, before }
 				)}`
 			),
-		instanceSyncHealth: (instance: string) =>
+		instance_sync_health: (instance: string) =>
 			call(
 				InstanceSyncHealth,
 				'GET',
 				`${SHELL}/instance-sync-health?${new URLSearchParams({ instance })}`
 			),
-		replayInstanceSync: (instance: string, ids?: readonly string[]) =>
+		replay_instance_sync: (instance: string, ids?: readonly string[]) =>
 			call(SyncReplayAnswer, 'POST', `${SHELL}/instance-sync-replay`, {
 				instance,
 				...(ids === undefined ? {} : { ids: [...ids] })
 			}),
-		instanceDeadLetters: (instance: string) =>
+		instance_sync_dead_letters: (instance: string) =>
 			call(
 				Schema.Array(SyncDeadLetter),
 				'GET',
 				`${SHELL}/instance-sync-dead-letters?${new URLSearchParams({ instance })}`
 			),
-		retireInstanceSync: (instance: string, id: string) =>
+		retire_instance_sync: (instance: string, id: string) =>
 			call(SyncRetireAnswer, 'POST', `${SHELL}/instance-sync-retire`, { instance, id }),
 		logs: (x: import('../engine/contracts.ts').LogQuery) =>
 			call(
@@ -267,22 +274,19 @@ export function shellApi(
 					}).filter((e): e is [string, string] => e[1] !== undefined && e[1] !== '')
 				)}`
 			),
-		audit: (query) => call(AuditPage, 'POST', `${SHELL}/audit/query`, encodeWire(query)),
-		auditDetail: (id) =>
+		audit: (query) => call(AuditPage, 'POST', `${SHELL}/audit/query`, encode_wire(query)),
+		audit_detail: (id) =>
 			call(Schema.NullOr(AuditRecord), 'GET', `${SHELL}/audit/detail${q('id', id)}`),
 		studio: () => call(StudioViewAnswer, 'GET', `${SHELL}/studio`),
-		studioRun: (op: import('./studio/model.ts').StudioOp) =>
+		studio_run: (op: import('./studio/model.ts').StudioOp) =>
 			call(StudioViewAnswer, 'POST', `${SHELL}/studio`, { op }),
-		studioFile: (commit: string, path: string) =>
+		studio_file: (commit: string, path: string) =>
 			call(
 				StudioFileAnswer,
 				'GET',
 				`${SHELL}/studio/file?${new URLSearchParams({ commit, path })}`
 			),
-		studioBuild: (commit: string) =>
-			call(StudioBuildAnswer, 'GET', `${SHELL}/studio/build?${new URLSearchParams({ commit })}`),
-		studioUsage: () => call(StudioUsageAnswer, 'GET', `${SHELL}/studio/usage`),
-		studioInspect: (input) =>
+		studio_inspect: (input) =>
 			call(
 				StudioInspectionAnswer,
 				'GET',
@@ -316,21 +320,23 @@ export function shellApi(
 				conversation: string,
 				text: string,
 				now?: boolean,
-				attachments: readonly import('../decl/runtime/integration.ts').Attachment[] = [],
+				attachments: readonly { readonly id: string }[] = [],
 				mode?: 'plan' | 'compact',
-				schedule?: string
+				schedule?: string,
+				question?: string
 			) =>
 				act('sys_message.post', {
 					conversation,
 					text,
+					...(question === undefined ? {} : { question }),
 					...(now === true ? { now } : {}),
 					...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
 					...(mode === undefined ? {} : { mode }),
 					...(schedule === undefined ? {} : { schedule })
 				}),
-			pageResult: (message: string, result: PageResult) =>
-				act('sys_message.pageResult', { message, result }),
-			claimPageAction: (message: string) => act('sys_message.claimPageAction', { message }),
+			page_result: (message: string, result: PageResult) =>
+				act('sys_message.page_result', { message, result }),
+			claim_page_action: (message: string) => act('sys_message.claim_page_action', { message }),
 			/** hook:attachments — one panel attachment to `/__bolt/files/sys_conversation.inputs`: its `FileRef`, or the refusal. */
 			upload: (file: File) =>
 				transport
@@ -352,7 +358,7 @@ export function shellApi(
 									bytes: Schema.Number
 								})
 							)(response.body).pipe(
-								Effect.map((file) => ({ ...file, id: fileRef(file).id })),
+								Effect.map((file) => ({ ...file, id: file_ref(file).id })),
 								Effect.mapError(
 									() =>
 										new ShellError({
@@ -364,23 +370,24 @@ export function shellApi(
 							);
 						})
 					),
-			respondNow: (conversation: string) => act('sys_conversation.respondNow', { conversation }), // hook:triage
+			respond_now: (conversation: string) => act('sys_conversation.respond_now', { conversation }), // hook:triage
 			confirm: (message: string, approve: boolean) =>
 				act('sys_message.confirm', { message, approve }),
 			// hook:agent-ui — §5.9's remaining generated actions
-			setAgent: (conversation: string, agent: string) =>
-				act('sys_conversation.setAgent', { conversation, agent }),
+			set_agent: (conversation: string, agent: string) =>
+				act('sys_conversation.set_agent', { conversation, agent }),
 			file: (message: string, about: { model: string; id: string } | null) =>
 				act('sys_message.file', { message, about }),
 			stop: (conversation: string) => act('sys_conversation.stop', { conversation }),
-			setModel: (conversation: string, model: string) =>
-				act('sys_conversation.setModel', { conversation, model }),
-			revise: (message: string, text: string) => act('sys_message.revise', { message, text }),
+			set_model: (conversation: string, model: string) =>
+				act('sys_conversation.set_model', { conversation, model }),
+			revise: (message: string, text: string, attachments?: readonly Json[]) => act('sys_message.revise', { message, text, ...(attachments === undefined ? {} : { attachments }) }),
+			restart: (message: string) => act('sys_message.restart', { message }),
 			dequeue: (message: string) => act('sys_message.dequeue', { message }),
 			reorder: (conversation: string, messages: readonly string[]) =>
 				act('sys_message.reorder', { conversation, messages: [...messages] }),
-			executePlan: (conversation: string) => act('sys_message.executePlan', { conversation }),
-			discardPlan: (conversation: string) => act('sys_message.discardPlan', { conversation }),
+			execute_plan: (conversation: string) => act('sys_message.execute_plan', { conversation }),
+			discard_plan: (conversation: string) => act('sys_message.discard_plan', { conversation }),
 			resume: (conversation: string) => act('sys_conversation.resume', { conversation }),
 			transcript: (conversation: string) =>
 				call(Transcript, 'GET', `${PATHS.agent}${q('conversation', conversation)}`),
@@ -399,7 +406,7 @@ export function shellApi(
  * Turnstile tokens are single-use (GAPS r5 11): a request that needs one waits for the next token, spends it and
  * asks the widget for another. `put` is the widget's callback; `reset` re-arms the widget.
  */
-export const challengeQueue = (reset: () => void = () => {}) =>
+export const challenge_queue = (reset: () => void = () => {}) =>
 	Effect.gen(function* () {
 		const tokens = yield* Queue.unbounded<string>();
 		return {
@@ -412,10 +419,19 @@ export const challengeQueue = (reset: () => void = () => {}) =>
 			}
 		};
 	});
-export type ChallengeQueue = Effect.Success<ReturnType<typeof challengeQueue>>;
+export type ChallengeQueue = Effect.Success<ReturnType<typeof challenge_queue>>;
+declare global {
+	interface Window {
+		/** Cloudflare's Turnstile API, once its script has loaded. */
+		turnstile?: {
+			render(el: HTMLElement, o: { sitekey: string; callback(token: string): void }): string;
+			reset(id: string): void;
+		};
+	}
+}
 
 /** A kiosk page's fetch: every `/__bolt` request names the kiosk, whose assigned policies it runs as. */
-export function kioskFetch(
+export function kiosk_fetch(
 	kiosk: () => string | null,
 	f: typeof fetch = (i, o) => fetch(i, o)
 ): typeof fetch {
@@ -431,7 +447,7 @@ export function kioskFetch(
 }
 
 /** A visitor page's fetch: every `/__bolt` request names the app; an upload and a final act carry a fresh token. */
-export function visitorFetch(
+export function visitor_fetch(
 	app: string,
 	challenge: ChallengeQueue | null,
 	f: typeof fetch = (i, o) => fetch(i, o)
@@ -462,7 +478,7 @@ export type AgentRequest = {
 	conversation?: string | null;
 };
 /** The agent panel's open state; the shell renders the panel, the agent area its conversation. */
-export function agentPanel() {
+export function agent_panel() {
 	let state: AgentRequest | null = null;
 	const readers = new Set<(s: AgentRequest | null) => void>();
 	const set = (s: AgentRequest | null) => {
@@ -497,7 +513,7 @@ type ViewCommon<F> = {
 	row?: { readonly [field: string]: import('@norbital-ai/std/kind').Value };
 	kind?: F extends CustomFieldName ? CustomShape<F> : InputKind;
 	id?: string;
-	address?: { value: string | null; onChange?(next: string | null): void };
+	address?: { value: string | null; on_change?(next: string | null): void };
 };
 /**
  * §3.2 role 5: what `+renderer.svelte` receives, `{ view: CustomFieldView<'<f>'> }`, a workspace's and a built-in's
@@ -511,33 +527,19 @@ export type CustomFieldView<F extends string = string> =
 			mode: 'edit';
 			disabled: boolean;
 			error?: string;
-			onChange(next: CustomValue<F> | null): void;
+			on_change(next: CustomValue<F> | null): void;
 	  });
 
-/**
- * An engine whose responses never stream (an agent's light browser) installs `window.boltLivePoll`, milliseconds: its
- * current reads are read again on that interval instead of streamed, or no live read would ever show.
- */
-const livePoll = () => {
-	if (typeof window === 'undefined') return undefined;
-	const descriptor: TypedPropertyDescriptor<unknown> | undefined = Object.getOwnPropertyDescriptor(
-		window,
-		'boltLivePoll'
-	);
-	const value = descriptor?.value;
-	return typeof value === 'number' && value > 0 ? (`${value} millis` as const) : undefined;
-};
-
-/** `$bolt` (§3.5): the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
-export function shellBolt(
+/** The page context (§3.5): the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
+export function shell_bolt(
 	boot: ShellBoot,
 	options: {
 		messages?: BoltConfig['messages'];
-		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry };
+		integration_setups?: { readonly [integration: string]: IntegrationSetupEntry };
 		challenge?: ChallengeQueue;
-		agent?: ReturnType<typeof agentPanel>;
+		agent?: ReturnType<typeof agent_panel>;
 		fetch?: typeof fetch;
-		openStream?: BoltConfig['openStream'];
+		open_stream?: BoltConfig['open_stream'];
 		models?: () => readonly string[];
 		device?: DeviceApi;
 		/** A kiosk page's client names its kiosk on every request (header) and stream (query). */
@@ -547,30 +549,29 @@ export function shellBolt(
 	return Effect.gen(function* () {
 		const visitor = boot.visitor;
 		const scoped =
-			options.kiosk === undefined ? options.fetch : kioskFetch(options.kiosk, options.fetch);
-		// a member page's stream is shared with the browser's other tabs (createBolt's default); a kiosk or visitor page,
+			options.kiosk === undefined ? options.fetch : kiosk_fetch(options.kiosk, options.fetch);
+		// a member page's stream is shared with the browser's other tabs (create_bolt's default); a kiosk or visitor page,
 		// whose stream answers another audience, opens its own (a kiosk boots again when it changes)
 		const own = (u: string) =>
-			options.openStream?.(u) ?? new EventSource(u, { withCredentials: true });
+			options.open_stream?.(u) ?? new EventSource(u, { withCredentials: true });
 		const kiosk = options.kiosk?.() ?? null;
-		const openStream =
+		const open_stream =
 			kiosk !== null
 				? (url: string) =>
 						own(`${url}${url.includes('?') ? '&' : '?'}kiosk=${encodeURIComponent(kiosk)}`)
 				: visitor !== null
 					? own
-					: options.openStream;
+					: options.open_stream;
 		const f =
 			visitor === null
 				? scoped
-				: visitorFetch(
+				: visitor_fetch(
 						visitor.app,
-						visitor.siteKey === undefined ? null : (options.challenge ?? null),
+						visitor.site_key === undefined ? null : (options.challenge ?? null),
 						scoped
 					);
-		const poll = livePoll();
-		const client = yield* createBolt({
-			onNotice: (notice) => {
+		const client = yield* create_bolt({
+			on_notice: (notice) => {
 				if (typeof notice['title'] === 'string')
 					toast.info(
 						notice['title'],
@@ -582,32 +583,40 @@ export function shellBolt(
 			locale: boot.workspace.locale,
 			tz: boot.workspace.tz,
 			catalog: boot.catalog,
+			read_catalog: boot.read_catalog,
+			operation_outputs: boot.operation_outputs,
 			/* hook:query (bolt.decode) */ describe:
-				boot.visitor === null && boot.aiUnconfigured !== true,
+				boot.visitor === null && boot.ai_unconfigured !== true,
 			/* hook:decisions (rule 16a) */ ...(options.messages === undefined
 				? {}
 				: { messages: options.messages }),
 			...(f === undefined ? {} : { fetch: f }),
-			...(openStream === undefined ? {} : { openStream }),
-			...(poll === undefined ? {} : { poll }),
+			...(open_stream === undefined ? {} : { open_stream }),
 			...(boot.contract === undefined ? {} : { contract: boot.contract })
 		});
-		const agent = options.agent ?? agentPanel();
-		const api = shellApi(options.fetch);
-		const instances = integrationClients({
+		const agent = options.agent ?? agent_panel();
+		const api = shell_api(options.fetch, {
+			after_mutation: () => page_live_mode() === 'snapshot' ? client.refresh() : Effect.void
+		});
+		const instances = integration_clients({
 			base: based(`${BOLT}/integrations/`),
 			...(f === undefined ? {} : { fetch: f })
 		});
 		return Object.assign(client, {
-			device: resolveDevice(options.device),
+			device: resolve_device(options.device),
 			/** An integration instance's host verbs: its status, pairing, test and status stream (`IntegrationSetup` draws them). */
 			integration: instances,
+			/** Provider choices for the shared IntegrationCard, using this workspace's authenticated transport. */
+			integration_offers: () => integration_offers({ base: based(`${BOLT}/integrations/`), ...(f === undefined ? {} : { fetch: f }) }),
 			/** A definition's own setup component (`integration/<name>/+integration.svelte`), loaded only when its UI opens. */
-			integrationSetup: (name: string) => options.integrationSetups?.[name]?.load,
+			integration_setup: (name: string) => options.integration_setups?.[name]?.load,
 			/** The path of an app page, optionally opening a record: `bolt.href(app, page?, record?)`. */
 			href: (...a: Parameters<typeof href>) => based(href(...a)),
 			/** The page's organization: the workspace name and its brand logo (the host's first icon), or `null`. */
 			org: { name: boot.workspace.name, logo: boot.workspace.logo ?? null },
+			tz: boot.workspace.tz,
+			catalog: boot.catalog,
+			automations: boot.automations,
 			runs: Object.assign(
 				(automation: string, options: { where?: Json; limit: number }) =>
 					Effect.gen(function* () {
@@ -627,7 +636,7 @@ export function shellBolt(
 						const one = conditions['id']?.eq;
 						// the live `runs` read: a `sys_run` change re-answers it, as the caller may see it (rule 56)
 						return client
-							.observe<{ rows: readonly RunView[] }>({
+							.observe({
 								read: {
 									m: 'runs',
 									a: [
@@ -636,20 +645,20 @@ export function shellBolt(
 											: { automation, limit: options.limit }
 									]
 								}
-							})
+							}, RunsReadAnswer)
 							.pipe(
 								Stream.map((answer) => ({
 									rows: answer.rows.filter((row) => {
 										const values: Readonly<Record<string, Wired>> = row;
 										return Object.entries(conditions).every(([field, condition]) =>
-											Equal.equals(encodeWire(values[field] ?? null), encodeWire(condition.eq))
+											equal_json(values[field] ?? null, condition.eq)
 										);
 									}),
 									next: null
 								}))
 							);
 					}).pipe(Stream.unwrap),
-				{ stop: (id: string) => api.stopRun(id) }
+				{ stop: (id: string) => api.stop_run(id) }
 			),
 			/** The agent panel: `open` it (optionally with a request), and the model classes the host offers. */
 			agent: {
@@ -661,82 +670,16 @@ export function shellBolt(
 		});
 	});
 }
-export type ShellBolt = Effect.Success<ReturnType<typeof shellBolt>>;
+export type ShellBolt = Effect.Success<ReturnType<typeof shell_bolt>>;
+/** What a mounted page receives: the shell client without its native transport members, and the `ui` its views take. */
+export type ShellPageContext = Omit<ShellBolt, 'native_query' | 'observe' | 'closed' | 'sync'> & UiContext;
+export const page_context = (
+	{ native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored }: ShellBolt,
+	ui: UiContext['ui']
+): ShellPageContext => ({ ...authored, ui });
 
 /** Each shell mount owns its configured runtime and every child resource. */
 class ShellConfiguration extends Context.Service<ShellConfiguration, ShellMountConfig>()(
 	'@norbital-ai/bolt/ShellConfiguration'
 ) {}
 export const ShellLive = (config: ShellMountConfig) => Layer.succeed(ShellConfiguration, config);
-
-let current: ShellBolt | null = null;
-export const setCurrentBolt = (client: ShellBolt | null) => {
-	current = client;
-};
-export function currentBolt(): ShellBolt {
-	if (current === null) throw new Error('$bolt was read before the workspace shell booted.');
-	return current;
-}
-/** Stable module value: calls and plain getters read the current boot on use. */
-export const bolt: Omit<ShellBolt, 'describe'> & { readonly describe: ShellBolt['describe'] } = {
-	get aggregate() {
-		return currentBolt().aggregate;
-	},
-	get history() {
-		return currentBolt().history;
-	},
-	get query() {
-		return currentBolt().query;
-	},
-	act: (...args) => currentBolt().act(...args),
-	recordCapabilities: (...args) => currentBolt().recordCapabilities(...args),
-	decode: (...args) => currentBolt().decode(...args),
-	get describe() {
-		return currentBolt().describe;
-	},
-	options: (...args) => currentBolt().options(...args),
-	start: (...args) => currentBolt().start(...args),
-	clock: (...args) => currentBolt().clock(...args),
-	convert: (...args) => currentBolt().convert(...args),
-	previewPdf: (...args) => currentBolt().previewPdf(...args),
-	observe: (...args) => currentBolt().observe(...args),
-	upload: (...args) => currentBolt().upload(...args),
-	fileUrl: (...args) => currentBolt().fileUrl(...args),
-	get approvals() {
-		return currentBolt().approvals;
-	},
-	get restore() {
-		return currentBolt().restore;
-	},
-	get session() {
-		return currentBolt().session;
-	},
-	get actor() {
-		return currentBolt().actor;
-	},
-	get locale() {
-		return currentBolt().locale;
-	},
-	t: (...args) => currentBolt().t(...args),
-	get closed() {
-		return currentBolt().closed;
-	},
-	get sync() {
-		return currentBolt().sync;
-	},
-	get device() {
-		return currentBolt().device;
-	},
-	integration: (...args) => currentBolt().integration(...args),
-	integrationSetup: (...args) => currentBolt().integrationSetup(...args),
-	href: (...args) => currentBolt().href(...args),
-	get org() {
-		return currentBolt().org;
-	},
-	get runs() {
-		return currentBolt().runs;
-	},
-	get agent() {
-		return currentBolt().agent;
-	}
-};

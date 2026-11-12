@@ -1,45 +1,37 @@
 <script module lang="ts">
 	import type { Json } from '../client/contract.js';
-	import type { FilterVariables } from './filter.js';
+	import type { FilterVariables } from './operators.js';
 
 	/** A saved native filter, independent of a table's viewer preferences and URL. */
-	export type FilterValue = { readonly where?: Json; readonly orderBy?: Json };
-	export type FilterEditorProps = {
+	export type FilterValue = { readonly where?: Json; readonly order_by?: Json };
+	type FilterEditorProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		model: string;
 		value?: FilterValue;
 		readonly?: boolean;
 		variables?: FilterVariables;
-		onChange?(value: FilterValue): void;
+		on_change?(value: FilterValue): void;
 	};
 </script>
 
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
-	import { useBolt } from '../client/context.js';
-	import { useKinds } from '../kinds/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import FilterPanel from './FilterPanel.svelte';
-	import {
-		fromWhere,
-		localFilterFields,
-		orderKeys,
-		orderOf,
-		orderText,
-		parseOrder,
-		rowsWhere,
-		savedFilterCatalog,
-		resolve,
-		operatorsFor,
-		sortable,
-		type Node,
-		type Offer,
-		type SortKey
-	} from './filter.js';
+	import { fromWhere, rowsWhere } from './where.js';
+	import { localFilterFields } from './local.js';
+	import { orderKeys, orderOf, orderText, parseOrder, sortable, type SortKey } from './order.js';
+	import { savedFilterCatalog, resolve, type Offer } from './catalog.js';
+	import { operatorsFor } from './operators.js';
+	import type { Node } from './node.js';
 
-	let { model, value = {}, readonly = false, variables, onChange }: FilterEditorProps = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	let { ctx, model, value = {}, readonly = false, variables, on_change }: FilterEditorProps = $props();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const catalog = $derived(savedFilterCatalog(kinds.catalog ?? {}));
 	const sortFields = $derived(sortable(catalog[model], true, catalog));
 	let rows = $state<readonly Node[]>([]);
@@ -83,7 +75,7 @@
 
 	function parse(next: FilterValue) {
 		const parsed = fromWhere(catalog, model, next.where ?? {}, model, '', variables);
-		const sorted = parseOrder(orderText(orderKeys(next.orderBy)), sortFields);
+		const sorted = parseOrder(orderText(orderKeys(next.order_by)), sortFields);
 		return parsed === null || sorted.dropped > 0 ? null : { rows: parsed, order: sorted.keys };
 	}
 	watch(
@@ -96,10 +88,7 @@
 			unsupported = parsed === null;
 			notice =
 				parsed === null
-					? msg(
-							bolt,
-							'view.unsupportedSaved',
-							'This filter references a field or condition unavailable in the current model. It is kept unchanged below.'
+					? msg(bolt, 'view.unsupportedSaved'
 						)
 					: null;
 			source = key;
@@ -108,14 +97,14 @@
 	);
 	function changed() {
 		const where = rowsWhere(catalog, model, rows, undefined, variables);
-		const orderBy = orderOf(order);
+		const order_by = orderOf(order);
 		const next: FilterValue = {
 			...(where === null ? {} : { where }),
-			...(order.length === 0 ? {} : { orderBy })
+			...(order.length === 0 ? {} : { order_by })
 		};
 		source = JSON.stringify([model, next, catalog[model]]);
 		sourceVariables = variables;
-		onChange?.(next);
+		on_change?.(next);
 	}
 	const loadOffers = () =>
 		Effect.suspend(() => {
@@ -185,15 +174,12 @@
 					Effect.map((result) => {
 						const parsed = parse(result);
 						if (parsed === null) {
-							notice = msg(
-								bolt,
-								'view.describeFailed',
-								'Could not build a filter from that description'
+							notice = msg(bolt, 'view.describeFailed'
 							);
 							return false;
 						}
 						rows = parsed.rows;
-						if (result.orderBy !== undefined) order = parsed.order;
+						if (result.order_by !== undefined) order = parsed.order;
 						notice = null;
 						changed();
 						return true;
@@ -218,10 +204,10 @@
 			value.where ?? {},
 			null,
 			2
-		)}{#if value.orderBy !== undefined}{`\n${JSON.stringify(value.orderBy, null, 2)}`}{/if}</pre>
+		)}{#if value.order_by !== undefined}{`\n${JSON.stringify(value.order_by, null, 2)}`}{/if}</pre>
 	{#if !readonly}<button type="button" class="text-sm underline" onclick={() => view.clear()}
-			>{msg(bolt, 'view.replaceSaved', 'Replace filter')}</button
+			>{msg(bolt, 'view.replaceSaved')}</button
 		>{/if}
 {:else}
-	<FilterPanel {view} {catalog} {model} sortable={sortFields} {variables} {readonly} expanded />
+	<FilterPanel {ctx} {view} {catalog} {model} sortable={sortFields} {variables} {readonly} expanded />
 {/if}

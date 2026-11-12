@@ -3,19 +3,19 @@
 	import { observe } from '@norbital-ai/ui/effect';
 	import { watch } from 'runed';
 	import type { ShellBolt } from '../runtime.ts';
-	import type { InboxRequest } from './data.ts';
+	import { InboxReadAnswer } from '../api-types.ts';
 
-	let { bolt, onCount }: { bolt: ShellBolt; onCount: (n: number) => void } = $props();
+	let { bolt, on_count }: { bolt: ShellBolt; on_count: (n: number) => void } = $props();
 	// svelte-ignore state_referenced_locally
 	const inbox = observe(() =>
-		bolt.observe<{ requests: readonly InboxRequest[] }>({
+		bolt.observe({
 			read: { m: 'inbox', a: [{ requests: true }] }
-		})
+		}, InboxReadAnswer)
 	);
 	watch(
 		() => inbox.current,
 		(value) => {
-			if (value !== undefined) onCount(value.requests.filter((r) => r.canDecide).length);
+			if (value !== undefined) on_count(value.requests.filter((r) => r.canDecide).length);
 		}
 	);
 </script>

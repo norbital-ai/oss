@@ -12,7 +12,7 @@ A button (or a link, with `href`) in a variant and size.
 	import type { HapticKind } from '../utils.js';
 	import { type VariantProps, tv } from 'tailwind-variants';
 
-	export const buttonVariants = tv({
+	export const button_variants = tv({
 		base: '[--hit-target:2rem] focus-visible:ring-ring inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm text-xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset disabled:pointer-events-none disabled:opacity-50',
 		variants: {
 			variant: {
@@ -40,8 +40,8 @@ A button (or a link, with `href`) in a variant and size.
 		}
 	});
 
-	export type ButtonVariant = VariantProps<typeof buttonVariants>['variant'];
-	export type ButtonSize = VariantProps<typeof buttonVariants>['size'];
+	export type ButtonVariant = VariantProps<typeof button_variants>['variant'];
+	export type ButtonSize = VariantProps<typeof button_variants>['size'];
 
 	/** The props of `Button`: the button's (or link's) attributes, `variant`, `size` and `haptic`. */
 	export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
@@ -52,8 +52,8 @@ A button (or a link, with `href`) in a variant and size.
 			/** A tick on tap where the device has a motor; for decisions, not for every button. */
 			haptic?: HapticKind;
 			hint?: string; // Tooltip hint
-			disabledMessage?: string; // Tooltip message when disabled
-			readonlyMessage?: string; // Tooltip message when readonly
+			disabled_message?: string; // Tooltip message when disabled
+			readonly_message?: string; // Tooltip message when readonly
 		};
 </script>
 
@@ -72,8 +72,8 @@ A button (or a link, with `href`) in a variant and size.
 		disabled = false,
 		readonly = false,
 		hint,
-		disabledMessage,
-		readonlyMessage,
+		disabled_message,
+		readonly_message,
 		haptic,
 		onclick,
 		...restProps
@@ -84,11 +84,11 @@ A button (or a link, with `href`) in a variant and size.
 
 	// Determine what tooltip message to show
 	const tooltipMessage = $derived.by(() => {
-		if (disabled && disabledMessage) {
-			return disabledMessage;
+		if (disabled && disabled_message) {
+			return disabled_message;
 		}
-		if (readonly && readonlyMessage) {
-			return readonlyMessage;
+		if (readonly && readonly_message) {
+			return readonly_message;
 		}
 		return hint;
 	});
@@ -122,7 +122,7 @@ A button (or a link, with `href`) in a variant and size.
 	// Compute final classes - readonly doesn't get disabled styles
 	const computedClass = $derived(
 		cn(
-			buttonVariants({ variant, size }),
+			button_variants({ variant, size }),
 			{
 				// Readonly gets pointer-events-none but no opacity change
 				'pointer-events-none': readonly && !disabled
@@ -164,7 +164,7 @@ A button (or a link, with `href`) in a variant and size.
 {/snippet}
 
 {#if shouldShowTooltip}
-	<Tooltip text={tooltipMessage} align="start" delayDuration={100}>
+	<Tooltip text={tooltipMessage} align="start" delay_duration={100}>
 		{#snippet trigger({ props })}
 			{@render Button({ props })}
 		{/snippet}

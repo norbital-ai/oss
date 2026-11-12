@@ -1,49 +1,48 @@
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
-import { Decimal, currency, dec, minorDigits, sum } from '../src/decimal.ts';
+import { Decimal, currency, dec, minor_digits, sum } from '../src/decimal.ts';
 import {
 	Instant,
 	PlainDate,
 	Zone,
-	addDays,
-	addMonths,
+	add_days,
+	add_months,
 	contains,
-	datePeriod,
+	date_period,
 	days,
-	eachDay,
-	formatDate,
-	formatInstant,
-	formatPeriod,
+	each_day,
+	format_date,
+	format_instant,
+	format_period,
 	intersect,
-	isPlainDate,
-	monthOf,
+	is_plain_date,
+	month_of,
 	overlaps,
-	parseInstant,
-	yearOf
+	parse_instant,
+	year_of
 } from '../src/date.ts';
-import { WorkCalendar, addBusinessHours, businessDays, cycleOf, cycles } from '../src/calendar.ts';
+import { Cycle, WorkCalendar, add_business_hours, business_days, cycle_of, cycles } from '../src/calendar.ts';
 import { columns, decode, encode } from '../src/sheet.ts';
-import { cloneNext, onlyShortens, sealWrites, voidOnce } from '../src/versioned.ts';
+import { clone_next, creates, only_shortens, seal_writes, void_once } from '../src/versioned.ts';
 import { compile, context, evaluate, formula } from '../src/formula.ts';
-import { band, pricedLines } from '../src/pricing.ts';
-import { parseJson, parseJsonResult } from '../src/json.ts';
+import { band, priced_lines } from '../src/pricing.ts';
+import { parse_json, parse_json_result } from '../src/json.ts';
 import { Effect, Schema } from 'effect';
-import { inputSchema } from '../src/kind.ts';
+import * as Result from 'effect/Result';
+import { input_schema } from '../src/kind.ts';
 
 const d = PlainDate;
 
 describe('native kind values', () => {
 	it.effect('nested stored lists and objects decode decimals exactly with ISO dates', () =>
 		Effect.gen(function* () {
-			const schema = inputSchema({
+			const schema = input_schema({
 				kind: 'object',
 				fields: {
 					lines: {
-						kind: 'list',
-						of: {
-							kind: 'object',
-							fields: { amount: { kind: 'decimal', scale: 2 }, day: { kind: 'date' } }
-						}
+						kind: 'object',
+						fields: { amount: { kind: 'decimal', scale: 2 }, day: { kind: 'date' } },
+						many: true
 					}
 				}
 			});
@@ -59,7 +58,7 @@ describe('native kind values', () => {
 		'required fields reject null even when one union arm is optional, while descendants remain optional',
 		() =>
 			Effect.gen(function* () {
-				const schema = inputSchema({
+				const schema = input_schema({
 					kind: 'object',
 					fields: {
 						choice: { kind: 'union', of: [{ kind: 'text', optional: true }, { kind: 'int' }] },
@@ -82,12 +81,14 @@ describe('native kind values', () => {
 
 describe('std/decimal', () => {
 	it('is one kind of value across std copies: instanceof holds, and each copy reads the other', async () => {
-		const other = (await import(
-			'../src/decimal.ts?copy' as string
-		)) as typeof import('../src/decimal.ts');
-		const theirs = other.Decimal.of('1.20');
+		const copy: string = '../src/decimal.ts?copy';
+		const loaded: unknown = await import(copy);
+		const other = Schema.decodeUnknownSync(Schema.Struct({ Decimal: Schema.Unknown }))(loaded).Decimal;
+		if (typeof other !== 'function' || !('of' in other) || typeof other.of !== 'function')
+			throw new Error('The copied module exposes no Decimal constructor.');
+		const theirs: unknown = other.of('1.20');
 		assert.ok(theirs instanceof Decimal);
-		assert.ok(Decimal.of('2') instanceof other.Decimal);
+		assert.ok(Decimal.of('2') instanceof other);
 		assert.equal(Decimal.of('1').plus(theirs).toString(), '2.20');
 		assert.equal(theirs.plus(Decimal.of('1')).toString(), '2.20');
 		const text: unknown = '1.2';
@@ -98,17 +99,17 @@ describe('std/decimal', () => {
 		assert.equal(dec('1.20').times('3').toString(), '3.60');
 		assert.equal(sum(['1.005', '2', dec('-0.005')]).toString(), '3.000');
 		assert.equal(dec('10').div('3', 4).toString(), '3.3333');
-		assert.equal(dec('-7').div('2', 0, 'halfEven').toString(), '-4');
+		assert.equal(dec('-7').div('2', 0, 'half_even').toString(), '-4');
 		assert.equal(dec('1.2').div('-0.5', 2).toString(), '-2.40');
 	});
 	it('rounds in every mode like Postgres', () => {
 		const r = (v: string, m: Parameters<Decimal['round']>[1]) => dec(v).round(0, m).toString();
 		assert.deepEqual(
-			['2.5', '-2.5', '3.5', '2.4'].map((v) => r(v, 'halfUp')),
+			['2.5', '-2.5', '3.5', '2.4'].map((v) => r(v, 'half_up')),
 			['3', '-3', '4', '2']
 		);
 		assert.deepEqual(
-			['2.5', '-2.5', '3.5'].map((v) => r(v, 'halfEven')),
+			['2.5', '-2.5', '3.5'].map((v) => r(v, 'half_even')),
 			['2', '-2', '4']
 		);
 		assert.deepEqual(
@@ -126,16 +127,16 @@ describe('std/decimal', () => {
 		assert.throws(() => dec(0.1));
 		assert.throws(() => dec('1').div('0', 2));
 		assert.throws(() => Number(dec('1')) + 1);
-		assert.equal(Decimal.fromNumber(0.1 + 0.2, 2).toString(), '0.30');
-		assert.equal(Decimal.fromNumber(1e-7, 8).toString(), '0.00000010');
+		assert.equal(Decimal.from_number(0.1 + 0.2, 2).toString(), '0.30');
+		assert.equal(Decimal.from_number(1e-7, 8).toString(), '0.00000010');
 		assert.deepEqual(dec({ $dec: '-0.50' }).toJSON(), { $dec: '-0.50' });
 		assert.equal(JSON.stringify({ a: dec('1.10') }), '{"a":{"$dec":"1.10"}}');
 		assert.ok(dec('2').gt('1.99') && dec('1.0').eq('1') && dec('-1').sign() === -1);
 	});
 	it('knows currencies and their minor units', () => {
-		assert.equal(minorDigits(currency('JPY')), 0);
-		assert.equal(minorDigits(currency('KWD')), 3);
-		assert.equal(dec('10.005').roundTo(currency('SGD')).toString(), '10.01');
+		assert.equal(minor_digits(currency('JPY')), 0);
+		assert.equal(minor_digits(currency('KWD')), 3);
+		assert.equal(dec('10.005').round_to(currency('SGD')).toString(), '10.01');
 		assert.throws(() => currency('ABC'));
 	});
 });
@@ -148,29 +149,29 @@ describe('std/date', () => {
 		assert.equal(Instant('2026-01-01T08:00:00+08:00'), '2026-01-01T00:00:00.000Z');
 		assert.throws(() => Instant('2026-01-01T08:00:00'));
 		assert.throws(() => Zone('Mars/Base'));
-		assert.throws(() => datePeriod('2026-02-01', '2026-01-31'));
+		assert.throws(() => date_period('2026-02-01', '2026-01-31'));
 	});
 	it('does inclusive period arithmetic', () => {
-		const jan = datePeriod('2026-01-01', '2026-01-31');
+		const jan = date_period('2026-01-01', '2026-01-31');
 		assert.ok(contains(jan, '2026-01-31') && !contains(jan, '2026-02-01'));
 		assert.ok(contains({ from: d('2026-01-01'), to: null }, '2099-01-01'));
 		assert.ok(
-			overlaps(jan, datePeriod('2026-01-31', null)) &&
-				!overlaps(jan, datePeriod('2026-02-01', null))
+			overlaps(jan, date_period('2026-01-31', null)) &&
+				!overlaps(jan, date_period('2026-02-01', null))
 		);
-		assert.deepEqual(intersect(jan, datePeriod('2026-01-20', null)), {
+		assert.deepEqual(intersect(jan, date_period('2026-01-20', null)), {
 			from: '2026-01-20',
 			to: '2026-01-31'
 		});
-		assert.equal(intersect(jan, datePeriod('2026-03-01', null)), null);
+		assert.equal(intersect(jan, date_period('2026-03-01', null)), null);
 		assert.equal(days(jan), 31);
 		assert.throws(() => days({ from: d('2026-01-01'), to: null }));
-		assert.deepEqual(eachDay(datePeriod('2026-12-31', '2027-01-01')), ['2026-12-31', '2027-01-01']);
-		assert.equal(addDays('2026-03-01', -1), '2026-02-28');
-		assert.equal(addMonths('2024-01-31', 1), '2024-02-29');
-		assert.equal(addMonths('2026-03-31', -13), '2025-02-28');
-		assert.deepEqual(monthOf('2026-02-10'), { from: '2026-02-01', to: '2026-02-28' });
-		assert.deepEqual(yearOf('2026-07-04'), { from: '2026-01-01', to: '2026-12-31' });
+		assert.deepEqual(each_day(date_period('2026-12-31', '2027-01-01')), ['2026-12-31', '2027-01-01']);
+		assert.equal(add_days('2026-03-01', -1), '2026-02-28');
+		assert.equal(add_months('2024-01-31', 1), '2024-02-29');
+		assert.equal(add_months('2026-03-31', -13), '2025-02-28');
+		assert.deepEqual(month_of('2026-02-10'), { from: '2026-02-01', to: '2026-02-28' });
+		assert.deepEqual(year_of('2026-07-04'), { from: '2026-01-01', to: '2026-12-31' });
 	});
 	it('validates Gregorian century boundaries and four-digit calendar years', () => {
 		for (const value of [
@@ -181,7 +182,7 @@ describe('std/date', () => {
 			'2000-02-29',
 			'9999-12-31'
 		]) {
-			assert.equal(isPlainDate(value), true);
+			assert.equal(is_plain_date(value), true);
 			assert.equal(PlainDate(value), value);
 		}
 		for (const value of [
@@ -196,20 +197,20 @@ describe('std/date', () => {
 			'2026-01-01\n',
 			'10000-01-01'
 		]) {
-			assert.equal(isPlainDate(value), false);
+			assert.equal(is_plain_date(value), false);
 			assert.throws(() => PlainDate(value), RangeError);
 		}
 		for (const value of [null, undefined, 20260101, new Date('2026-01-01'), {}, []])
-			assert.equal(isPlainDate(value), false);
-		assert.equal(addMonths('0000-03-31', -1), '0000-02-29');
-		assert.equal(addMonths('0099-12-31', 1), '0100-01-31');
-		assert.equal(addMonths('0100-03-31', -1), '0100-02-28');
-		assert.equal(addMonths('2026-01-31', -0.5), '2026-01-31');
-		assert.equal(addMonths('2026-03-31', -2.5), '2026-01-31');
+			assert.equal(is_plain_date(value), false);
+		assert.equal(add_months('0000-03-31', -1), '0000-02-29');
+		assert.equal(add_months('0099-12-31', 1), '0100-01-31');
+		assert.equal(add_months('0100-03-31', -1), '0100-02-28');
+		assert.equal(add_months('2026-01-31', -0.5), '2026-01-31');
+		assert.equal(add_months('2026-03-31', -2.5), '2026-01-31');
 		for (const offset of [Number.NaN, Infinity, -Infinity])
-			assert.throws(() => addMonths('2026-01-01', offset), RangeError);
-		assert.throws(() => addMonths('0000-01-01', -1), RangeError);
-		assert.throws(() => addMonths('9999-12-31', 1), RangeError);
+			assert.throws(() => add_months('2026-01-01', offset), RangeError);
+		assert.throws(() => add_months('0000-01-01', -1), RangeError);
+		assert.throws(() => add_months('9999-12-31', 1), RangeError);
 	});
 	it('matches native calendar clamping throughout a Gregorian 400-year cycle', () => {
 		const two = (value: number) => String(value).padStart(2, '0');
@@ -229,56 +230,69 @@ describe('std/date', () => {
 						last.setUTCMonth(last.getUTCMonth() + 1);
 						last.setUTCDate(0);
 						expected.setUTCDate(Math.min(day, last.getUTCDate()));
-						assert.equal(addMonths(source, offset), expected.toISOString().slice(0, 10));
+						assert.equal(add_months(source, offset), expected.toISOString().slice(0, 10));
 					}
 				}
 			}
 		}
 	});
 	it('formats and parses in a zone', () => {
-		assert.equal(formatDate('2026-01-05'), 'Jan 5, 2026');
+		assert.equal(format_date('2026-01-05'), 'Jan 5, 2026');
 		assert.equal(
-			formatInstant('2026-01-05T16:30:00Z', { timeZone: 'Asia/Singapore', timeStyle: 'short' }),
+			format_instant('2026-01-05T16:30:00Z', { timeZone: 'Asia/Singapore', timeStyle: 'short' }),
 			'12:30 AM'
 		);
-		assert.equal(formatPeriod(datePeriod('2026-01-05', null)), 'Jan 5, 2026 – …');
-		assert.equal(formatPeriod(null), '—');
-		assert.equal(parseInstant('2026-01-05 09:00', 'Asia/Kuala_Lumpur'), '2026-01-05T01:00:00.000Z');
-		assert.equal(parseInstant('2026-03-08 02:30', 'America/New_York'), '2026-03-08T07:30:00.000Z'); // in the DST gap: after it
-		assert.equal(parseInstant('2026-11-01 12:00', 'America/New_York'), '2026-11-01T17:00:00.000Z');
-		assert.equal(parseInstant('garbage'), null);
-		assert.equal(parseInstant('2026-01-05 09:00'), null);
+		assert.equal(format_period(date_period('2026-01-05', null)), 'Jan 5, 2026 – …');
+		assert.equal(format_period(null), '—');
+		assert.equal(parse_instant('2026-01-05 09:00', 'Asia/Kuala_Lumpur'), '2026-01-05T01:00:00.000Z');
+		assert.equal(parse_instant('2026-03-08 02:30', 'America/New_York'), '2026-03-08T07:30:00.000Z'); // in the DST gap: after it
+		assert.equal(parse_instant('2026-11-01 12:00', 'America/New_York'), '2026-11-01T17:00:00.000Z');
+		assert.equal(parse_instant('garbage'), null);
+		assert.equal(parse_instant('2026-01-05 09:00'), null);
 	});
 });
 
 describe('std/calendar', () => {
+	it('refuses retired cycle metadata instead of silently changing the selected pay period', () => {
+		const monthly = { every: 'month', opensOn: 26 } as const;
+		const semi_monthly = { every: 'semi_month', secondOpensOn: 11 } as const;
+		assert.throws(() => cycle_of(monthly, '2026-02-25'));
+		assert.throws(() => cycle_of(semi_monthly, '2026-02-20'));
+		assert.throws(() => Schema.decodeUnknownSync(Cycle)({ every: 'semiMonth' }));
+		assert.deepEqual(cycle_of({ every: 'semi_month', second_opens_on: 11 }, '2026-02-10'), {
+			from: '2026-02-01', to: '2026-02-10'
+		});
+		assert.deepEqual(cycle_of({ every: 'semi_month', second_opens_on: 11 }, '2026-02-11'), {
+			from: '2026-02-11', to: '2026-02-28'
+		});
+	});
 	it('names a cycle by the day it opens', () => {
-		assert.deepEqual(cycleOf({ every: 'month', opensOn: 26 }, '2026-02-25'), {
+		assert.deepEqual(cycle_of({ every: 'month', opens_on: 26 }, '2026-02-25'), {
 			from: '2026-01-26',
 			to: '2026-02-25'
 		});
-		assert.deepEqual(cycleOf({ every: 'month', opensOn: 26 }, '2026-02-26'), {
+		assert.deepEqual(cycle_of({ every: 'month', opens_on: 26 }, '2026-02-26'), {
 			from: '2026-02-26',
 			to: '2026-03-25'
 		});
-		assert.deepEqual(cycleOf({ every: 'month' }, '2026-02-10'), {
+		assert.deepEqual(cycle_of({ every: 'month' }, '2026-02-10'), {
 			from: '2026-02-01',
 			to: '2026-02-28'
 		});
-		assert.deepEqual(cycleOf({ every: 'semiMonth' }, '2026-02-20'), {
+		assert.deepEqual(cycle_of({ every: 'semi_month' }, '2026-02-20'), {
 			from: '2026-02-16',
 			to: '2026-02-28'
 		});
-		assert.deepEqual(cycleOf({ every: 'week', opensOn: 1 }, '2026-09-27'), {
+		assert.deepEqual(cycle_of({ every: 'week', opens_on: 1 }, '2026-09-27'), {
 			from: '2026-09-21',
 			to: '2026-09-27'
 		});
-		assert.deepEqual(cycleOf({ every: 'days', n: 14, anchor: '2026-01-05' }, '2026-01-01'), {
+		assert.deepEqual(cycle_of({ every: 'days', n: 14, anchor: '2026-01-05' }, '2026-01-01'), {
 			from: '2025-12-22',
 			to: '2026-01-04'
 		});
 		assert.deepEqual(
-			cycles({ every: 'semiMonth' }, datePeriod('2026-01-10', '2026-02-02')).map((c) => c.from),
+			cycles({ every: 'semi_month' }, date_period('2026-01-10', '2026-02-02')).map((c) => c.from),
 			['2026-01-01', '2026-01-16', '2026-02-01']
 		);
 	});
@@ -289,15 +303,15 @@ describe('std/calendar', () => {
 		holidays: ['2026-10-01']
 	});
 	it('counts business days and adds business hours', () => {
-		assert.equal(businessDays(datePeriod('2026-09-28', '2026-10-04'), cal), 4); // Mon–Sun, Thursday a holiday
+		assert.equal(business_days(date_period('2026-09-28', '2026-10-04'), cal), 4); // Mon–Sun, Thursday a holiday
 		// Friday 17:00 SGT + 4 h: 1 h Friday, then Monday 09:00 + 3 h = 12:00 SGT
-		assert.equal(addBusinessHours('2026-09-25T09:00:00Z', 4, cal), '2026-09-28T04:00:00.000Z');
+		assert.equal(add_business_hours('2026-09-25T09:00:00Z', 4, cal), '2026-09-28T04:00:00.000Z');
 		// Wednesday 20:00 SGT + 1.5 h skips Thursday's holiday: Friday 10:30 SGT
 		assert.equal(
-			addBusinessHours('2026-09-30T12:00:00Z', dec('1.5'), cal),
+			add_business_hours('2026-09-30T12:00:00Z', dec('1.5'), cal),
 			'2026-10-02T02:30:00.000Z'
 		);
-		assert.equal(addBusinessHours('2026-09-26T00:00:00Z', 0, cal), '2026-09-28T01:00:00.000Z');
+		assert.equal(add_business_hours('2026-09-26T00:00:00Z', 0, cal), '2026-09-28T01:00:00.000Z');
 		assert.throws(() =>
 			WorkCalendar({ zone: 'UTC', week: { ...cal.week, 1: { start: '18:00', end: '09:00' } } })
 		);
@@ -361,6 +375,7 @@ describe('std/sheet', () => {
 describe('std/versioned', () => {
 	const v = (id: string, from: string, to: string | null, sealed = true) => ({
 		id,
+		revision: 1,
 		period: { from: d(from), to: to === null ? null : d(to) },
 		sealed_at: sealed ? '2026-01-01T00:00:00.000Z' : null,
 		voided_at: null,
@@ -368,15 +383,18 @@ describe('std/versioned', () => {
 		name: id
 	});
 	it('seals a draft over its predecessor and before its successor, in one list', () => {
-		const writes = sealWrites(
+		const writes = seal_writes(
 			v('draft', '2026-04-01', null, false),
 			[v('a', '2026-01-01', null), v('c', '2026-07-01', null)],
 			'2026-09-25T00:00:00.000Z'
 		);
 		assert.deepEqual(writes, [
-			{ target: 'a', set: { period: { from: '2026-01-01', to: '2026-03-31' } } },
 			{
-				target: 'draft',
+				target: v('a', '2026-01-01', null),
+				set: { period: { from: '2026-01-01', to: '2026-03-31' } }
+			},
+			{
+				target: v('draft', '2026-04-01', null, false),
 				set: {
 					period: { from: '2026-04-01', to: '2026-06-30' },
 					sealed_at: '2026-09-25T00:00:00.000Z'
@@ -384,7 +402,7 @@ describe('std/versioned', () => {
 			}
 		]);
 		assert.throws(() =>
-			sealWrites(
+			seal_writes(
 				v('draft', '2026-01-01', null, false),
 				[v('a', '2026-01-01', null)],
 				'2026-09-25T00:00:00.000Z'
@@ -393,26 +411,26 @@ describe('std/versioned', () => {
 	});
 	it('lets a sealed version only end earlier, or be voided once with a reason', () => {
 		const sealed = v('a', '2026-01-01', null);
-		assert.equal(onlyShortens(sealed, { period: { from: '2026-01-01', to: '2026-03-31' } }), null);
+		assert.equal(only_shortens(sealed, { period: { from: '2026-01-01', to: '2026-03-31' } }), null);
 		assert.match(
-			onlyShortens(sealed, { period: { from: '2026-02-01', to: null } }) ?? '',
+			only_shortens(sealed, { period: { from: '2026-02-01', to: null } }) ?? '',
 			/only end earlier/
 		);
-		assert.match(onlyShortens(sealed, { name: 'renamed' }) ?? '', /name cannot change/);
-		assert.match(onlyShortens(sealed, { lines: { create: [{}] } }) ?? '', /lines cannot change/);
-		assert.equal(onlyShortens(sealed, { name: 'a', voided_at: 'x' }), null);
+		assert.match(only_shortens(sealed, { name: 'renamed' }) ?? '', /name cannot change/);
+		assert.match(only_shortens(sealed, { lines: { create: [{}] } }) ?? '', /lines cannot change/);
+		assert.equal(only_shortens(sealed, { name: 'a', voided_at: 'x' }), null);
 		assert.match(
-			voidOnce(sealed, { voided_at: '2026-09-25T00:00:00.000Z' }) ?? '',
+			void_once(sealed, { voided_at: '2026-09-25T00:00:00.000Z' }) ?? '',
 			/states its reason/
 		);
 		assert.equal(
-			voidOnce(sealed, { voided_at: '2026-09-25T00:00:00.000Z', void_reason: 'wrong rate' }),
+			void_once(sealed, { voided_at: '2026-09-25T00:00:00.000Z', void_reason: 'wrong rate' }),
 			null
 		);
 		const voided = { ...sealed, voided_at: '2026-09-25T00:00:00.000Z', void_reason: 'wrong rate' };
-		assert.match(voidOnce(voided, { voided_at: null }) ?? '', /never undone/);
-		assert.match(voidOnce(voided, { void_reason: 'other' }) ?? '', /part of the record/);
-		assert.match(voidOnce(sealed, { void_reason: 'why' }) ?? '', /only with a void/);
+		assert.match(void_once(voided, { voided_at: null }) ?? '', /never undone/);
+		assert.match(void_once(voided, { void_reason: 'other' }) ?? '', /part of the record/);
+		assert.match(void_once(sealed, { void_reason: 'why' }) ?? '', /only with a void/);
 	});
 	it('compares values structurally: key order is no change, a decimal compares by its exact text', () => {
 		const sealed = {
@@ -420,18 +438,19 @@ describe('std/versioned', () => {
 			meta: { b: 2, a: [1, { y: 'y', x: 'x' }] },
 			rate: dec('1.20')
 		};
-		assert.equal(onlyShortens(sealed, { meta: { a: [1, { x: 'x', y: 'y' }], b: 2 } }), null);
-		assert.equal(onlyShortens(sealed, { rate: { $dec: '1.20' } }), null);
-		assert.match(onlyShortens(sealed, { rate: dec('1.2') }) ?? '', /rate cannot change/);
+		assert.equal(only_shortens(sealed, { meta: { a: [1, { x: 'x', y: 'y' }], b: 2 } }), null);
+		assert.equal(only_shortens(sealed, { rate: { $dec: '1.20' } }), null);
+		assert.match(only_shortens(sealed, { rate: dec('1.2') }) ?? '', /rate cannot change/);
 		assert.match(
-			onlyShortens(sealed, { meta: { a: [{ x: 'x', y: 'y' }, 1], b: 2 } }) ?? '',
+			only_shortens(sealed, { meta: { a: [{ x: 'x', y: 'y' }, 1], b: 2 } }) ?? '',
 			/meta cannot change/
 		);
 	});
 	it('clones the successor draft with its children as creates', () => {
-		const next = cloneNext(v('a', '2026-01-01', null), '2026-07-01', {
-			lines: [{ id: 'l1', sku: 'X', price: '1.00' }]
-		});
+		const next = {
+			...clone_next(v('a', '2026-01-01', null), '2026-07-01'),
+			lines: creates([{ id: 'l1', sku: 'X', price: '1.00' }])
+		};
 		assert.deepEqual(next, {
 			name: 'a',
 			period: { from: '2026-07-01', to: null },
@@ -446,7 +465,7 @@ describe('std/formula', () => {
 		fields: {
 			age: { kind: 'int' },
 			salary: { kind: 'money' },
-			kids: { kind: 'list', of: { kind: 'object', fields: { age: { kind: 'int' } } } }
+			kids: { kind: 'object', fields: { age: { kind: 'int' } }, many: true }
 		}
 	} as const;
 	const site = context(
@@ -541,7 +560,7 @@ describe('std/pricing (M2)', () => {
 		{ price: 'quantity * rate * 2', label: 'OT 2×' }
 	];
 	it('slices a quantity through the bands that hold', () => {
-		const s = band(site, bands, { rate: dec('10'), rest_day: false }, '3.5');
+		const s = Result.getOrThrow(band(site, bands, { rate: dec('10'), rest_day: false }, '3.5'));
 		assert.deepEqual(
 			s.map((x) => [x.label, x.quantity?.toString(), x.amount.toString()]),
 			[
@@ -550,12 +569,14 @@ describe('std/pricing (M2)', () => {
 			]
 		);
 		assert.deepEqual(
-			band(site, bands, { rate: dec('10'), rest_day: true }, '3').map((x) => x.amount.toString()),
+			Result.getOrThrow(band(site, bands, { rate: dec('10'), rest_day: true }, '3')).map((x) =>
+				x.amount.toString()
+			),
 			['60']
 		);
 	});
 	it('prices catalogue lines into buckets', () => {
-		const lines = pricedLines(
+		const lines = Result.getOrThrow(priced_lines(
 			site,
 			[
 				{ code: 'OT', label: 'Overtime', bucket: 'EARNING', quantity: '3', bands },
@@ -567,7 +588,7 @@ describe('std/pricing (M2)', () => {
 				}
 			],
 			{ rate: dec('10'), rest_day: false }
-		);
+		));
 		assert.deepEqual(
 			lines.map((l) => [l.code, l.label, l.bucket, l.amount.toString()]),
 			[
@@ -588,14 +609,14 @@ describe('std/json', () => {
 			['1e400', Infinity],
 			['[1,{"a":true}]', [1, { a: true }]]
 		] as const) {
-			const result = parseJsonResult(text);
+			const result = parse_json_result(text);
 			assert.equal(result._tag, 'Success');
 			if (result._tag === 'Success') assert.deepEqual(result.success, value);
 		}
-		for (const text of ['', '{nope', '{"a":']) assert.equal(parseJsonResult(text)._tag, 'Failure');
+		for (const text of ['', '{nope', '{"a":']) assert.equal(parse_json_result(text)._tag, 'Failure');
 	});
 	it('parses or answers null', () => {
-		assert.deepEqual(parseJson('{"a":[1]}'), { a: [1] });
-		assert.equal(parseJson('{nope'), null);
+		assert.deepEqual(parse_json('{"a":[1]}'), { a: [1] });
+		assert.equal(parse_json('{nope'), null);
 	});
 });

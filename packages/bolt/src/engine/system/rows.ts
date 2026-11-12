@@ -2,10 +2,11 @@
 // model declaration in `src/system` — its key, fields, computed fields and FKs — and its Schema is built from the same
 // declaration, so neither is a hand copy. A Schema is named for its table: a malformed row is refused naming it.
 import { Schema } from 'effect';
-import type { FieldKind } from '../../decl/fields.ts';
+import type { Kind } from '@norbital-ai/std/kind';
 import type { ComputedKind, ModelSpec } from '../../decl/model.ts';
 import type { Json } from '../../decl/values.ts';
-import { SYSTEM, type SystemNames } from '../../system/index.ts';
+import { SYSTEM } from '../../system/index.ts';
+import type { SystemNames } from '../../system/names.ts';
 
 type Models = SystemNames['models'];
 type Relationships = SystemNames['relationships'];
@@ -14,10 +15,12 @@ type SystemModel = keyof Models & string;
 
 // ── a column's wire value: what `parse` makes of the Postgres type `schema/ddl.ts` gives the field ──
 type Wire<K> = K extends { many: true }
-	? readonly string[]
+	? K extends { kind: 'text' | 'enum' }
+		? readonly string[]
+		: Json
 	: K extends { kind: 'enum'; values: readonly (infer V)[] }
 		? V
-		: K extends { kind: 'int' | 'count' | 'duration' }
+		: K extends { kind: 'int' | 'number' | 'count' }
 			? number
 			: K extends { kind: 'seq'; pattern: string }
 				? string
@@ -25,7 +28,7 @@ type Wire<K> = K extends { many: true }
 					? number
 					: K extends { kind: 'bool' }
 						? boolean
-						: K extends { kind: 'json' | 'file' | 'custom' | 'object' | 'list' }
+						: K extends { kind: 'json' | 'file' | 'custom' | 'object' | 'record' | 'union' }
 							? Json
 							: string;
 type Cell<K> = K extends { optional: true } ? Wire<K> | null : Wire<K>;
@@ -54,11 +57,11 @@ export type Row<N extends SystemModel> = Flat<
 const WIRE = {
 	text: Schema.String,
 	int: Schema.Number,
+	number: Schema.Number,
 	decimal: Schema.String,
 	money: Schema.String,
 	currency: Schema.String,
 	bool: Schema.Boolean,
-	duration: Schema.Number,
 	date: Schema.String,
 	instant: Schema.String,
 	time: Schema.String,
@@ -70,15 +73,19 @@ const WIRE = {
 	count: Schema.Number,
 	json: Schema.Json,
 	object: Schema.Record(Schema.String, Schema.Json),
-	list: Schema.Array(Schema.Json),
+	record: Schema.Record(Schema.String, Schema.Json),
+	union: Schema.Json,
 	file: Schema.Json,
 	point: Schema.String,
 	vector: Schema.String,
+	ref: Schema.Json,
 	custom: Schema.Json
-} satisfies { readonly [K in FieldKind['kind']]: Schema.Top };
-const wire = (k: FieldKind): Schema.Top =>
+} satisfies { readonly [K in Kind['kind']]: Schema.Top };
+const wire = (k: Kind): Schema.Top =>
 	'many' in k && k.many === true
-		? Schema.Array(Schema.String)
+		? k.kind === 'text' || k.kind === 'enum'
+			? Schema.Array(Schema.String)
+			: Schema.Array(Schema.Json)
 		: k.kind === 'enum'
 			? Schema.Literals(k.values)
 			: k.kind === 'seq' && k.pattern !== undefined

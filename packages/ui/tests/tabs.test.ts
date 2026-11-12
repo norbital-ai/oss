@@ -3,6 +3,13 @@ import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte';
 import { expect, it } from 'vitest';
 import Tabs from '../src/primitives/tabs/tabs.svelte';
 import TabStrip from '../src/primitives/tabs/tab-strip.svelte';
+import { ui_messages_for, ui_text_for } from '../src/i18n.ts';
+
+it('owns primitive and model-view translations', () => {
+	expect(ui_text_for('zh-CN').propertyName).toBe('属性名称');
+	expect(ui_messages_for('zh-CN')['ui.table.empty']).toBe('尚无{what}');
+	expect(ui_messages_for('en')).toEqual({});
+});
 
 it.each([
 	{ orientation: 'horizontal', side: 'start', arrow: 'ArrowRight' },
@@ -96,7 +103,7 @@ it.each([250, 100])(
 	}
 );
 
-it('a tab chosen under More stays there: More and its row show it, the strip keeps its order', async () => {
+it.each(['en', 'zh'])('an overflow tab keeps its selection with %s chrome', async (locale) => {
 	// every trigger 100px wide in a 250px strip: one tab and More fit
 	const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
 	const room = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
@@ -120,12 +127,17 @@ it('a tab chosen under More stays there: More and its row show it, the strip kee
 		const body = createRawSnippet(() => ({ render: () => '<p>Tab content</p>' }));
 		const tabs = ['Leave', 'Claim', 'Suspension'].map((title) => ({ name: title, title, body }));
 		const target = document.body.appendChild(document.createElement('div'));
-		const view = mount(Tabs, { target, props: { tabs, value: 'Suspension' } });
+		const view = mount(Tabs, {
+			target,
+			props: { tabs, value: 'Suspension' },
+			context: new Map([[Symbol.for('norbital.ui.text'), ui_text_for(locale)]])
+		});
 		await tick();
 		flushSync();
 		const strip = [...target.querySelectorAll('[role=tab]')].map((e) => e.textContent?.trim());
 		expect(strip).toEqual(['Leave']);
 		const more = target.querySelector<HTMLButtonElement>('[data-tabs-more]');
+		expect(more?.textContent?.trim()).toBe(locale === 'zh' ? '更多' : 'More');
 		expect(more?.dataset['state']).toBe('active');
 		more?.click();
 		await tick();

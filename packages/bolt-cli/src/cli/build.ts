@@ -12,8 +12,8 @@ import {
 } from '../compiler/artifact/index.ts';
 import { buildPacks } from '../compiler/artifact/seed.ts';
 import { layerLines, preparedLayer } from '../compiler/artifact/platform.ts';
-import { CONTRACT, readArtifact, type Artifact } from '@norbital-ai/bolt/artifact';
-import { readPackSource, type PackJson } from '@norbital-ai/bolt/engine';
+import { CONTRACT, read_artifact, type Artifact } from '@norbital-ai/bolt/artifact';
+import { read_pack_source, type PackJson } from '@norbital-ai/bolt/engine';
 import type {
 	BoltError,
 	EngineManifest,
@@ -235,7 +235,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 	const record = path.join(norbital, 'release.json');
 	yield* fs.writeFileString(
 		`${record}.next`,
-		`${JSON.stringify(Schema.encodeSync(ReleaseJson)(release), null, '\t')}\n`
+		`${JSON.stringify(yield* Schema.encodeEffect(ReleaseJson)(release), null, '\t')}\n`
 	);
 	yield* fs.rename(`${record}.next`, record);
 	yield* fs.remove(old, { recursive: true });
@@ -255,7 +255,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 			);
 	return {
 		// its trees were hashed as they were written
-		artifact: yield* readArtifact(bundle, [CONTRACT], 'executed'),
+		artifact: yield* read_artifact(bundle, [CONTRACT], 'executed'),
 		files,
 		packs: seeded.packs,
 		release,
@@ -305,7 +305,7 @@ const seedWorkspace = Effect.fn('bolt.seedWorkspace')(function* (
 		(yield* fs.exists(path.join(seedOut, 'base', 'pack.json'))) &&
 		(yield* fs.readFileString(stampFile).pipe(Effect.catch(() => Effect.succeed('')))) === stamp
 	)
-		return { packs: { base: (yield* readPackSource(path.join(seedOut, 'base'))).meta } };
+		return { packs: { base: (yield* read_pack_source(path.join(seedOut, 'base'))).meta } };
 	yield* fs.remove(stampFile, { force: true });
 	const packErrors: CheckDiagnostic[] = [];
 	const packs = yield* buildPacks(root, manifest, seedOut, packErrors);

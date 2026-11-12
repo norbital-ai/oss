@@ -1,10 +1,10 @@
 // An invitation: the authored team affiliation a member receives on acceptance. It names the person by their
 // email, their mobile number, or both; either proves it. Administrators read it (X-18 identity); no grant.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_invitation', {
+export default bind_system_model('sys_invitation')({
 	description: 'An invitation to join the workspace.',
-	label: 'email',
+	record_label: 'record.email',
 	fields: {
 		email: { kind: 'text', optional: true },
 		/** A mobile number in international form. */
@@ -20,7 +20,10 @@ export default model('sys_invitation', {
 		revoked_at: { kind: 'instant', optional: true },
 		revision: { kind: 'int', default: 1 }
 	},
-	check: { addressed: { or: [{ email: { isNull: false } }, { phone: { isNull: false } }] } },
-	table: { primary: 'text', indexes: [{ on: [{ lower: 'email' }] }, { on: ['phone'] }] },
-	read: 'all'
+	constraints: {
+		addressed: { check: { or: [{ email: { is_null: false } }, { phone: { is_null: false } }] } }
+	},
+	table: { primary: 'text' },
+	outputs: { default: { fields: 'all' } },
+	indexes: { by_expression: { on: [{ lower: 'email' }] }, by_phone: { on: ['phone'] } }
 });

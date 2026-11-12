@@ -4,25 +4,19 @@
 // (a model's read and write layers, a policy's grant layers), syncs (their connection, parsers, cadence and instance), embedding
 // origins; and, over the model sources, a write callback reading inside a loop and a notice sent through a connection that
 // carries no conversation. Each finding names the declaring file.
-import { Array, Predicate, Result, Schema } from 'effect';
-import { LIMITS, sizeBytes } from '@norbital-ai/bolt/engine';
+import { Array, Predicate, Result } from 'effect';
+import { LIMITS, size_bytes } from '@norbital-ai/bolt/engine';
 import type { EngineManifest, GrantData } from '@norbital-ai/bolt/engine';
 import {
 	FieldsSchema,
-	layerModels,
-	scopeObject,
-	parseRate,
+	layer_models,
+	parse_cron,
+	parse_rate,
 	DRIVERS,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
-import { type IntegrationSpec } from '@norbital-ai/bolt';
-import { clockDefault } from '@norbital-ai/std/vars';
-import {
-	labelExpression,
-	labelPaths,
-	recordLabelSpec,
-	recordLabelExpression
-} from '@norbital-ai/std/label';
+import { clock_default } from '@norbital-ai/std/vars';
+import { label_expression, label_paths } from '@norbital-ai/std/label';
 
 export type Finding = { code: string; path: string; message: string; line?: number };
 const isList = <T>(v: T | readonly T[]): v is readonly T[] => Array.isArray(v);
@@ -39,45 +33,12 @@ const PRECISION: Readonly<Record<string, readonly string[]>> = {
 	instant: [...DATE_UNITS, 'hour', 'minute'],
 	time: ['hour', 'minute']
 };
-const MACROS = ['@yearly', '@annually', '@monthly', '@weekly', '@daily', '@hourly'];
-const RANGES = [
-	[0, 59],
-	[0, 23],
-	[1, 31],
-	[1, 12],
-	[0, 7]
-] as const;
-/** Five fields (minute hour day month weekday) of `*`, numbers, ranges, lists and steps, or a macro. ponytail: no month or day names. */
-export function cronValid(s: string): boolean {
-	if (MACROS.includes(s)) return true;
-	const fields = s.trim().split(/\s+/);
-	return (
-		fields.length === 5 &&
-		fields.every((field, i) =>
-			field.split(',').every((part) => {
-				const [range = '', step] = part.split('/');
-				if (step !== undefined && !/^[1-9]\d*$/.test(step)) return false;
-				if (range === '*') return true;
-				const [lo, hi] = RANGES[i]!,
-					[a = '', b] = range.split('-');
-				const n = (x: string) => /^\d+$/.test(x) && Number(x) >= lo && Number(x) <= hi;
-				return n(a) && (b === undefined || (n(b) && Number(a) <= Number(b)));
-			})
-		)
-	);
-}
 
-/** The read grants a model grant holds, by output: `read` is `default`'s, `outputs` the named ones'. */
-const grantedOutputs = (
-	g: GrantData
-): readonly (readonly [string, NonNullable<GrantData['read']>])[] => [
-	...(g.read === undefined ? [] : [['default', g.read] as const]),
-	...Object.entries(g.outputs ?? {})
-];
+const grantedOutputs = (g: GrantData) => Object.entries(g.outputs ?? {});
 /** The layer map output `output` of `c` declares (`undefined`: no such output). */
 const outputLayers = (m: EngineManifest, c: string, output: string) => {
 	const spec = m.exposures[c] ?? SYSTEM.exposures[c];
-	return output === 'default' ? spec?.read : spec?.outputs?.[output];
+	return spec?.outputs[output];
 };
 /** The root fields output `output` of `c` lists; `undefined`: every field (`'all'`) or no such output. */
 const outputFields = (
@@ -89,9 +50,12 @@ const outputFields = (
 	return fields === undefined || fields === 'all' ? undefined : fields;
 };
 /** A read grant whose root `where` scopes to the requestor's own rows: `{ <sys_user ref>: { eq: { var: 'requestor.id' } } }`. */
-const ownRows = (m: EngineManifest, c: string, read: NonNullable<GrantData['read']>): boolean => {
-	const root = Predicate.isObject(read) ? read[c] : undefined;
-	const where = Predicate.isObject(root) ? root.where : undefined;
+const ownRows = (
+	m: EngineManifest,
+	c: string,
+	read: NonNullable<GrantData['outputs']>[string]
+): boolean => {
+	const where = read.scopes?.[c];
 	return (
 		Predicate.isObject(where) &&
 		Object.entries(where).some(
@@ -105,7 +69,7 @@ const ownRows = (m: EngineManifest, c: string, read: NonNullable<GrantData['read
 };
 /** The columns a create or update grant names on layer `path`; `undefined`: every declared one. */
 const grantColumns = (g: GrantData['create'], path: string): readonly string[] | undefined =>
-	typeof g === 'object' ? g.columns?.[path] : undefined;
+	g?.columns?.[path];
 const SYSTEM_COLUMNS = ['id', 'revision', 'created_at', 'created_by', 'updated_at', 'updated_by'];
 
 type RuleContext = {
@@ -190,7 +154,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				!(Number.isInteger(k.max) && Number(k.max) > 0)
 			)
 				range('text max is a positive integer');
-			if (k.kind === 'file' && !(sizeBytes(String(k.max)) > 0))
+			if (k.kind === 'file' && !(size_bytes(String(k.max)) > 0))
 				range('file max is a positive size'); // hook:runtime
 			// a precision the kind cannot hold (a JS manifest or a cast: tsc refuses it in a declaration)
 			const units = PRECISION[k.kind === 'period' ? String(k.of) : k.kind] ?? [];
@@ -211,7 +175,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 			)
 				range('min is above max');
 			if (k.kind === 'seq') {
-				const tokens = [...String(k.pattern ?? '{0}').matchAll(/\{([^}]*)\}/g)].map((x) => x[1]!);
+				const tokens = [...String(k.pattern ?? '{0}').matchAll(/\{([^}]*)\}/g)].map((x) => x[0].slice(1, -1));
 				if (
 					tokens.filter((t) => /^0+$/.test(t)).length !== 1 ||
 					tokens.some((t) => !/^(0+|yyyy|yy|mm)$/.test(t))
@@ -244,6 +208,9 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 								model,
 								`${f}: '${s}' moves to '${to}', which is not a state`
 							);
+				for (const [state, rule] of Object.entries(states))
+					if (rule.stamp !== undefined && (spec.fields[rule.stamp]?.kind !== 'instant' || spec.fields[rule.stamp]?.many === true))
+						at('model/state', 'model', model, `${f}.${state}: stamp '${rule.stamp}' must name one stored instant field`);
 				// rule 41, §5.5: every state is reachable from `initial` along `to` edges (an unreachable state's edges are dead)
 				const seen = new Set([String(k.initial)]);
 				for (const s of seen) for (const to of states[s]?.to ?? []) seen.add(to);
@@ -265,7 +232,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				!(
 					Object.keys(d).length === 1 &&
 					typeof d['var'] === 'string' &&
-					clockDefault(d['var']) !== undefined
+					clock_default(d['var']) !== undefined
 				)
 			)
 				at(
@@ -284,28 +251,31 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				);
 		}
 		// a label is what a person reads for the row: an id or a foreign key would show as a uuid
-		const identifier = recordLabelExpression(spec) ?? recordLabelSpec(spec);
+		const identifier = spec.record_label;
 		if (typeof identifier === 'string') {
-			const program = labelExpression(identifier);
+			const program = label_expression(identifier);
 			if ('error' in program) at('model/label', 'model', model, program.error);
 		}
-		for (const l of labelPaths(identifier)) {
-			// a label may follow one-relations; labelRead brings the target's label in the same read
-			let owner = model;
-			for (const [index, field] of l.split('.').entries()) {
-				const relation = m.relationships[`${owner}.${field}`];
-				if (relation !== undefined) {
-					owner = list(relation.to)[0] ?? owner;
+		for (const l of label_paths(identifier)) {
+			const [field = l, ...tail] = l.split('.');
+			const relation = m.relationships[`${model}.${field}`];
+			if (relation === undefined) {
+				if (spec.fields[field] === undefined && spec.computed?.[field] === undefined && field !== 'id')
+					at('model/label', 'model', model, `label reads unknown field '${l}'`);
+				const kind = spec.fields[field];
+				if (tail.length > 0 && kind?.kind === 'ref' && kind.many === true)
+					at('model/label', 'model', model, `label '${l}' must follow a to-one relation`);
+			} else if (tail.length > 0) {
+				const targets = list(relation.to), target = targets[0], leaf = tail[0];
+				if (targets.length !== 1 || target === undefined) {
+					at('model/label', 'model', model, `label '${l}' must follow a single-target to-one relation`);
 					continue;
 				}
-				const own = m.models[owner] ?? SYSTEM.models[owner];
-				if (
-					own?.fields[field] === undefined &&
-					own?.computed?.[field] === undefined &&
-					field !== 'id'
-				)
+				const own = m.models[target] ?? SYSTEM.models[target];
+				if (leaf === undefined || (own?.fields[leaf] === undefined && own?.computed?.[leaf] === undefined && leaf !== 'id'))
 					at('model/label', 'model', model, `label reads unknown field '${l}'`);
-				if (index < l.split('.').length - 1) break;
+				if (leaf !== undefined && tail.length > 1 && (m.relationships[`${target}.${leaf}`] ?? SYSTEM.relationships[`${target}.${leaf}`]) !== undefined)
+					at('model/label', 'model', model, `label '${l}' crosses more than one relation`);
 			}
 			if (l === 'id' || m.relationships[`${model}.${l}`] !== undefined)
 				at(
@@ -322,7 +292,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				const target = m.models[to] ?? SYSTEM.models[to];
 				return (
 					target === undefined ||
-					(recordLabelExpression(target) === undefined && !(target.search?.text.length ?? 0))
+					(target.record_label === undefined && !(target.search?.text.length ?? 0))
 				);
 			});
 			if (silent !== undefined)
@@ -335,7 +305,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 		}
 		// the search reads each linked row's own search text, and through its links theirs: every link on the way is a
 		// layer the model's read declares, read under its policies
-		const read = m.exposures[model]?.read;
+		const read = m.exposures[model]?.outputs.default;
 		const undeclared = (at: string, of: string, seen: readonly string[]): string[] =>
 			(m.models[of]?.search?.text ?? []).flatMap((f) => {
 				const rel = m.relationships[`${of}.${f}`];
@@ -388,9 +358,9 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 }
 
 /**
- * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layerModels`); a layer names
+ * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layer_models`); a layer names
  * fields its model has, a write layer only writable columns and never the FK that ties its rows to the layer above
- * (the engine sets it); `filled` stays within `create.columns`. An output is never named `default`. A policy grants
+ * (the engine sets it); `filled` stays within `create.columns`. A policy grants
  * outputs its model declares and filters only their paths, and it grants a write verb only beside the model's own.
  */
 function layerRules({ m, at }: RuleContext): void {
@@ -420,17 +390,16 @@ function layerRules({ m, at }: RuleContext): void {
 	};
 	/** The FK on a child layer's model that runs back to the layer above. */
 	const backFk = (above: string, rel: string): string | undefined => {
-		const key = Object.keys(relationships).find((k) => {
-			const r = relationships[k]!;
+		const entry = Object.entries(relationships).find(([, r]) => {
 			return (
 				r.inverse === rel && (typeof r.to === 'string' ? r.to === above : r.to.includes(above))
 			);
 		});
-		return key?.slice(key.indexOf('.') + 1);
+		return entry?.[0].slice(entry[0].indexOf('.') + 1);
 	};
 	const resolved: { [model: string]: { readonly [path: string]: string } } = {};
 	for (const [model, c] of Object.entries(m.exposures)) {
-		const { models, errors } = layerModels(model, c, relationships);
+		const { models, errors } = layer_models(model, c, relationships);
 		resolved[model] = models;
 		for (const e of errors) at('model/layer', 'model', model, e);
 		const unknown = (
@@ -445,20 +414,13 @@ function layerRules({ m, at }: RuleContext): void {
 						'model/layer',
 						'model',
 						model,
-						`${where}: '${f}' is no ${where === 'read' ? 'field' : 'writable column'} of ${path} (${models[path]})`
+						`${where}: '${f}' is no ${where.startsWith('outputs.') ? 'field' : 'writable column'} of ${path} (${models[path]})`
 					);
 		};
-		for (const read of [c.read, ...Object.values(c.outputs ?? {})])
+		for (const [output, read] of Object.entries(c.outputs))
 			for (const [path, layer] of Object.entries(read))
 				if (models[path] !== undefined && layer.fields !== 'all')
-					unknown('read', path, layer.fields, fieldsOf(models[path]));
-		if (Object.hasOwn(c.outputs ?? {}, 'default'))
-			at(
-				'model/layer',
-				'model',
-				model,
-				"outputs: 'default' is the model's read; name another output"
-			);
+					unknown(`outputs.${output}`, path, layer.fields, fieldsOf(models[path]));
 		for (const [verb, map] of [
 			['create', c.create?.columns],
 			['update', c.update?.columns]
@@ -493,19 +455,16 @@ function layerRules({ m, at }: RuleContext): void {
 			const declared = m.exposures[c] ?? SYSTEM.exposures[c];
 			if (declared === undefined) continue;
 			const bad = (message: string) => at('access/layer', 'policy', p, `${c}: ${message}`);
-			const identity = c === 'sys_user' || c === 'sys_invitation';
 			for (const [output, read] of grantedOutputs(g)) {
 				const layers = outputLayers(m, c, output);
 				if (layers === undefined) {
 					bad(`grants output '${output}', which ${c} does not declare`);
 					continue;
 				}
-				// an identity grant is a bare root scope; any other names the output's paths
-				if (identity || !Predicate.isObject(read)) continue;
-				for (const path of Object.keys(read))
+				for (const path of Object.keys(read.scopes ?? {}))
 					if (layers[path] === undefined)
 						bad(
-							`${output === 'default' ? 'read' : `outputs.${output}`} names '${path}', which that output does not declare as a read layer`
+							`outputs.${output} names '${path}', which that output does not declare as a read layer`
 						);
 			}
 			for (const verb of ['create', 'update', 'delete'] as const) {
@@ -533,31 +492,14 @@ function layerRules({ m, at }: RuleContext): void {
 /** Rule 38: a rate admits at least one request per window. */
 const validRate = (rate: string): boolean => {
 	const parsed = Result.try(() => {
-		const r = parseRate(rate);
+		const r = parse_rate(rate);
 		return Number.isInteger(r.limit) && r.limit > 0 && r.windowMs > 0;
 	});
 	return Result.isSuccess(parsed) && parsed.success;
 };
 
-function toolRules({ m, at }: RuleContext): void {
-	for (const [name, tool] of Object.entries(m.agent.tools ?? {})) {
-		const input = Schema.decodeUnknownResult(FieldsSchema)(tool.input ?? {});
-		if (Result.isFailure(input)) at('tool/input', 'tool', name, `input: ${input.failure.message}`);
-	}
-}
-
 function automationRules({ m, bodies, at }: RuleContext): void {
 	for (const [name, a] of Object.entries(m.automations)) {
-		const input = Schema.decodeUnknownResult(FieldsSchema)(a.input ?? {});
-		if (Result.isFailure(input))
-			at('automation/input', 'automation', name, `input: ${input.failure.message}`);
-		if (a.limit !== undefined && !validRate(a.limit))
-			at(
-				'automation/limit',
-				'automation',
-				name,
-				`limit: '${a.limit}' is not a positive count per window`
-			);
 		// a run holds exactly its declared policies: at least one, each declared
 		const policies: readonly unknown[] = Array.isArray(a.policies) ? a.policies : [];
 		if (policies.length === 0)
@@ -575,38 +517,26 @@ function automationRules({ m, bodies, at }: RuleContext): void {
 					name,
 					`policies: there is no policy '${String(p)}'`
 				);
-		const delegated = new Set<string>();
-		for (const declaration of a.delegations ?? []) {
-			const dot = declaration.verb.lastIndexOf('.'),
-				model = declaration.verb.slice(0, dot),
-				verb = declaration.verb.slice(dot + 1);
-			const grant = m.policies[declaration.policy]?.grants[model];
-			const key = declaration.verb + '\0' + declaration.policy;
-			if (
-				!isOp(verb) ||
-				m.exposures[model] === undefined ||
-				grant === undefined ||
-				grant[verb] === undefined ||
-				delegated.has(key)
-			)
-				at(
-					'automation/delegation',
-					'automation',
-					name,
-					'Delegation requires one unique existing policy and its exact native target verb grant.'
-				);
-			delegated.add(key);
+		for (const [field, kind] of Object.entries(a.input ?? {})) {
+			if (kind.kind !== 'rows') continue;
+			const model = m.exposures[kind.of] ?? SYSTEM.exposures[kind.of];
+			if (kind.of === 'sys_run' || model === undefined)
+				at('automation/rows', 'automation', name, `input.${field}: '${kind.of}' is no readable model`);
+			else if (!a.policies.some((policy) => m.policies[policy]?.grants[kind.of]?.outputs?.['default'] !== undefined))
+				at('automation/rows', 'automation', name, `input.${field}: the automation's policies must grant ${kind.of}'s default output`);
 		}
 		if (!bodies.automations.includes(name))
 			at(
 				'automation/no-body',
 				'automation',
 				name,
-				`declare its run body inline: automation('${name}', { …, run: function* (input, ctx) { … } })`
+				'declare its run body inline: automation({ …, run: function* (input, ctx) { … } })'
 			);
-		for (const on of list(a.on)) {
-			if ('cron' in on && typeof on.cron === 'string' && !cronValid(on.cron))
-				at('automation/cron', 'automation', name, `'${on.cron}' is not 5 cron fields or a macro`);
+		for (const on of a.on ?? []) {
+			if (!('cron' in on)) continue;
+			const parsed = parse_cron(on.cron, on.tz ?? m.workspace.tz);
+			if (Result.isFailure(parsed))
+				at('automation/cron', 'automation', name, `'${on.cron}': ${parsed.failure.message}`);
 		}
 	}
 }
@@ -618,14 +548,16 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 		if (Predicate.isObject(aud) && Array.isArray(aud.public))
 			for (const p of aud.public) publicOf.set(p, [...(publicOf.get(p) ?? []), app]);
 	}
-	// a kiosk open with no authentication runs its requests as its assigned policies, so those count as
-	// public for per-ip limits just like an app's visitor policies.
-	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {})) {
-		if (spec.auth !== 'none') continue;
-		for (const p of spec.policies ?? [])
-			publicOf.set(p, [...(publicOf.get(p) ?? []), `kiosk:${kiosk}`]);
-	}
 	for (const [p, spec] of Object.entries(m.policies)) {
+		for (const automation of spec.capabilities?.automations ?? [])
+			if (m.automations[automation] === undefined)
+				at('access/automation', 'policy', p, `'${automation}' is not an automation; manual sync controls use capabilities.syncs`);
+		for (const key of spec.capabilities?.syncs ?? []) {
+			const dot = key.lastIndexOf('.'), model = key.slice(0, dot), sync = key.slice(dot + 1);
+			const entry = m.exposures[model]?.syncs?.[sync];
+			if (dot < 1 || entry === undefined || entry.with === 'file' || entry.read !== true)
+				at('access/sync', 'policy', p, `'${key}' is not a remote read sync (model.sync_name)`);
+		}
 		for (const [key, v] of Object.entries(spec.limits ?? {})) {
 			// rule 38: a rate admits at least one request per window
 			for (const x of list(v)) {
@@ -651,6 +583,7 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 
 function visitorRules({ m, at }: RuleContext): void {
 	for (const [app, spec] of Object.entries(m.apps)) {
+		if (spec.shell === 'kiosk') continue;
 		const aud = spec.audience;
 		const publicPolicies: unknown = typeof aud === 'object' ? aud.public : undefined;
 		if (!strings(publicPolicies)) continue;
@@ -674,22 +607,18 @@ function visitorRules({ m, at }: RuleContext): void {
 }
 
 function kioskRules({ m, bodies, at }: RuleContext): void {
-	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {})) {
-		const s = spec;
-		const policies = strings(spec.policies) ? spec.policies : [];
+	for (const [kiosk, s] of Object.entries(m.apps)) {
+		if (s.shell !== 'kiosk') continue;
+		const isPublic = typeof s.audience === 'object';
+		const declared = isPublic ? s.audience.public : s.policies;
+		const policies = strings(declared) ? declared : [];
+		if (policies.length === 0)
+			at('kiosk/policy', 'app', kiosk, 'a kiosk declares the policies it runs under');
 		for (const p of policies)
 			if (m.policies[p] === undefined)
-				at('kiosk/policy', 'kiosk', kiosk, `policies: there is no policy '${p}'`);
-		if (
-			s.auth !== undefined &&
-			s.auth !== 'members' &&
-			s.auth !== 'external' &&
-			s.auth !== 'all' &&
-			s.auth !== 'none'
-		)
-			at('kiosk/auth', 'kiosk', kiosk, `auth is 'members', 'external', 'all' or 'none'`);
+				at('kiosk/policy', 'app', kiosk, `policies: there is no policy '${p}'`);
 		if (Object.keys(s.pages ?? {}).length === 0)
-			at('kiosk/pages', 'kiosk', kiosk, 'a kiosk has at least one page');
+			at('kiosk/pages', 'app', kiosk, 'a kiosk has at least one page');
 		// A kiosk's authority is fixed and always on: its policies admit no open-ended grant. Every output it reads
 		// lists its fields (a narrow named output; its history shows the same), every create and update lists its
 		// columns, and nothing deletes.
@@ -711,26 +640,26 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 				if (g.delete !== undefined) narrow(`${c}: a kiosk never deletes`);
 			}
 		}
-		// auth 'external': every signed-in external opens it, so its policies are their portal authority and never
+		// audience 'external': every signed-in external opens it, so its policies are their portal authority and never
 		// open apps, kiosks or agent tools beyond it
-		if (s.auth === 'external')
+		if (s.audience === 'external')
 			for (const p of policies)
 				if (m.policies[p]?.capabilities !== undefined)
 					at(
 						'access/kiosk-grant',
 						'policy',
 						p,
-						`kiosk '${kiosk}' (auth 'external'): a portal policy holds no capabilities`
+						`kiosk '${kiosk}' (audience 'external'): a portal policy holds no capabilities`
 					);
-		// auth 'none': the kiosk is open with no requestor policy, so its assigned policies run
+		// A public kiosk is open with no requestor policy, so its assigned policies run
 		// envoy-style inside — they hold the same visitor shape as a public app's policies.
-		if (s.auth === 'none') {
+		if (isPublic) {
 			const held = policies.flatMap((p: string) =>
 				m.policies[p] === undefined ? [] : [[p, m.policies[p]] as const]
 			);
 			visitorShape(m, held, {
 				bad: (p, message) =>
-					at('access/kiosk-grant', 'policy', p, `kiosk '${kiosk}' (auth 'none'): ${message}`),
+					at('access/kiosk-grant', 'policy', p, `kiosk '${kiosk}' (public audience): ${message}`),
 				ref: (p, message) => at('access/kiosk-ref', 'policy', p, message),
 				title: 'public kiosk',
 				forbidden: 'public kiosk policy',
@@ -742,6 +671,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 	}
 }
 
+type IntegrationSpec = EngineManifest['integrations'][string];
 /** A definition by name: the workspace's, or one of bolt's conversation definitions. */
 const definition = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
 	m.integrations[name] ?? SYSTEM.integrations[name];
@@ -760,12 +690,6 @@ const MEDIA_TOPS = [
 	'text',
 	'video'
 ];
-/** The FK value a ref's `where` pins its `sys_integration` target to (`{ integration: { eq: '<definition>' } }`). */
-const pinnedTo = (where: unknown): unknown =>
-	Predicate.isObject(where) && Predicate.isObject(where['integration'])
-		? where['integration']['eq']
-		: undefined;
-
 function syncRules({ m, at }: RuleContext): void {
 	for (const [model, c] of Object.entries(m.exposures))
 		for (const [name, sync] of Object.entries(c.syncs ?? {})) {
@@ -804,52 +728,20 @@ function syncRules({ m, at }: RuleContext): void {
 				bad('every', `'${sync.every}' is not a duration ('15min', '1h')`);
 			if (sync.partitions !== undefined && d.configuration?.[sync.partitions] === undefined)
 				bad('partitions', `'${sync.partitions}' is no configuration field of '${sync.with}'`);
-			// an FK pinned to the definition picks the instance per row; else a write goes through its one named connection
-			const pinned = Object.entries(m.relationships).some(
-				([key, r]) =>
-					key.startsWith(`${model}.`) &&
-					r.to === 'sys_integration' &&
-					pinnedTo(r.where) === sync.with
-			);
-			const slots = Object.values(m.connections).filter((x) => x.integration === sync.with).length;
-			if (sync.write === true && !pinned && slots !== 1)
-				bad(
-					'instance',
-					`a write goes through one instance of '${sync.with}': pin an FK to sys_integration (where: { integration: { eq: '${sync.with}' } }) or declare exactly one connection of it (there are ${slots})`
-				);
 		}
 }
 
 const ORIGIN = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*(:\d{1,5})?$/i;
 function embedRules({ m, at }: RuleContext): void {
-	const origins = (
-		code: string,
-		role: string,
-		name: string,
-		list: readonly string[] | undefined
-	) => {
-		for (const o of list ?? [])
-			if (!ORIGIN.test(o))
-				at(
-					code,
-					role,
-					name,
-					`embed: '${o}' is an origin, https://host[:port] (no path, no wildcard)`
-				);
-	};
-	for (const [kiosk, spec] of Object.entries(m.kiosks ?? {}))
-		origins('kiosk/embed', 'kiosk', kiosk, spec.embed);
 	for (const [app, spec] of Object.entries(m.apps))
-		for (const [page, p] of Object.entries(spec.pages ?? {})) {
-			origins('app/embed', 'app', app, p.embed);
-			if (p.embed !== undefined && p.portal !== true)
+		for (const origin of spec.embed ?? [])
+			if (!ORIGIN.test(origin))
 				at(
 					'app/embed',
 					'app',
 					app,
-					`page '${page}': only a portal page (portal: true) may be embedded`
+					`embed: '${origin}' is an origin, https://host[:port] (no path, no wildcard)`
 				);
-		}
 }
 
 const RULES = [
@@ -857,7 +749,6 @@ const RULES = [
 	modelRules,
 	layerRules,
 	automationRules,
-	toolRules,
 	policyRules,
 	visitorRules,
 	kioskRules,
@@ -905,19 +796,18 @@ function visitorShape(
 	);
 	for (const [p, s] of policies) {
 		const bad = (message: string) => options.bad(p, message);
-		for (const k of ['automations', 'capabilities'] as const)
-			if (s[k] !== undefined) bad(`a ${options.forbidden} holds no ${k}`);
+		if (s.capabilities !== undefined) bad(`a ${options.forbidden} holds no capabilities`);
 		for (const [c, g] of Object.entries(s.grants)) {
 			if (c.startsWith('sys_')) {
 				bad(`no grant on ${c}`);
 				continue;
 			}
 			for (const k of Object.keys(g))
-				if (k !== 'read' && k !== 'outputs' && k !== 'create')
+				if (k !== 'outputs' && k !== 'create')
 					bad(`${c}: a ${options.title} may only read or create, never ${k}`);
 			for (const [output, read] of grantedOutputs(g)) {
 				const fields = outputFields(m, c, output);
-				const label = labelPaths(recordLabelSpec(m.models[c] ?? {})).map(
+				const label = label_paths(m.models[c]?.record_label).map(
 					(path) => path.split('.')[0] ?? path
 				);
 				if (fields === undefined)

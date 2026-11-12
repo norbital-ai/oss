@@ -2,8 +2,8 @@
 // idle time: every token received (answer or reasoning) restarts it, so a model streaming its reasoning is never cut. A
 // stream silent for the wall is closed and its partial output kept as a cut step the next request continues; a request
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
-// The agent's turn loop and an inference reach it as an Effect `LanguageModel` (P7, `generate`): one `generateText` with
-// tool-call resolution disabled is one `modelCall`, its tools a `Toolkit`, the AI port's ABI unchanged beneath it.
+// Chat, compaction, verification and structured inference send the native request through modelCall.
+import { item_kind, json_schema, KindSchema } from '@norbital-ai/std/kind';
 import {
 	Cause,
 	Clock,
@@ -18,13 +18,15 @@ import {
 	type Scope
 } from 'effect';
 import * as EffectArray from 'effect/Array';
-import { AiError, LanguageModel, Prompt, Response, Tool, Toolkit } from 'effect/ai';
+import { model_step, run_calls, type ModelCarry } from './step.ts';
+import { textOf } from './schema.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
+import type { ToolBehavior } from '../../protocol/schema.ts';
 import type { Ai, AiEvent } from '../ports.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { FacilityCall } from '../services.ts';
 import type { Json } from '../../decl/values.ts';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { encode_wire } from '@norbital-ai/std/wire';
 import {
 	LIMITS,
 	type AiMessage,
@@ -34,7 +36,6 @@ import {
 } from '../contracts.ts';
 import { decodeInput } from '../callables/decode.ts';
 import type { Kind } from '@norbital-ai/std/kind';
-import { RequestOutput } from '../integrations/request-schema.ts';
 import { bound, BOUNDS, size } from './context.ts';
 import {
 	ANY,
@@ -56,9 +57,10 @@ import {
 import { Validator } from '@cfworker/json-schema';
 import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
-/** Rule 72: a platform budget checked before the provider's own limit. */
-export const MODEL_FILES = { count: 24, bytes: 20 * 1024 * 1024 } as const;
-/** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool; 8 files / 20 MiB a message. */
+const MiB = 1024 * 1024;
+/** Rule 72: a platform budget checked before the provider's own limit: files and bytes a call, bytes one file. */
+export const MODEL_FILES = { count: 24, bytes: 20 * MiB, fileBytes: 8 * MiB } as const;
+/** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool, within `MODEL_FILES`. */
 export const ATTACHMENT_MIME = /^(image|text|audio|application)\/[\w.+-]+$/;
 class ModelIdle extends FacilityFailure {
 	declare readonly cutTool?: true;
@@ -85,8 +87,8 @@ const retryBackoff: Schedule.Schedule<Duration.Duration, PortFailure> = Schedule
 ).pipe(
 	Schedule.modifyDelay(({ input, duration }) =>
 		Effect.succeed(
-			input instanceof FacilityFailure && input.retryAfterMs !== undefined
-				? Duration.max(duration, Duration.millis(input.retryAfterMs))
+			input instanceof FacilityFailure && input.retry_after_ms !== undefined
+				? Duration.max(duration, Duration.millis(input.retry_after_ms))
 				: duration
 		)
 	)
@@ -110,34 +112,23 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	request: AiRequest,
 	options: {
 		wallMs?: number | undefined;
+		/** Utility calls may retry upstream failures before a response, including their private streamed progress. */
+		retryUpstream?: number;
 		onDelta?: ((text: string) => void) | undefined;
 		onReasoning?: ((text: string) => void) | undefined;
 		onRequest?: (request: AiRequest) => Effect.Effect<void>;
 	} = {}
 ) {
 	if (options.onRequest !== undefined) yield* options.onRequest(request);
-	if (ai === undefined)
-		return yield* Effect.fail(
-			new Unavailable({ facility: 'ai', reason: 'the host provides no ai' })
-		);
+	if (ai === undefined) return yield* new Unavailable({ facility: 'ai', reason: 'the host provides no ai' });
 	if (!(yield* servesModel(ai, request.model)))
-		return yield* Effect.fail(
-			new Unavailable({
-				facility: 'ai',
-				reason: `no model is mapped to the class '${request.model}'`
-			})
-		);
+		return yield* new Unavailable({ facility: 'ai', reason: `no model is mapped to the class '${request.model}'` });
 	const files = request.files ?? [];
-	if (
-		files.length > MODEL_FILES.count ||
-		files.reduce((n, f) => n + f.bytes.length, 0) > MODEL_FILES.bytes
-	)
-		return yield* Effect.fail(
-			new FacilityFailure({
-				kind: 'invalid',
-				message: `a model call takes at most ${MODEL_FILES.count} files and 20 MiB`
-			})
-		);
+	if (files.length > MODEL_FILES.count || files.reduce((n, f) => n + f.bytes.length, 0) > MODEL_FILES.bytes)
+		return yield* new FacilityFailure({
+			kind: 'invalid',
+			message: `a model call takes at most ${MODEL_FILES.count} files and ${MODEL_FILES.bytes / MiB} MiB`
+		});
 	const wallMs = options.wallMs ?? LIMITS.callMs.ai,
 		// a long prompt no provider has cached takes 20–30 s to its first byte; after that the idle wall holds
 		firstMs = options.wallMs ?? FIRST_EVENT_MS;
@@ -146,9 +137,17 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		progressed = false,
 		begun = false;
 	let response: AiResponse | undefined;
+	let upstreamRetries = 0;
 	// Each pull races a native sleep. Business time may be frozen or adjusted independently.
 	yield* Stream.transformPull(
-		Stream.suspend(() => ai.infer(request)),
+		Stream.suspend(() => {
+			partial = '';
+			reasoning = '';
+			progressed = false;
+			begun = false;
+			response = undefined;
+			return ai.infer(request);
+		}),
 		(pull) => {
 			let finished = false;
 			const idle = (cause?: FacilityFailure): Effect.Effect<readonly [AiEvent], FacilityFailure> =>
@@ -158,33 +157,24 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						return Effect.fail(
 							progressed
 								? new ModelIdle(`the model was still writing a tool call at ${wallMs} ms`, true)
-								: (cause ??
-										new ModelIdle(
-											`the model yielded nothing within ${begun ? wallMs : firstMs} ms`
-										))
+								: (cause ?? new ModelIdle(`the model yielded nothing within ${begun ? wallMs : firstMs} ms`))
 						);
 					const cut: AiResponse = {
 						content: partial,
-						toolCalls: [],
+						tool_calls: [],
 						finish: 'cut',
 						...(reasoning === '' ? {} : { reasoning }),
 						usage: { input: 0, output: 0 }
 					};
-					const events: readonly [AiEvent] = [{ _tag: 'Response', response: cut }];
-					return Effect.succeed(events);
+					return Effect.succeed<readonly [AiEvent]>([{ _tag: 'Response', response: cut }]);
 				});
 			return Effect.succeed(
 				Effect.suspend(() =>
 					finished
 						? Cause.done()
 						: pull.pipe(
-								Effect.catchTag('FacilityFailure', (cause) =>
-									cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause)
-								),
-								Effect.timeoutOrElse({
-									duration: begun ? wallMs : firstMs,
-									orElse: () => idle()
-								})
+								Effect.catchTag('FacilityFailure', (cause) => (cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause))),
+								Effect.timeoutOrElse({ duration: begun ? wallMs : firstMs, orElse: () => idle() })
 							)
 				)
 			);
@@ -211,26 +201,33 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 				}
 			})
 		),
-		// A capacity refusal before output is safe to resend; a partial streamed reply is not.
+		// Capacity retries require no output. Utility calls carry their own upstream retry allowance.
 		Effect.retry({
 			schedule: retryBackoff,
 			times: TRANSIENT_RETRIES,
-			while: (error) =>
-				error instanceof FacilityFailure &&
-				error.kind === 'rateLimited' &&
-				partial === '' &&
-				!progressed &&
-				response === undefined
+			while: (error) => {
+				if (error instanceof FacilityFailure && error.kind === 'rate_limited')
+					return partial === '' && !progressed && response === undefined;
+				if (!isTransientUpstream(error) || upstreamRetries >= (options.retryUpstream ?? 0))
+					return false;
+				upstreamRetries++;
+				return true;
+			}
 		})
 	);
 	if (response === undefined)
-		return yield* Effect.fail(
-			new FacilityFailure({
-				kind: 'upstream',
-				message: 'the model stream ended without a response'
-			})
-		);
-	return response;
+		return yield* new FacilityFailure({ kind: 'upstream', message: 'the model stream ended without a response' });
+	return {
+		...response,
+		usage: {
+			...response.usage,
+			prompt: {
+				system: request.system?.length ?? 0,
+				messages: JSON.stringify(request.messages).length,
+				tools: request.tools === undefined || request.tools.length === 0 ? 0 : JSON.stringify(request.tools).length
+			}
+		}
+	};
 });
 
 /** `confirm`: an in-app call the person must approve first; it executes later under key `(turn, callId)`. */
@@ -244,271 +241,12 @@ export const ToolAnswer = Schema.Union([
 	Schema.Struct({ confirm: Schema.Literal(true) })
 ]);
 export type ToolAnswer = typeof ToolAnswer.Type;
-/** A catalogue tool, erased to its answer: a `Tool.make` over a service-free input Schema, or a `Tool.dynamic`. */
-export type AnyTool = Tool.Tool<
-	string,
-	{
-		readonly parameters: Schema.Top & {
-			readonly DecodingServices: never;
-			readonly EncodingServices: never;
-		};
-		readonly success: typeof ToolAnswer;
-		readonly failure: typeof Schema.Never;
-		readonly failureMode: 'error';
-	}
->;
-/** A tool's input as the closed JSON Schema the model is shown: Effect's document of its Schema, refusing unknown keys. */
-const closed: LanguageModel.CodecTransformer = (schema) => {
-	const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: 'error' });
-	return {
-		codec: schema,
-		jsonSchema:
-			Object.keys(document.definitions).length === 0
-				? document.schema
-				: { ...document.schema, $defs: document.definitions }
-	};
-};
-/** Each input's JSON Schema, by the object it is derived from: a turn's later steps offer the same tools again. */
-const toolSchemas = new WeakMap<object, Json>();
-/** The JSON Schema a tool's input is offered as: a dynamic tool's raw schema, else its closed Schema document. */
-export const toolSchema = (tool: Tool.Any): Json => {
-	const source =
-		Tool.isDynamic(tool) && tool.jsonSchema !== undefined ? tool.jsonSchema : tool.parametersSchema;
-	let schema = toolSchemas.get(source);
-	if (schema === undefined) {
-		schema = Schema.decodeUnknownSync(Schema.Json)(
-			Tool.getJsonSchema(tool, { transformer: closed })
-		);
-		toolSchemas.set(source, schema);
-	}
-	return schema;
-};
-
-/** The AI port's own content of a message or a reply part rides this provider option, so the ABI sees it unchanged. */
-const BOLT = 'bolt';
-/** A transcript message as a prompt message: its words as parts, its ABI content as the `bolt` option. */
-const promptMessage = (m: AiMessage): Prompt.Message => {
-	const options = { [BOLT]: m.content };
-	if (m.role !== 'tool')
-		return Prompt.makeMessage(m.role, {
-			content: [Prompt.makePart('text', { text: textOf(m.content) })],
-			options
-		});
-	const step = Predicate.isObject(m.content) ? m.content : {};
-	return Prompt.makeMessage('tool', {
-		content: [
-			Prompt.makePart('tool-result', {
-				id: typeof step['id'] === 'string' ? step['id'] : '',
-				name: typeof step['name'] === 'string' ? step['name'] : '',
-				isFailure: false,
-				result: step['result'] ?? null,
-				providerExecuted: false
-			})
-		],
-		options
-	});
-};
-/** A prompt back as the port's messages: each message's own content, else its words. */
-const portMessages = (prompt: Prompt.Prompt): AiMessage[] =>
-	prompt.content.flatMap((m): AiMessage[] =>
-		m.role === 'system'
-			? []
-			: [
-					{
-						role: m.role,
-						content:
-							m.options[BOLT] ??
-							m.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
-					}
-				]
-	);
-/** What a reply's finish carries beyond the standard parts: a cut and its continuation, the cost and the call id. */
-const Finish = Schema.Struct({
-	cut: Schema.Boolean,
-	continuation: Schema.optionalKey(Schema.String),
-	cost: Schema.optionalKey(Schema.Number),
-	call: Schema.optionalKey(Schema.String),
-	provider: Schema.optionalKey(Schema.String),
-	cached: Schema.optionalKey(Schema.Number),
-	reasoning: Schema.optionalKey(Schema.Number),
-	prompt: Schema.optionalKey(
-		Schema.Struct({ system: Schema.Number, messages: Schema.Number, tools: Schema.Number })
-	)
-});
-/** A port reply as response parts. */
-const replyParts = (r: AiResponse): Response.PartEncoded[] => [
-	...(r.reasoning === undefined ? [] : [{ type: 'reasoning' as const, text: r.reasoning }]),
-	{ type: 'text', text: textOf(r.content), metadata: { [BOLT]: r.content } },
-	...r.toolCalls.map((c): Response.PartEncoded => ({
-		type: 'tool-call',
-		id: c.id,
-		name: c.name,
-		params: c.input,
-		...(c.invalid === undefined ? {} : { metadata: { [BOLT]: c.invalid } })
-	})),
-	{
-		type: 'finish',
-		reason: r.finish === 'tool' ? 'tool-calls' : r.finish === 'cut' ? 'pause' : 'stop',
-		usage: { inputTokens: { total: r.usage.input }, outputTokens: { total: r.usage.output } },
-		metadata: {
-			[BOLT]: Schema.encodeSync(Finish)({
-				cut: r.finish === 'cut',
-				...(r.continuation === undefined ? {} : { continuation: r.continuation }),
-				...(r.usage.cost === undefined ? {} : { cost: r.usage.cost }),
-				...(r.usage.call === undefined ? {} : { call: r.usage.call }),
-				...(r.usage.provider === undefined ? {} : { provider: r.usage.provider }),
-				...(r.usage.cached === undefined ? {} : { cached: r.usage.cached }),
-				...(r.usage.reasoning === undefined ? {} : { reasoning: r.usage.reasoning }),
-				...(r.usage.prompt === undefined ? {} : { prompt: r.usage.prompt })
-			})
-		}
-	}
-];
-/** A generated response back as the port's reply. */
-const portReply = (
-	response: LanguageModel.GenerateTextResponse<Record<string, AnyTool>, 'deferred'>
-): AiResponse => {
-	let content: Json = '',
-		finish: typeof Finish.Type = { cut: false };
-	for (const part of response.content)
-		if (part.type === 'text') content = part.metadata[BOLT] ?? part.text;
-		else if (part.type === 'finish')
-			finish = Option.getOrElse(
-				Schema.decodeUnknownOption(Finish)(part.metadata[BOLT]),
-				() => finish
-			);
-	const toolCalls = response.toolCalls.map((c) => {
-		const invalid = c.metadata[BOLT];
-		return {
-			id: c.id,
-			name: c.name,
-			input: Option.getOrElse(Schema.decodeUnknownOption(Schema.Json)(c.params), () => ({})),
-			...(typeof invalid === 'string' ? { invalid } : {})
-		};
-	});
-	const reasoning = response.reasoningText;
-	return {
-		content,
-		toolCalls,
-		finish: finish.cut ? 'cut' : toolCalls.length > 0 ? 'tool' : 'stop',
-		...(finish.continuation === undefined ? {} : { continuation: finish.continuation }),
-		...(reasoning === undefined ? {} : { reasoning }),
-		usage: {
-			input: response.usage.inputTokens.total ?? 0,
-			output: response.usage.outputTokens.total ?? 0,
-			...(finish.cost === undefined ? {} : { cost: finish.cost }),
-			...(finish.call === undefined ? {} : { call: finish.call }),
-			...(finish.provider === undefined ? {} : { provider: finish.provider }),
-			...(finish.cached === undefined ? {} : { cached: finish.cached }),
-			...(finish.reasoning === undefined ? {} : { reasoning: finish.reasoning }),
-			...(finish.prompt === undefined ? {} : { prompt: finish.prompt })
-		}
-	};
-};
-/**
- * One model step (P7): `generateText` over the AI port as an Effect `LanguageModel`, with tool-call resolution disabled
- * and validation deferred, so the caller's own loop (idle wall, cut, retry, confirm cards, repeat guard) runs the calls.
- * The toolkit's tools reach the port as their closed JSON Schemas; the step's failure is the port's own (`modelCall`).
- */
-export const generate = Effect.fn('Ai.generate')(function* (
-	ai: Ai['Service'] | undefined,
-	request: Omit<AiRequest, 'tools'>,
-	toolkit: Toolkit.WithHandler<Record<string, AnyTool>>,
-	options: Parameters<typeof modelCall>[2] = {}
-): Effect.fn.Return<AiResponse, FacilityFailure | Unavailable> {
-	let failure: FacilityFailure | Unavailable | undefined;
-	const model = yield* LanguageModel.make({
-		generateText: (provider) =>
-			Effect.gen(function* () {
-				const tools = provider.tools.map((tool) => ({
-					name: tool.name,
-					description: Tool.getDescription(tool) ?? '',
-					input: toolSchema(tool)
-				}));
-				const messages = portMessages(provider.prompt);
-				const outbound = { ...request, messages, ...(tools.length === 0 ? {} : { tools }) };
-				const reply = yield* modelCall(ai, outbound, options);
-				const prompt = {
-					system: request.system?.length ?? 0,
-					messages: JSON.stringify(messages).length,
-					tools: tools.length === 0 ? 0 : JSON.stringify(tools).length
-				};
-				return replyParts({ ...reply, usage: { ...reply.usage, prompt } });
-			}).pipe(
-				Effect.mapError((error) => {
-					failure = error;
-					return AiError.make({
-						module: 'Bolt',
-						method: 'sys_2.infer',
-						reason: new AiError.UnknownError({ description: error.message })
-					});
-				})
-			),
-		streamText: () =>
-			Stream.fail(
-				AiError.make({
-					module: 'Bolt',
-					method: 'sys_2.infer',
-					reason: new AiError.UnknownError({ description: 'the agent generates each step whole' })
-				})
-			)
-	});
-	const response = yield* model
-		.generateText({
-			prompt: Prompt.fromMessages([
-				...(request.system === undefined
-					? []
-					: [Prompt.makeMessage('system', { content: request.system })]),
-				...request.messages.map(promptMessage)
-			]),
-			toolkit,
-			disableToolCallResolution: true,
-			toolCallValidation: 'deferred'
-		})
-		.pipe(
-			Effect.mapError(
-				(error) => failure ?? new FacilityFailure({ kind: 'upstream', message: error.message })
-			)
-		);
-	return portReply(response);
-});
-/**
- * Tools the model is offered by their raw JSON Schemas whose calls the caller answers itself (an inference's draft and
- * lent tools): resolution is disabled, so no handler ever runs.
- */
-export const declaredToolkit = Effect.fn('Ai.declaredToolkit')(function* (
-	tools: readonly { readonly name: string; readonly description: string; readonly input: Json }[]
-) {
-	const declared: AnyTool[] = tools.map((t) =>
-		Tool.dynamic(t.name, {
-			description: t.description,
-			parameters: Predicate.isObject(t.input) ? t.input : {},
-			success: ToolAnswer
-		})
-	);
-	const kit = Toolkit.make(...declared);
-	return yield* kit.pipe(
-		Effect.provideContext(
-			yield* kit.toHandlers(
-				Object.fromEntries(
-					declared.map((t) => [t.name, () => Effect.die(`${t.name} is answered by its caller`)])
-				)
-			)
-		)
-	);
-});
-
-export const textOf = (content: Json): string => {
-	if (typeof content === 'string') return content;
-	const t = Predicate.isObject(content) ? content['text'] : undefined;
-	return typeof t === 'string' ? t : JSON.stringify(content);
-};
-
 /** A tool `ctx.ai.sys_2.infer` offers the model (rule 58: a host tool its automation's policies name); a throw is a failed result. */
 export type InferTool = {
 	name: string;
 	description: string;
 	input: Json;
+	behavior: ToolBehavior;
 	call(input: Json): Effect.Effect<Json, PortFailure>;
 };
 /**
@@ -547,7 +285,7 @@ const EditOp = Schema.Struct({
 });
 /** The empty answer a structured inference starts from, by the output's kind. */
 const emptyOf = (k: Kind): Json =>
-	k.kind === 'list'
+	k.many === true
 		? []
 		: k.kind === 'object' || k.kind === 'record' || k.kind === 'json'
 			? {}
@@ -557,163 +295,104 @@ const emptyOf = (k: Kind): Json =>
  * returning the new draft. `set` replaces or creates the value at a keyed pointer, creating missing parent objects and
  * lists; `set` at `/list/KEY` of a keyed list adds or replaces that item and fills its key field. `append` adds to an
  * unkeyed list; `remove: true` deletes. A set or appended value is checked against its kind (quoted scalars read as the
- * kind) and a keyed item keeps a distinct key. Throws the operation's problem, led by its path.
+ * kind) and a keyed item keeps a distinct key. Fails with the operation's problem, led by its path.
  */
-export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Json {
-	function fail(why: string): never {
-		throw new Error(`${op.path || '/'}: ${why}`);
-	}
+export class EditRefused extends Schema.TaggedError<EditRefused>()('EditRefused', {
+	message: Schema.String
+}) {}
+type Edited = Result.Result<Json | undefined, EditRefused>;
+export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Result.Result<Json, EditRefused> {
+	const refused = (message: string) => Result.fail(new EditRefused({ message }));
+	const fail = (why: string) => refused(`${op.path || '/'}: ${why}`);
 	if ([op.set, op.remove, op.append].filter((v) => v !== undefined).length !== 1)
-		fail('give exactly one of set, remove and append');
-	const segs = segments(op.path) ?? fail('a path is "" or starts with "/"');
-	const fits = (k: Kind, value: Json, at: readonly string[]): Json => {
+		return fail('give exactly one of set, remove and append');
+	const segs = segments(op.path);
+	if (segs === undefined) return fail('a path is "" or starts with "/"');
+	const fits = (k: Kind, value: Json, at: readonly string[]): Result.Result<Json, EditRefused> => {
 		const v = unquoted(k, value);
 		const problems = decodeInput({ v: k }, { v }).problems;
-		if (problems.length > 0)
-			throw new Error(
-				problems
-					.map(
-						(p) =>
-							`${pointer(at) + keyedPath(v, k, p.path.split('.').slice(1)) || '/'}: ${p.message}`
-					)
-					.join('; ')
-			);
-		return v;
+		return problems.length > 0
+			? refused(
+					problems
+						.map(
+							(p) =>
+								`${pointer(at) + keyedPath(v, k, p.path.split('.').slice(1)) || '/'}: ${p.message}`
+						)
+						.join('; ')
+				)
+			: Result.succeed(v);
 	};
-	const target = (
-		current: Json | undefined,
-		k: Kind,
-		keyed: string | undefined
-	): Json | undefined => {
+	const target = (current: Json | undefined, k: Kind, keyed: string | undefined): Edited => {
 		if (op.remove === true) {
-			if (segs.length === 0) fail('cannot remove the whole answer');
-			if (current === undefined) fail('nothing is there');
-			return undefined;
+			if (segs.length === 0) return fail('cannot remove the whole answer');
+			if (current === undefined) return fail('nothing is there');
+			return Result.succeed(undefined);
 		}
 		if (op.append !== undefined) {
 			const list = current ?? [];
-			if (!isList(list)) fail('append adds to a list, and this is not one');
+			if (!isList(list)) return fail('append adds to a list, and this is not one');
 			const key = keyOf(k);
-			if (key !== undefined) fail(`a keyed list: add an item with set at ${op.path}/<its ${key}>`);
-			return [
-				...list,
-				fits(childKind(k, '', list) ?? ANY, op.append, [...segs, String(list.length)])
-			];
+			if (key !== undefined) return fail(`a keyed list: add an item with set at ${op.path}/<its ${key}>`);
+			const item = fits(childKind(k, '', list) ?? ANY, op.append, [...segs, String(list.length)]);
+			return Result.isFailure(item) ? item : Result.succeed([...list, item.success]);
 		}
 		let value = op.set ?? null;
 		const seg = segs.at(-1);
 		if (keyed !== undefined && seg !== undefined && isObj(value)) {
 			const own = keyText(value, keyed);
 			if (own === undefined) value = { ...value, [keyed]: seg };
-			else if (own !== seg) fail(`the item's ${keyed} is "${own}", not "${seg}"`);
+			else if (own !== seg) return fail(`the item's ${keyed} is "${own}", not "${seg}"`);
 		}
 		return fits(k, value, segs);
 	};
-	const update = (
-		current: Json | undefined,
-		k: Kind,
-		i: number,
-		keyed?: string
-	): Json | undefined => {
+	const update = (current: Json | undefined, k: Kind, i: number, keyed?: string): Edited => {
 		const seg = segs[i];
 		if (seg === undefined) return target(current, k, keyed);
 		const here = pointer(segs.slice(0, i)) || '/';
-		const holder =
-			current ?? (op.remove === true ? fail(`nothing is at ${here}`) : k.kind === 'list' ? [] : {});
-		const child =
-			childKind(k, seg, holder) ??
-			fail(`${pointer(segs.slice(0, i + 1))} is not part of the output`);
+		if ((current === undefined || current === null) && op.remove === true)
+			return fail(`nothing is at ${here}`);
+		const holder: Json = current ?? (k.many === true ? [] : {});
+		const child = childKind(k, seg, holder);
+		if (child === undefined) return fail(`${pointer(segs.slice(0, i + 1))} is not part of the output`);
 		if (isList(holder)) {
 			const key = keyOf(k);
 			const index = indexOf(holder, seg, key);
 			if (index < 0 && !(key !== undefined && i === segs.length - 1 && op.set !== undefined))
-				fail(`${here} has no item "${seg}"`);
-			const next = update(index < 0 ? undefined : holder[index], child, i + 1, key);
-			if (next === undefined) return holder.filter((_, j) => j !== index);
+				return fail(`${here} has no item "${seg}"`);
+			const updated = update(index < 0 ? undefined : holder[index], child, i + 1, key);
+			if (Result.isFailure(updated)) return updated;
+			const next = updated.success;
+			if (next === undefined) return Result.succeed(holder.filter((_, j) => j !== index));
 			if (key !== undefined) {
 				const named = keyText(next, key);
-				if (named === undefined) fail(`the item needs its ${key}`);
+				if (named === undefined) return fail(`the item needs its ${key}`);
 				if (holder.some((x, j) => j !== index && keyText(x, key) === named))
-					fail(`another item of ${here} is keyed "${named}"`);
+					return fail(`another item of ${here} is keyed "${named}"`);
 			}
-			return index < 0 ? [...holder, next] : holder.map((x, j) => (j === index ? next : x));
+			return Result.succeed(
+				index < 0 ? [...holder, next] : holder.map((x, j) => (j === index ? next : x))
+			);
 		}
 		if (isObj(holder)) {
-			const next = update(Object.hasOwn(holder, seg) ? holder[seg] : undefined, child, i + 1);
-			return next === undefined
-				? Object.fromEntries(Object.entries(holder).filter(([f]) => f !== seg))
-				: { ...holder, [seg]: next };
+			const updated = update(Object.hasOwn(holder, seg) ? holder[seg] : undefined, child, i + 1);
+			if (Result.isFailure(updated)) return updated;
+			const next = updated.success;
+			return Result.succeed(
+				next === undefined
+					? Object.fromEntries(Object.entries(holder).filter(([f]) => f !== seg))
+					: { ...holder, [seg]: next }
+			);
 		}
 		return fail(`${here} holds ${JSON.stringify(holder)}, not an object or list`);
 	};
-	return update(draft, kind, 0) ?? fail('cannot remove the whole answer');
+	const edited = update(draft, kind, 0);
+	if (Result.isFailure(edited)) return Result.fail(edited.failure);
+	return edited.success === undefined
+		? fail('cannot remove the whole answer')
+		: Result.succeed(edited.success);
 }
 
 /** A declared output kind (§3.3.2) as the JSON Schema the provider constrains its answer by. */
-function jsonSchemaOf(k: Kind): Json {
-	switch (k.kind) {
-		case 'text':
-			return { type: 'string', ...(k['max'] === undefined ? {} : { maxLength: Number(k['max']) }) };
-		case 'int':
-			return { type: 'integer' };
-		case 'number':
-			return { type: 'number' };
-		case 'decimal':
-		case 'money':
-			return { type: ['number', 'string'] };
-		case 'bool':
-			return { type: 'boolean' };
-		case 'date':
-			return { type: 'string', format: 'date' };
-		case 'instant':
-			return { type: 'string', format: 'date-time' };
-		case 'enum':
-			return { enum: [...k.values] };
-		case 'id':
-			return { type: 'string', format: 'uuid' };
-		case 'vector':
-			return { type: 'array', items: { type: 'number' } };
-		case 'list': {
-			const key = keyOf(k);
-			return {
-				type: 'array',
-				items: jsonSchemaOf(k.of),
-				...(key === undefined
-					? {}
-					: {
-							description: `Keyed by "${key}": an item's path is …/<its ${key}>, never its index.`
-						})
-			};
-		}
-		case 'record':
-			return { type: 'object', additionalProperties: jsonSchemaOf(k.of) };
-		case 'object': {
-			const fields = Object.entries(k.fields);
-			return {
-				type: 'object',
-				additionalProperties: k.rest === undefined ? false : jsonSchemaOf(k.rest),
-				properties: Object.fromEntries(fields.map(([f, x]) => [f, jsonSchemaOf(x)])),
-				required: fields
-					.filter(([, x]) => x.optional !== true && x['default'] === undefined)
-					.map(([f]) => f)
-			};
-		}
-		case 'union':
-			return 'of' in k
-				? { anyOf: k.of.map(jsonSchemaOf) }
-				: {
-						anyOf: Object.entries(k.arms).map(([tag, fields]) =>
-							jsonSchemaOf({
-								kind: 'object',
-								fields: { ...fields, [k.by]: { kind: 'enum', values: [tag] } }
-							})
-						)
-					};
-		default:
-			return {};
-	}
-}
-
 /**
  * Without the author's `steps`, an inference has no step budget and no time limit: it goes on while it progresses, until
  * it answers (a structured one, until a submission matches). What ends a runaway is the stall window — no model token,
@@ -726,12 +405,20 @@ const FINAL_TURNS = 3;
 /** A rule the answer must hold beside its shape: CEL over the answer's top-level properties, and what to say when it fails. */
 type Rule = { expression: string; message: string };
 /** `output` as a JSON Schema (draft 2020-12) for the structure and CEL `rules` for the logic, instead of a declared kind. */
-type SchemaOutput = { jsonSchema: Json; rules?: readonly Rule[] };
+type SchemaOutput = { json_schema: Json; rules?: readonly Rule[] };
 
 const Rules = Schema.Array(Schema.Struct({ expression: Schema.String, message: Schema.String }));
 const InferOutput = Schema.Union([
-	Schema.Struct({ jsonSchema: Schema.Json, rules: Schema.optionalKey(Rules) }),
-	RequestOutput
+	Schema.StructWithRest(
+		Schema.Struct({ json_schema: Schema.Json, rules: Schema.optionalKey(Rules) }),
+		[
+			Schema.Record(
+				Schema.String.check(Schema.makeFilter((key) => key !== 'json_schema' && key !== 'rules')),
+				Schema.Never
+			)
+		]
+	),
+	KindSchema
 ]);
 /** `ai.sys_2.infer`'s arguments; `tools` names the host tools a run lends it (the run's gate, `runs/index.ts`). */
 export const InferArgs = Schema.Struct({
@@ -747,32 +434,29 @@ export const InferArgs = Schema.Struct({
 	label: Schema.optionalKey(Schema.String)
 });
 export const inferArgsOf = Schema.decodeUnknownOption(InferArgs);
+/** Keywords whose error repeats its children's. */
+const CONTAINERS = new Set(['properties', 'items', 'prefixItems', 'additionalProperties', 'allOf', '$ref', 'dependentSchemas']);
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
-function schemaChecker(output: SchemaOutput): (value: Json) => string[] {
-	const schema = output.jsonSchema;
+function schemaChecker(
+	output: SchemaOutput
+): Effect.Effect<(value: Json) => string[], FacilityFailure> {
+	const schema = output.json_schema;
 	if (typeof schema !== 'boolean' && !Predicate.isObject(schema))
-		throw new Error('jsonSchema must be an object or boolean');
-	const validator = new Validator(schema, '2020-12', false);
-	return (value) => [
-		...new Set(
-			validator
-				.validate(value)
-				// a container's error repeats its children's; the leaves name what to edit
-				.errors.filter(
-					(e) =>
-						![
-							'properties',
-							'items',
-							'prefixItems',
-							'additionalProperties',
-							'allOf',
-							'$ref',
-							'dependentSchemas'
-						].includes(e.keyword)
-				)
-				.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`)
-		)
-	];
+		return Effect.fail(FacilityFailure.invalid('json_schema must be an object or boolean'));
+	return Effect.try({
+		try: () => new Validator(schema, '2020-12', false),
+		catch: (error) => FacilityFailure.invalid(error instanceof Error ? error.message : String(error))
+	}).pipe(
+		Effect.map((validator) => (value: Json): string[] => [
+			...new Set(
+				validator
+					.validate(value)
+					// a container's error repeats its children's; the leaves name what to edit
+					.errors.filter((e) => !CONTAINERS.has(e.keyword))
+					.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`)
+			)
+		])
+	);
 }
 /**
  * A checker for `rules` over the answer's top-level `properties`: every rule that evaluates to false. A rule that cannot
@@ -817,7 +501,7 @@ function ruleChecker(
 /**
  * `ctx.ai.sys_2.infer` for automations (rule 63, L-BOLT-371/372): a prompt, optional files and an `output`, continued
  * across cut steps while it progresses (STALL_MS of silence ends it). Files are FileRefs the host loads. A
- * structured `output` — a declared kind, or `{ jsonSchema, rules }` — is built, not written in one piece: the model edits a
+ * structured `output` — a declared kind, or `{ json_schema, rules }` — is built, not written in one piece: the model edits a
  * draft with `edit` (keyed pointers: a keyed list's items by key) as it finds each part, inspects it with `read`, `find`
  * and `diff`, and hands it in with `submit`. A submission is checked against `output` and every rule (the schema's and
  * the request's own `rules`); one that does not match gets every offending field (and broken rule) back and the loop goes
@@ -834,6 +518,10 @@ const NUMERAL = /^-?\d+(\.\d+)?$/;
 /** A model's quoted scalar (`"true"`, `"95"`) read as the kind's own value; anything else is left for the decode to refuse. */
 function unquoted(kind: Kind, value: Json): Json {
 	if (value === null) return value;
+	if (kind.many === true)
+		return EffectArray.isArray<typeof value>(value)
+			? value.map((item) => unquoted(item_kind(kind), item))
+			: value;
 	switch (kind.kind) {
 		case 'bool': {
 			const t = typeof value === 'string' ? value.trim().toLowerCase() : undefined;
@@ -842,14 +530,9 @@ function unquoted(kind: Kind, value: Json): Json {
 		case 'int':
 		case 'number':
 		case 'count':
-		case 'duration':
 			return typeof value === 'string' && NUMERAL.test(value.trim()) ? Number(value.trim()) : value;
 		case 'json':
 			return kind.shape === undefined ? value : unquoted(kind.shape, value);
-		case 'list':
-			return EffectArray.isArray<typeof value>(value)
-				? value.map((item) => unquoted(kind.of, item))
-				: value;
 		case 'record':
 		case 'object':
 		case 'union': {
@@ -875,7 +558,7 @@ function unquoted(kind: Kind, value: Json): Json {
 	}
 }
 
-export function inferFacility(
+export function infer_facility(
 	ai: Ai['Service'] | undefined,
 	options: {
 		load?: (fileId: string) => Effect.Effect<{ mime: string; bytes: Uint8Array }, PortFailure>;
@@ -883,7 +566,7 @@ export function inferFacility(
 		/** Each answer-changing call (`edit`, `submit`) as the model makes it: the host's record of the draft's progress. */
 		onDraft?: (name: string, input: Json) => Effect.Effect<void>;
 		/** Each message of the transcript as it is written: the host keeps the inference's whole conversation. */
-		onMessage?: (message: AiMessage, index: number) => Effect.Effect<void>;
+		onMessage?: (message: AiMessage, index: number, behavior: ToolBehavior) => Effect.Effect<void>;
 	} = {}
 ) {
 	return Effect.fn('Ai.inferFacility')(function* (
@@ -892,32 +575,19 @@ export function inferFacility(
 	): Effect.fn.Return<CrossAnswer, PortFailure, Scope.Scope> {
 		const signal = yield* Effect.abortSignal;
 		if (call._tag !== 'ai.sys_2.infer')
-			return {
-				ok: false,
-				error: {
-					kind: 'unavailable',
-					facility: call._tag,
-					reason: 'not an agent facility'
-				}
-			};
+			return { ok: false, error: { kind: 'unavailable', facility: call._tag, reason: 'not an agent facility' } };
 		const a = yield* Schema.decodeUnknownEffect(InferArgs)(call.args[0] ?? {}).pipe(
 			Effect.mapError((error) => new FacilityFailure({ kind: 'invalid', message: error.message }))
 		);
-		const invalid = (message: string): CrossAnswer => ({
-			ok: false,
-			error: { kind: 'invalid', message }
-		});
+		const invalid = (message: string): CrossAnswer => ({ ok: false, error: { kind: 'invalid', message } });
 		const refs = a.files ?? [];
 		if (refs.length > 0 && options.load === undefined)
 			return {
 				ok: false,
 				error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' }
 			};
-		const schemaOut = a.output !== undefined && 'jsonSchema' in a.output ? a.output : undefined;
-		const out =
-			a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text'
-				? a.output
-				: undefined;
+		const schemaOut = a.output !== undefined && 'json_schema' in a.output ? a.output : undefined;
+		const out = a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text' ? a.output : undefined;
 		const structured = schemaOut !== undefined || out !== undefined;
 		if (a.initial !== undefined && !structured)
 			return invalid('initial requires a structured output');
@@ -925,26 +595,11 @@ export function inferFacility(
 			return invalid(
 				`a text answer reads at most ${MODEL_FILES.count} files; ask for a structured output to read more`
 			);
-		let check: ((value: Json) => string[]) | undefined;
-		if (schemaOut !== undefined)
-			check = yield* Effect.try({
-				try: () => schemaChecker(schemaOut),
-				catch: (error) =>
-					new FacilityFailure({
-						kind: 'invalid',
-						message: error instanceof Error ? error.message : String(error)
-					})
-			});
-		const root = Predicate.isObject(schemaOut?.jsonSchema) ? schemaOut.jsonSchema : {};
+		const check = schemaOut === undefined ? undefined : yield* schemaChecker(schemaOut);
+		const root = Predicate.isObject(schemaOut?.json_schema) ? schemaOut.json_schema : {};
 		const rules = [...(schemaOut?.rules ?? []), ...(a.rules ?? [])];
 		const ruled = ruleChecker(
-			Object.keys(
-				out?.kind === 'object'
-					? out.fields
-					: Predicate.isObject(root['properties'])
-						? root['properties']
-						: {}
-			),
+			Object.keys(out?.kind === 'object' ? out.fields : Predicate.isObject(root['properties']) ? root['properties'] : {}),
 			rules
 		);
 		if (typeof ruled === 'string') return invalid(ruled);
@@ -972,27 +627,25 @@ export function inferFacility(
 		const beat = () => {
 			progressed = clock.currentTimeMillisUnsafe();
 		};
-		const shape = out !== undefined ? jsonSchemaOf(out) : schemaOut?.jsonSchema;
+		const shape = out !== undefined ? json_schema(out) : schemaOut?.json_schema;
 		const rulesText =
 			rules.length === 0
 				? ''
 				: `\n\nThe answer must also hold these rules (CEL over the top-level properties):\n${rules.map((r) => `- ${r.message}: ${r.expression}`).join('\n')}`;
 		// the draft's reader yields its name to a workspace `read` tool
 		const draftRead = tools.some((t) => t.name === 'read') ? 'read_answer' : 'read';
-		const object = (
-			properties: { [name: string]: Json },
-			required: readonly string[] = []
-		): Json => ({
+		const object = (properties: { [name: string]: Json }, required: readonly string[] = []): Json => ({
 			type: 'object',
 			additionalProperties: false,
 			required: [...required],
 			properties
 		});
-		const finishing = !structured
+		const finishing: readonly Pick<InferTool, 'name' | 'description' | 'input' | 'behavior'>[] = !structured
 			? []
 			: [
 					{
 						name: EDIT,
+						behavior: {},
 						description: `Change the answer you are building. Each op names a path and exactly one of: set (replace or create the value there; missing parent objects and lists are created), remove: true, or append (add an item to the end of a list that has no key). A path is a JSON Pointer ("/a/b"), except that an item of a keyed list is addressed by its key, never its index ("/items/ANNUAL/days"; set "/items/NEW" adds the item NEW); a list without a key uses indices. Ops apply in order and each is checked on its own: the result counts those applied and names each failed op with its path, and later ops still apply. Send only what changes. Take as many turns as the answer needs (tools to check facts, more reading); when it is complete, call ${SUBMIT} in the same reply as your last ${EDIT}.`,
 						input: object(
 							{
@@ -1009,11 +662,13 @@ export function inferFacility(
 					},
 					{
 						name: SUBMIT,
+						behavior: {},
 						description: `Hand in the answer as edited so far, including any ${EDIT} earlier in this same reply (calls apply in order). It is checked against the required shape; anything wrong comes back by path, and you ${EDIT} and ${SUBMIT} again together in one reply.`,
 						input: object({})
 					},
 					{
 						name: draftRead,
+						behavior: draftRead === 'read' ? { data: true } : {},
 						description: `Read the answer at a path (as in ${EDIT}; "" is the whole answer). fields narrows an object to those fields, and each item of a list to its key and those fields. Reading changes nothing. A value too large to return comes back as its outline: read a child path, or pass fields.`,
 						input: object(
 							{ path: { type: 'string' }, fields: { type: 'array', items: { type: 'string' } } },
@@ -1022,26 +677,23 @@ export function inferFacility(
 					},
 					{
 						name: FIND,
+						behavior: {},
 						description: `Search the answer for text, case-insensitively: the values and field names under path (default the whole answer). Returns each matching path (as in ${EDIT}) with a short excerpt, at most ${HITS}.`,
 						input: object({ text: { type: 'string' }, path: { type: 'string' } }, ['text'])
 					},
 					{
 						name: DIFF,
+						behavior: {},
 						description: `What has changed in the answer since it started, under path (default the whole answer): each change's path, whether it was added, removed or changed, and the values before and after (long ones shortened). Items of keyed lists are matched by key. Use it to check your work, and to describe your changes.`,
 						input: object({ path: { type: 'string' } })
 					}
 				];
 		const drafting = new Set(finishing.map((t) => t.name));
 		const inspecting = new Set([draftRead, FIND, DIFF]);
-		const offered = [
-			...tools.map(({ name, description, input }) => ({ name, description, input })),
-			...finishing
-		];
-		// both tool sets as toolkits: every tool, or only the draft's once `steps` is spent
-		const kits = {
-			all: yield* declaredToolkit(offered),
-			finishing: yield* declaredToolkit(finishing)
-		};
+		const definitions = [...tools, ...finishing];
+		const offered = definitions.map(({ name, description, input }) => ({ name, description, input }));
+		const finishingOffers = finishing.map(({ name, description, input }) => ({ name, description, input }));
+		const behaviorOf = new Map(definitions.map((tool): [string, ToolBehavior] => [tool.name, tool.behavior]));
 		/** The draft checked against `output` and the rules: every offending field named (rule 23), as keyed pointers. */
 		const decoded = (raw: Json): CrossAnswer => {
 			let problems: string[];
@@ -1071,7 +723,9 @@ export function inferFacility(
 				recorded.set(messages, messages.length);
 				return onMessage === undefined
 					? Effect.void
-					: Effect.forEach(messages.slice(from), (message) => onMessage(message, messageIndex++), {
+					: Effect.forEach(messages.slice(from), (message) => onMessage(message, messageIndex++,
+						message.role === 'tool' && isObj(message.content) && typeof message.content['name'] === 'string'
+							? behaviorOf.get(message.content['name']) ?? {} : {}), {
 							discard: true
 						});
 			});
@@ -1086,9 +740,7 @@ export function inferFacility(
 			final: boolean
 		): Effect.fn.Return<CrossAnswer, PortFailure> {
 			const settle = (value: Json): CrossAnswer => (final ? decoded(value) : { ok: true, value });
-			let text = '',
-				continuation: string | undefined,
-				cutAt: number | undefined,
+			let carry: ModelCarry | undefined,
 				pauses = 0,
 				failures = 0,
 				stalls = 0,
@@ -1110,47 +762,35 @@ export function inferFacility(
 					);
 				}
 				yield* record(messages);
-				const r = yield* generate(
+				const offeredTools = spent ? finishingOffers : offered;
+				const stepped = yield* model_step(modelCall(
 					ai,
 					{
 						model: a.model ?? 'default',
 						...(a.system === undefined ? {} : { system: a.system }),
 						messages: [...messages],
+						...(offeredTools.length === 0 ? {} : { tools: offeredTools }),
 						...(files.length === 0 ? {} : { files }),
-						...(continuation === undefined ? {} : { continuation })
+						...(carry?.continuation === undefined ? {} : { continuation: carry.continuation })
 					},
-					spent ? kits.finishing : kits.all,
 					{
 						...(options.wallMs === undefined ? {} : { wallMs: options.wallMs }),
+						retryUpstream: TRANSIENT_RETRIES,
 						onDelta: beat,
 						onReasoning: beat
 					}
-				).pipe(
-					// Transient upstream failures back off within the inference's existing stall wall.
-					Effect.retry({
-						schedule: retryBackoff,
-						times: TRANSIENT_RETRIES,
-						while: isTransientUpstream
-					}),
-					Effect.catch((e) => Effect.succeed(e))
-				);
+				), carry).pipe(Effect.catch((e) => Effect.succeed(e)));
 				beat();
 				// ended from outside (a stop, the caller's own wall): the last failed submission says more than a bare timeout
 				if (signal.aborted)
 					return last !== undefined && !last.ok
 						? last
-						: {
-								ok: false,
-								error: {
-									kind: 'timeout',
-									message: 'the inference was ended before it answered'
-								}
-							};
+						: { ok: false, error: { kind: 'timeout', message: 'the inference was ended before it answered' } };
 				// a silent model call stalls one turn, never the whole inference: ask again (for smaller calls when it went
 				// silent writing one); past the last try a draft that already holds is the answer
-				if (r instanceof ModelIdle) {
+				if (stepped instanceof ModelIdle) {
 					if (++idles <= PAUSES) {
-						if (r.cutTool === true)
+						if (stepped.cutTool === true)
 							messages.push({
 								role: 'user',
 								content: `Your last reply went silent while you were still writing a tool call. Make smaller calls: one row, or a few fields, per ${EDIT}.`
@@ -1160,81 +800,64 @@ export function inferFacility(
 					const held = structured ? settle(draft) : undefined;
 					if (held?.ok === true) return held;
 				}
-				if (isFacilityError(r))
+				if (isFacilityError(stepped))
 					return {
 						ok: false,
 						error:
-							r instanceof Unavailable
-								? { kind: 'unavailable', facility: r.facility, reason: r.reason }
+							stepped instanceof Unavailable
+								? { kind: 'unavailable', facility: stepped.facility, reason: stepped.reason }
 								: {
-										kind: r.kind,
-										message: r.message,
-										...(r.status === undefined ? {} : { status: r.status })
+										kind: stepped.kind,
+										message: stepped.message,
+										...(stepped.status === undefined ? {} : { status: stepped.status })
 									}
 					};
+				const { response: r, content: whole, calls } = stepped;
 				idles = 0;
 				if (r.finish === 'cut') {
-					cutAt ??= messages.length;
-					text += textOf(r.content);
-					continuation = r.continuation;
-					messages.splice(cutAt, messages.length - cutAt, { role: 'assistant', content: text });
+					carry = stepped.carry;
+					messages.push({ role: 'assistant', content: stepped.segment.text });
 					continue;
 				}
-				// once tools end, a reply that still edits or submits may be repaired; one that does neither is the last
-				finished = spent && (r.toolCalls.length === 0 || ++finals >= FINAL_TURNS);
-				const whole: Json = text === '' ? r.content : text + textOf(r.content);
-				if (cutAt !== undefined) messages.splice(cutAt);
-				text = '';
-				continuation = undefined;
-				cutAt = undefined;
-				if (r.toolCalls.length > 0) {
+				finished = spent && (calls.length === 0 || ++finals >= FINAL_TURNS);
+				carry = undefined;
+				if (r.tool_calls.length > 0) {
 					const before = JSON.stringify(draft);
 					messages.push({
 						role: 'assistant',
 						content: {
-							text: typeof whole === 'string' ? whole : '',
-							toolCalls: encodeWire(r.toolCalls)
+							text: typeof r.content === 'string' ? r.content : '',
+							toolCalls: encode_wire(calls)
 						}
 					});
-					for (const c of r.toolCalls) {
-						let result: Json;
-						if (
-							(c.name === EDIT || c.name === SUBMIT) &&
-							structured &&
-							options.onDraft !== undefined
-						)
+					const completed = yield* run_calls<CrossAnswer, PortFailure, never>(calls, Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {
+						let result: Json, submitted: CrossAnswer | undefined;
+						if (!stopped && invalid === undefined && (c.name === EDIT || c.name === SUBMIT) && structured && options.onDraft !== undefined)
 							yield* options.onDraft(c.name, c.input);
-						if (c.name === EDIT && structured) {
-							const ops = Option.getOrUndefined(
-								Schema.decodeUnknownOption(EditInput)(c.input)
-							)?.ops;
+						if (stopped) result = { skipped: 'An earlier call submitted this step; no later operation ran.' };
+						else if (invalid !== undefined) result = invalid;
+						else if (c.name === EDIT && structured) {
+							const ops = Option.getOrUndefined(Schema.decodeUnknownOption(EditInput)(c.input))?.ops;
 							if (ops === undefined)
 								result = { error: `${EDIT} takes { ops: [{ path, set | remove | append }] }` };
 							else {
 								const errors: Json[] = [];
 								for (const [i, op] of ops.entries()) {
-									const edited = Result.try({
-										try: () => applyEdit(draft, Schema.decodeUnknownSync(EditOp)(op), kind),
-										catch: (cause) => (cause instanceof Error ? cause.message : String(cause))
-									});
+									const edited = yield* Schema.decodeUnknownEffect(EditOp)(op).pipe(
+										Effect.flatMap((decoded) => Effect.fromResult(applyEdit(draft, decoded, kind))),
+										Effect.result
+									);
 									if (Result.isSuccess(edited)) draft = edited.success;
-									else errors.push({ op: i, error: edited.failure });
+									else errors.push({ op: i, error: edited.failure.message });
 								}
-								result = {
-									applied: ops.length - errors.length,
-									...(errors.length === 0 ? {} : { errors })
-								};
+								result = { applied: ops.length - errors.length, ...(errors.length === 0 ? {} : { errors }) };
 							}
 						} else if (c.name === draftRead && structured) {
 							const input = Option.getOrUndefined(Schema.decodeUnknownOption(ReadInput)(c.input));
-							const at =
-								input === undefined
-									? `${draftRead} takes { path, fields? }`
-									: resolve(draft, input.path, kind);
+							const at = input === undefined ? `${draftRead} takes { path, fields? }` : resolve(draft, input.path, kind);
 							if (typeof at === 'string') result = { error: at };
 							else {
-								const value =
-									input?.fields === undefined ? at.value : project(at.value, at.kind, input.fields);
+								const value = input?.fields === undefined ? at.value : project(at.value, at.kind, input.fields);
 								const key = keyOf(at.kind);
 								// too large to return: its outline, so the model reads a narrower path
 								result =
@@ -1259,25 +882,17 @@ export function inferFacility(
 							if (input === undefined) result = { error: `${FIND} takes { text, path? }` };
 							else {
 								const at = resolve(draft, input.path ?? '', kind);
-								const hits =
-									typeof at === 'string'
-										? []
-										: find(at.value, at.kind, input.path ?? '', input.text);
+								const hits = typeof at === 'string' ? [] : find(at.value, at.kind, input.path ?? '', input.text);
 								result =
 									typeof at === 'string'
 										? { error: at }
 										: {
 												matches: hits.slice(0, HITS),
-												...(hits.length > HITS
-													? {
-															more: `${hits.length - HITS} more: narrow with path or a longer text`
-														}
-													: {})
+												...(hits.length > HITS ? { more: `${hits.length - HITS} more: narrow with path or a longer text` } : {})
 											};
 							}
 						} else if (c.name === DIFF && structured) {
-							const path =
-								Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
+							const path = Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
 							const now = resolve(draft, path, kind),
 								then = resolve(original, path, kind);
 							if (typeof now === 'string' && typeof then === 'string') result = { error: now };
@@ -1301,45 +916,37 @@ export function inferFacility(
 										...(change.before === undefined ? {} : { before: shown(change.before) }),
 										...(change.after === undefined ? {} : { after: shown(change.after) })
 									})),
-									...(changes.length > CHANGES
-										? { more: `${changes.length - CHANGES} more: narrow with path` }
-										: {})
+									...(changes.length > CHANGES ? { more: `${changes.length - CHANGES} more: narrow with path` } : {})
 								};
 							}
 						} else if (c.name === SUBMIT && structured) {
 							last = settle(draft);
-							if (last.ok) return last;
-							result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
+							if (last.ok) { submitted = last; result = { submitted: true }; }
+							else result = { error: last.error.kind === 'invalid' ? last.error.message : 'invalid' };
 						} else {
 							const tool = spent ? undefined : tools.find((t) => t.name === c.name);
 							result =
 								tool === undefined
 									? { error: `there is no tool '${c.name}'` }
-									: yield* tool
-											.call(c.input)
-											.pipe(Effect.catch((e) => Effect.succeed({ error: e.message })));
+									: yield* tool.call(c.input).pipe(Effect.catch((e) => Effect.succeed({ error: e.message })));
 						}
-						messages.push({
-							role: 'tool',
-							content: { id: c.id, name: c.name, result: bound(result) }
-						});
+						messages.push({ role: 'tool', content: { id: c.id, name: c.name, result: bound(result) } });
 						beat();
-					}
+						return submitted === undefined ? Option.none() : Option.some(submitted);
+					}));
+					if (Option.isSome(completed)) return completed.value;
 					// a turn of only draft tools that leaves the draft as it was is no progress: 3 running end the call. Under a
 					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
 					if (
 						structured &&
-						r.toolCalls.every((c) => drafting.has(c.name)) &&
-						(a.steps === undefined || r.toolCalls.some((c) => !inspecting.has(c.name))) &&
+						r.tool_calls.every((c) => drafting.has(c.name)) &&
+						(a.steps === undefined || r.tool_calls.some((c) => !inspecting.has(c.name))) &&
 						JSON.stringify(draft) === before
 					) {
 						// a model that re-edits instead of submitting: a draft that already holds is the answer
-						const held = r.toolCalls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
+						const held = r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
 						if (held?.ok === true) return held;
-						if (++stalls > FAILURES)
-							return (
-								last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`)
-							);
+						if (++stalls > FAILURES) return last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`);
 					} else stalls = 0;
 					// the step budget ends the tools: one final turn answers
 					if (!spent && a.steps !== undefined && ++turns >= a.steps) {
@@ -1356,35 +963,32 @@ export function inferFacility(
 				}
 				if (typeof whole === 'string' && whole.trim() === '') {
 					// a reply of reasoning alone: ask it to go on (L-BOLT-371)
-					if (++pauses > PAUSES)
-						return invalid(`the model answered nothing ${PAUSES + 1} times running`);
+					if (++pauses > PAUSES) return invalid(`the model answered nothing ${PAUSES + 1} times running`);
 					messages.push({ role: 'user', content: 'Continue, and give your answer.' });
 					continue;
 				}
 				pauses = 0;
-				if (!structured) return { ok: true, value: textOf(whole) };
+				if (!structured) { messages.push({ role: 'assistant', content: textOf(r.content) }); return { ok: true, value: textOf(whole) }; }
 				// a structured answer written out as text instead: a well-formed one is taken as a submission of it
 				const parsed =
-					typeof whole === 'string'
-						? Option.getOrUndefined(
-								Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole)
-							)
-						: whole;
+					typeof whole === 'string' ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole)) : whole;
+				let feedback: string | undefined;
 				if (parsed !== undefined) {
 					last = settle(parsed);
-					if (last.ok) return last;
+					if (last.ok) { messages.push({ role: 'assistant', content: textOf(r.content) }); return last; }
+					feedback = last.error.kind === 'invalid' ? last.error.message : 'That answer does not match the output';
 					draft = parsed;
 				}
 				if (++failures > FAILURES)
 					return last ?? invalid(`the model did not build its answer with ${EDIT} and ${SUBMIT}`);
 				messages.push(
-					{ role: 'assistant', content: textOf(whole) },
+					{ role: 'assistant', content: textOf(r.content) },
 					{
 						role: 'user',
 						content:
-							parsed === undefined
+							feedback === undefined
 								? `Build the answer with ${EDIT} and hand it in with ${SUBMIT}; do not write it out.`
-								: `${last!.ok ? '' : last!.error.kind === 'invalid' ? last!.error.message : 'That answer does not match the output'}. It is now your draft: fix it with ${EDIT}, then call ${SUBMIT}.`
+								: `${feedback}. It is now your draft: fix it with ${EDIT}, then call ${SUBMIT}.`
 					}
 				);
 			}
@@ -1434,13 +1038,7 @@ export function inferFacility(
 			const held = structured ? decoded(draft) : undefined;
 			return held?.ok === true
 				? held
-				: {
-						ok: false,
-						error: {
-							kind: 'timeout',
-							message: `the inference made no progress for ${STALL_MS / 60_000} minutes`
-						}
-					};
+				: { ok: false, error: { kind: 'timeout', message: `the inference made no progress for ${STALL_MS / 60_000} minutes` } };
 		});
 		return yield* Effect.raceFirst(answering, stalled);
 	}, Effect.scoped);

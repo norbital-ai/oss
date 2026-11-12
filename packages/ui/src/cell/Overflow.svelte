@@ -7,7 +7,7 @@ bounded, scrollable popover holding it whole: `full` when given, else `text` as 
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 
@@ -25,7 +25,7 @@ bounded, scrollable popover holding it whole: `full` when given, else `text` as 
 		full?: Snippet;
 		expand?: 'always' | 'row' | 'never';
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	let probe = $state<HTMLElement | null>(null);
 	let overflow = $state(false);
 	$effect(() => {

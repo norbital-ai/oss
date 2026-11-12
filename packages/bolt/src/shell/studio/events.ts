@@ -23,7 +23,7 @@ const FrameSchema = Schema.Union([
 		state: Schema.Literals(['running', 'done', 'failed'])
 	})
 ]);
-export const studioEvents = (url = based(`${SHELL}/studio/events`)) =>
+export const studio_events = (url = based(`${SHELL}/studio/events`)) =>
 	Stream.callback<StudioFrame, StudioStreamFailed>((queue) =>
 		Effect.acquireRelease(
 			Effect.try({

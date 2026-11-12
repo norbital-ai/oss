@@ -1,3 +1,7 @@
+import { actor_ref } from '../engine/access/actor.ts';
+import { json_schema } from '@norbital-ai/std/kind';
+import { automation_fields } from '../decl/runtime/automation-input.ts';
+import { uuid } from '../engine/port.ts';
 // Each body enters one decoded route; all engine calls remain in the activation's Effect graph.
 import {
 	Clock,
@@ -16,7 +20,10 @@ import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import * as HttpServerResponse from 'effect/http/HttpServerResponse';
 import type { Json } from '../decl/values.ts';
 import type { Authority, Bindings, Invocation, Outcome, RowData } from '../engine/contracts.ts';
-import type { EngineManifest } from '../engine/manifest.ts';
+import { Captured, capturedFields } from '../engine/db/captured.ts';
+import { relations, type EngineManifest } from '../engine/manifest.ts';
+import { catalog_of } from '../engine/access/pred.ts';
+import { bindingsAt } from '../engine/query/reader.ts';
 import {
 	Conflict,
 	Fenced,
@@ -28,7 +35,7 @@ import {
 import { BoltError, CODE } from './errors.ts';
 import {
 	addressBucket,
-	chargesFor,
+	charges_for,
 	macKey,
 	OPEN_WINDOWS_SQL,
 	OpenWindow,
@@ -37,20 +44,26 @@ import {
 	type Charge
 } from '../engine/access/rate.ts';
 import { lazyKeys } from '../engine/identity/session.ts';
-import { admitVisitor, parseCallable, startCharge } from '../engine/callables/index.ts';
-import { AgentBackground, agentCallables, conversationFor } from '../engine/agent/callables.ts';
+import { admit_visitor, parse_callable, decode_acts, startCharge } from '../engine/callables/index.ts';
+import {
+	AgentBackground,
+	agentCallables,
+	conversationFor,
+	type AgentCallables
+} from '../engine/agent/callables.ts';
 import { isStaff, transcriptRow } from '../engine/agent/schema.ts';
 import { mcpServers } from '../engine/agent/mcp.ts';
 import { agentSettings, allowedModel, spent } from '../engine/agent/settings.ts';
-import { convertDocument, previewPdf } from '../engine/facilities.ts';
-import { lowerRead } from '../engine/query/engine.ts';
+import { previewPdf } from '../engine/facilities.ts';
+import { lower_read } from '../engine/query/engine.ts';
 import { readsAny, viewOutput } from '../engine/access/authority.ts';
-import { fingerprint, schemaSlice } from '../engine/schema/plan.ts';
-import { recordCapabilities, transformBridge } from '../engine/write/act.ts';
+import { client_contract } from '../engine/access/operation-outputs.ts';
+import { record_capabilities, transformBridge } from '../engine/write/act.ts';
 import { restorePreview, restoreRecord } from '../engine/write/restore.ts';
 import { subscribe } from '../engine/runs/push.ts';
-import { actorRef } from '../engine/write/commit.ts';
-import { filterDescribe } from '../engine/filter-describe/index.ts';
+import { visible_run_names } from '../engine/runs/rows.ts';
+
+import { filter_describe } from '../engine/filter-describe/index.ts';
 import type { RateCharge } from '../engine/write/commit.ts';
 import { TenantDb } from '../engine/db/tenant-db.ts';
 import {
@@ -58,15 +71,17 @@ import {
 	Reads,
 	Writes,
 	Callables,
+	Automations,
 	Approvals,
 	Live,
 	Agents,
-	Guest,
-	type AgentCallables
+	Guest
 } from '../engine/services.ts';
 import type { ReadIR, RequestRoot } from './reads.ts';
 import {
 	ActBody,
+	SyncControlBody,
+	type WriteMapBody,
 	LiveBody,
 	NoticeRow,
 	OwnCall,
@@ -81,12 +96,12 @@ import {
 	HEADERS,
 	INTEGRATIONS,
 	PATHS,
-	noticePath,
+	notice_path,
 	RATE_LIMITED,
 	redact,
-	statusOf,
-	uuidv7Within,
-	wireError
+	status_of,
+	uuidv7_within,
+	wire_error
 } from './wire.ts';
 import { HOOKS, OAUTH_CALLBACK } from '../engine/integrations/links.ts';
 import { sseResponse } from './sse.ts';
@@ -167,46 +182,45 @@ export class RateLimits extends Context.Service<
 	);
 }
 
-/** Every `rateLimited` refusal on the wire: one message and `Retry-After`. */
+const errorJson = (code: string, message: string, status = 500, headers?: Readonly<Record<string, string>>) =>
+	HttpServerResponse.jsonUnsafe({ error: { code, message } }, { status, ...(headers === undefined ? {} : { headers }) });
+/** Every `rate_limited` refusal on the wire: one message and `Retry-After`. */
 export const rateLimitedResponse = (retryAfter: number) =>
-	HttpServerResponse.jsonUnsafe(
-		{ error: { code: 'rateLimited', message: RATE_LIMITED } },
-		{ status: 429, headers: { 'retry-after': String(retryAfter) } }
-	);
+	errorJson('rate_limited', RATE_LIMITED, 429, { 'retry-after': String(retryAfter) });
 export const requestUrl = (request: HttpServerRequest.HttpServerRequest) =>
 	new URL(request.url, 'http://bolt.local');
 export const header = (request: HttpServerRequest.HttpServerRequest, name: string) =>
 	request.headers[name.toLowerCase()];
 export const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
-export const responseError = (error: unknown) => {
+const forbidden = (message: string) => BoltError.make('forbidden', 'admission', message);
+export const response_error = (error: unknown) => {
 	if (error instanceof IdentityRefusal)
-		return HttpServerResponse.jsonUnsafe(
-			{ error: { code: error.code, message: error.message } },
-			{
-				status: CODE[error.code].status,
-				...(error.retryAfter === undefined
-					? {}
-					: { headers: { 'retry-after': String(error.retryAfter) } })
-			}
-		);
+		return errorJson(error.code, error.message, CODE[error.code].status,
+			error.retryAfter === undefined ? undefined : { 'retry-after': String(error.retryAfter) });
 	if (error instanceof Conflict)
-		return HttpServerResponse.jsonUnsafe(
-			{ error: { code: 'conflict', message: 'Another write changed these records.' } },
-			{ status: 409 }
-		);
+		return errorJson('conflict', 'Another write changed these records.', 409);
 	if (error instanceof Fenced)
-		return HttpServerResponse.jsonUnsafe(
-			{ error: { code: 'fenced', message: error.message } },
-			{ status: 500 }
-		);
+		return errorJson('fenced', error.message);
 	if (error instanceof Interrupted)
-		return HttpServerResponse.jsonUnsafe(
-			{ error: { code: 'interrupted', message: 'The workspace generation is closed.' } },
-			{ status: 500 }
-		);
-	const { body, status } = wireError(error);
-	return HttpServerResponse.jsonUnsafe(body, { status });
+		return errorJson('interrupted', 'The workspace generation is closed.');
+	const { body, status } = wire_error(error);
+	return errorJson(body.error.code, body.error.message, status);
 };
+type EffectMemo<K, A, E, R> = {
+	get(key: K): Effect.Effect<A, E, R> | undefined;
+	set(key: K, value: Effect.Effect<A, E, R>): void;
+};
+/** Cold loads keep their exact result; a reused decoded body is checked by its own route schema. */
+const memoized = <K, Stored, A extends Stored, E, R>(
+	cache: EffectMemo<K, Stored, E, R>, key: K,
+	create: () => Effect.Effect<A, E, R>, reuse: (value: Stored) => Effect.Effect<A, E, R>
+) => Effect.gen(function* () {
+	const hit = cache.get(key);
+	if (hit !== undefined) return yield* hit.pipe(Effect.flatMap(reuse));
+	const value = yield* Effect.cached(create());
+	cache.set(key, value);
+	return yield* value;
+});
 /** HttpIncomingMessage caches JSON consumption. This also memoizes Schema decoding for admission and dispatch. */
 const bodies = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
@@ -222,37 +236,17 @@ export const requestBody = <A>(
 			decoded = new Map();
 			bodies.set(request, decoded);
 		}
-		const hit = decoded.get(schema);
-		if (hit !== undefined)
-			return yield* hit.pipe(
-				Effect.flatMap((value) =>
-					Schema.is(Schema.toType(schema))(value)
-						? Effect.succeed(value)
-						: Effect.fail(invalid('A cached body did not match its route.'))
-				)
-			);
-		const value = yield* Effect.cached(
-			request.json.pipe(
+		return yield* memoized(decoded, schema, () => request.json.pipe(
 				Effect.flatMap(Schema.decodeUnknownEffect(schema, { onExcessProperty: 'error' })),
 				Effect.mapError((e) => invalid(String(e)))
-			)
-		);
-		decoded.set(schema, value);
-		return yield* value;
+			), (value) => Schema.is(Schema.toType(schema))(value)
+				? Effect.succeed(value)
+				: Effect.fail(invalid('A cached body did not match its route.')));
 	});
 export const bindings = Effect.gen(function* () {
 	const now = yield* Clock.currentTimeMillis;
 	const m = yield* Manifest;
-	return {
-		now: new Date(now).toISOString(),
-		today: new Intl.DateTimeFormat('en-CA', {
-			timeZone: m.workspace.tz,
-			year: 'numeric',
-			month: '2-digit',
-			day: '2-digit'
-		}).format(new Date(now)),
-		tz: m.workspace.tz
-	} satisfies Bindings;
+	return bindingsAt(now, m.workspace.tz);
 });
 const committed = (output: Json): Outcome => ({ kind: 'committed', output, records: [] });
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
@@ -285,15 +279,17 @@ const ipFor = (
 	authority.actor.kind === 'visitor' || authority.limits.some((rule) => rule.per === 'ip')
 		? limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'))
 		: Effect.succeed(undefined);
+/** The limit keys an `/act` body names: its callables (a PDF preview is `convert`). */
+const actCallables = (request: HttpServerRequest.HttpServerRequest) =>
+	Effect.map(requestBody(request, ActBody), (body) =>
+		'acts' in body ? Object.keys(body.acts) : [body.callable === 'convert.previewPdf' ? 'convert' : body.callable]);
 /** Shell admission and dispatch share one charge; direct protocol hosts use the same native peer address. */
 export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 	request: HttpServerRequest.HttpServerRequest,
-	authority: Authority
+	authority: Authority,
+	callables: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<readonly string[], BoltError> = actCallables
 ): Effect.fn.Return<ActRateAdmission, EngineError, RateLimits> {
-	const existing = actAdmissions.get(request);
-	if (existing !== undefined) return yield* existing;
-	const admission = yield* Effect.cached(
-		Effect.gen(function* () {
+	return yield* memoized(actAdmissions, request, () => Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis;
 			const limits = yield* RateLimits;
 			const bucket = yield* ipFor(limits, request, authority);
@@ -303,7 +299,7 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 				...(actor === undefined ? {} : { actor }),
 				...(ip === undefined ? {} : { ip })
 			};
-			const common = chargesFor(authority, ['act'], who);
+			const common = charges_for(authority, ['act'], who);
 			const persistent = (charges: readonly Charge[]) => ({
 				charges: charges.map((charge) => ({
 					rule: charge.rule,
@@ -315,16 +311,7 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			});
 			const verdict = yield* limits.charge(common, now);
 			if (!verdict.ok) return { verdict, ...persistent(common) };
-			const body = yield* requestBody(request, ActBody);
-			const named = chargesFor(
-				authority,
-				[
-					body.callable === 'convert.document' || body.callable === 'convert.previewPdf'
-						? 'convert'
-						: body.callable
-				],
-				who
-			).filter(
+			const named = charges_for(authority, yield* callables(request), who).filter(
 				(charge) =>
 					!common.some((prior) => prior.rule === charge.rule && prior.bucket === charge.bucket)
 			);
@@ -332,18 +319,15 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 				verdict: yield* limits.charge(named, now),
 				...persistent([...common, ...named])
 			};
-		})
-	);
-	actAdmissions.set(request, admission);
-	return yield* admission;
+		}), Effect.succeed);
 });
 /** Public page loaders and wire reads obey the same visitor surface restrictions. */
 /** One record as the caller's generic views read it: through its view output (`default` when held). */
-const viewGet = (m: EngineManifest, authority: Authority, model: string, id: string): ReadIR => {
-	const read = lowerRead(m, 'get', [model, id]),
-		output = viewOutput(m, authority, model);
-	return read.kind === 'get' && output !== undefined ? { ...read, output } : read;
-};
+const viewGet = (m: EngineManifest, authority: Authority, model: string, id: string) =>
+	Effect.map(lower_read(m, 'get', [model, id]), (read): ReadIR => {
+		const output = viewOutput(m, authority, model);
+		return read.kind === 'get' && output !== undefined ? { ...read, output } : read;
+	});
 export const readAdmitted = (
 	authority: Authority,
 	read:
@@ -362,7 +346,7 @@ export const readAdmitted = (
 				(read.roots ?? []).every((root) => 'read' in root && readAdmitted(authority, root.read))
 			: (read.kind === 'read' || read.kind === 'get') &&
 				typeof read.model === 'string' &&
-				admitVisitor(authority, { read: read.model }) === null));
+				admit_visitor(authority, { read: read.model }) === null));
 const readAdmissions = new WeakMap<
 	HttpServerRequest.HttpServerRequest,
 	Effect.Effect<ReturnType<RateWindows['charge']>, DbError, RateLimits>
@@ -372,24 +356,18 @@ export const requestReadRate = Effect.fn('protocol.requestReadRate')(function* (
 	request: HttpServerRequest.HttpServerRequest,
 	authority: Authority
 ) {
-	const existing = readAdmissions.get(request);
-	if (existing !== undefined) return yield* existing;
-	const admission = yield* Effect.cached(
-		Effect.gen(function* () {
+	return yield* memoized(readAdmissions, request, () => Effect.gen(function* () {
 			const limits = yield* RateLimits;
 			const ip = yield* ipFor(limits, request, authority);
 			const actor = individual(authority, ip);
 			return yield* limits.charge(
-				chargesFor(authority, ['read'], {
+				charges_for(authority, ['read'], {
 					...(actor === undefined ? {} : { actor }),
 					...(ip === undefined ? {} : { ip })
 				}),
 				yield* Clock.currentTimeMillis
 			);
-		})
-	);
-	readAdmissions.set(request, admission);
-	return yield* admission;
+		}), Effect.succeed);
 });
 /** Visitor wire reads are the same granted model pages and records as their server-loader IR. */
 export const wireReadAdmitted = (authority: Authority, read: WireRead | undefined): boolean => {
@@ -412,17 +390,45 @@ export const wireReadAdmitted = (authority: Authority, read: WireRead | undefine
 };
 const liveViewAdmitted = wireReadAdmitted;
 
-export type ActCall = {
+const dispatchWrites = Effect.fn('protocol.dispatchWrites')(function* (
+	body: WriteMapBody,
+	key: string,
+	retry: boolean,
+	authority: Authority,
+	request: HttpServerRequest.HttpServerRequest
+) {
+	const admission = yield* requestActRate(request, authority);
+	if (!admission.verdict.ok) return {
+		outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED } satisfies Outcome,
+		v: yield* (yield* Live).v,
+		retryAfter: admission.verdict.retryAfter
+	};
+	const decoded = yield* decode_acts(yield* Manifest, body.acts);
+	return yield* (yield* Callables).acts({
+		name: 'act',
+		acts: decoded.acts,
+		outputs: decoded.outputs,
+		key,
+		issuedAt: body.issued_at,
+		retry,
+		rate: admission.charges,
+		authority,
+		bindings: yield* bindings,
+		invocationId: yield* uuid(yield* Crypto.Crypto),
+		from: 'Client'
+	});
+});
+
+type ActCall = {
 	readonly callable: string;
 	readonly input: Json;
 	readonly key: string;
 	readonly issuedAt: string;
 	readonly retry?: boolean | undefined;
 	readonly observed?: { readonly [id: string]: number } | undefined;
-	readonly onConflict?: 'update' | 'keep' | undefined;
 	readonly rate?: readonly RateCharge[] | undefined;
 };
-export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
+export const dispatch_act = Effect.fn('protocol.dispatchAct')(function* (
 	call: ActCall,
 	authority: Authority,
 	request?: HttpServerRequest.HttpServerRequest
@@ -432,7 +438,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 		b = yield* bindings;
 	const limited = (retryAfter: number) =>
 		Effect.map(live.v, (v) => ({
-			outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED } satisfies Outcome,
+			outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED } satisfies Outcome,
 			v,
 			retryAfter
 		}));
@@ -447,7 +453,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 		);
 		if (call.callable === 'sys_message.post') {
 			const verdict = yield* (yield* RateLimits).charge(
-				chargesFor(
+				charges_for(
 					authority,
 					['agent'],
 					authority.actor.kind === 'member' ? { actor: authority.actor.id } : {}
@@ -461,27 +467,33 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 	}
 	if (
 		[
-			'start',
+			'run',
 			'approvals.decide',
-			'convert.document',
 			'filter.describe',
 			'filter.options',
-			'sys_notification.markRead',
+			'sys_notification.mark_read',
 			'history.preview',
 			'history.restore'
 		].includes(call.callable)
 	) {
-		const decoded = yield* Schema.decodeUnknownEffect(OwnCall)({
+		const decoded = yield* Schema.decodeUnknownEffect(OwnCall, { onExcessProperty: 'error' })({
 			callable: call.callable,
 			input: call.input
 		}).pipe(Effect.mapError((e) => invalid(String(e))));
 		let outcome: Outcome;
-		if (decoded.callable === 'start') {
+		if (decoded.callable === 'run') {
+			if (m.automations[decoded.input.automation]?.mode === 'call') {
+				if ('id' in decoded.input || 'runs' in decoded.input)
+					outcome = { kind: 'refused', code: 'invalid_input', message: 'A call takes one input and no run ids.' };
+				else outcome = yield* (yield* Automations).call({ automation: decoded.input.automation, input: decoded.input.input ?? {}, authority, bindings: b });
+			} else if (!('runs' in decoded.input) && !('id' in decoded.input)) {
+				outcome = { kind: 'refused', code: 'invalid_input', message: 'A job names its run ids.' };
+			} else {
 			const runs = ('runs' in decoded.input ? decoded.input.runs : [decoded.input]).map((run) => ({
 				id: run.id,
 				input: run.input ?? {}
 			}));
-			outcome = runs.every((run) => uuidv7Within(run.id, Date.parse(b.now)))
+			outcome = runs.every((run) => uuidv7_within(run.id, Date.parse(b.now)))
 				? yield* (yield* Callables).start({
 						automation: decoded.input.automation,
 						runs,
@@ -490,13 +502,14 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 					})
 				: {
 						kind: 'refused',
-						code: 'invalidInput',
+						code: 'invalid_input',
 						message: 'A run id is a uuidv7 minted within 24 hours.',
 						field: 'id'
 					};
-			if (outcome.kind === 'refused' && outcome.code === 'rateLimited')
+			}
+			if (outcome.kind === 'refused' && outcome.code === 'rate_limited')
 				return yield* limited(
-					resetAfter([startCharge(m, decoded.input.automation, authority)], Date.parse(b.now))
+					resetAfter([startCharge(decoded.input.automation, authority)], Date.parse(b.now))
 				);
 		} else if (decoded.callable === 'approvals.decide') {
 			const decision = yield* (yield* Approvals).decide({
@@ -506,36 +519,15 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 			});
 			outcome =
 				decision.kind === 'decided'
-					? committed({ requestId: decision.requestId, status: decision.status })
+					? committed({ request_id: decision.request_id, status: decision.status })
 					: decision;
-		} else if (decoded.callable === 'convert.document') {
-			if (authority.actor.kind !== 'member')
-				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'Only members may convert documents.')
-				);
-			const file = yield* convertDocument(decoded.input.source, {
-				...decoded.input.request,
-				for: 'bolt.$export',
-				by: authority.actor.id
-			}).pipe(
-				Effect.mapError((error) =>
-					BoltError.make(
-						error._tag === 'Unavailable' ? 'unavailable' : 'invalid',
-						'facility',
-						error.message,
-						error
-					)
-				)
-			);
-			outcome = committed(file);
-		} else if (decoded.callable === 'sys_notification.markRead') {
+		} else if (decoded.callable === 'sys_notification.mark_read') {
 			if (authority.actor.kind !== 'member' || authority.actor.external)
 				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'Only staff members have an inbox.')
-				);
+					forbidden('Only staff members have an inbox.'));
 			const db = yield* TenantDb;
-			yield* db.write({
-				text: 'UPDATE sys_notification SET read_at = $4::timestamptz WHERE member = $1 AND ($2::boolean OR id IN (SELECT jsonb_array_elements_text($3::jsonb))) AND read_at IS NULL',
+			const captured = yield* db.returning(Captured, {
+				text: `UPDATE sys_notification SET read_at = $4::timestamptz WHERE member = $1 AND ($2::boolean OR id IN (SELECT jsonb_array_elements_text($3::jsonb))) AND read_at IS NULL RETURNING ${capturedFields("'sys_notification'")}`,
 				params: [
 					authority.actor.id,
 					'all' in decoded.input,
@@ -543,7 +535,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 					b.now
 				]
 			});
-			live.syncChanged('sys_notification');
+			live.publish(captured);
 			outcome = committed(null);
 		} else if (decoded.callable === 'history.preview') {
 			const previewed = yield* restorePreview(yield* probe, decoded.input, authority, b);
@@ -555,25 +547,14 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
 				authority,
 				bindings: b,
-				invocationId: yield* (yield* Crypto.Crypto)
-					.randomUUIDv4()
-					.pipe(
-						Effect.mapError((error) =>
-							BoltError.make(
-								'unavailable',
-								'facility',
-								'Secure random UUID generation failed.',
-								error
-							)
-						)
-					)
+				invocationId: yield* uuid(yield* Crypto.Crypto)
 			});
 			return { outcome: restored.outcome, v: restored.v ?? (yield* live.v) };
 		} else {
-			const filters = yield* filterDescribe;
+			const filters = yield* filter_describe;
 			if (decoded.callable === 'filter.describe') {
 				const verdict = yield* (yield* RateLimits).charge(
-					chargesFor(
+					charges_for(
 						authority,
 						['agent'],
 						authority.actor.kind === 'member' ? { actor: authority.actor.id } : {}
@@ -591,11 +572,11 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 				outcome = result.ok
 					? committed({
 							...(result.where === undefined ? {} : { where: result.where }),
-							...(result.orderBy === undefined ? {} : { orderBy: result.orderBy })
+							...(result.order_by === undefined ? {} : { order_by: result.order_by })
 						})
 					: {
 							kind: 'refused',
-							code: result.code === 'notFound' ? 'notFound' : 'invalidInput',
+							code: result.code === 'not_found' ? 'not_found' : 'invalid_input',
 							message: result.message
 						};
 			} else if (decoded.callable === 'filter.options') {
@@ -609,14 +590,14 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 					? committed({ fields: result.fields })
 					: {
 							kind: 'refused',
-							code: result.code === 'notFound' ? 'notFound' : 'invalidInput',
+							code: result.code === 'not_found' ? 'not_found' : 'invalid_input',
 							message: result.message
 						};
 			} else return yield* Effect.fail(invalid('Unknown own callable.'));
 		}
 		return { outcome, v: yield* live.v };
 	}
-	const parsed = parseCallable(call.callable, m);
+	const parsed = parse_callable(call.callable, m);
 	if (Result.isFailure(parsed)) return yield* Effect.fail(parsed.failure);
 	const callable = parsed.success;
 	const context = {
@@ -624,13 +605,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 		...(admitted === undefined ? {} : { rate: [...(call.rate ?? []), ...admitted.charges] }),
 		authority,
 		bindings: b,
-		invocationId: yield* (yield* Crypto.Crypto)
-			.randomUUIDv4()
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-				)
-			)
+		invocationId: yield* uuid(yield* Crypto.Crypto)
 	};
 	if (callable._tag === 'Verb')
 		return yield* (yield* Writes).act({
@@ -640,7 +615,7 @@ export const dispatchAct = Effect.fn('protocol.dispatchAct')(function* (
 			mode: { _tag: 'Direct' }
 		});
 	return yield* Effect.fail(
-		BoltError.make('unknownCallable', 'decode', `there is no callable '${call.callable}'`)
+		BoltError.make('unknown_callable', 'decode', `there is no callable '${call.callable}'`)
 	);
 });
 
@@ -657,7 +632,7 @@ const probe = Effect.gen(function* () {
 			transformBridge(manifest, over, invocation)
 	};
 });
-const lower = Effect.fn('protocol.lowerRead')(function* (
+const lower = Effect.fn('protocol.lower_read')(function* (
 	authority: Authority,
 	read: WireRead
 ): Effect.fn.Return<ReadIR, EngineError, Manifest | TenantDb> {
@@ -686,8 +661,7 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 	if (read.m === 'conversations' || read.m === 'inbox') {
 		if (authority.actor.kind !== 'member' || (read.m === 'inbox' && authority.actor.external))
 			return yield* Effect.fail(
-				BoltError.make('forbidden', 'admission', 'Not available to this member.')
-			);
+				forbidden('Not available to this member.'));
 		if (read.m === 'conversations')
 			return { kind: 'conversations', model: 'sys_conversation', member: authority.actor.id };
 		const options = read.a[0];
@@ -705,16 +679,15 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 			typeof options['automation'] === 'string' ? options['automation'] : undefined;
 		const id = typeof options['id'] === 'string' ? options['id'] : undefined;
 		// rule 56: every run is staff's; a holder of an automation (external included) reads its runs; one run by id is
-		// answered as `runView` lets the caller read it
+		// answered as `run_view` lets the caller read it
 		if (
 			authority.actor.kind !== 'member' ||
 			(authority.actor.external &&
 				id === undefined &&
-				(automation === undefined || !authority.automations.includes(automation)))
+				(automation === undefined || !visible_run_names(authority).includes(automation)))
 		)
 			return yield* Effect.fail(
-				BoltError.make('forbidden', 'admission', 'No runs for this member.')
-			);
+				forbidden('No runs for this member.'));
 		const limit = typeof options['limit'] === 'number' ? options['limit'] : 100;
 		return {
 			kind: 'runs',
@@ -725,10 +698,7 @@ const lower = Effect.fn('protocol.lowerRead')(function* (
 			...(options['brief'] === true ? { brief: true } : {})
 		};
 	}
-	return yield* Effect.try({
-		try: () => lowerRead(m, read.m, read.a),
-		catch: (e) => (e instanceof BoltError ? e : invalid(String(e)))
-	});
+	return yield* lower_read(m, read.m, read.a);
 });
 
 /** One notice of `GET /__bolt/notices`; its `at` is the event id a reconnect names in `Last-Event-ID`. */
@@ -742,7 +712,40 @@ type NoticeEvent = {
 const inboxRow = Schema.decodeUnknownOption(NoticeRow);
 const inboxPage = Schema.decodeUnknownOption(Schema.Struct({ rows: Schema.Array(Schema.Json) }));
 
+const releaseChanged = Effect.fn('protocol.releaseChanged')(function* (request: HttpServerRequest.HttpServerRequest) {
+	const stated = header(request, HEADERS.contract);
+	if (stated === undefined || stated === client_contract(yield* Manifest)) return undefined;
+	return HttpServerResponse.jsonUnsafe({
+		outcome: { kind: 'refused', code: 'release_changed', message: 'The workspace was updated; reload the page.' },
+		v: yield* (yield* Live).v
+	}, { status: 409 });
+});
 export const BoltRoutes = {
+	[`POST ${PATHS.sync_control}` as const]: {
+		guest: false,
+		run: Effect.fn('protocol.sync_control')(function* (request: HttpServerRequest.HttpServerRequest, authority: Authority) {
+			const body = yield* requestBody(request, SyncControlBody);
+			if (header(request, HEADERS.key) !== body.id)
+				return yield* Effect.fail(invalid('The idempotency key must equal the sync run id.'));
+			const changed = yield* releaseChanged(request);
+			if (changed !== undefined) return changed;
+			const admitted = yield* requestActRate(request, authority, () =>
+				Effect.succeed([`${body.model}.sync.${body.sync}`]));
+			if (!admitted.verdict.ok) return rateLimitedResponse(admitted.verdict.retryAfter);
+			const b = yield* bindings;
+			if (!uuidv7_within(body.id, Date.parse(b.now)))
+				return yield* Effect.fail(invalid('A sync run id is a uuidv7 minted within 24 hours.'));
+			const outcome = redact(yield* (yield* Callables).sync_control({
+				model: body.model, sync: body.sync, id: body.id, input: body.input, authority, bindings: b
+			}), authority.actor);
+			return HttpServerResponse.jsonUnsafe({ outcome, v: yield* (yield* Live).v }, {
+				status: status_of(outcome),
+				...(outcome.kind === 'refused' && outcome.code === 'rate_limited'
+					? { headers: { 'retry-after': String(resetAfter([startCharge(`${body.model}.sync.${body.sync}`, authority)], Date.parse(b.now))) } }
+					: {})
+			});
+		})
+	},
 	[`POST ${PATHS.q}` as const]: {
 		guest: 'reads',
 		run: Effect.fn('protocol.q')(function* (
@@ -752,14 +755,14 @@ export const BoltRoutes = {
 			const rate = yield* requestReadRate(request, authority);
 			if (!rate.ok) return rateLimitedResponse(rate.retryAfter);
 			const body = yield* requestBody(request, QBody);
-			if (body.reads.some((r) => ['transcript', 'inbox', 'conversations'].includes(r.m)))
-				return yield* Effect.fail(invalid('This read is live-only.'));
+			if (body.reads.some((read) => !wireReadAdmitted(authority, read)))
+				return yield* Effect.fail(forbidden('Visitors may not do this.'));
 			const batch = yield* Effect.forEach(body.reads, (read) => lower(authority, read));
 			const values = yield* (yield* Reads).run(batch, { as: 'caller', authority }, yield* bindings);
 			if (values.length !== batch.length)
 				return yield* Effect.fail(
 					BoltError.make(
-						'badAnswer',
+						'bad_answer',
 						'deliver',
 						`The reader returned ${values.length} answers for ${batch.length} reads.`
 					)
@@ -777,30 +780,17 @@ export const BoltRoutes = {
 			if (!key) return yield* Effect.fail(invalid(`${HEADERS.key} is required (rule 31)`));
 			const body = yield* requestBody(request, ActBody),
 				live = yield* Live;
-			const stated = header(request, HEADERS.contract),
-				contract = fingerprint(schemaSlice(yield* Manifest));
-			if (stated !== undefined && stated !== contract)
-				return HttpServerResponse.jsonUnsafe(
-					{
-						outcome: {
-							kind: 'refused',
-							code: 'releaseChanged',
-							message: 'The workspace was updated; reload the page.'
-						},
-						v: yield* live.v
-					},
-					{ status: 409 }
-				);
-			if (body.callable === 'convert.previewPdf') {
+			const changed = yield* releaseChanged(request);
+			if (changed !== undefined) return changed;
+			if ('callable' in body && body.callable === 'convert.previewPdf') {
 				if (authority.actor.kind !== 'member')
 					return yield* Effect.fail(
-						BoltError.make('forbidden', 'admission', 'Only members may convert documents.')
-					);
+						forbidden('Only members may convert documents.'));
 				const admitted = yield* requestActRate(request, authority);
 				if (!admitted.verdict.ok)
 					return HttpServerResponse.jsonUnsafe(
 						{
-							outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
+							outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED },
 							v: yield* live.v
 						},
 						{ status: 429, headers: { 'retry-after': String(admitted.verdict.retryAfter) } }
@@ -823,17 +813,23 @@ export const BoltRoutes = {
 					headers: { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' }
 				});
 			}
-			const reply = yield* dispatchAct(
-				{ ...body, key, retry: header(request, HEADERS.retry) === '1' },
-				authority,
-				request
-			).pipe(
-				Effect.provide(yield* Effect.context<Effect.Services<ReturnType<typeof dispatchAct>>>())
-			);
+			if ('callable' in body) {
+				const generated = parse_callable(body.callable, yield* Manifest);
+				if (Result.isSuccess(generated) && generated.success._tag === 'Verb')
+					return yield* Effect.fail(invalid('Generated writes take a map of callable to inputs.'));
+			}
+			const retry = header(request, HEADERS.retry) === '1';
+			const reply = yield* ('acts' in body
+				? dispatchWrites(body, key, retry, authority, request)
+				: dispatch_act(
+					{ callable: body.callable, input: body.input, observed: body.observed, issuedAt: body.issued_at, key, retry },
+					authority,
+					request
+				));
 			const outcome = redact(reply.outcome, authority.actor);
 			// every 429 names its wait: a cell's own count says it; a refusal the statement decided waits out its windows
 			const retryAfter =
-				outcome.kind === 'refused' && outcome.code === 'rateLimited'
+				outcome.kind === 'refused' && outcome.code === 'rate_limited'
 					? 'retryAfter' in reply
 						? reply.retryAfter
 						: (yield* requestActRate(request, authority)).resetAfter
@@ -841,7 +837,7 @@ export const BoltRoutes = {
 			return HttpServerResponse.jsonUnsafe(
 				{ outcome, v: reply.v },
 				{
-					status: statusOf(outcome),
+					status: status_of(outcome),
 					...(retryAfter === undefined ? {} : { headers: { 'retry-after': String(retryAfter) } })
 				}
 			);
@@ -871,26 +867,23 @@ export const BoltRoutes = {
 			let first = true;
 			const none: readonly NoticeEvent[] = [];
 			const notices = (frame: Frame): readonly NoticeEvent[] => {
-				if (frame.t !== 'answer') return none;
-				const replay = first;
+				if (frame.t !== 'answer' && frame.t !== 'patch') return none;
+				let rows: readonly NoticeRow[];
+				if (first && frame.t === 'answer') {
+					rows = Number.isNaN(since) ? [] : Option.match(inboxPage(frame.value), {
+						onNone: () => [],
+						onSome: (page) => page.rows
+							.flatMap((row) => Option.toArray(inboxRow(row)))
+							.filter((row) => !row.read && Date.parse(row.at) > since)
+							.reverse()
+					});
+				} else rows = (frame.arrivals ?? []).flatMap((row) => Option.toArray(inboxRow(row)));
 				first = false;
-				const rows: readonly NoticeRow[] = replay
-					? Number.isNaN(since)
-						? []
-						: Option.match(inboxPage(frame.value), {
-								onNone: () => [],
-								onSome: (page) =>
-									page.rows
-										.flatMap((row) => Option.toArray(inboxRow(row)))
-										.filter((row) => !row.read && Date.parse(row.at) > since)
-										.reverse()
-							})
-					: (frame.arrivals ?? []).flatMap((row) => Option.toArray(inboxRow(row)));
 				return rows.map((row) => ({
 					id: row.id,
 					title: row.title,
 					body: row.body,
-					path: noticePath(row.link),
+					path: notice_path(row.link),
 					at: row.at
 				}));
 			};
@@ -920,10 +913,9 @@ export const BoltRoutes = {
 			const body = yield* requestBody(request, LiveBody),
 				live = yield* Live,
 				owner = yield* live.authorityOf(body.conn);
-			if (Option.isSome(owner) && actorRef(owner.value.actor) !== actorRef(authority.actor))
+			if (Option.isSome(owner) && actor_ref(owner.value.actor) !== actor_ref(authority.actor))
 				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'the live connection belongs to another session')
-				);
+					forbidden('the live connection belongs to another session'));
 			if (Option.isSome(owner) && owner.value.key !== authority.key)
 				yield* live.authorize(body.conn, authority);
 			yield* Effect.forEach(body.drop ?? [], (view) => live.drop(body.conn, view));
@@ -933,8 +925,7 @@ export const BoltRoutes = {
 					Effect.gen(function* () {
 						if (!liveViewAdmitted(authority, view.read))
 							return yield* Effect.fail(
-								BoltError.make('forbidden', 'admission', 'Visitors may not do this.')
-							);
+								forbidden('Visitors may not do this.'));
 						yield* live.register(body.conn, view.view, {
 							read: yield* lower(authority, view.read)
 						});
@@ -963,8 +954,7 @@ export const BoltRoutes = {
 		) {
 			if (!isStaff(authority))
 				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'Only staff members receive notices.')
-				);
+					forbidden('Only staff members receive notices.'));
 			const body = yield* requestBody(request, PushBody);
 			if (
 				body.endpoint.length > 2048 ||
@@ -975,8 +965,7 @@ export const BoltRoutes = {
 				return yield* Effect.fail(invalid('Invalid push subscription.'));
 			if (authority.actor.kind !== 'member')
 				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'Only staff members receive notices.')
-				);
+					forbidden('Only staff members receive notices.'));
 			yield* subscribe(authority.actor.id, body);
 			return HttpServerResponse.empty({ status: 204 });
 		})
@@ -993,8 +982,7 @@ export const BoltRoutes = {
 				(authority.actor.external ? m.agent.external : m.agent.internal) === undefined
 			)
 				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.')
-				);
+					forbidden('The assistant is not available to you here.'));
 			// an administrator's runtime settings narrow the picker (one model hides it); administrators also read the whole
 			// catalogue, the settings and this month's spend (Settings, Organization); the session rail reads the MCP servers
 			const catalog = yield* (yield* Agents).models,
@@ -1067,7 +1055,8 @@ export const BoltRoutes = {
 				b = yield* bindings,
 				m = yield* Manifest;
 			const readable = (model: string, id: string) =>
-				reads.run([viewGet(m, authority, model, id)], { as: 'caller', authority }, b).pipe(
+				viewGet(m, authority, model, id).pipe(
+					Effect.flatMap((read) => reads.run([read], { as: 'caller', authority }, b)),
 					Effect.map(([row]) => row !== null && row !== undefined),
 					Effect.catchTag('BoltError', () => Effect.succeed(false))
 				);
@@ -1089,11 +1078,11 @@ export const BoltRoutes = {
 				});
 			const view = yield* approvals.view(id, authority, readable);
 			return Option.isNone(view)
-				? responseError(BoltError.make('notFound', 'admission', 'Not found or no access.'))
+				? response_error(BoltError.make('not_found', 'admission', 'Not found or no access.'))
 				: HttpServerResponse.jsonUnsafe({ value: view.value });
 		})
 	},
-	[`GET ${PATHS.recordCapabilities}` as const]: {
+	[`GET ${PATHS.record_capabilities}` as const]: {
 		guest: false,
 		run: Effect.fn('protocol.capabilities')(function* (
 			request: HttpServerRequest.HttpServerRequest,
@@ -1103,10 +1092,12 @@ export const BoltRoutes = {
 				model = p.get('model'),
 				id = p.get('id');
 			if (!model || !id) return yield* Effect.fail(invalid('model and id are required'));
-			const pc = p.get('parentModel'),
-				pi = p.get('parentId'),
+			if ([...p.keys()].some((key) => !['model', 'id', 'parent_model', 'parent_id', 'relation', 'parent_revision'].includes(key)))
+				return yield* Effect.fail(invalid('Unknown record capability parameter.'));
+			const pc = p.get('parent_model'),
+				pi = p.get('parent_id'),
 				relation = p.get('relation'),
-				revision = p.get('parentRevision');
+				revision = p.get('parent_revision');
 			const parent =
 				pc === null && pi === null && relation === null && revision === null
 					? undefined
@@ -1125,20 +1116,20 @@ export const BoltRoutes = {
 			const m = yield* Manifest,
 				reads = yield* Reads,
 				b = yield* bindings;
-			const value = yield* recordCapabilities(
+			const value = yield* record_capabilities(
 				yield* probe,
 				model,
 				id,
 				authority,
 				b,
 				(c, i): Effect.Effect<RowData | null, EngineError> =>
-					reads
-						.run([viewGet(m, authority, c, i)], { as: 'caller', authority }, b)
-						.pipe(Effect.map(([row]) => (Schema.is(JsonObject)(row) ? row : null))),
+					viewGet(m, authority, c, i)
+						.pipe(
+							Effect.flatMap((read) => reads.run([read], { as: 'caller', authority }, b)),Effect.map(([row]) => (Schema.is(JsonObject)(row) ? row : null))),
 				parent
 			);
 			return value === null
-				? responseError(BoltError.make('notFound', 'admission', 'Not found or no access.'))
+				? response_error(BoltError.make('not_found', 'admission', 'Not found or no access.'))
 				: HttpServerResponse.jsonUnsafe({ value });
 		})
 	},
@@ -1149,7 +1140,7 @@ export const BoltRoutes = {
 			authority: Authority
 		) {
 			const m = yield* Manifest;
-			return HttpServerResponse.jsonUnsafe(openapi(m, authority, fingerprint(schemaSlice(m))));
+			return HttpServerResponse.jsonUnsafe(openapi(m, authority, client_contract(m)));
 		})
 	}
 } as const;
@@ -1157,7 +1148,7 @@ const routeOf = (request: HttpServerRequest.HttpServerRequest) =>
 	Object.entries(BoltRoutes).find(
 		([key]) => key === `${request.method} ${requestUrl(request).pathname}`
 	)?.[1];
-export const needsGuest = Effect.fn('protocol.needsGuest')(
+export const needs_guest = Effect.fn('protocol.needsGuest')(
 	function* (request: HttpServerRequest.HttpServerRequest) {
 		const url = requestUrl(request);
 		const path = url.pathname;
@@ -1193,7 +1184,7 @@ export const needsGuest = Effect.fn('protocol.needsGuest')(
 	},
 	Effect.catch(() => Effect.succeed(true))
 );
-export const boltRoutes = (request: HttpServerRequest.HttpServerRequest) =>
+export const bolt_routes = (request: HttpServerRequest.HttpServerRequest) =>
 	Effect.gen(function* () {
 		const route = routeOf(request);
 		if (route === undefined) return Option.none<HttpServerResponse.HttpServerResponse>();
@@ -1207,9 +1198,9 @@ export const boltRoutes = (request: HttpServerRequest.HttpServerRequest) =>
 			);
 		return Option.some(yield* route.run(request, authority.value));
 	}).pipe(
-		Effect.catch((e) => Effect.succeed(Option.some(responseError(e)))),
+		Effect.catch((e) => Effect.succeed(Option.some(response_error(e)))),
 		Effect.catchCause((cause) =>
-			Effect.logWarning(cause).pipe(Effect.as(Option.some(responseError(cause))))
+			Effect.logWarning(cause).pipe(Effect.as(Option.some(response_error(cause))))
 		)
 	);
 
@@ -1219,29 +1210,133 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 			? readsAny(authority, model)
 			: authority.admin || (authority.models[model]?.[verb]?.length ?? 0) > 0;
 	const exposed = Object.keys(m.exposures);
-	const callables = [
-		...exposed.flatMap((model) =>
-			(['create', 'update', 'delete'] as const)
-				.filter((verb) => m.exposures[model]?.[verb] !== undefined && may(model, verb))
-				.map((verb) => `${model}.${verb}`)
-		),
-		...((authority.admin ? Object.keys(m.automations) : authority.automations).length > 0
-			? ['start']
-			: [])
-	];
+	const catalog = catalog_of(m),
+		relation_index = relations(m);
+	const target = (model: string): Json => ({
+		type: 'object',
+		required: catalog.models.get(model)?.audit === true ? ['id', 'revision'] : ['id'],
+		properties: { id: { type: 'string' }, revision: { type: 'integer', minimum: 0 } }
+	});
+	const list = (items: Json): Json => ({ type: 'array', items });
+	const update = (model: string, set: Json): Json => ({
+		type: 'object', additionalProperties: false, required: ['target', 'set'],
+		properties: { target: target(model), set }
+	});
+	/** Follow the same compiled column paths and root grant arms as write admission, including child actions. */
+	const input = (
+		root: string,
+		model: string,
+		path: string,
+		verb: 'create' | 'update',
+		mode = verb,
+		parent?: string
+	): Json => {
+		const declared = m.exposures[root]?.[verb]?.columns ?? {};
+		const held = (declared[path] ?? []).filter((field) =>
+			field !== parent && (authority.admin ||
+				(authority.models[root]?.[verb] ?? []).some((arm) => arm.columns[path]?.includes(field)))
+		);
+		const properties: Record<string, Json> = {};
+		for (const field of held) {
+			const kind = m.models[model]?.fields[field],
+				relation = m.relationships[`${model}.${field}`];
+			if (kind !== undefined) properties[field] = json_schema(kind);
+			else if (relation !== undefined) properties[field] = json_schema({ kind: 'ref', ...relation });
+		}
+		for (const at of Object.keys(declared)) {
+			const name = at.startsWith(`${path}.`) ? at.slice(path.length + 1) : '';
+			if (name === '' || name.includes('.') || (!authority.admin &&
+				!(authority.models[root]?.[verb] ?? []).some((arm) => Object.hasOwn(arm.columns, at))))
+				continue;
+			const relation = relation_index.inverse.get(`${model}.${name}`);
+			if (relation === undefined) continue;
+			const child = input(root, relation.from, at, verb, 'create', relation.fk),
+				row = target(relation.from);
+			properties[name] = mode === 'create'
+				? list(relation.spec.owned ? child : { oneOf: [child, row] })
+				: {
+					type: 'object', additionalProperties: false,
+					properties: {
+						create: list(child),
+						update: list(update(relation.from, input(root, relation.from, at, verb, 'update', relation.fk))),
+						delete: list(row),
+						...(relation.spec.owned ? {} : { link: list(row) }),
+						...(!relation.spec.owned && relation.spec.optional ? { unlink: list(row) } : {})
+					}
+				};
+		}
+		// Transform-filled fields and defaults are judged by the write engine; submitted columns retain their native kinds.
+		return { type: 'object', additionalProperties: false, properties };
+	};
+	const writes = Object.fromEntries(exposed.flatMap((model) =>
+		(['create', 'update', 'delete'] as const)
+			.filter((verb) => m.exposures[model]?.[verb] !== undefined && may(model, verb))
+			.map((verb): [string, Json] => [
+				`${model}.${verb}`,
+				list(verb === 'create'
+					? input(model, model, model, verb)
+					: verb === 'update'
+						? update(model, input(model, model, model, verb))
+						: { type: 'object', additionalProperties: false, required: ['target'], properties: { target: target(model) } })
+			])
+	));
+	const automations = (authority.admin ? Object.keys(m.automations) : authority.automations)
+		.filter((name) => m.automations[name] !== undefined);
+	const run_inputs = automations.flatMap((name): Json[] => {
+		const automation = m.automations[name];
+		if (automation === undefined) return [];
+		const start = {
+			input: json_schema({ kind: 'object', fields: automation_fields(automation.input) }),
+			id: { type: 'string' }
+		};
+		return [
+			{
+				type: 'object', additionalProperties: false, required: ['automation'],
+				properties: { automation: { const: name }, ...start }
+			},
+			{
+				type: 'object', additionalProperties: false, required: ['automation', 'runs'],
+				properties: {
+					automation: { const: name },
+					runs: { type: 'array', minItems: 1, items: {
+						type: 'object', additionalProperties: false, required: ['id'], properties: start
+					} }
+				}
+			}
+		];
+	});
 	const body = (schema: Json) => ({ required: true, content: { 'application/json': { schema } } });
 	const responses = {
 		200: { description: 'answered' },
-		202: { description: 'pendingApproval, or running: the act continues as the named run' },
+		202: { description: 'pending_approval, or running: the act continues as the named run' },
 		401: { description: 'unauthenticated' },
 		422: { description: 'refused' }
 	};
 	return {
 		openapi: '3.1.0',
 		info: { title: 'Bolt workspace', version },
-		components: { securitySchemes: { apiKey: { type: 'http', scheme: 'bearer' } } },
-		security: [{ apiKey: [] }],
+		components: { securitySchemes: { api_key: { type: 'http', scheme: 'bearer' } } },
+		security: [{ api_key: [] }],
 		paths: {
+			[PATHS.sync_control]: {
+				post: {
+					operationId: 'sync_control',
+					description: 'Native manual refresh or file transfer. Requires a member and the relevant sync capability or file grants; this is not an automation start.',
+					parameters: [
+						{ name: HEADERS.key, in: 'header', required: true, description: 'The same uuidv7 as body.id.', schema: { type: 'string' } },
+						{ name: HEADERS.contract, in: 'header', schema: { type: 'string', const: version } }
+					],
+					requestBody: body({
+						type: 'object', additionalProperties: false, required: ['model', 'sync', 'id', 'input', 'issued_at'],
+						properties: {
+							model: { type: 'string' }, sync: { type: 'string' },
+							id: { type: 'string', format: 'uuid' }, issued_at: { type: 'string', format: 'date-time' },
+							input: { type: 'object', description: 'Remote: { instance?, partition? }. File: { mode: import, file, context? } or { mode: template | export, format?, to?, where?, context? }.' }
+						}
+					}),
+					responses
+				}
+			},
 			[PATHS.q]: {
 				post: {
 					operationId: 'q',
@@ -1280,18 +1375,22 @@ function openapi(m: EngineManifest, authority: Authority, version: string): Json
 						{ name: HEADERS.contract, in: 'header', schema: { type: 'string', const: version } }
 					],
 					requestBody: body({
-						oneOf: callables.map((callable) => ({
-							type: 'object',
-							required: ['callable', 'input', 'issuedAt'],
-							properties: {
-								callable: { const: callable },
-								input:
-									callable === 'start'
-										? { type: 'object' }
-										: { type: 'array', items: { type: 'object' } },
-								issuedAt: { type: 'string', format: 'date-time' }
-							}
-						}))
+						oneOf: [
+							{
+								type: 'object', additionalProperties: false, required: ['acts', 'issued_at'],
+								properties: {
+									acts: { type: 'object', additionalProperties: false, properties: writes },
+									issued_at: { type: 'string', format: 'date-time' }
+								}
+							},
+							...(run_inputs.length === 0 ? [] : [{
+								type: 'object', additionalProperties: false, required: ['callable', 'input', 'issued_at'],
+								properties: {
+									callable: { const: 'run' }, input: { oneOf: run_inputs },
+									issued_at: { type: 'string', format: 'date-time' }
+								}
+							}])
+						]
 					}),
 					responses
 				}

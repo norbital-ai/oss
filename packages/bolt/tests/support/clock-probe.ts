@@ -7,7 +7,7 @@ class ClockProbeExpired extends Schema.TaggedError<ClockProbeExpired>()('ClockPr
 }) {}
 
 /** Advance actual registered native sleeps until the operation settles, within the scenario's existing budget. */
-export const clockProbe = <A, E, R>(operation: Effect.Effect<A, E, R>, millis: number) =>
+export const clock_probe = <A, E, R>(operation: Effect.Effect<A, E, R>, millis: number) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const clock = yield* Clock.Clock,

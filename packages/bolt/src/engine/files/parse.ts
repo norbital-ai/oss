@@ -1,12 +1,12 @@
 // A file sync's built-in parsers (spec §3.3), run on the host: an uploaded file's bytes as records of the sync's columns
 // (its `schema`, else the model's writable fields), each with `$at` (its sheet row or line) so findings point at it. A
-// header or key matches a column's name or `label`, any case; an unknown one is ignored. A custom parser runs in the guest
+// header or key matches a column's name or catalogue caption, any case; an unknown one is ignored. A custom parser runs in the guest
 // (`sync/file.ts`); this module only says which parser an upload is read with.
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
-import { csvDelimiter, csvRows, csvText } from '@norbital-ai/std/csv';
-import { isPlainDate } from '@norbital-ai/std/date';
-import { utcOf } from '@norbital-ai/std/zone';
-import type { InputFields, InputKind } from '../../decl/fields.ts';
+import { csv_delimiter, csv_rows, csv_text } from '@norbital-ai/std/csv';
+import { is_plain_date } from '@norbital-ai/std/date';
+import { utc_of } from '@norbital-ai/std/zone';
+import type { Fields, Kind } from '@norbital-ai/std/kind';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { BuiltinParser, Finding } from '../../decl/runtime/sync.ts';
 import type { Json } from '../../decl/values.ts';
@@ -70,13 +70,13 @@ export const acceptOf = (parsers: readonly Parser[]): string =>
 		)
 	].join(',');
 
-/** A column's header: its label, else its name. */
-export const headerOf = (field: string, kind: InputKind): string => kind.label ?? field;
-/** A header or key's column, by name or label, any case (a name wins over another column's label). */
-function columnOf(columns: InputFields): (header: string) => string | undefined {
+export type ColumnCaptions = Readonly<Record<string, string>>;
+/** A column's header: its resolved catalogue caption, else its field identifier. */
+export const headerOf = (field: string, captions: ColumnCaptions): string => captions[field] ?? field;
+/** A header or key's column, by name or caption, any case (a name wins over another column's caption). */
+function columnOf(columns: Fields, captions: ColumnCaptions): (header: string) => string | undefined {
 	const names = new Map<string, string>();
-	for (const [f, k] of Object.entries(columns))
-		if (k.label !== undefined) names.set(k.label.trim().toLowerCase(), f);
+	for (const f of Object.keys(columns)) names.set(headerOf(f, captions).trim().toLowerCase(), f);
 	for (const f of Object.keys(columns)) names.set(f.toLowerCase(), f);
 	return (header) => names.get(header.trim().toLowerCase());
 }
@@ -89,7 +89,7 @@ const ISO_INSTANT =
  * A sheet cell as its column's kind takes it: numbers and booleans as such (from text too), an Excel date, time or
  * date-time serial as its date, time or instant (a serial is wall time in `tz`), the rest as trimmed text.
  */
-function valueOf(k: InputKind, c: Exclude<Cell, null>, tz: string): Json {
+function valueOf(k: Kind, c: Exclude<Cell, null>, tz: string): Json {
 	const text = typeof c === 'string' ? c.trim() : String(c);
 	if (k.kind === 'int' || k.kind === 'number')
 		return typeof c === 'number'
@@ -107,7 +107,7 @@ function valueOf(k: InputKind, c: Exclude<Cell, null>, tz: string): Json {
 					: text;
 	if (k.kind === 'date' && typeof c === 'number')
 		return new Date(EXCEL_EPOCH + Math.floor(c) * DAY).toISOString().slice(0, 10);
-	if (k.kind === 'date' && isPlainDate(text.slice(0, 10)) && ISO_INSTANT.test(text))
+	if (k.kind === 'date' && is_plain_date(text.slice(0, 10)) && ISO_INSTANT.test(text))
 		return text.slice(0, 10);
 	if (k.kind === 'time' && typeof c === 'number') {
 		const m = Math.round((c % 1) * 1440);
@@ -115,7 +115,7 @@ function valueOf(k: InputKind, c: Exclude<Cell, null>, tz: string): Json {
 	}
 	if (k.kind === 'instant' && typeof c === 'number') {
 		const date = new Date(EXCEL_EPOCH + Math.floor(c) * DAY).toISOString().slice(0, 10);
-		return new Date(utcOf(date, Math.round((c % 1) * 86_400) * 1000, tz)).toISOString();
+		return new Date(utc_of(date, Math.round((c % 1) * 86_400) * 1000, tz)).toISOString();
 	}
 	return text;
 }
@@ -123,11 +123,12 @@ function valueOf(k: InputKind, c: Exclude<Cell, null>, tz: string): Json {
 /** Row 1 is the header; each later row with a value is a record whose `$at` is its row. */
 function fromTable(
 	cells: readonly (readonly Cell[])[],
-	columns: InputFields,
+	columns: Fields,
+	captions: ColumnCaptions,
 	required: readonly string[],
 	tz: string
 ): Parsed {
-	const column = columnOf(columns);
+	const column = columnOf(columns, captions);
 	const header = (cells[0] ?? []).map((h) => (h === null ? undefined : column(String(h))));
 	const missing = required.filter((f) => !header.includes(f));
 	if (missing.length > 0)
@@ -140,7 +141,7 @@ function fromTable(
 					: [
 							{
 								at: 1,
-								field: headerOf(f, k),
+								field: headerOf(f, captions),
 								message: 'The file has no such column.',
 								severity: 'refuse' as const
 							}
@@ -168,7 +169,7 @@ const notParsed = (message: string): Parsed => ({
 	findings: [{ at: 0, message, severity: 'refuse' }]
 });
 /** An array of records, or `{ "records": [...] }`; a record's `$at` is its place in the list (from 1). */
-function fromJson(text: string, columns: InputFields): Parsed {
+function fromJson(text: string, columns: Fields, captions: ColumnCaptions): Parsed {
 	const decoded = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json))(text);
 	if (Result.isFailure(decoded)) return notParsed('The file is not JSON.');
 	const value: Json = decoded.success;
@@ -179,7 +180,7 @@ function fromJson(text: string, columns: InputFields): Parsed {
 			: null;
 	if (list === null)
 		return notParsed('A JSON file holds a list of records, or { "records": [...] }.');
-	const column = columnOf(columns),
+	const column = columnOf(columns, captions),
 		records: Obj[] = [],
 		findings: Finding[] = [];
 	list.forEach((item, i) => {
@@ -235,7 +236,7 @@ function icsValue(p: { params: ReadonlyMap<string, string>; value: string }, tz:
 		return new Date(
 			t[7] === 'Z'
 				? Date.parse(`${date}T00:00:00Z`) + ms
-				: utcOf(date, ms, p.params.get('TZID') ?? tz)
+				: utc_of(date, ms, p.params.get('TZID') ?? tz)
 		).toISOString();
 	}
 	return p.value.replace(/\\([\\;,nN])/g, (_, c: string) => (c === 'n' || c === 'N' ? '\n' : c));
@@ -245,8 +246,8 @@ function icsValue(p: { params: ReadonlyMap<string, string>; value: string }, tz:
  * `dtend`, `location`, …) whose `$at` is its `BEGIN:VEVENT` line; nested components (alarms) are skipped.
  * ponytail: a repeated property (ATTENDEE, CATEGORIES) keeps its last value; a schema field needing all of them needs a custom parser.
  */
-function fromIcs(text: string, columns: InputFields, tz: string): Parsed {
-	const column = columnOf(columns),
+function fromIcs(text: string, columns: Fields, captions: ColumnCaptions, tz: string): Parsed {
+	const column = columnOf(columns, captions),
 		lines: { text: string; at: number }[] = [];
 	text.split(/\r\n|\n|\r/).forEach((l, i) => {
 		const last = lines.at(-1);
@@ -286,30 +287,32 @@ function fromIcs(text: string, columns: InputFields, tz: string): Parsed {
 export function parseBuiltin(
 	parser: BuiltinParser,
 	bytes: Uint8Array,
-	columns: InputFields,
-	options: { readonly required: readonly string[]; readonly tz: string }
+	columns: Fields,
+	options: { readonly required: readonly string[]; readonly tz: string; readonly captions?: ColumnCaptions }
 ): Parsed {
+	const captions = options.captions ?? {};
 	const parsed = Result.try(() => {
 		switch (parser) {
 			case 'xlsx':
-				return fromTable(xlsxCells(bytes), columns, options.required, options.tz);
+				return fromTable(xlsxCells(bytes), columns, captions, options.required, options.tz);
 			case 'csv':
 			case 'tsv': {
-				const text = csvText(bytes);
+				const text = csv_text(bytes);
 				return fromTable(
-					csvRows(text, parser === 'tsv' ? '\t' : csvDelimiter(text)),
+					csv_rows(text, parser === 'tsv' ? '\t' : csv_delimiter(text)),
 					columns,
+					captions,
 					options.required,
 					options.tz
 				);
 			}
 			case 'json':
-				return fromJson(csvText(bytes), columns);
+				return fromJson(csv_text(bytes), columns, captions);
 			case 'ics':
-				return fromIcs(csvText(bytes), columns, options.tz);
+				return fromIcs(csv_text(bytes), columns, captions, options.tz);
 			case 'txt': {
 				const field = Object.keys(columns)[0] ?? 'line';
-				const lines = csvText(bytes)
+				const lines = csv_text(bytes)
 					.split(/\r?\n/)
 					.filter((line) => line !== '');
 				return { records: lines.map((line, index) => ({ [field]: line, $at: index + 1 })), findings: [] };

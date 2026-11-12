@@ -1,7 +1,7 @@
 // The `decision.made` attributes (§5.12): the state the decider received is recorded, every text leaf clipped, so the
 // panel's raw-context tab can show exactly what triage/filter/author was given without one event growing unbounded.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { Logs } from '../src/engine/ports.ts';
 import type { LogEvent } from '../src/engine/contracts.ts';
 import {
@@ -9,7 +9,7 @@ import {
 	decisionUsage,
 	type DecisionRequest,
 	type DecisionResult
-} from '../src/engine/decisions/index.ts';
+} from '../src/engine/decision.ts';
 
 const request: DecisionRequest = {
 	state: {
@@ -29,7 +29,7 @@ const request: DecisionRequest = {
 };
 const answered: DecisionResult = {
 	answers: { m0: { type: 'choice', choice: 'yes', confidence: 0.9, probabilities: { yes: 0.9 } } },
-	costUsd: 0,
+	cost_usd: 0,
 	provider: 'test'
 };
 
@@ -52,10 +52,10 @@ describe('the decision.made attributes', () => {
 					...answered,
 					call: 'decision:gen-1',
 					model: 'jev',
-					costUsd: 0.002,
+					cost_usd: 0.002,
 					tokens: { input: 120, output: 2 }
 				},
-				{ invocation: 'invocation', run: null, conversation: null, turn: null, durationMs: 37 }
+				{ invocation: 'invocation', run: null, conversation: null, turn: null, duration_ms: 37 }
 			);
 			expect(records).toHaveLength(1);
 			expect(records[0]).toMatchObject({
@@ -68,7 +68,7 @@ describe('the decision.made attributes', () => {
 					input: 120,
 					output: 2,
 					cost: 0.002,
-					durationMs: 37,
+					duration_ms: 37,
 					questionCount: 1,
 					settlement: 'pending',
 					call: 'decision:gen-1'
@@ -78,12 +78,11 @@ describe('the decision.made attributes', () => {
 		})
 	);
 	it('record the request state with every string leaf clipped to 600 characters', () => {
-		const e = decisionEvent('triage', request, answered) as {
-			use: string;
-			questions: string[];
-			state: { directive: string; pending: { text: string }[] };
-			answers: unknown;
-		};
+		const e = Schema.decodeUnknownSync(Schema.Struct({
+			use: Schema.String, questions: Schema.Array(Schema.String),
+			state: Schema.Struct({ directive: Schema.String, pending: Schema.Array(Schema.Struct({ from: Schema.String, text: Schema.String })) }),
+			answers: Schema.Json
+		}))(decisionEvent('triage', request, answered));
 		expect(e.use).toBe('triage');
 		expect(e.questions).toEqual(['m0']);
 		expect(e.answers).toEqual(answered.answers);
@@ -93,10 +92,7 @@ describe('the decision.made attributes', () => {
 	});
 
 	it('record the state on a failure too, beside the typed error', () => {
-		const e = decisionEvent('filter', request, { kind: 'upstream', message: 'down' }) as {
-			error: string;
-			state: unknown;
-		};
+		const e = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String, state: Schema.Json }))(decisionEvent('filter', request, { kind: 'upstream', message: 'down' }));
 		expect(e.error).toBe('upstream');
 		expect(e.state).toBeDefined();
 	});

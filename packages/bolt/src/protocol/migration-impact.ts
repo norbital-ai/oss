@@ -11,7 +11,7 @@ export const MigrationStepImpact = /*#__PURE__*/ Schema.Struct({
 });
 export type MigrationStepImpact = typeof MigrationStepImpact.Type;
 export const MigrationImpact = /*#__PURE__*/ Schema.Struct({
-	durationMs: Schema.Number,
+	duration_ms: Schema.Number,
 	steps: Schema.Array(MigrationStepImpact)
 });
 export type MigrationImpact = typeof MigrationImpact.Type;
@@ -19,7 +19,7 @@ export type MigrationImpact = typeof MigrationImpact.Type;
 const fill = (template: string, values: Readonly<Record<string, string | number>>) =>
 	template.replace(/\{(\w+)\}/g, (all, key: string) => String(values[key] ?? all));
 /** A step in plain words, read from its generated id (`drop:column:contracts.bank`, `check:contracts.nationality`). */
-export function impactText(
+export function impact_text(
 	step: Pick<MigrationStepImpact, 'id' | 'hazard' | 'rows'>,
 	t: (key: string) => string = (key) => key
 ): string {
@@ -62,12 +62,12 @@ export function impactText(
 	}
 }
 /** A destructive step's plain name, from its generated id (`drop:column:contracts.bank`). */
-export const stepName = (id: string) => id.slice(id.lastIndexOf(':') + 1);
+export const step_name = (id: string) => id.slice(id.lastIndexOf(':') + 1);
 /**
  * What a person reads before merging: every step that touches data (additions that write nothing are left out), the
  * downtime, then what a rollback costs: the schema differs from before, so it returns live's data to this merge.
  */
-export const impactLines = (
+export const impact_lines = (
 	impact: MigrationImpact,
 	t: (key: string) => string = (key) => key
 ): readonly string[] => [
@@ -76,9 +76,9 @@ export const impactLines = (
 			// a data step sitting in an additive one wrote rows; the engine's own history bookkeeping is no one's data
 			(step) => step.hazard !== 'additive' || (step.rows > 0 && !step.id.includes(':history:'))
 		)
-		.map((step) => impactText(step, t)),
+		.map((step) => impact_text(step, t)),
 	fill(t('Expected downtime about {s} s (measured on the preview)'), {
-		s: Math.max(1, Math.round(impact.durationMs / 1000))
+		s: Math.max(1, Math.round(impact.duration_ms / 1000))
 	}),
 	t('Rolling back later would lose anything written after this merge')
 ];

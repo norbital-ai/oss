@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { whatsappCloud } from '../../src/chat/whatsapp-cloud/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = {
@@ -62,7 +62,7 @@ describe('WhatsApp Business Cloud', () => {
 			const h = yield* connected(whatsappCloud, settings),
 				body = hook({ ...text, context: { from: '100', id: 'wamid.0' } });
 			expect(h.status).toMatchObject({ state: 'connected', account: '100' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([
 				{
 					kind: 'messages',
@@ -70,11 +70,11 @@ describe('WhatsApp Business Cloud', () => {
 						{
 							id: 'wamid.1',
 							thread: '6580000000',
-							sentAt: '2026-09-21T14:13:20.000Z',
+							sent_at: '2026-09-21T14:13:20.000Z',
 							from: { handle: '6580000000', name: 'Mei' },
 							text: 'hello',
 							group: false,
-							replyTo: 'wamid.0',
+							reply_to: 'wamid.0',
 							attachments: [],
 							invocation: 'direct'
 						}
@@ -91,9 +91,9 @@ describe('WhatsApp Business Cloud', () => {
 				new Request(
 					`https://hook.test/?hub.mode=subscribe&hub.verify_token=${token}&hub.challenge=42`
 				);
-			const good = yield* h.link.webhook!(query('verify'));
+			const good = yield* required(h.link.webhook)(query('verify'));
 			expect(yield* Effect.promise(() => good.text())).toBe('42');
-			expect((yield* h.link.webhook!(query('wrong'))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(query('wrong'))).status).toBe(401);
 		})
 	);
 	it.live('refuses a bad signature and stores nothing', () =>
@@ -101,7 +101,7 @@ describe('WhatsApp Business Cloud', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(whatsappCloud, settings),
 				body = hook(text);
-			const forged = yield* h.link.webhook!(
+			const forged = yield* required(h.link.webhook)(
 				webhook(body, { 'x-hub-signature-256': 'sha256=forged' })
 			);
 			expect(forged.status).toBe(401);
@@ -115,7 +115,7 @@ describe('WhatsApp Business Cloud', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = hook(text);
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('leaves another number’s message, a status and a reaction alone', () =>
@@ -141,7 +141,7 @@ describe('WhatsApp Business Cloud', () => {
 					]
 				})
 			])
-				expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -155,8 +155,8 @@ describe('WhatsApp Business Cloud', () => {
 			});
 			const good = hook(document('media1')),
 				bad = hook({ id: 'wamid.2', ...document('media2') });
-			yield* h.link.webhook!(webhook(good, signature(good)));
-			yield* h.link.webhook!(webhook(bad, signature(bad)));
+			yield* required(h.link.webhook)(webhook(good, signature(good)));
+			yield* required(h.link.webhook)(webhook(bad, signature(bad)));
 			expect(h.events[0]).toMatchObject({
 				messages: [
 					{
@@ -178,8 +178,8 @@ describe('WhatsApp Business Cloud', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(whatsappCloud, settings);
-			expect(yield* h.link.send!({ to: '6580000000', text: 'Hello' }, [])).toMatchObject({
-				providerId: 'wamid.out1'
+			expect(yield* required(h.link.send)({ to: '6580000000', text: 'Hello' }, [])).toMatchObject({
+				provider_id: 'wamid.out1'
 			});
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://graph.facebook.com/v25.0/100/messages');
@@ -191,12 +191,12 @@ describe('WhatsApp Business Cloud', () => {
 				type: 'text',
 				text: { preview_url: false, body: 'Hello' }
 			});
-			yield* h.link.send!({ to: 'SG.ENT.abc123', text: 'Hello' }, []);
+			yield* required(h.link.send)({ to: 'SG.ENT.abc123', text: 'Hello' }, []);
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toMatchObject({
 				recipient: 'SG.ENT.abc123'
 			});
 			const before = api.calls.length;
-			yield* h.link.send!({ to: '6580000000', text: 'a'.repeat(4097) }, []);
+			yield* required(h.link.send)({ to: '6580000000', text: 'a'.repeat(4097) }, []);
 			expect(
 				api.calls.slice(before).map((one) => JSON.parse(one.body).text.body.length)
 			).toEqual([4096, 1]);
@@ -206,7 +206,7 @@ describe('WhatsApp Business Cloud', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: { message: 'Invalid token', code: 190 } }, 401));
 			const h = yield* host(chatProvider(whatsappCloud), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

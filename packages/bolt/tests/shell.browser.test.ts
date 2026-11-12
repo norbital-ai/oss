@@ -1,15 +1,15 @@
 import { expect, it } from '@effect/vitest';
 import { Deferred, Effect, Layer, ManagedRuntime } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
-import { shellApi } from '../src/shell/runtime.ts';
+import { shell_api } from '../src/shell/runtime.ts';
 import { ShellError, type Invitation } from '../src/shell/api-types.ts';
 import type { SignInMethods } from '../src/shell/host.ts';
 import AccessCard from './support/access-card.svelte';
 import './support/shell.css';
 
-const api = shellApi(async (url) =>
+const api = shell_api(async (url) =>
 	Response.json({
 		value: String(url).endsWith('/methods')
 			? { email: true, phone: false, whatsapp: false, signup: [], locale: 'en' }
@@ -20,7 +20,7 @@ const api = shellApi(async (url) =>
 );
 
 it('keeps an unknown email on the address step and accepts a corrected email', async () => {
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const view = mount(AccessCard, {
@@ -28,7 +28,7 @@ it('keeps an unknown email on the address step and accepts a corrected email', a
 		props: {
 			api: {
 				...api,
-				sendCode: (address: string) =>
+				send_code: (address: string) =>
 					address === 'stranger@x.test'
 						? Effect.fail(
 								new ShellError({
@@ -67,7 +67,7 @@ it('keeps an unknown email on the address step and accepts a corrected email', a
 it.each(['ready', 'failed'] as const)(
 	'sign-in enables its form and recovers from a send failure while methods are %s',
 	async (result) => {
-		const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+		const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 		const methods = Deferred.makeUnsafe<SignInMethods, ShellError>();
 		const send = Deferred.makeUnsafe<void, ShellError>();
 		const target = document.createElement('div');
@@ -78,7 +78,7 @@ it.each(['ready', 'failed'] as const)(
 				api: {
 					...api,
 					methods: () => Deferred.await(methods),
-					sendCode: () => Deferred.await(send)
+					send_code: () => Deferred.await(send)
 				}
 			}
 		});
@@ -125,7 +125,7 @@ it.each(['ready', 'failed'] as const)(
 );
 
 it('invitation loading disables admission and presents a read failure', async () => {
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	const invitation = Deferred.makeUnsafe<Invitation, ShellError>();
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);

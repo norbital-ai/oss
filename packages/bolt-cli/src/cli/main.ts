@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /// <reference types="node" />
-import { Effect, Console, Option } from 'effect';
+import { Effect, Console, Option, Predicate } from 'effect';
 import { Argument, Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 import { dev, tethered } from './dev.ts';
-import { hostFileOf } from '@norbital-ai/bolt/tooling';
+import { host_file_of } from '@norbital-ai/bolt/tooling';
 import { platformCommand } from './platform.ts';
 import { templatesCommand } from './templates.ts';
 import {
@@ -31,9 +31,19 @@ const print = (errors: readonly CheckDiagnostic[]) =>
 			`${error.code} ${error.message}${error.help === undefined ? '' : `\n${error.help}`}`
 		)
 	).pipe(Effect.andThen(Console.error(`${errors.length} errors`)));
+/** A failure's words and those of each cause under it (a build's Vite error rides `cause`), never a blank line. */
+const reason = (error: unknown): string => {
+	const words: string[] = [];
+	for (let at = error, depth = 0; at !== undefined && at !== null && depth < 8; depth++) {
+		const message = Predicate.hasProperty(at, 'message') ? String(at.message) : String(at);
+		if (message !== '' && !words.includes(message)) words.push(message);
+		at = Predicate.hasProperty(at, 'cause') ? at.cause : undefined;
+	}
+	return words.length === 0 ? String(error) : words.join('\n  caused by: ');
+};
 /** An author's failure: its diagnostics, or with none its message, never a bare count. */
 const failed = (error: AuthorErrors) =>
-	error.errors.length === 0 ? Console.error(error.message) : print(error.errors);
+	error.errors.length === 0 ? Console.error(reason(error)) : print(error.errors);
 const dir = Argument.String('dir').pipe(Argument.withDefault('.'));
 const log: Log = (line) => console.log(line);
 const json = Flag.Boolean('json').pipe(
@@ -183,7 +193,7 @@ const devCommand = Command.make(
 					);
 				return yield* watching(options.dir);
 			}
-			const hostFile = yield* hostFileOf(root, Option.getOrUndefined(options.host));
+			const hostFile = yield* host_file_of(root, Option.getOrUndefined(options.host));
 			if (Option.isNone(hostFile)) return yield* watching(options.dir);
 			yield* Effect.scoped(
 				dev(root, hostFile.value, {
@@ -275,9 +285,7 @@ export const main = (argv: readonly string[]) =>
 		Effect.as(0),
 		Effect.catchTag('AuthorErrors', (error) => failed(error).pipe(Effect.as(1))),
 		// its words: a host reads this line as the failure's reason
-		Effect.catch((error) =>
-			Console.error('message' in error ? error.message : error).pipe(Effect.as(2))
-		)
+		Effect.catch((error) => Console.error(reason(error)).pipe(Effect.as(2)))
 	);
 if (
 	process.argv[1] !== undefined &&

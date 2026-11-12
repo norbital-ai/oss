@@ -5,8 +5,9 @@ import { Clock, Effect, Schema } from 'effect';
 import { LIMITS, type EmbedInput, type QueuedRun } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { TenantDb } from '../db/tenant-db.ts';
+import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Ai } from '../ports.ts';
-import { Manifest, Wake, type RunHandler } from '../services.ts';
+import { Manifest, Live, Wake, type RunHandler } from '../services.ts';
 import { Port } from '../port.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueue } from '../runs/queue.ts';
@@ -58,7 +59,7 @@ export const embedQueued = (id: string, now: string): QueuedRun & { id: string }
 	id,
 	automation: EMBED,
 	input: {},
-	dueAt: now,
+	due_at: now,
 	cause: 'schedule',
 	depth: 0
 });
@@ -85,13 +86,14 @@ function assertWidth(
  * The platform run: every semantic model's rows with no vector, a page at a time, one `embed` call per page. A
  * row that changed after it was read keeps its null (its own write queued the next run). A port failure fails the
  * run with the facility's kind (`upstream`/`timeout` retry, rule 54). Rule 25a: a page whose guarded write stores 0 of
- * its rows stops the run `noProgress`; after 10,000 rows the run queues one continuation and ends. A row whose `file`
+ * its rows stops the run `no_progress`; after 10,000 rows the run queues one continuation and ends. A row whose `file`
  * source holds an image embeds that image (its bytes from the files port); every other row embeds its text sources.
  * ponytail: one vector per row, so the first image wins over the text; a non-image file is not embedded.
  */
 export const embedRun = Effect.gen(function* () {
 	const manifest = yield* Manifest,
 		db = yield* TenantDb,
+		live = yield* Live,
 		ai = yield* Ai,
 		wake = yield* Wake;
 	const File = Schema.Struct({
@@ -137,8 +139,8 @@ export const embedRun = Effect.gen(function* () {
 					if (selected >= RUN_IDS) {
 						const at = iso(yield* Clock.currentTimeMillis),
 							c = new Chain();
-						enqueue(c, [{ automation: EMBED, input: {}, dueAt: at, cause: 'continue', depth: 0 }]);
-						yield* db.write(c.sql('NULL AS outcome'));
+						enqueue(c, [{ automation: EMBED, input: {}, due_at: at, cause: 'continue', depth: 0 }]);
+						yield* nativeCommit(db.write, live.publish, c, CapturedResult);
 						yield* wake.at(at);
 						return { embedded, continued: true };
 					}
@@ -187,7 +189,7 @@ export const embedRun = Effect.gen(function* () {
 					if (vectors.length !== todo.length)
 						return yield* Effect.fail(
 							BoltError.make(
-								'badAnswer',
+								'bad_answer',
 								'facility',
 								'the host returned the wrong number of embeddings'
 							)
@@ -197,7 +199,7 @@ export const embedRun = Effect.gen(function* () {
 						catch: (error) =>
 							error instanceof BoltError
 								? error
-								: BoltError.make('badAnswer', 'facility', 'the host returned invalid embeddings')
+								: BoltError.make('bad_answer', 'facility', 'the host returned invalid embeddings')
 					});
 					const set = todo.map((row, index) => ({
 						id: row.id,
@@ -211,7 +213,7 @@ export const embedRun = Effect.gen(function* () {
 					if (result.rows.length === 0)
 						return yield* Effect.fail(
 							BoltError.make(
-								'noProgress',
+								'no_progress',
 								'commit',
 								`bolt.embed: a pass on ${model} selected ${todo.length} rows and wrote 0; the run stops (rule 25a)`
 							)

@@ -1,52 +1,51 @@
 // The workspace shell's pure halves (§5.10, §3.9): app visibility, the nav tree, routes, and the visitor fetch.
+import { required } from './support/required.ts';
 import { readFileSync } from 'node:fs';
 import { beforeEach, afterEach, describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Context, Effect, Layer, ManagedRuntime, Option, Result, Schema } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { Files, Images } from '../src/engine/ports.ts';
-import { imagesPort } from '../src/node/images.ts';
+import { images_port } from '../src/node/images.ts';
 import { manifest as baseManifest } from './engine-fixture.ts';
-import { canOpenKiosk } from '../src/decl/runtime/kiosk.ts';
 import type { Authority, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
 import { exposure } from '../src/engine/access/exposure.ts';
 import {
-	canOpen,
-	commandCenterTabs,
-	crossSite,
-	framePolicy,
-	holdsPublic,
+	can_open,
+	command_center_tabs,
+	cross_site,
+	frame_policy,
+	holds_public,
 	href,
-	isOpenRoute,
-	kioskHref,
-	kioskNav,
+	is_open_route,
+	kiosk_href,
+	kiosk_nav,
 	nav,
-	navApps,
-	previewRoute,
-	startableAutomations,
+	nav_apps,
+	preview_route,
+	startable_automations,
 	route,
 	surfaces
 } from '../src/shell/nav.ts';
-import { challengeQueue, kioskFetch, visitorFetch, shellApi } from '../src/shell/runtime.ts';
+import { challenge_queue, kiosk_fetch, visitor_fetch, shell_api } from '../src/shell/runtime.ts';
 import { BoltRoutes } from '../src/protocol/http.ts';
-import { activeApp, media, navigationModel } from '../src/shell/model.ts';
-import { fileAttachments } from '../src/engine/agent/attachments.ts';
+import { active_app, media, navigation_model } from '../src/shell/model.ts';
+import { file_attachments } from '../src/engine/agent/attachments.ts';
 import {
-	languageOf,
-	routedEnvironment,
 	StudioOp,
-	studioView,
-	suggestMessage,
+	studio_view,
+	suggest_message,
 	type StudioState
 } from '../src/shell/studio/model.ts';
-import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
+import { decode_manifest, type EngineManifest } from '../src/engine/manifest.ts';
 /** The Node host's image port, as the agent's attachments read through it. */
-const hostImages = Effect.map(Layer.build(Images.fromAbi(imagesPort)), (context) =>
+const hostImages = Effect.map(Layer.build(Images.fromAbi(images_port)), (context) =>
 	Context.get(context, Images)
 );
-const decodeOp = (value: unknown) => Option.getOrNull(Schema.decodeUnknownOption(StudioOp)(value));
+const decodeOp = (value: unknown) =>
+	Option.getOrNull(Schema.decodeUnknownOption(StudioOp, { onExcessProperty: 'error' })(value));
 
 beforeEach(() => {
 	vi.stubGlobal('location', new URL('https://workspace.test/'));
@@ -98,15 +97,13 @@ const m: EngineManifest = {
 			icon: 'i',
 			audience: { public: ['applicant'], challenge: 'turnstile' },
 			pages: { apply: { title: 'Apply' } }
-		}
-	},
-	groups: { hr: { label: 'HR', icon: 'g', defaultChild: 'people' } },
-	kiosks: {
+		},
 		clock: {
 			title: 'Clock',
 			description: 'd',
 			icon: 'i',
-			auth: 'members',
+			shell: 'kiosk',
+			audience: 'members',
 			policies: ['kiosk_clock'],
 			pages: { clock: { title: 'Clock' } }
 		},
@@ -114,17 +111,17 @@ const m: EngineManifest = {
 			title: 'Lobby',
 			description: 'd',
 			icon: 'i',
-			auth: 'none',
-			policies: ['lobby_public'],
+			shell: 'kiosk',
+			audience: { public: ['lobby_public'] },
 			pages: { welcome: { title: 'Welcome' } }
 		}
-	}
+	},
+	groups: { hr: { title: 'HR', icon: 'g', default_child: 'people' } }
 };
 const member = (
 	apps: string[],
 	over: Partial<Extract<EngineActor, { kind: 'member' }>> = {},
-	admin = false,
-	kiosks: string[] = []
+	admin = false
 ): Authority => ({
 	key: 'k',
 	admin,
@@ -141,46 +138,51 @@ const member = (
 		phone: null,
 		external: false,
 		teams: [],
-		teamPath: [],
+		team_path: [],
 		admin,
 		party: null,
 		...over
 	},
-	capabilities: { apps, kiosks, tools: [], mcp: [] }
+	capabilities: { apps, syncs: [], tools: [], mcp: [] }
 });
 const names = (ns: ReturnType<typeof nav>): unknown[] =>
 	ns.map((n) => (n.kind === 'group' ? { [n.name]: names(n.children) } : n.name));
 
 describe('app visibility (§3.9, capabilities.apps)', () => {
 	it('a member whose policy names a public app opens it as themselves; `*`, other staff and administrators stay its visitor', () => {
-		expect(canOpen(m, member(['careers'], { external: true }), 'careers')).toBe(true);
-		expect(holdsPublic(member(['careers'], { external: true }), 'careers')).toBe(true);
-		expect(holdsPublic(member(['*']), 'careers')).toBe(false);
-		expect(holdsPublic(member(['sales']), 'careers')).toBe(false);
-		expect(holdsPublic(member(['careers'], {}, true), 'careers')).toBe(false);
+		expect(can_open(m, member(['careers'], { external: true }), 'careers')).toBe(true);
+		expect(holds_public(member(['careers'], { external: true }), 'careers')).toBe(true);
+		expect(holds_public(member(['*']), 'careers')).toBe(false);
+		expect(holds_public(member(['sales']), 'careers')).toBe(false);
+		expect(holds_public(member(['careers'], {}, true), 'careers')).toBe(false);
 	});
 	it('staff see members/all apps their policies admit, by name, * or group prefix', () => {
-		expect(canOpen(m, member(['sales']), 'sales')).toBe(true);
-		expect(canOpen(m, member(['sales']), 'hr/kiosk')).toBe(false);
-		expect(canOpen(m, member(['hr']), 'hr/kiosk')).toBe(true);
-		expect(canOpen(m, member(['hr/kiosk']), 'hr/people')).toBe(false);
-		expect(canOpen(m, member(['*']), 'both')).toBe(true);
-		expect(canOpen(m, member(['*']), 'portal')).toBe(false);
-		expect(canOpen(m, member(['*']), 'careers')).toBe(false);
+		expect(can_open(m, member(['sales']), 'sales')).toBe(true);
+		expect(can_open(m, member(['sales']), 'hr/kiosk')).toBe(false);
+		expect(can_open(m, member(['hr']), 'hr/kiosk')).toBe(true);
+		expect(can_open(m, member(['hr/kiosk']), 'hr/people')).toBe(false);
+		expect(can_open(m, member(['*']), 'both')).toBe(true);
+		expect(can_open(m, member(['*']), 'portal')).toBe(false);
+		expect(can_open(m, member(['*']), 'careers')).toBe(false);
 	});
 	it('externals see only external/all apps; admins see every app; visitors only their own', () => {
 		const ext = member(['*'], { external: true });
-		expect(['sales', 'portal', 'both'].map((a) => canOpen(m, ext, a))).toEqual([false, true, true]);
-		expect(Object.keys(m.apps).every((a) => canOpen(m, member([], {}, true), a))).toBe(true);
+		expect(['sales', 'portal', 'both'].map((a) => can_open(m, ext, a))).toEqual([
+			false,
+			true,
+			true
+		]);
+		const apps = Object.entries(m.apps).filter(([, app]) => app.shell !== 'kiosk');
+		expect(apps.every(([name]) => can_open(m, member([], {}, true), name))).toBe(true);
 		const visitor: Authority = {
 			...member([]),
 			actor: { kind: 'visitor', app: 'careers', visitor: 'v' }
 		};
-		expect(Object.keys(m.apps).filter((a) => canOpen(m, visitor, a))).toEqual(['careers']);
+		expect(Object.keys(m.apps).filter((a) => can_open(m, visitor, a))).toEqual(['careers']);
 	});
 	it("the shell renders only its nav's apps: an external's members app is no access", () => {
-		expect(navApps(nav(m, member(['*'], { external: true })))).toEqual(['both', 'portal']);
-		expect(navApps(nav(m, member(['hr'])))).toEqual(['hr/people', 'hr/kiosk']);
+		expect(nav_apps(nav(m, member(['*'], { external: true })))).toEqual(['both', 'portal']);
+		expect(nav_apps(nav(m, member(['hr'])))).toEqual(['hr/people', 'hr/kiosk']);
 	});
 	it('externals and visitors get no settings, runs or staff inbox; the agent follows the briefs', () => {
 		expect(surfaces(m, member([]).actor, true)).toEqual({
@@ -209,40 +211,43 @@ describe('app visibility (§3.9, capabilities.apps)', () => {
 });
 
 describe('exposure (the boot catalog ui reads)', () => {
-	it('accepts an unlabelled model and preserves an explicit text index without inventing an identifier', () => {
-		const source: EngineManifest = {
-			...em,
-			models: {
-				...em.models,
-				jobs: {
-					description: 'Jobs',
-					fields: { title: { kind: 'text' } },
-					search: { text: ['title'] }
-				}
-			}
-		};
-		const model = exposure(source, { ...member([]), admin: true }).jobs;
-		expect(model?.label).toEqual([]);
-		expect(model?.record_label).toBeUndefined();
-		expect(model?.search).toEqual(['title']);
-		expect(
-			exposure(
-				{
-					...source,
+	it.effect(
+		'accepts an unlabelled model and preserves an explicit text index without inventing an identifier',
+		() =>
+			Effect.gen(function* () {
+				const source: EngineManifest = {
+					...em,
 					models: {
-						...source.models,
-						jobs: { description: 'Jobs', fields: { title: { kind: 'text' } } }
+						...em.models,
+						jobs: {
+							description: 'Jobs',
+							fields: { title: { kind: 'text' } },
+							search: { text: ['title'] }
+						}
 					}
-				},
-				{ ...member([]), admin: true }
-			).jobs?.search
-		).toBeUndefined();
-	});
+				};
+				const model = (yield* exposure(source, { ...member([]), admin: true })).jobs;
+				expect(model?.label).toEqual([]);
+				expect(model?.record_label).toBeUndefined();
+				expect(model?.search).toEqual(['title']);
+				expect(
+					(yield* exposure(
+						{
+							...source,
+							models: {
+								...source.models,
+								jobs: { description: 'Jobs', fields: { title: { kind: 'text' } } }
+							}
+						},
+						{ ...member([]), admin: true }
+					)).jobs?.search
+				).toBeUndefined();
+			})
+	);
 	const TRUE = { t: 'const', value: true } as const;
 	/** One policy `p`'s access points on a model: none unless named (decision 3: reads and write columns per path). */
 	const access = (over: Partial<ModelAuthority> = {}): ModelAuthority => ({
 		read: {},
-		history: [],
 		create: [],
 		update: [],
 		delete: [],
@@ -250,437 +255,531 @@ describe('exposure (the boot catalog ui reads)', () => {
 		...over
 	});
 	const em = Result.getOrThrow(
-		decodeManifest({
+		decode_manifest({
 			...baseManifest,
 			models: {
 				jobs: {
 					description: 'Work orders on site',
-					label: 'title',
+					record_label: 'record.title',
 					fields: { title: { kind: 'text' }, pay: { kind: 'money' }, notes: { kind: 'text' } },
 					search: { text: ['title'] }
 				},
-				sites: { description: 'Work sites', label: 'name', fields: { name: { kind: 'text' } } }
+				sites: {
+					description: 'Work sites',
+					record_label: 'record.name',
+					fields: { name: { kind: 'text' } }
+				}
 			},
 			relationships: { 'jobs.site': { to: 'sites', optional: true } },
 			exposures: {
 				jobs: {
-					read: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } },
+					outputs: {
+						default: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } }
+					},
 					update: { columns: { jobs: ['title'] } }
 				}
 			},
 			integrations: {}
 		} satisfies EngineManifest)
 	);
-	it("exposes the columns a write arm admits, with or without its policy's check (the verdict comes at write time)", () => {
-		const source: EngineManifest = {
-			...em,
-			exposures: {
-				jobs: {
-					read: { jobs: { fields: ['title', 'pay'] } },
-					create: { columns: { jobs: ['title', 'pay'] } },
-					update: { columns: { jobs: ['title', 'pay'] } }
-				}
-			}
-		};
-		const auth: Authority = {
-			...member([]),
-			models: {
-				jobs: access({
-					read: { default: { jobs: [{ policy: 'p', where: TRUE }] } },
-					create: [{ policy: 'p', columns: { jobs: ['title'] }, check: true }],
-					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
-				})
-			}
-		};
-		expect(exposure(source, auth)['jobs']).toMatchObject({
-			create: { columns: ['title'] },
-			update: { columns: ['title'] }
-		});
-		expect(exposure(source, auth)['jobs']?.create).not.toHaveProperty('proposalOnly');
-	});
-	it("names a file sync's required context, which a toolbar without it cannot start", () => {
-		const source: EngineManifest = {
-			...em,
-			exposures: {
-				jobs: {
-					read: { jobs: { fields: ['title'] } },
-					syncs: {
-						report: {
-							with: 'file',
-							parser: ['json'],
-							schema: { name: { kind: 'text' } },
-							context: {
-								ids: { kind: 'list', of: { kind: 'id', of: 'jobs' } },
-								kind: { kind: 'enum', values: ['A', 'B'], default: 'A' },
-								at: { kind: 'instant', optional: true }
+	it.effect(
+		"exposes the columns a write arm admits, with or without its policy's check (the verdict comes at write time)",
+		() =>
+			Effect.gen(function* () {
+				const source: EngineManifest = {
+					...em,
+					exposures: {
+						jobs: {
+							outputs: { default: { jobs: { fields: ['title', 'pay'] } } },
+							create: { columns: { jobs: ['title', 'pay'] } },
+							update: { columns: { jobs: ['title', 'pay'] } }
+						}
+					}
+				};
+				const auth: Authority = {
+					...member([]),
+					models: {
+						jobs: access({
+							read: { default: { jobs: [{ policy: 'p', where: TRUE }] } },
+							create: [{ policy: 'p', columns: { jobs: ['title'] }, check: true }],
+							update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
+						})
+					}
+				};
+				expect((yield* exposure(source, auth))['jobs']).toMatchObject({
+					create: { columns: ['title'] },
+					update: { columns: ['title'] }
+				});
+				expect((yield* exposure(source, auth))['jobs']?.create).not.toHaveProperty('proposal_only');
+			})
+	);
+	it.effect("names a file sync's required context, which a toolbar without it cannot start", () =>
+		Effect.gen(function* () {
+			const source: EngineManifest = {
+				...em,
+				exposures: {
+					jobs: {
+						outputs: { default: { jobs: { fields: ['title'] } } },
+						syncs: {
+							report: {
+								with: 'file',
+								parser: ['json'],
+								schema: { name: { kind: 'text' } },
+								context: {
+									ids: { kind: 'ref', to: 'jobs', many: true },
+									kind: { kind: 'enum', values: ['A', 'B'], default: 'A' },
+									at: { kind: 'instant', optional: true }
+								},
+								write: true
 							},
-							write: true
+							sheet: { with: 'file', parser: ['csv'] }
+						}
+					}
+				}
+			};
+			const auth: Authority = {
+				...member([]),
+				models: { jobs: access({ read: { default: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
+			};
+			expect((yield* exposure(source, auth))['jobs']?.syncs).toEqual({
+				report: { kind: 'file', parser: ['json'], export: ['json'], context: ['ids'] },
+				sheet: { kind: 'file', parser: ['csv'], export: ['csv'] }
+			});
+		})
+	);
+	it.effect(
+		'exposes native integration instance forms by their grants without exposing the host fence',
+		() =>
+			Effect.gen(function* () {
+				const admin = (yield* exposure(em, { ...member([]), admin: true }))['sys_integration'];
+				expect(admin).toMatchObject({
+					create: { columns: ['integration', 'name', 'owner', 'envoy', 'configuration'] },
+					update: { columns: ['name', 'envoy', 'active', 'configuration', 'import_start'] },
+					relations: { owner: { targets: ['sys_user'], optional: true } }
+				});
+				expect(admin?.fields).not.toHaveProperty('epoch');
+				expect((yield* exposure(em, member([])))['sys_integration']).toBeUndefined();
+				const auth: Authority = {
+					...member([]),
+					models: {
+						sys_integration: access({
+							read: { default: { sys_integration: [{ policy: 'p', where: TRUE }] } },
+							update: [
+								{ policy: 'p', columns: { sys_integration: ['configuration'] }, check: false }
+							]
+						})
+					}
+				};
+				const restricted = (yield* exposure(em, auth))['sys_integration'];
+				expect(restricted?.update?.columns).toEqual(['configuration']);
+				expect(restricted?.create).toBeUndefined();
+				expect(restricted?.fields).not.toHaveProperty('epoch');
+			})
+	);
+	it.effect(
+		'a declared write layer exposes its child identity (model, parent FK, owned) beside the read layer',
+		() =>
+			Effect.gen(function* () {
+				const source: EngineManifest = {
+					...em,
+					models: {
+						...em.models,
+						lines: {
+							record_label: 'record.amount',
+							description: 'Order lines.',
+							fields: { amount: { kind: 'int' } }
+						}
+					},
+					relationships: { 'lines.job': { to: 'jobs', inverse: 'lines', owned: true } },
+					exposures: {
+						jobs: {
+							outputs: { default: { jobs: { fields: 'all' }, 'jobs.lines': { fields: 'all' } } },
+							update: { columns: { jobs: ['title'], 'jobs.lines': ['amount'] } }
 						},
-						sheet: { with: 'file', parser: ['csv'] }
-					}
-				}
-			}
-		};
-		const auth: Authority = {
-			...member([]),
-			models: { jobs: access({ read: { default: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
-		};
-		expect(exposure(source, auth)['jobs']?.syncs).toEqual({
-			report: { kind: 'file', parser: ['json'], export: ['json'], context: ['ids'] },
-			sheet: { kind: 'file', parser: ['csv'], export: ['csv'] }
-		});
-	});
-	it('exposes native integration instance forms by their grants without exposing the host fence', () => {
-		const admin = exposure(em, { ...member([]), admin: true })['sys_integration'];
-		expect(admin).toMatchObject({
-			create: { columns: ['integration', 'name', 'owner', 'envoy', 'configuration'] },
-			update: { columns: ['name', 'envoy', 'active', 'configuration', 'import_start'] },
-			relations: { owner: { targets: ['sys_user'], optional: true } }
-		});
-		expect(admin?.fields).not.toHaveProperty('epoch');
-		expect(exposure(em, member([]))['sys_integration']).toBeUndefined();
-		const auth: Authority = {
-			...member([]),
-			models: {
-				sys_integration: access({
-					read: { default: { sys_integration: [{ policy: 'p', where: TRUE }] } },
-					update: [{ policy: 'p', columns: { sys_integration: ['configuration'] }, check: false }]
-				})
-			}
-		};
-		const restricted = exposure(em, auth)['sys_integration'];
-		expect(restricted?.update?.columns).toEqual(['configuration']);
-		expect(restricted?.create).toBeUndefined();
-		expect(restricted?.fields).not.toHaveProperty('epoch');
-	});
-	it('a declared write layer exposes its child identity (model, parent FK, owned) beside the read layer', () => {
-		const source: EngineManifest = {
-			...em,
-			models: {
-				...em.models,
-				lines: { label: 'amount', description: 'Order lines.', fields: { amount: { kind: 'int' } } }
-			},
-			relationships: { 'lines.job': { to: 'jobs', inverse: 'lines', owned: true } },
-			exposures: {
-				jobs: {
-					read: { jobs: { fields: 'all' }, 'jobs.lines': { fields: 'all' } },
-					update: { columns: { jobs: ['title'], 'jobs.lines': ['amount'] } }
-				},
-				lines: {
-					read: { lines: { fields: 'all' } },
-					create: { columns: { lines: ['amount', 'job'] } },
-					update: { columns: { lines: ['amount'] } }
-				}
-			}
-		};
-		const catalog = exposure(source, { ...member([]), admin: true });
-		// the write layer carries the child's own columns, as its form edits them in place
-		expect(catalog['jobs']?.update?.with?.['lines']).toEqual({
-			model: 'lines',
-			parent: 'job',
-			owned: true,
-			create: { columns: ['amount'] },
-			update: { columns: ['amount'] },
-			delete: true
-		});
-		expect(catalog['jobs']?.children?.['lines']).toEqual({
-			model: 'lines',
-			parent: 'job',
-			owned: true
-		});
-	});
-	it("sends a relationship's where so a picker offers only what a write accepts", () => {
-		const narrowed: EngineManifest = {
-			...em,
-			relationships: {
-				'jobs.site': { to: 'sites', optional: true, where: { title: { eq: 'Yard' } } }
-			},
-			exposures: {
-				jobs: { read: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } } }
-			}
-		};
-		expect(exposure(narrowed, { ...member([]), admin: true })['jobs']?.relations).toEqual({
-			site: { targets: ['sites'], optional: true, where: { title: { eq: 'Yard' } } }
-		});
-	});
-	it('exposes readable source-owned fields with a restriction reason and keeps owned parents immutable', () => {
-		const source: EngineManifest = {
-			...em,
-			relationships: { 'jobs.site': { to: 'sites', optional: true, owned: true } },
-			exposures: {
-				jobs: {
-					read: { jobs: { fields: ['title', 'pay', 'site'] }, 'jobs.site': { fields: 'all' } },
-					update: { columns: { jobs: ['title', 'site'] } },
-					syncs: { jobs: { with: 'operations', read: true } }
-				}
-			},
-			integrations: {
-				operations: {
-					description: 'Operations source',
-					driver: 'sqlserver',
-					configuration: {}
-				}
-			}
-		};
-		const catalog = exposure(source, { ...member([]), admin: true });
-		expect(catalog['jobs']).toMatchObject({
-			update: { columns: ['title'] },
-			fields: { pay: { kind: 'money' } },
-			relations: { site: { targets: ['sites'] } },
-			readonlyFields: { pay: 'syncOwned', site: 'ownedParent' },
-			syncs: { jobs: { kind: 'remote', with: 'operations' } }
-		});
-		expect(exposure(source, member([]))['jobs']).toBeUndefined();
-		const auth: Authority = {
-			...member([]),
-			models: {
-				jobs: access({ read: { default: { jobs: [{ policy: 'p', where: TRUE }] } } })
-			}
-		};
-		expect(exposure(source, auth)['jobs']?.syncs).toBeUndefined();
-		expect(exposure(source, { ...auth, automations: ['jobs.sync.jobs'] })['jobs']?.syncs).toEqual({
-			jobs: { kind: 'remote', with: 'operations' }
-		});
-	});
-	it('sends relations, guarded write inputs and the fields of the output the views read; never an unexposed field', () => {
-		const auth: Authority = {
-			...member([]),
-			models: {
-				jobs: access({
-					read: { default: { jobs: [{ policy: 'p', where: TRUE }] } },
-					update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
-				})
-			}
-		};
-		expect(exposure(em, auth)).toEqual({
-			jobs: {
-				label: ['title'],
-				labelPaths: ['title'],
-				record_label: 'record.title',
-				search: ['$label', 'title'],
-				fields: { title: { kind: 'text' }, pay: { kind: 'money' } },
-				relations: { site: { targets: ['sites'], optional: true } },
-				layers: ['site'],
-				update: { columns: ['title'] },
-				description: 'Work orders on site'
-			}
-		});
-	});
-	it('a caller holding only a named output reads that output: its fields, its layers, its name', () => {
-		const source: EngineManifest = {
-			...em,
-			exposures: {
-				jobs: {
-					...em.exposures['jobs']!,
-					outputs: { brief: { jobs: { fields: ['title'] } } }
-				}
-			}
-		};
-		const auth: Authority = {
-			...member([]),
-			models: { jobs: access({ read: { brief: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
-		};
-		expect(exposure(source, auth)['jobs']).toEqual({
-			label: ['title'],
-			labelPaths: ['title'],
-			record_label: 'record.title',
-			search: ['$label', 'title'],
-			fields: { title: { kind: 'text' } },
-			output: 'brief',
-			description: 'Work orders on site'
-		});
-		// granted both, the views read `default`
-		const both: Authority = {
-			...auth,
-			models: {
-				jobs: access({
-					read: {
-						default: { jobs: [{ policy: 'p', where: TRUE }] },
-						brief: { jobs: [{ policy: 'p', where: TRUE }] }
-					}
-				})
-			}
-		};
-		expect(exposure(source, both)['jobs']).not.toHaveProperty('output');
-		expect(exposure(source, both)['jobs']?.fields).toHaveProperty('pay');
-	});
-	it('sends a readable computed field, so a label naming one resolves (A5)', () => {
-		const withComputed = Result.getOrThrow(
-			decodeManifest({
-				...baseManifest,
-				...em,
-				models: {
-					...em.models,
-					jobs: {
-						...em.models['jobs']!,
-						label: 'code',
-						computed: {
-							code: { kind: 'text', expr: { field: 'title' } },
-							quantity: { kind: 'decimal', scale: 6, expr: 1 }
+						lines: {
+							outputs: { default: { lines: { fields: 'all' } } },
+							create: { columns: { lines: ['amount', 'job'] } },
+							update: { columns: { lines: ['amount'] } }
 						}
 					}
-				},
-				exposures: { jobs: { ...em.exposures['jobs'], read: { jobs: { fields: 'all' } } } }
+				};
+				const catalog = yield* exposure(source, { ...member([]), admin: true });
+				// the write layer carries the child's own columns, as its form edits them in place
+				expect(catalog['jobs']?.update?.with?.['lines']).toEqual({
+					model: 'lines',
+					parent: 'job',
+					owned: true,
+					create: { columns: ['amount'] },
+					update: { columns: ['amount'] },
+					delete: true
+				});
+				expect(catalog['jobs']?.children?.['lines']).toEqual({
+					model: 'lines',
+					parent: 'job',
+					owned: true
+				});
 			})
-		);
-		expect(exposure(withComputed, { ...member([]), admin: true })['jobs']).toMatchObject({
-			label: ['code'],
-			fields: {
-				title: { kind: 'text' },
-				code: { kind: 'text' },
-				quantity: { kind: 'decimal', scale: 6 }
-			}
-		});
-		expect(exposure(em, { ...member([]), admin: true })['jobs']!.fields).not.toHaveProperty('code');
-	});
-	it('a roll-up sum over a money field keeps its money and literal currency (A9)', () => {
-		const orders = Result.getOrThrow(
-			decodeManifest({
-				...baseManifest,
+	);
+	it.effect("sends a relationship's where so a picker offers only what a write accepts", () =>
+		Effect.gen(function* () {
+			const narrowed: EngineManifest = {
 				...em,
-				models: {
-					...em.models,
-					orders: {
-						label: 'code',
-						fields: {
-							code: { kind: 'text' },
-							total: { kind: 'sum', of: 'lines.amount' },
-							qty: { kind: 'sum', of: 'lines.n' }
-						}
-					},
-					lines: {
-						label: 'code',
-						fields: {
-							code: { kind: 'text' },
-							amount: { kind: 'money', currency: 'SGD' },
-							n: { kind: 'decimal', scale: 2 }
-						}
-					}
-				},
-				relationships: { ...em.relationships, 'lines.order': { to: 'orders', inverse: 'lines' } },
-				exposures: { orders: { read: { orders: { fields: 'all' } } } }
-			})
-		);
-		expect(exposure(orders, { ...member([]), admin: true })['orders']!.fields).toEqual({
-			code: { kind: 'text' },
-			total: { kind: 'sum', of: 'lines.amount', money: { currency: 'SGD' } },
-			qty: { kind: 'sum', of: 'lines.n' }
-		});
-	});
-	it("a roll-up sum over money in a per-row currency reads in the parent's same-named currency field", () => {
-		const orders = Result.getOrThrow(
-			decodeManifest({
-				...baseManifest,
-				...em,
-				models: {
-					...em.models,
-					orders: {
-						label: 'code',
-						fields: {
-							code: { kind: 'text' },
-							currency: { kind: 'currency' },
-							total: { kind: 'sum', of: 'lines.amount' }
-						}
-					},
-					lines: {
-						label: 'code',
-						fields: {
-							code: { kind: 'text' },
-							currency: { kind: 'currency' },
-							amount: { kind: 'money', currency: 'currency' }
-						}
-					},
-					bills: {
-						label: 'code',
-						fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'bill_lines.amount' } }
-					}
-				},
 				relationships: {
-					...em.relationships,
-					'lines.order': { to: 'orders', inverse: 'lines' },
-					'lines.bill': { to: 'bills', inverse: 'bill_lines' }
+					'jobs.site': { to: 'sites', optional: true, where: { title: { eq: 'Yard' } } }
 				},
 				exposures: {
-					orders: { read: { orders: { fields: 'all' } } },
-					bills: { read: { bills: { fields: 'all' } } }
-				}
-			})
-		);
-		const x = exposure(orders, { ...member([]), admin: true });
-		expect(x['orders']!.fields['total']).toEqual({
-			kind: 'sum',
-			of: 'lines.amount',
-			money: { currency: 'currency' }
-		});
-		// a parent without that field shows the sum in the workspace default
-		expect(x['bills']!.fields['total']).toEqual({
-			kind: 'sum',
-			of: 'bill_lines.amount',
-			money: {}
-		});
-	});
-	it("a create form offers only the columns the holder's create arms admit; the host fills the rest", () => {
-		const withCreate = Result.getOrThrow(
-			decodeManifest({
-				...baseManifest,
-				...em,
-				exposures: {
-					jobs: { ...em.exposures['jobs'], create: { columns: { jobs: ['title', 'notes'] } } }
-				}
-			})
-		);
-		const auth: Authority = {
-			...member([]),
-			models: {
-				jobs: access({ create: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }] })
-			}
-		};
-		expect(exposure(withCreate, auth)['jobs']).toMatchObject({
-			create: { columns: ['title'] },
-			fields: { title: { kind: 'text' } }
-		});
-		expect(exposure(withCreate, { ...auth, admin: true })['jobs']!.create).toEqual({
-			columns: ['title', 'notes']
-		});
-		const filled = Result.getOrThrow(
-			decodeManifest({
-				...baseManifest,
-				...withCreate,
-				exposures: {
 					jobs: {
-						...withCreate.exposures['jobs']!,
-						create: { columns: { jobs: ['title', 'notes'] }, filled: { jobs: ['title', 'notes'] } }
+						outputs: {
+							default: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } }
+						}
 					}
 				}
+			};
+			expect(
+				(yield* exposure(narrowed, { ...member([]), admin: true }))['jobs']?.relations
+			).toEqual({
+				site: { targets: ['sites'], optional: true, where: { title: { eq: 'Yard' } } }
+			});
+		})
+	);
+	it.effect(
+		'exposes readable source-owned fields with a restriction reason and keeps owned parents immutable',
+		() =>
+			Effect.gen(function* () {
+				const source: EngineManifest = {
+					...em,
+					relationships: { 'jobs.site': { to: 'sites', optional: true, owned: true } },
+					exposures: {
+						jobs: {
+							outputs: {
+								default: {
+									jobs: { fields: ['title', 'pay', 'site'] },
+									'jobs.site': { fields: 'all' }
+								}
+							},
+							update: { columns: { jobs: ['title', 'site'] } },
+							syncs: { jobs: { with: 'operations', read: true } }
+						}
+					},
+					integrations: {
+						operations: {
+							description: 'Operations source',
+							driver: 'sqlserver',
+							configuration: {}
+						}
+					}
+				};
+				const catalog = yield* exposure(source, { ...member([]), admin: true });
+				expect(catalog['jobs']).toMatchObject({
+					update: { columns: ['title'] },
+					fields: { pay: { kind: 'money' } },
+					relations: { site: { targets: ['sites'] } },
+					readonly_fields: { pay: 'sync_owned', site: 'owned_parent' },
+					syncs: { jobs: { kind: 'remote', with: 'operations' } }
+				});
+				expect((yield* exposure(source, member([])))['jobs']).toBeUndefined();
+				const auth: Authority = {
+					...member([]),
+					models: {
+						jobs: access({ read: { default: { jobs: [{ policy: 'p', where: TRUE }] } } })
+					}
+				};
+				expect((yield* exposure(source, auth))['jobs']?.syncs).toBeUndefined();
+				expect(
+					(yield* exposure(source, { ...auth, capabilities: { ...auth.capabilities, syncs: ['jobs.jobs'] } }))['jobs']?.syncs
+				).toEqual({
+					jobs: { kind: 'remote', with: 'operations' }
+				});
 			})
-		);
-		expect(exposure(filled, auth)['jobs']!.create).toEqual({
-			columns: ['title'],
-			filled: ['title']
-		});
-		expect(exposure(filled, { ...auth, admin: true })['jobs']!.create).toEqual({
-			columns: ['title', 'notes'],
-			filled: ['title', 'notes']
-		});
-	});
-	it('exposes the system models the caller reads, so a picker at sys_user labels its rows', () => {
-		const auth: Authority = {
-			...member([]),
-			models: {
-				sys_user: access({
-					read: { directory: { sys_user: [{ policy: '$directory', where: TRUE }] } }
+	);
+	it.effect(
+		'sends relations, guarded write inputs and the fields of the output the views read; never an unexposed field',
+		() =>
+			Effect.gen(function* () {
+				const auth: Authority = {
+					...member([]),
+					models: {
+						jobs: access({
+							read: { default: { jobs: [{ policy: 'p', where: TRUE }] } },
+							update: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }]
+						})
+					}
+				};
+				expect(yield* exposure(em, auth)).toEqual({
+					jobs: {
+						audit: false,
+						label: ['title'],
+						label_paths: ['title'],
+						record_label: 'record.title',
+						search: ['$label', 'title'],
+						fields: { title: { kind: 'text' }, pay: { kind: 'money' } },
+						relations: { site: { targets: ['sites'], optional: true } },
+						layers: ['site'],
+						update: { columns: ['title'] },
+						description: 'Work orders on site'
+					}
+				});
+			})
+	);
+	it.effect(
+		'a caller holding only a named output reads that output: its fields, its layers, its name',
+		() =>
+			Effect.gen(function* () {
+				const jobs = em.exposures['jobs'];
+				if (jobs === undefined) throw new Error('Missing jobs exposure');
+				const source: EngineManifest = {
+					...em,
+					exposures: {
+						jobs: {
+							...jobs,
+							outputs: { ...jobs.outputs, brief: { jobs: { fields: ['title'] } } }
+						}
+					}
+				};
+				const auth: Authority = {
+					...member([]),
+					models: { jobs: access({ read: { brief: { jobs: [{ policy: 'p', where: TRUE }] } } }) }
+				};
+				expect((yield* exposure(source, auth))['jobs']).toEqual({
+					audit: false,
+					label: ['title'],
+					label_paths: ['title'],
+					record_label: 'record.title',
+					search: ['$label', 'title'],
+					fields: { title: { kind: 'text' } },
+					output: 'brief',
+					description: 'Work orders on site'
+				});
+				// granted both, the views read `default`
+				const both: Authority = {
+					...auth,
+					models: {
+						jobs: access({
+							read: {
+								default: { jobs: [{ policy: 'p', where: TRUE }] },
+								brief: { jobs: [{ policy: 'p', where: TRUE }] }
+							}
+						})
+					}
+				};
+				expect((yield* exposure(source, both))['jobs']).not.toHaveProperty('output');
+				expect((yield* exposure(source, both))['jobs']?.fields).toHaveProperty('pay');
+			})
+	);
+	it.effect('sends a readable computed field, so a label naming one resolves (A5)', () =>
+		Effect.gen(function* () {
+			const withComputed = Result.getOrThrow(
+				decode_manifest({
+					...baseManifest,
+					...em,
+					models: {
+						...em.models,
+						jobs: {
+							...required(em.models['jobs']),
+							record_label: 'record.code',
+							computed: {
+								code: { kind: 'text', expr: { field: 'title' } },
+								quantity: { kind: 'decimal', scale: 6, expr: 1 }
+							}
+						}
+					},
+					exposures: {
+						jobs: { ...em.exposures['jobs'], outputs: { default: { jobs: { fields: 'all' } } } }
+					}
 				})
-			}
-		};
-		expect(exposure(em, auth)['sys_user']).toEqual({
-			label: ['name'],
-			labelPaths: ['name'],
-			record_label: 'record.name',
-			search: ['$label', 'name'],
-			fields: { name: { kind: 'text' } },
-			output: 'directory'
-		});
-	});
+			);
+			expect((yield* exposure(withComputed, { ...member([]), admin: true }))['jobs']).toMatchObject(
+				{
+					record_label: 'record.code',
+					label: ['code'],
+					fields: {
+						title: { kind: 'text' },
+						code: { kind: 'text' },
+						quantity: { kind: 'decimal', scale: 6 }
+					}
+				}
+			);
+			expect(
+				required((yield* exposure(em, { ...member([]), admin: true }))['jobs']).fields
+			).not.toHaveProperty('code');
+		})
+	);
+	it.effect('a roll-up sum over a money field keeps its money and literal currency (A9)', () =>
+		Effect.gen(function* () {
+			const orders = Result.getOrThrow(
+				decode_manifest({
+					...baseManifest,
+					...em,
+					models: {
+						...em.models,
+						orders: {
+							description: 'orders',
+							record_label: 'record.code',
+							fields: {
+								code: { kind: 'text' },
+								total: { kind: 'sum', of: 'lines.amount' },
+								qty: { kind: 'sum', of: 'lines.n' }
+							}
+						},
+						lines: {
+							description: 'lines',
+							record_label: 'record.code',
+							fields: {
+								code: { kind: 'text' },
+								amount: { kind: 'money', currency: 'SGD' },
+								n: { kind: 'decimal', scale: 2 }
+							}
+						}
+					},
+					relationships: { ...em.relationships, 'lines.order': { to: 'orders', inverse: 'lines' } },
+					exposures: { orders: { outputs: { default: { orders: { fields: 'all' } } } } }
+				})
+			);
+			expect(
+				required((yield* exposure(orders, { ...member([]), admin: true }))['orders']).fields
+			).toEqual({
+				code: { kind: 'text' },
+				total: { kind: 'sum', of: 'lines.amount', money: { currency: 'SGD' } },
+				qty: { kind: 'sum', of: 'lines.n' }
+			});
+		})
+	);
+	it.effect(
+		"a roll-up sum over money in a per-row currency reads in the parent's same-named currency field",
+		() =>
+			Effect.gen(function* () {
+				const orders = Result.getOrThrow(
+					decode_manifest({
+						...baseManifest,
+						...em,
+						models: {
+							...em.models,
+							orders: {
+								description: 'orders',
+								record_label: 'record.code',
+								fields: {
+									code: { kind: 'text' },
+									currency: { kind: 'currency' },
+									total: { kind: 'sum', of: 'lines.amount' }
+								}
+							},
+							lines: {
+								description: 'lines',
+								record_label: 'record.code',
+								fields: {
+									code: { kind: 'text' },
+									currency: { kind: 'currency' },
+									amount: { kind: 'money', currency: 'currency' }
+								}
+							},
+							bills: {
+								description: 'bills',
+								record_label: 'record.code',
+								fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'bill_lines.amount' } }
+							}
+						},
+						relationships: {
+							...em.relationships,
+							'lines.order': { to: 'orders', inverse: 'lines' },
+							'lines.bill': { to: 'bills', inverse: 'bill_lines' }
+						},
+						exposures: {
+							orders: { outputs: { default: { orders: { fields: 'all' } } } },
+							bills: { outputs: { default: { bills: { fields: 'all' } } } }
+						}
+					})
+				);
+				const x = yield* exposure(orders, { ...member([]), admin: true });
+				expect(required(x['orders']).fields['total']).toEqual({
+					kind: 'sum',
+					of: 'lines.amount',
+					money: { currency: 'currency' }
+				});
+				// a parent without that field shows the sum in the workspace default
+				expect(required(x['bills']).fields['total']).toEqual({
+					kind: 'sum',
+					of: 'bill_lines.amount',
+					money: {}
+				});
+			})
+	);
+	it.effect(
+		"a create form offers only the columns the holder's create arms admit; the host fills the rest",
+		() =>
+			Effect.gen(function* () {
+				const withCreate = Result.getOrThrow(
+					decode_manifest({
+						...baseManifest,
+						...em,
+						exposures: {
+							jobs: { ...em.exposures['jobs'], create: { columns: { jobs: ['title', 'notes'] } } }
+						}
+					})
+				);
+				const auth: Authority = {
+					...member([]),
+					models: {
+						jobs: access({ create: [{ policy: 'p', columns: { jobs: ['title'] }, check: false }] })
+					}
+				};
+				expect((yield* exposure(withCreate, auth))['jobs']).toMatchObject({
+					create: { columns: ['title'] },
+					fields: { title: { kind: 'text' } }
+				});
+				expect(
+					required((yield* exposure(withCreate, { ...auth, admin: true }))['jobs']).create
+				).toEqual({
+					columns: ['title', 'notes']
+				});
+				const filled = Result.getOrThrow(
+					decode_manifest({
+						...baseManifest,
+						...withCreate,
+						exposures: {
+							jobs: {
+								...required(withCreate.exposures['jobs']),
+								create: {
+									columns: { jobs: ['title', 'notes'] },
+									filled: { jobs: ['title', 'notes'] }
+								}
+							}
+						}
+					})
+				);
+				expect(required((yield* exposure(filled, auth))['jobs']).create).toEqual({
+					columns: ['title'],
+					filled: ['title']
+				});
+				expect(
+					required((yield* exposure(filled, { ...auth, admin: true }))['jobs']).create
+				).toEqual({
+					columns: ['title', 'notes'],
+					filled: ['title', 'notes']
+				});
+			})
+	);
+	it.effect(
+		'exposes the system models the caller reads, so a picker at sys_user labels its rows',
+		() =>
+			Effect.gen(function* () {
+				const auth: Authority = {
+					...member([]),
+					models: {
+						sys_user: access({
+							read: { directory: { sys_user: [{ policy: '$directory', where: TRUE }] } }
+						})
+					}
+				};
+				expect((yield* exposure(em, auth))['sys_user']).toEqual({
+					label: ['name'],
+					label_paths: ['name'],
+					record_label: 'record.name',
+					search: ['$label', 'name'],
+					fields: { name: { kind: 'text' } },
+					output: 'directory'
+				});
+			})
+	);
 });
 
 describe('nav tree', () => {
@@ -719,7 +818,7 @@ describe('nav tree', () => {
 			},
 			groups: {
 				...m.groups,
-				'hr/settings': { label: 'Settings', icon: 'i', defaultChild: 'lineage' }
+				'hr/settings': { title: 'Settings', icon: 'i', default_child: 'lineage' }
 			}
 		};
 		const [, hr] = nav(nested, member(['sales', 'hr']));
@@ -758,7 +857,7 @@ describe('nav tree', () => {
 });
 
 describe('preview environments drop the meta tools', () => {
-	const at = (path: string) => previewRoute(route(m, new URL(path, 'https://w.example')), true);
+	const at = (path: string) => preview_route(route(m, new URL(path, 'https://w.example')), true);
 	it('an administrator on a Studio host keeps the inbox, runs and Settings but not Norbius or Studio', () => {
 		expect(surfaces(m, member([], {}, true).actor, true, true, true)).toEqual({
 			inbox: true,
@@ -781,14 +880,14 @@ describe('preview environments drop the meta tools', () => {
 		]).toEqual([
 			{ kind: 'inbox' },
 			{ kind: 'settings', tab: 'organization' },
-			{ kind: 'commandCenter', tab: 'automations' },
+			{ kind: 'command_center', tab: 'automations' },
 			{ kind: 'settings', tab: 'secrets' }
 		]);
-		expect(previewRoute({ kind: 'studio' }, false)).toEqual({ kind: 'studio' });
+		expect(preview_route({ kind: 'studio' }, false)).toEqual({ kind: 'studio' });
 	});
 	it('the sidebar drops Norbius, People and Studio and keeps Approvals and the rest of Settings', () => {
 		const auth = member(['sales'], {}, true);
-		const model = navigationModel(
+		const model = navigation_model(
 			{
 				workspace: { name: 'Acme', locale: 'en', tz: 'UTC', live: 'https://acme.example' },
 				actor: auth.actor,
@@ -802,6 +901,8 @@ describe('preview environments drop the meta tools', () => {
 				push: null,
 				visitor: null,
 				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} },
 				catalog: {}
 			},
 			'/',
@@ -815,7 +916,7 @@ describe('preview environments drop the meta tools', () => {
 		);
 		expect(keys.filter((k) => ['norbius', 'integrations', 'studio'].includes(k))).toEqual([]);
 		// no People and no Studio inspection in a preview: the audit trail, runs and inference stay
-		expect(commandCenterTabs(surfaces(m, auth.actor, true, true, true), true, true)).toEqual([
+		expect(command_center_tabs(surfaces(m, auth.actor, true, true, true), true, true)).toEqual([
 			'audit',
 			'automations'
 		]);
@@ -824,7 +925,7 @@ describe('preview environments drop the meta tools', () => {
 		const admin = member([], {}, true).actor,
 			staff = member([]).actor;
 		// tethered (Colony serves Studio): every tab
-		expect(commandCenterTabs(surfaces(m, admin, true, true), true, false)).toEqual([
+		expect(command_center_tabs(surfaces(m, admin, true, true), true, false)).toEqual([
 			'bundle',
 			'telemetry',
 			'logs',
@@ -834,18 +935,18 @@ describe('preview environments drop the meta tools', () => {
 			'people'
 		]);
 		// untethered: no host inspection, the rest stays
-		expect(commandCenterTabs(surfaces(m, admin, true), true, false)).toEqual([
+		expect(command_center_tabs(surfaces(m, admin, true), true, false)).toEqual([
 			'audit',
 			'automations',
 			'inference',
 			'people'
 		]);
 		// a staff member: their runs only; an external: none
-		expect(commandCenterTabs(surfaces(m, staff, false, true), false, false)).toEqual([
+		expect(command_center_tabs(surfaces(m, staff, false, true), false, false)).toEqual([
 			'automations'
 		]);
 		expect(
-			commandCenterTabs(surfaces(m, member([], { external: true }).actor, false), false, false)
+			command_center_tabs(surfaces(m, member([], { external: true }).actor, false), false, false)
 		).toEqual([]);
 	});
 });
@@ -856,9 +957,9 @@ describe('routes and hrefs', () => {
 		expect(at('/app/hr/kiosk/clock')).toEqual({ kind: 'page', app: 'hr/kiosk', page: 'clock' });
 		// one spelling per page: a named page is never also its app's folder, and the folder's own-leaf page is only the folder
 		expect([at('/app/sales'), at('/app/sales/deals'), at('/app/sales/')]).toEqual([
-			{ kind: 'notFound' },
+			{ kind: 'not_found' },
 			{ kind: 'page', app: 'sales', page: 'deals' },
-			{ kind: 'notFound' }
+			{ kind: 'not_found' }
 		]);
 		expect(at(href('sales', 'quotes', { model: 'quotes', id: 'q/1' }))).toEqual({
 			kind: 'page',
@@ -866,13 +967,13 @@ describe('routes and hrefs', () => {
 			page: 'quotes',
 			record: { model: 'quotes', id: 'q/1' }
 		});
-		expect(at('/app/sales/nope')).toEqual({ kind: 'notFound' });
-		expect(at('/app/hr')).toEqual({ kind: 'notFound' });
+		expect(at('/app/sales/nope')).toEqual({ kind: 'not_found' });
+		expect(at('/app/hr')).toEqual({ kind: 'not_found' });
 	});
 	it('shell routes; sign-in keeps only a same-origin next', () => {
 		expect(at('/inbox')).toEqual({ kind: 'inbox' });
 		// runs and the workspace log live in the command center; there is no `/runs` or `/logs`
-		expect([at('/runs'), at('/logs')]).toEqual([{ kind: 'notFound' }, { kind: 'notFound' }]);
+		expect([at('/runs'), at('/logs')]).toEqual([{ kind: 'not_found' }, { kind: 'not_found' }]);
 		expect(at('/settings/secrets')).toEqual({ kind: 'settings', tab: 'secrets' });
 		// no default or fallback tab: each other spelling is not found
 		expect([
@@ -884,7 +985,7 @@ describe('routes and hrefs', () => {
 			at('/sign-in/x'),
 			at('/invite/abc/x'),
 			at('/inbox/')
-		]).toEqual(Array.from({ length: 8 }, () => ({ kind: 'notFound' })));
+		]).toEqual(Array.from({ length: 8 }, () => ({ kind: 'not_found' })));
 		// each command center tab is a stable deep link
 		expect([
 			at('/command-center'),
@@ -893,13 +994,13 @@ describe('routes and hrefs', () => {
 			at('/command-center/x'),
 			at('/command-center/audit/1')
 		]).toEqual([
-			{ kind: 'commandCenter' },
-			{ kind: 'commandCenter', tab: 'audit' },
-			{ kind: 'commandCenter', tab: 'people' },
-			{ kind: 'notFound' },
-			{ kind: 'notFound' }
+			{ kind: 'command_center' },
+			{ kind: 'command_center', tab: 'audit' },
+			{ kind: 'command_center', tab: 'people' },
+			{ kind: 'not_found' },
+			{ kind: 'not_found' }
 		]);
-		expect([at('/studio'), at('/studio/x')]).toEqual([{ kind: 'studio' }, { kind: 'notFound' }]);
+		expect([at('/studio'), at('/studio/x')]).toEqual([{ kind: 'studio' }, { kind: 'not_found' }]);
 		// L-BOLT-528: each Studio tab is a stable deep link; Live moved to the command center
 		expect([
 			at('/studio/changes'),
@@ -909,19 +1010,19 @@ describe('routes and hrefs', () => {
 		]).toEqual([
 			{ kind: 'studio', tab: 'changes' },
 			{ kind: 'studio', tab: 'versions' },
-			{ kind: 'notFound' },
-			{ kind: 'notFound' }
+			{ kind: 'not_found' },
+			{ kind: 'not_found' }
 		]);
 		expect(at('/invite/abc')).toEqual({ kind: 'invite', id: 'abc' });
-		expect(at('/sign-in?next=/app/sales')).toEqual({ kind: 'signIn', next: '/app/sales' });
-		expect(at('/sign-in?next=//evil.example')).toEqual({ kind: 'signIn' });
+		expect(at('/sign-in?next=/app/sales')).toEqual({ kind: 'sign_in', next: '/app/sales' });
+		expect(at('/sign-in?next=//evil.example')).toEqual({ kind: 'sign_in' });
 	});
 	it('only public pages, sign-in and invitation open signed out; there is no registration page', () => {
-		expect(at('/register/t')).toEqual({ kind: 'notFound' });
+		expect(at('/register/t')).toEqual({ kind: 'not_found' });
 		expect(
-			['/app/careers/apply', '/sign-in', '/invite/x'].every((p) => isOpenRoute(m, at(p)))
+			['/app/careers/apply', '/sign-in', '/invite/x'].every((p) => is_open_route(m, at(p)))
 		).toBe(true);
-		expect(['/app/sales', '/inbox', '/'].some((p) => isOpenRoute(m, at(p)))).toBe(false);
+		expect(['/app/sales', '/inbox', '/'].some((p) => is_open_route(m, at(p)))).toBe(false);
 	});
 });
 
@@ -941,14 +1042,14 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 					return new Response('{}');
 				};
 				let resets = 0;
-				const close = mountEdge(ManagedRuntime.make(Layer.empty));
+				const close = mount_edge(ManagedRuntime.make(Layer.empty));
 				yield* Effect.addFinalizer(() =>
 					Effect.tryPromise({ try: close, catch: (cause) => new Error(String(cause)) }).pipe(
 						Effect.orDie
 					)
 				);
-				const queue = yield* challengeQueue(() => resets++);
-				const vf = visitorFetch('careers', queue, f);
+				const queue = yield* challenge_queue(() => resets++);
+				const vf = visitor_fetch('careers', queue, f);
 				yield* Effect.tryPromise({
 					try: () => vf('/__bolt/q', { method: 'POST' }),
 					catch: (cause) => new Error(String(cause))
@@ -991,7 +1092,7 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 						return new Response('{}');
 					};
 					let at: string | null = 'lobby';
-					const kf = kioskFetch(() => at, f);
+					const kf = kiosk_fetch(() => at, f);
 					await kf('/__bolt/q', { method: 'POST' });
 					await kf('/assets/x.png');
 					at = null;
@@ -1016,7 +1117,6 @@ describe('visitor fetch (§5.10, GAPS r5 11)', () => {
 					read: {
 						kiosk: { openings: [{ policy: 'visitor', where: { t: 'const', value: true } }] }
 					},
-					history: [],
 					create: [],
 					update: [],
 					delete: [],
@@ -1064,12 +1164,12 @@ describe('startable automations', () => {
 			}
 		};
 		expect(
-			startableAutomations(withRuns, { ...member([]), automations: ['drift', 'lineage'] })
+			startable_automations(withRuns, { ...member([]), automations: ['drift', 'lineage'] })
 		).toEqual([
-			{ name: 'drift', description: 'd', needsInput: false },
-			{ name: 'lineage', description: 'd', needsInput: true }
+			{ name: 'drift', description: 'd', needs_input: false },
+			{ name: 'lineage', description: 'd', needs_input: true }
 		]);
-		expect(startableAutomations(withRuns, member([], {}, true)).map((a) => a.name)).toEqual([
+		expect(startable_automations(withRuns, member([], {}, true)).map((a) => a.name)).toEqual([
 			'drift',
 			'lineage',
 			'tick'
@@ -1085,12 +1185,14 @@ describe('sidebar model', () => {
 		admin: auth.admin,
 		preview: null,
 		nav: nav(m, auth),
-		kiosks: kioskNav(m, auth),
+		kiosks: kiosk_nav(m, auth),
 		surfaces: surfaces(m, auth.actor, auth.admin, studio),
 		inbox: 2,
 		push: null,
 		visitor: null,
 		automations: {},
+		read_catalog: {},
+		operation_outputs: { automations: {} },
 		catalog: {}
 	});
 	const tree = (
@@ -1116,7 +1218,7 @@ describe('sidebar model', () => {
 			]
 		};
 		const open = (path: string) =>
-			activeApp(navigationModel(boot, path, (k) => k))?.pages?.map((p) => [p.key, p.active]);
+			active_app(navigation_model(boot, path, (k) => k))?.pages?.map((p) => [p.key, p.active]);
 		expect(open('/app/payroll/compliance')).toEqual([
 			['payroll/payroll', false],
 			['payroll/compliance', true]
@@ -1126,34 +1228,23 @@ describe('sidebar model', () => {
 			['payroll/compliance', false]
 		]);
 	});
-	it("kiosks sit in the ellipsis menu's Kiosks group: members ones by capability, `none` ones for everyone", () => {
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'clock', member([], {}, false, ['clock']))).toBe(
-			true
-		);
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'clock', member([]))).toBe(false);
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'lobby', member([]))).toBe(true);
-		expect(m.kiosks?.['lobby']?.auth === 'none').toBe(true);
-		expect(m.kiosks?.['clock']?.auth === 'none').toBe(false);
-		expect(canOpenKiosk({ ...baseManifest, ...m }, 'clock', member([], {}, true))).toBe(true);
-		expect(kioskNav(m, member([], {}, false, ['clock'])).map((k) => k.name)).toEqual([
-			'clock',
-			'lobby'
-		]);
-		expect(kioskHref('clock', 'clock')).toBe('/kiosk/clock/clock');
+	it("kiosks sit in the ellipsis menu's Kiosks group: members ones by capability, public ones for everyone", () => {
+		expect(kiosk_nav(m, member([])).map((k) => k.name)).toEqual(['lobby']);
+		expect(kiosk_nav(m, member([], {}, true)).map((k) => k.name)).toEqual(['clock', 'lobby']);
+		expect(route(m, new URL('http://x/app/clock'))).toEqual({ kind: 'not_found' });
+		expect(kiosk_nav(m, member(['clock'])).map((k) => k.name)).toEqual(['clock', 'lobby']);
+		expect(kiosk_href('clock', 'clock')).toBe('/kiosk/clock/clock');
 		expect(route(m, new URL('http://x/kiosk/clock/clock'))).toEqual({
 			kind: 'kiosk',
 			kiosk: 'clock',
 			page: 'clock'
 		});
-		expect(route(m, new URL('http://x/kiosk/nope/clock'))).toEqual({ kind: 'notFound' });
-		expect(framePolicy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
-		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'lobby', page: 'welcome' })).toBe(true);
-		expect(isOpenRoute(m, { kind: 'kiosk', kiosk: 'clock', page: 'clock' })).toBe(false);
+		expect(route(m, new URL('http://x/kiosk/nope/clock'))).toEqual({ kind: 'not_found' });
+		expect(frame_policy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
+		expect(is_open_route(m, { kind: 'kiosk', kiosk: 'lobby', page: 'welcome' })).toBe(true);
+		expect(is_open_route(m, { kind: 'kiosk', kiosk: 'clock', page: 'clock' })).toBe(false);
 		expect(
-			tree(
-				navigationModel(bootOf(member([], {}, false, ['clock'])), '/kiosk/clock/clock', (k) => k)
-					.utilities
-			)
+			tree(navigation_model(bootOf(member(['clock'])), '/kiosk/clock/clock', (k) => k).utilities)
 		).toContainEqual(['kiosks', ['clock', 'lobby']]);
 	});
 });
@@ -1161,10 +1252,10 @@ describe('sidebar model', () => {
 describe('Studio port boundary', () => {
 	it('decodes only well-formed ops; a saved path stays inside the source', () => {
 		expect(decodeOp({ op: 'rollback', commit: 'abc' })).toEqual({ op: 'rollback', commit: 'abc' });
-		expect(decodeOp({ op: 'rollback', commit: 'abc', discardDataSince: 't' })).toEqual({
+		expect(decodeOp({ op: 'rollback', commit: 'abc', discard_data_since: 't' })).toEqual({
 			op: 'rollback',
 			commit: 'abc',
-			discardDataSince: 't'
+			discard_data_since: 't'
 		});
 		expect(
 			decodeOp({ op: 'save', expected: 'h', files: { 'src/a.ts': 'x', 'b.ts': null } })
@@ -1177,6 +1268,29 @@ describe('Studio port boundary', () => {
 			decodeOp({ op: 'drop' }),
 			decodeOp([])
 		]).toEqual([null, null, null, null, null, null]);
+	});
+	it('accepts only current source edit and rollback keys', () => {
+		expect(
+			decodeOp({
+				op: 'draft',
+				path: 'src/a.ts',
+				old_string: 'before',
+				new_string: 'after',
+				replace_all: true
+			})
+		).toMatchObject({ old_string: 'before', new_string: 'after', replace_all: true });
+		expect([
+			decodeOp({ op: 'draft', path: 'src/a.ts', oldString: 'before', newString: 'after' }),
+			decodeOp({
+				op: 'draft',
+				path: 'src/a.ts',
+				old_string: 'before',
+				new_string: 'after',
+				replaceAll: true
+			}),
+			decodeOp({ op: 'draft', patchText: '*** Begin Patch' }),
+			decodeOp({ op: 'rollback', commit: 'c1', discardDataSince: 'yesterday' })
+		]).toEqual([null, null, null, null]);
 	});
 	it("decodes a merge with the destructive steps it accepts, and a held request's decision", () => {
 		expect([
@@ -1220,35 +1334,34 @@ describe('Studio port boundary', () => {
 			decodeOp({ op: 'preview', id: 3 })
 		]).toEqual([null, null, null, null, null, null]);
 	});
-	it('edits a path in its language (L-BOLT-528)', () => {
-		expect(['a.ts', 'b.svelte', 'c.json', 'd.md'].map(languageOf)).toEqual([
-			'javascript',
-			'javascript',
-			'json',
-			'plaintext'
-		]);
-	});
 	it('cuts the workbench manifest to the Manifest chips, each entry with its source path (L-BOLT-527)', () => {
 		const manifest = Result.getOrThrow(
-			decodeManifest({
+			decode_manifest({
 				...baseManifest,
 				workspace: { tz: 'UTC', locale: 'en', secrets: { API: { label: 'API' } } },
 				models: {
-					b: { description: 'B records', label: 'name', fields: { name: { kind: 'text' } } },
-					a: { description: 'A records', label: 'name', fields: { name: { kind: 'text' } } }
+					b: {
+						description: 'B records',
+						record_label: 'record.name',
+						fields: { name: { kind: 'text' } }
+					},
+					a: {
+						description: 'A records',
+						record_label: 'record.name',
+						fields: { name: { kind: 'text' } }
+					}
 				},
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: { rep: { description: 'Representative', grants: {} } },
-				envoys: {},
+
 				automations: { nightly: { description: 'Nightly task', policies: ['rep'] } },
-				connections: { stripe: { integration: 'stripe' }, mail: { integration: 'mail' } },
 				mcp: { docs: { description: 'Documentation tools', url: 'API' } },
 				integrations: {
 					mail: { description: 'Mailbox', driver: 'email' },
 					stripe: {
 						description: 'Stripe API',
 						driver: 'http',
-						http: { baseUrl: 'https://api.stripe.com' }
+						http: { base_url: 'https://api.stripe.com' }
 					}
 				}
 			} satisfies EngineManifest)
@@ -1276,18 +1389,11 @@ describe('Studio port boundary', () => {
 			preview: null,
 			releases: []
 		};
-		const v = studioView(state);
-		// Released shells still require this retired section in their wire decoder.
-		expect(
-			Schema.decodeUnknownSync(
-				Schema.Struct({ sections: Schema.Struct({ remotes: Schema.Array(Schema.Unknown) }) })
-			)(v).sections.remotes
-		).toEqual([]);
+		const v = studio_view(state);
 		const names = Object.fromEntries(
-			Object.entries(v.sections!).map(([s, es]) => [s, es.map((e) => e.name)])
+			Object.entries(required(v.sections)).map(([s, es]) => [s, es.map((e) => e.name)])
 		);
 		expect(names).toEqual({
-			remotes: [],
 			models: ['a', 'b'],
 			apps: ['x'],
 			kiosks: [],
@@ -1295,35 +1401,41 @@ describe('Studio port boundary', () => {
 			automations: ['nightly'],
 			secrets: ['API']
 		});
-		expect(v.sections!.models).toEqual([
+		expect(required(v.sections).models).toEqual([
 			{ name: 'a', path: 'src/data/model/a/+model.ts' },
 			{ name: 'b', path: 'src/data/model/b/+model.ts' }
 		]);
 		expect(v.sections?.policies).toEqual([
 			{ name: 'rep', path: 'src/access_control/policy/+rep.policy.ts' }
 		]);
-		expect(v.sections!.apps).toEqual([{ name: 'x', path: 'src/app/x/+app.ts', href: '/app/x' }]);
+		expect(required(v.sections).apps).toEqual([
+			{ name: 'x', path: 'src/app/x/+app.ts', href: '/app/x' }
+		]);
 		expect('manifest' in v).toBe(false);
 		expect(v.stale).toBeUndefined();
 	});
 	it('fails a manifest older than the source closed: no partial sections when a declared file is gone', () => {
 		const manifest = Result.getOrThrow(
-			decodeManifest({
+			decode_manifest({
 				...baseManifest,
 				workspace: { tz: 'UTC', locale: 'en' },
 				models: {
-					a: { description: 'A records', label: 'name', fields: { name: { kind: 'text' } } }
+					a: {
+						description: 'A records',
+						record_label: 'record.name',
+						fields: { name: { kind: 'text' } }
+					}
 				},
 				apps: { x: { title: 'X', description: 'X workspace', icon: 'lucide:box', pages: {} } },
 				policies: {},
-				envoys: {},
+
 				automations: {},
-				connections: {},
+
 				mcp: {},
 				integrations: {}
 			} satisfies EngineManifest)
 		);
-		const v = studioView({
+		const v = studio_view({
 			commit: 'h',
 			files: { 'src/app/x/+app.ts': { bytes: 0 } },
 			changes: [],
@@ -1334,7 +1446,7 @@ describe('Studio port boundary', () => {
 		});
 		expect([v.sections, v.stale]).toEqual([null, true]);
 		expect(
-			studioView({
+			studio_view({
 				commit: 'h',
 				files: {},
 				changes: [],
@@ -1350,22 +1462,15 @@ describe('Studio port boundary', () => {
 			'src/i18n/+messages.ts': { bytes: 0 },
 			'src/data/+payroll.model.ts': { bytes: 0 }
 		};
-		expect(suggestMessage({ 'src/i18n/+messages.ts': 'x' }, files)).toBe('Update i18n messages');
-		expect(suggestMessage({ 'src/data/+payroll.model.ts': null, 'notes.txt': 'n' }, files)).toBe(
+		expect(suggest_message({ 'src/i18n/+messages.ts': 'x' }, files)).toBe('Update i18n messages');
+		expect(suggest_message({ 'src/data/+payroll.model.ts': null, 'notes.txt': 'n' }, files)).toBe(
 			'Remove payroll model, Add notes'
 		);
-		expect(suggestMessage({ a: '1', b: '2', c: '3' }, {})).toBe('Add a and 2 more files');
+		expect(suggest_message({ a: '1', b: '2', c: '3' }, {})).toBe('Add a and 2 more files');
 		expect(
 			decodeOp({ op: 'save', expected: 'c', files: {}, message: 'Fix the label' })
 		).toMatchObject({ message: 'Fix the label' });
 		expect(decodeOp({ op: 'save', expected: 'c', files: {}, message: '' })).toBeNull();
-	});
-	it('summarizes the routed environment: live preferred, any routed one otherwise, none when unrouted (L-BOLT-534)', () => {
-		const env = (name: string, release: string) => ({ name, release, url: null });
-		expect(routedEnvironment([env('development', 'r1')])).toEqual(env('development', 'r1'));
-		expect(routedEnvironment([env('preview', 'r2'), env('live', 'r1')])).toEqual(env('live', 'r1'));
-		expect(routedEnvironment([env('development', '')])).toBeUndefined();
-		expect(routedEnvironment(undefined)).toBeUndefined();
 	});
 });
 
@@ -1390,8 +1495,7 @@ describe('reading files over the files port', () => {
 						}
 					]),
 				write: () => Effect.die('unused write'),
-				session: () =>
-					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
@@ -1408,7 +1512,7 @@ describe('reading files over the files port', () => {
 				remove: () => Effect.die('unused remove'),
 				download: () => Effect.die('unused download')
 			});
-			const a = fileAttachments(db, files, yield* hostImages);
+			const a = file_attachments(db, files, yield* hostImages);
 			expect(yield* a.read({ id: 'f1', name: 'a.csv' })).toEqual({
 				name: 'a.csv',
 				mime: 'text/csv',
@@ -1432,8 +1536,7 @@ describe('reading files over the files port', () => {
 			const db = TenantDb.typed({
 				read: () => Effect.succeed([{ rows: [{ key: 'k', mime: 'image/heic' }], affected: 0 }]),
 				write: () => Effect.die('unused write'),
-				session: () =>
-					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 				transaction: () => Effect.die('unused transaction')
 			});
 			const files = Files.of({
@@ -1446,7 +1549,7 @@ describe('reading files over the files port', () => {
 				remove: () => Effect.die('unused remove'),
 				download: () => Effect.die('unused download')
 			});
-			const got = yield* fileAttachments(db, files, yield* hostImages).read({ id: 'f' });
+			const got = yield* file_attachments(db, files, yield* hostImages).read({ id: 'f' });
 			if (
 				typeof got !== 'object' ||
 				got === null ||
@@ -1471,6 +1574,8 @@ describe('workspace media', () => {
 
 describe('embedding', () => {
 	const partner = 'https://partner.example';
+	const lobby = m.apps['lobby'];
+	if (lobby === undefined) throw new Error('missing lobby fixture');
 	const embedded: EngineManifest = {
 		...m,
 		apps: {
@@ -1479,41 +1584,42 @@ describe('embedding', () => {
 				title: 'Kiosk',
 				description: 'd',
 				icon: 'i',
-				pages: {
-					clock: { title: 'Clock', portal: true, embed: [partner, 'https://b.example:8443'] }
-				}
-			}
-		},
-		kiosks: { lobby: { ...m.kiosks!['lobby']!, embed: [partner] } }
+				embed: [partner, 'https://b.example:8443'],
+				pages: { clock: { title: 'Clock' } }
+			},
+			lobby: { ...lobby, embed: [partner] }
+		}
 	};
-	it('a kiosk or portal page is framed by the workspace and the origins its `embed` names; without `embed`, by the workspace alone', () => {
-		expect(framePolicy(embedded, '/app/hr/kiosk/clock')).toBe(
+	it('an app or kiosk page is framed by the workspace and the origins its `embed` names; without `embed`, by the workspace alone', () => {
+		expect(frame_policy(embedded, '/app/hr/kiosk/clock')).toBe(
 			`frame-ancestors 'self' ${partner} https://b.example:8443`
 		);
-		expect(framePolicy(embedded, '/kiosk/lobby/welcome')).toBe(`frame-ancestors 'self' ${partner}`);
-		expect(framePolicy(m, '/app/hr/kiosk/clock')).toBe("frame-ancestors 'self'");
-		expect(framePolicy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(embedded, '/kiosk/lobby/welcome')).toBe(
+			`frame-ancestors 'self' ${partner}`
+		);
+		expect(frame_policy(m, '/app/hr/kiosk/clock')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(m, '/kiosk/lobby/welcome')).toBe("frame-ancestors 'self'");
 	});
 	it('every other page, and a route that is none, is framed by the workspace alone', () => {
-		expect(framePolicy(embedded, '/app/sales/deals')).toBe("frame-ancestors 'self'");
-		expect(framePolicy(m, '/sign-in')).toBe("frame-ancestors 'self'");
-		expect(framePolicy(m, '/nowhere')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(embedded, '/app/sales/deals')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(m, '/sign-in')).toBe("frame-ancestors 'self'");
+		expect(frame_policy(m, '/nowhere')).toBe("frame-ancestors 'self'");
 	});
 	const post = (headers: Record<string, string>) =>
 		new Request('https://acme.example/__bolt/q', { method: 'POST', headers });
 	it('refuses a browser write another site started, framed or not; a page of this workspace and a webhook pass', () => {
-		expect(crossSite(post({ 'sec-fetch-site': 'cross-site' }), 'https://acme.example')).toBe(true);
-		expect(crossSite(post({ 'sec-fetch-site': 'same-site' }), 'https://acme.example')).toBe(true);
-		expect(crossSite(post({ 'sec-fetch-site': 'same-origin' }), 'https://acme.example')).toBe(
+		expect(cross_site(post({ 'sec-fetch-site': 'cross-site' }), 'https://acme.example')).toBe(true);
+		expect(cross_site(post({ 'sec-fetch-site': 'same-site' }), 'https://acme.example')).toBe(true);
+		expect(cross_site(post({ 'sec-fetch-site': 'same-origin' }), 'https://acme.example')).toBe(
 			false
 		); // a portal in another site's frame
-		expect(crossSite(post({ origin: 'https://evil.example' }), 'https://acme.example')).toBe(true); // a browser without Sec-Fetch
-		expect(crossSite(post({ origin: 'https://acme.example' }), 'https://acme.example/acme')).toBe(
+		expect(cross_site(post({ origin: 'https://evil.example' }), 'https://acme.example')).toBe(true); // a browser without Sec-Fetch
+		expect(cross_site(post({ origin: 'https://acme.example' }), 'https://acme.example/acme')).toBe(
 			false
 		);
-		expect(crossSite(post({}), 'https://acme.example')).toBe(false); // a server's webhook
+		expect(cross_site(post({}), 'https://acme.example')).toBe(false); // a server's webhook
 		expect(
-			crossSite(
+			cross_site(
 				new Request('https://acme.example/app/x', { headers: { 'sec-fetch-site': 'cross-site' } }),
 				'https://acme.example'
 			)
@@ -1526,7 +1632,7 @@ describe('shell HTTP failures', () => {
 		it.effect(`preserves HTTP ${status} when the server answers HTML`, () =>
 			Effect.gen(function* () {
 				const result = yield* Effect.flip(
-					shellApi(async () => new Response('<html>proxy error</html>', { status })).boot()
+					shell_api(async () => new Response('<html>proxy error</html>', { status })).boot()
 				);
 				expect(result).toMatchObject({ status });
 				expect(result.code).not.toBe('offline');
@@ -1535,7 +1641,7 @@ describe('shell HTTP failures', () => {
 	it.effect('keeps the safe refusal reason', () =>
 		Effect.gen(function* () {
 			const result = yield* Effect.flip(
-				shellApi(async () =>
+				shell_api(async () =>
 					Response.json(
 						{ error: { code: 'expired', message: 'The link expired.' } },
 						{ status: 410 }
@@ -1548,13 +1654,16 @@ describe('shell HTTP failures', () => {
 	it.effect('answers every rateLimited refusal with the one friendly message', () =>
 		Effect.gen(function* () {
 			const result = yield* Effect.flip(
-				shellApi(async () =>
-					Response.json({ error: { code: 'rateLimited', message: 'rateLimited' } }, { status: 429 })
+				shell_api(async () =>
+					Response.json(
+						{ error: { code: 'rate_limited', message: 'rate_limited' } },
+						{ status: 429 }
+					)
 				).boot()
 			);
 			expect(result).toMatchObject({
 				status: 429,
-				code: 'rateLimited',
+				code: 'rate_limited',
 				message: 'Too many requests. Wait a moment and try again.'
 			});
 		})
@@ -1563,19 +1672,19 @@ describe('shell HTTP failures', () => {
 		Effect.gen(function* () {
 			expect(
 				yield* Effect.flip(
-					shellApi(async () => {
+					shell_api(async () => {
 						throw new TypeError('fetch failed');
 					}).boot()
 				)
 			).toMatchObject({ status: 0, code: 'offline' });
 			expect(
-				yield* Effect.flip(shellApi(async () => new Response('not JSON')).boot())
+				yield* Effect.flip(shell_api(async () => new Response('not JSON')).boot())
 			).toMatchObject({ status: 200, code: 'protocol' });
 		})
 	);
 	it.effect("decodes each route's answer once: a malformed value is a protocol failure", () =>
 		Effect.gen(function* () {
-			const answering = (value: unknown) => shellApi(async () => Response.json({ value }));
+			const answering = (value: unknown) => shell_api(async () => Response.json({ value }));
 			expect(
 				yield* answering({
 					email: true,
@@ -1598,7 +1707,7 @@ describe('shell HTTP failures', () => {
 it.effect('explains a generic internal refusal using its HTTP status', () =>
 	Effect.gen(function* () {
 		const result = yield* Effect.flip(
-			shellApi(async () =>
+			shell_api(async () =>
 				Response.json(
 					{ error: { code: 'internal', message: 'The request failed.' } },
 					{ status: 500 }
@@ -1612,3 +1721,61 @@ it.effect('explains a generic internal refusal using its HTTP status', () =>
 		});
 	})
 );
+
+describe('native shell mutations on a snapshot client', () => {
+	it.effect(
+		'awaits the owned refresh without retrying an acknowledged write when the read fails',
+		() =>
+			Effect.gen(function* () {
+				const calls: string[] = [];
+				const api = shell_api(
+					async () => {
+						calls.push('mutation');
+						return Response.json({
+							outcome: { kind: 'committed', output: { id: 'message' }, records: [] },
+							v: 4
+						});
+					},
+					{
+						base: 'https://workspace.test',
+						after_mutation: () =>
+							Effect.sync(() => {
+								calls.push('refresh');
+							}).pipe(Effect.andThen(Effect.fail({ message: 'The transcript could not refresh.' })))
+					}
+				);
+				expect(yield* api.agent.post('conversation', 'Steer this', true)).toMatchObject({
+					kind: 'committed',
+					output: { id: 'message' }
+				});
+				expect(calls).toEqual(['mutation', 'refresh']);
+			})
+	);
+	it.effect(
+		'refreshes held and running work, while refused, conflict and uncertain outcomes stay unchanged',
+		() =>
+			Effect.gen(function* () {
+				const outcomes = [
+					{ kind: 'pending_approval', request_id: 'approval', records: [] },
+					{ kind: 'running', run: 'run' },
+					{ kind: 'refused', code: 'forbidden', message: 'No access.' },
+					{ kind: 'conflict', records: [] },
+					{ kind: 'unknown', invocation: 'uncertain' }
+				] as const;
+				for (const outcome of outcomes) {
+					let refreshed = 0;
+					const api = shell_api(async () => Response.json({ outcome, v: 1 }), {
+						base: 'https://workspace.test',
+						after_mutation: () =>
+							Effect.sync(() => {
+								refreshed++;
+							})
+					});
+					expect(yield* api.agent.stop('conversation')).toEqual(outcome);
+					expect(refreshed).toBe(
+						outcome.kind === 'pending_approval' || outcome.kind === 'running' ? 1 : 0
+					);
+				}
+			})
+	);
+});

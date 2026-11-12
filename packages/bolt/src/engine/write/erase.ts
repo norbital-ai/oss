@@ -8,12 +8,12 @@ import { Predicate } from 'effect';
 import type { Outcome, RowData } from '../contracts.ts';
 
 import { BoltError } from '../../protocol/errors.ts';
-import { catalogOf } from '../access/pred.ts';
+import { catalog_of } from '../access/pred.ts';
 import { exprFields, judgeErase } from '../identity/erase.ts';
+import { constraintIndex } from '../schema/plan.ts';
 import {
 	type ActRequest,
 	type ActResult,
-	constraintsOf,
 	expired,
 	idempotency,
 	k,
@@ -23,53 +23,55 @@ import {
 	type Taker,
 	type WriteEngine
 } from './act.ts';
-import { executeCommit, compileOutcomeRecord, type Commit, type Write } from './commit.ts';
+import { executeCommit, compile_outcome_record, type Commit, type Write } from './commit.ts';
 import { writerOf } from '../runs/queue.ts';
 import { Flattener } from './flatten.ts';
-import { decided } from './sql.ts';
+import { decideError } from './sql.ts';
+import { settleCommit } from './result.ts';
 export const erase = Effect.fn('Bolt.erase')(function* (
 	e: WriteEngine,
 	r: ActRequest,
 	take: Taker
 ) {
 	const m = e.manifest,
-		cat = catalogOf(m),
+		cat = catalog_of(m),
 		auth = r.authority,
 		b = r.bindings,
 		c = r.model,
 		model = m.models[c];
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
 	if (model === undefined || m.exposures[c] === undefined)
-		return yield* Effect.fail(BoltError.make('unknownModel', 'decode', `unknown model '${c}'`));
+		return yield* Effect.fail(BoltError.make('unknown_model', 'decode', `unknown model '${c}'`));
 	const late = expired(r);
 	if (late !== null) return none(late);
 	if (!auth.admin) return none(refused('forbidden', 'Only an administrator can erase.'));
 	// decode: `{ target }` removes, `{ target, set }` anonymises stored authored fields (X-24 shapes)
 	const input = r.input;
 	if (!Predicate.isObject(input) || Object.keys(input).some((x) => x !== 'target' && x !== 'set'))
-		return none(refused('invalidInput', 'erase takes { target } or { target, set }.'));
+		return none(refused('invalid_input', 'erase takes { target } or { target, set }.'));
 	const target = input['target'];
 	const ids = EffectArray.isArray<typeof target>(target) ? target : [target];
 	if (ids.length === 0 || !ids.every((x): x is string => typeof x === 'string'))
-		return none(refused('invalidInput', 'target is an id or a list of ids.', ['target']));
+		return none(refused('invalid_input', 'target is an id or a list of ids.', ['target']));
 	const set = input['set'];
 	let values: RowData = {};
 	if (set !== undefined) {
 		if (!Predicate.isObject(set) || Object.keys(set).length === 0)
-			return none(refused('invalidInput', 'set names the fields to anonymise.', ['set']));
+			return none(refused('invalid_input', 'set names the fields to anonymise.', ['set']));
 		const f = new Flattener(m, cat, () => '');
 		f.update(c, 'any', ids[0], set, null, []);
 		const other = Object.keys(set).find((x) => model.fields[x] === undefined);
 		if (other !== undefined)
 			return none(
-				refused('invalidInput', `'${other}' is not a stored authored field.`, ['set', other])
+				refused('invalid_input', `'${other}' is not a stored authored field.`, ['set', other])
 			);
-		if (f.problems.length > 0)
+		const problem = f.problems[0];
+		if (problem !== undefined)
 			return none(
 				refused(
-					'invalidInput',
+					'invalid_input',
 					f.problems.map((p) => `${p.path.join('.')}: ${p.message}`).join('; '),
-					f.problems[0]!.path
+					problem.path
 				)
 			);
 		const change = f.items[0]?.change;
@@ -94,10 +96,13 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 	const stored_: RowData[] = [];
 	for (const id of ids) {
 		const row = rows.get(k(c, id));
-		if (row === undefined) return none(refused('notFound', `No ${c} has this id.`, ['target']));
+		if (row === undefined) return none(refused('not_found', `No ${c} has this id.`, ['target']));
+		const observed = r.observed?.[id];
+		if (observed !== undefined && row['revision'] !== observed)
+			return none({ kind: 'conflict', records: [{ model: c, id }] });
 		stored_.push(row);
 	}
-	const verdict = judgeErase(m, auth, c, stored_, req);
+	const verdict = yield* judgeErase(m, auth, c, stored_, req, b);
 	if (!verdict.ok) return none({ kind: 'refused', code: verdict.code, message: verdict.message }); // hook:identity
 	let writes: Write[], spec: NonNullable<Commit['erase']>;
 	if (req.mode === 'remove') {
@@ -141,7 +146,7 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 		actor: auth.actor,
 		writer: writerOf(auth),
 		writes,
-		owned: req.mode === 'remove' ? ownedLocks(m, cat, writes, rows) : [],
+		owned: req.mode === 'remove' ? yield* ownedLocks(m, cat, writes, rows) : [],
 		runs: [],
 		notices: [],
 		output: null,
@@ -163,27 +168,11 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 	}
 	return yield* Effect.gen(function* () {
 		const rows = yield* executeCommit(e.db, m, cat, commit);
-		const row = rows[0];
-		if (row === undefined)
-			return yield* Effect.fail(
-				BoltError.make('badAnswer', 'commit', 'The commit returned no answer.')
-			);
-		const outcome = row.outcome ?? (yield* stored()) ?? refused('refused', 'The outcome was lost.');
-		return {
-			outcome,
-			captured: row.captured,
-			v: e.committed === undefined ? 0 : yield* e.committed(row, outcome)
-		};
+		return yield* settleCommit(rows[0], stored, e.committed);
 	}).pipe(
 		Effect.catch((err) =>
 			Effect.gen(function* () {
-				const d = yield* Effect.try({
-					try: () => decided(err, constraintsOf(m)),
-					catch: (error) =>
-						error instanceof BoltError
-							? error
-							: BoltError.make('bug', 'commit', String(error), error)
-				});
+				const d = yield* decideError(err, yield* constraintIndex(m));
 				if (!d.record) return none(d.outcome);
 				yield* take(
 					'warn',
@@ -193,11 +182,11 @@ export const erase = Effect.fn('Bolt.erase')(function* (
 						: { code: d.outcome.kind }
 				);
 				const value = yield* Schema.decodeUnknownEffect(Schema.Json)(d.outcome).pipe(
-					Effect.mapError((error) => BoltError.make('badAnswer', 'commit', error.message, error))
+					Effect.mapError((error) => BoltError.make('bad_answer', 'commit', error.message, error))
 				);
 				const res = yield* e.db.returning(
 					Schema.Struct({ outcome: Schema.NullOr(OutcomeSchema) }),
-					compileOutcomeRecord(common, value)
+					compile_outcome_record(common, value)
 				);
 				return none(res[0]?.outcome ?? d.outcome);
 			})

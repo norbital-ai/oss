@@ -133,11 +133,9 @@ it.live(
 	() =>
 		browser(async () => {
 			const kind: Kind = {
-				kind: 'list',
-				of: {
-					kind: 'object',
-					fields: { name: { kind: 'text' }, range: { kind: 'period', of: 'date' } }
-				}
+				kind: 'object',
+				fields: { name: { kind: 'text' }, range: { kind: 'period', of: 'date' } },
+				many: true
 			};
 			const initial = [{ name: 'A', range: { from: '2018-04-09', to: null } }];
 			const { target } = await show({ kind, initial, mode: 'edit' });
@@ -214,7 +212,7 @@ it.live('an object schema near a datatype shape stays a plain object', () =>
 it.live('lists of native date ranges retain one native Value column and editor', () =>
 	browser(async () => {
 		const { target } = await show({
-			kind: { kind: 'list', of: { kind: 'period', of: 'date' } },
+			kind: { kind: 'period', of: 'date', many: true },
 			initial: [{ from: '2026-10-01', to: '2026-10-31' }],
 			mode: 'edit'
 		});
@@ -225,7 +223,7 @@ it.live('lists of native date ranges retain one native Value column and editor',
 		);
 		assert.equal(table.querySelectorAll('[data-period-input]').length, 1);
 		const view = await show({
-			kind: { kind: 'list', of: { kind: 'period', of: 'date' } },
+			kind: { kind: 'period', of: 'date', many: true },
 			initial: [{ from: '2026-01-01', to: '2026-02-01' }]
 		});
 		assert.equal(view.target.querySelector('.cm-editor'), null);
@@ -262,26 +260,6 @@ it.live(
 		})
 );
 
-it.live('an untagged union retains the matching native arm and its hidden-field policy', () =>
-	browser(async () => {
-		const { target } = await show({
-			kind: {
-				kind: 'union',
-				of: [
-					{
-						kind: 'object',
-						fields: { code: { kind: 'text' }, secret: { kind: 'text', hidden: true } }
-					},
-					{ kind: 'text' }
-				]
-			},
-			initial: { code: 'visible record', secret: 'private arm value' }
-		});
-		assert.ok(textOf(target).includes('visible record'));
-		assert.equal(textOf(target).includes('private arm value'), false);
-	})
-);
-
 it.live(
 	'native clearing preserves explicit null while nonnullable JSON Schema clearing omits the key',
 	() =>
@@ -297,7 +275,7 @@ it.live(
 			);
 			assert.deepEqual(direct.changes.at(-1), { count: null });
 			const list = await show({
-				kind: { kind: 'list', of: native },
+				kind: { kind: 'json', shape: native, many: true },
 				initial: [{ count: 3 }],
 				mode: 'edit'
 			});
@@ -340,7 +318,7 @@ it.live('custom renderers retain precedence for false and empty string values', 
 				kind: { kind: 'custom', of: 'status' },
 				initial: value,
 				host: {
-					customFields: {
+					custom_fields: {
 						status: {
 							shape: typeof value === 'boolean' ? { kind: 'bool' } : { kind: 'text' },
 							renderer: Renderer
@@ -359,7 +337,7 @@ it.live('empty container additions and removals remain visible as inline changes
 			before: { removedObject: {}, removedArray: [] },
 			initial: { addedObject: {}, addedArray: [] },
 			mode: 'diff',
-			changesOnly: true
+			changes_only: true
 		});
 		const removed = [...target.querySelectorAll('del')].map(textOf).join(' ');
 		const added = [...target.querySelectorAll('ins')].map(textOf).join(' ');
@@ -442,7 +420,7 @@ it.live(
 					rendered: { raw: 'private renderer payload' }
 				},
 				host: {
-					customFields: {
+					custom_fields: {
 						privateShape: {
 							shape: {
 								kind: 'object',
@@ -494,14 +472,12 @@ it.live(
 		browser(async () => {
 			const union = await show({
 				kind: {
-					kind: 'list',
-					of: {
-						kind: 'union',
-						by: 'basis',
-						arms: {
-							employee: { code: { kind: 'text' }, secret: { kind: 'text', hidden: true } }
-						}
-					}
+					kind: 'union',
+					by: 'basis',
+					arms: {
+						employee: { code: { kind: 'text' }, secret: { kind: 'text', hidden: true } }
+					},
+					many: true
 				},
 				initial: [{ basis: 'employee', code: 'Visible union item', secret: 'private union item' }]
 			});
@@ -522,7 +498,7 @@ it.live(
 					},
 					initial: [{ public: 'Visible schema item', secret: 'private schema item' }],
 					host: {
-						customFields: {
+						custom_fields: {
 							confidential: {
 								shape: {
 									kind: 'object',
@@ -590,7 +566,7 @@ it.live('a schema variant switch preserves the prior nested custom visibility ru
 			initial: { type: 'public', payload: { public: 'Current visible' } },
 			mode: 'diff',
 			host: {
-				customFields: {
+				custom_fields: {
 					confidential: {
 						shape: {
 							kind: 'object',
@@ -660,4 +636,25 @@ it.live(
 			await settle();
 			assert.deepEqual(fixed.changes.at(-1), { ready: false });
 		})
+);
+
+it.live('schema value actions retain false, zero, empty text and null', () =>
+	browser(async () => {
+		for (const fixed of [false, 0, '', null]) {
+			const view = await show({ schema: { const: fixed }, initial: 'different', mode: 'edit' });
+			required(
+				[...view.target.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+					textOf(button).includes('Use fixed value')
+				)
+			).click();
+			await settle();
+			assert.deepEqual(view.changes.at(-1), fixed);
+		}
+		for (const fallback of [false, 0, '']) {
+			const view = await show({ schema: { default: fallback }, initial: null, mode: 'edit' });
+			element<HTMLButtonElement>(view.target, 'button[aria-label="Use default"]').click();
+			await settle();
+			assert.deepEqual(view.changes.at(-1), fallback);
+		}
+	})
 );

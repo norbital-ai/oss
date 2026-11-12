@@ -1,7 +1,7 @@
 // Engine failures (D3, rule 72a). `BoltError` carries a literal `code`; a separate tag exists only where code branches
-// on it. `CODE` is the one table of each code's wire status and retry class (rule 54); `isTransient` reads it.
+// on it. `CODE` is the one table of each code's wire status and retry class (rule 54); `is_transient` reads it.
 import { Match, Option, Schema } from 'effect';
-import { FACILITY_KINDS } from '../decl/errors.ts';
+import { FACILITY_KINDS } from '../decl/errors/facility.ts';
 import type { AgentRefusal } from './agent/schema.ts';
 export type { AgentRefusal } from './agent/schema.ts';
 
@@ -10,6 +10,7 @@ import { BoltError, CODE } from '../protocol/errors.ts';
 const DbErrorFields = {
 	sqlstate: Schema.String,
 	message: Schema.String,
+	outcome_unknown: Schema.optionalKey(Schema.Literal(true)),
 	constraint: Schema.optional(Schema.String),
 	column: Schema.optional(Schema.String)
 };
@@ -58,14 +59,14 @@ export class SerializationReplay extends Schema.TaggedError<SerializationReplay>
 ) {}
 export const IDENTITY_REFUSALS = [
 	'forbidden',
-	'notFound',
-	'rateLimited',
+	'not_found',
+	'rate_limited',
 	'expired',
-	'lastAdmin',
+	'last_admin',
 	'active',
 	'check',
-	'invalidCode',
-	'notMember',
+	'invalid_code',
+	'not_member',
 	'unavailable',
 	'upstream',
 	'timeout'
@@ -92,21 +93,23 @@ export type EngineError =
 	| ManifestInvalid
 	| AgentRefusal;
 
-/** The SQLSTATEs `refusalOf` answers `conflict` (40001, 40P01) or `timeout` (57014). */
-const TRANSIENT_SQLSTATES: ReadonlySet<string> = new Set(['40001', '40P01', '57014']);
+/** Transaction races, cancellation, unavailable locks/connections and temporary server shutdown or saturation. */
+const TRANSIENT_SQLSTATES: ReadonlySet<string> = new Set([
+	'40001', '40P01', '57014', '55P03', '53300', '57P01', '57P02', '57P03', '57P05'
+]);
 const guestFacility = Schema.decodeUnknownOption(
 	Schema.Struct({ kind: Schema.Literals(FACILITY_KINDS) })
 );
 /** Rule 54: guest facility failures retain their kind across the isolate boundary. */
-export const isTransient = (e: EngineError): boolean =>
+export const is_transient = (e: EngineError): boolean =>
 	Match.valueTags(e, {
 		BoltError: (b) => {
 			if (CODE[b.code].transient) return true;
-			if (b.code !== 'guestError') return false;
+			if (b.code !== 'guest_error') return false;
 			const facility = guestFacility(b.cause);
 			return Option.isSome(facility) && CODE[facility.value.kind].transient;
 		},
-		DbError: (d) => TRANSIENT_SQLSTATES.has(d.sqlstate),
+		DbError: (d) => /^08[A-Z0-9]{3}$/.test(d.sqlstate) || TRANSIENT_SQLSTATES.has(d.sqlstate),
 		Conflict: () => CODE.conflict.transient,
 		Fenced: () => CODE.fenced.transient,
 		Interrupted: () => CODE.interrupted.transient,

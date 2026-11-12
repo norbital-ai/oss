@@ -3,13 +3,10 @@
 import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
-import {
-	ROLES,
-	pageServerMetadata,
-	type LoadedManifest as Manifest
-} from '@norbital-ai/bolt/tooling';
+import { writeDeclarations } from './declarations.ts';
+import { ROLES, type LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 import { SYSTEM_COLUMNS } from '@norbital-ai/store'; // hook:write
-import { treeDigest } from '@norbital-ai/bolt/artifact';
+import { tree_digest } from '@norbital-ai/bolt/artifact';
 import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/bolt/engine';
 
 export type { LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
@@ -57,13 +54,20 @@ const skillTree = Effect.fnUntraced(function* (
 			file,
 			`a skill is at most ${SKILL_BYTES / 1024 / 1024} MiB (this one is ${bytes} bytes)`
 		);
-	return { text, digest: treeDigest(files), files: files.map(([name]) => name).sort() };
+	return { text, digest: tree_digest(files), files: files.map(([name]) => name).sort() };
 });
 
 export const load = Effect.fn('bolt.load')(function* (root: string, files: readonly Discovered[]) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	const manifest = Object.fromEntries(ROLES.map((r) => [r.role, {}])) as Manifest;
+	if (files.some((file) => file.role === 'model' || file.role === 'integration_definition'))
+		yield* writeDeclarations(root, files);
+	const manifest: Manifest = yield* Schema.decodeUnknownEffect(
+		Schema.Record(
+			Schema.Literals(ROLES.map((r) => r.role)),
+			Schema.Record(Schema.String, Schema.Unknown)
+		)
+	)(Object.fromEntries(ROLES.map((r) => [r.role, {}])));
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
 		errors.push({ code, path, message: `${path}: ${message}` });
@@ -100,32 +104,7 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 				: undefined;
 			if (declaration === undefined)
 				fail('load/no-default', f.path, `default-export the ${f.role} declaration`);
-			else if (f.role === 'page_server' || f.role === 'kiosk_page_server') {
-				const codec = yield* Effect.tryPromise({
-					try: (): Promise<unknown> =>
-						import(
-							pathToFileURL(
-								path.join(
-									path.dirname(abs),
-									`${f.name.slice(f.name.lastIndexOf('/') + 1)}.page.data.ts`
-								)
-							).href
-						),
-					catch: (cause) => new LoadError({ path: f.path, cause })
-				}).pipe(Effect.result);
-				if (codec._tag === 'Failure') {
-					fail('load/page-server-codec', f.path, String(codec.failure.cause));
-					continue;
-				}
-				const shared = Predicate.isObject(codec.success) ? codec.success['default'] : undefined;
-				const metadata = yield* Effect.try({
-					try: () => pageServerMetadata(declaration, shared),
-					catch: (cause) => new LoadError({ path: f.path, cause })
-				}).pipe(Effect.result);
-				if (metadata._tag === 'Failure')
-					fail('load/page-server-shape', f.path, String(metadata.failure.cause));
-				else manifest[f.role][f.name] = metadata.success;
-			} else manifest[f.role][f.name] = declaration;
+			else manifest[f.role][f.name] = declaration;
 		}
 	}
 	return { manifest, errors };
@@ -143,7 +122,7 @@ export function manifestErrors(
 	const errors: Diagnostic[] = [];
 	const fail = (code: Diagnostic['code'], path: string, message: string) =>
 		errors.push({ code, path, message: `${path}: ${message}` });
-	// A declaration typed by its own name takes it first (`model('<m>', …)`), and it must be the path's (`load/name-path`).
+	// A generated declaration binding carries its path-derived name, checked against the file being loaded.
 	for (const role of NAMED) {
 		for (const [name, d] of Object.entries(manifest[role] ?? {})) {
 			const declared = Predicate.isObject(d) ? d['name'] : undefined;
@@ -151,7 +130,7 @@ export function manifestErrors(
 				fail(
 					'load/name-path',
 					sourcePath(role, name, files),
-					`declares ${CALLS[role]}('${String(declared)}'); its path names it '${name}'`
+					`uses the ${CALLS[role]} binding for '${String(declared)}'; its path names it '${name}'`
 				);
 		}
 	}
@@ -188,30 +167,33 @@ export function manifestErrors(
 		else {
 			const parents = new Map<string, string>();
 			for (const [handle, entry] of Object.entries(teams)) {
-				const policies = Array.isArray(entry)
-					? entry
-					: Predicate.isObject(entry)
-						? entry['policies']
-						: undefined;
-				if (!handle.trim() || !Array.isArray(policies) || !policies.every(Predicate.isString)) {
+				if (!Predicate.isReadonlyObject(entry) || Array.isArray(entry)) {
+					fail('load/team-shape', path, `team '${handle}' declares an object with its policy list`);
+					continue;
+				}
+				const policies = entry['policies'];
+				if (
+					!handle.trim() ||
+					!Array.isArray(policies) ||
+					!policies.every(Predicate.isString) ||
+					Object.keys(entry).some((key) => key !== 'name' && key !== 'parent' && key !== 'policies')
+				) {
 					fail('load/team-shape', path, `team '${handle}' declares its policy list`);
 					continue;
 				}
 				for (const policy of policies)
 					if (!Object.hasOwn(manifest.policy, policy))
 						fail('load/team-policy', path, `team '${handle}' names unknown policy '${policy}'`);
-				if (Predicate.isObject(entry)) {
-					if (
-						entry['name'] !== undefined &&
-						(typeof entry['name'] !== 'string' || !entry['name'].trim())
-					)
-						fail('load/team-name', path, `team '${handle}' has a nonempty display name`);
-					const parent = entry['parent'];
-					if (parent !== undefined && parent !== null) {
-						if (typeof parent !== 'string' || !Object.hasOwn(teams, parent))
-							fail('load/team-parent', path, `team '${handle}' names an existing parent handle`);
-						else parents.set(handle, parent);
-					}
+				if (
+					entry['name'] !== undefined &&
+					(typeof entry['name'] !== 'string' || !entry['name'].trim())
+				)
+					fail('load/team-name', path, `team '${handle}' has a nonempty display name`);
+				const parent = entry['parent'];
+				if (parent !== undefined && parent !== null) {
+					if (typeof parent !== 'string' || !Object.hasOwn(teams, parent))
+						fail('load/team-parent', path, `team '${handle}' names an existing parent handle`);
+					else parents.set(handle, parent);
 				}
 			}
 			for (const handle of parents.keys()) {
@@ -248,85 +230,54 @@ export function manifestErrors(
 				);
 		}
 	}
+	for (const [name, app] of Object.entries(manifest.app)) {
+		const path = sourcePath('app', name, files);
+		if (!Predicate.isObject(app) || !Predicate.isObject(app['pages'])) {
+			fail('app/shape', path, `app '${name}' declares a pages map`);
+			continue;
+		}
+		for (const page of Object.keys(app['pages']))
+			if (!Object.hasOwn(manifest.page, `${name}/${page}`))
+				fail('app/page-missing', path, `app '${name}' lists '${page}' without a page file`);
+	}
+	for (const [name, group] of Object.entries(manifest.group)) {
+		const child = Predicate.isObject(group) ? group['default_child'] : undefined;
+		if (
+			typeof child !== 'string' ||
+			child.includes('/') ||
+			(!Object.hasOwn(manifest.app, `${name}/${child}`) &&
+				!Object.hasOwn(manifest.group, `${name}/${child}`))
+		)
+			fail(
+				'app/group-child',
+				sourcePath('group', name, files),
+				`group '${name}' must name a direct default_child`
+			);
+	}
 	// `app/page-unlisted` (§3.3.1): every page file has an entry in its app's `pages`, whose key order is nav order.
 	for (const page of Object.keys(manifest.page ?? {})) {
 		const at = page.lastIndexOf('/');
 		const app = manifest.app[page.slice(0, at)];
-		if (app && !Object.hasOwn((spec(app)['pages'] ?? {}) as object, page.slice(at + 1)))
+		const pages = Predicate.isObject(app) ? app['pages'] : undefined;
+		if (Predicate.isObject(pages) && !Object.hasOwn(pages, page.slice(at + 1)))
 			fail(
 				'app/page-unlisted',
 				String(manifest.page[page]),
 				`app '${page.slice(0, at)}' lists no page '${page.slice(at + 1)}' in pages`
 			);
-		const audience = spec(app)['audience'];
-		if (
-			(audience === 'external' || audience === 'all' || Predicate.isObject(audience)) &&
-			manifest.page_server[page] === undefined
-		)
-			fail(
-				'app/page-server-required',
-				String(manifest.page[page]),
-				'a public or external page declares a read-only +<page>.page.server.ts loader and shared data codec'
-			);
 	}
-	// every kiosk page file has an entry in its kiosk's `pages`, whose key order is nav order.
-	for (const page of Object.keys(manifest.kiosk_page ?? {})) {
-		const at = page.lastIndexOf('/');
-		const kiosk = (manifest.kiosk ?? {})[page.slice(0, at)];
-		if (kiosk && !Object.hasOwn((spec(kiosk)['pages'] ?? {}) as object, page.slice(at + 1)))
-			fail(
-				'app/page-unlisted',
-				String(manifest.kiosk_page[page]),
-				`kiosk '${page.slice(0, at)}' lists no page '${page.slice(at + 1)}' in pages`
-			);
-		const auth = spec(kiosk)['auth'];
-		if (
-			(auth === 'none' || auth === 'external' || auth === 'all') &&
-			manifest.kiosk_page_server[page] === undefined
-		)
-			fail(
-				'app/page-server-required',
-				String(manifest.kiosk_page[page]),
-				'a public or external kiosk page declares a read-only +<page>.page.server.ts loader and shared data codec'
-			);
-	}
-	for (const role of ['page_server', 'kiosk_page_server'] as const)
-		for (const [page, declaration] of Object.entries(manifest[role]))
-			if (
-				!Predicate.isObject(declaration) ||
-				declaration['data'] !== true ||
-				declaration['load'] !== true
-			)
-				fail(
-					'load/page-server-shape',
-					sourcePath(role, page),
-					'a page server declares its shared data codec and generator load body'
-				);
 	return errors;
 }
 
-/** The literal of a `{ name, spec }` declaration (model, automation, custom field, integration, app, group, kiosk), else the export itself. */
+/** The literal of a body declaration, or the export itself. */
 export function spec(d: unknown): { readonly [key: string]: unknown } {
-	const o = (d ?? {}) as { spec?: object };
-	return (o.spec ?? o) as { readonly [key: string]: unknown };
+	if (!Predicate.isReadonlyObject(d)) return {};
+	return Predicate.isReadonlyObject(d['spec']) ? d['spec'] : d;
 }
 
-/** The roles whose declaration takes its name first, and the call each is. */
-const NAMED = [
-	'model',
-	'custom_field',
-	'automation',
-	'integration_definition',
-	'app',
-	'group',
-	'kiosk'
-] as const;
+/** Roles whose generated declaration binding carries a path identity. */
+const NAMED = ['model', 'integration_definition'] as const;
 const CALLS: { readonly [R in (typeof NAMED)[number]]: string } = {
 	model: 'model',
-	custom_field: 'customField',
-	automation: 'automation',
-	integration_definition: 'integration',
-	app: 'app',
-	group: 'group',
-	kiosk: 'kiosk'
+	integration_definition: 'integration'
 };

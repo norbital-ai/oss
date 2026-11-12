@@ -44,7 +44,7 @@ bolt dev --host=./dev.host.ts     # another host file
 ```
 
 The workspace's `norbital.host.ts` (or the file `--host` names) default-exports a `Facilities` record ([hosts](./hosts.md)),
-for example bolt-server's `host()`. Guest code runs on bolt-cli's own `nodeGuests()` runner, as bolt-server's does. Each build is migrated on that host's
+for example bolt-server's `host()`. Guest code runs on bolt-cli's own `node_guests` runner, as bolt-server's does. Each build is migrated on that host's
 `database` and activated through the needs check, so a bundle needing a member the file leaves `off` refuses to
 start, naming it. Served at `http://127.0.0.1:<port>` (default 5180).
 
@@ -54,7 +54,7 @@ start, naming it. Served at `http://127.0.0.1:<port>` (default 5180).
 | `+model.ts`, automations, policies, other declarations | manifest and guest rebuilt, the workspace reactivated, `reloaded` printed |
 | `seed/`, `migrations/*.sql`                            | rebuilt and reactivated                                                   |
 
-It serves through the engine path bolt-server takes (`serveRelease`): deadline wakes, the cron clock and integration
+It serves through the engine path bolt-server takes (`serve_release`): deadline wakes, the cron clock and integration
 links over the file's optional `serving` providers. A converter, geocoder and web reader come from `serving` too; it
 serves no bundler or browser.
 
@@ -71,7 +71,8 @@ bolt test [dir] [vitest args…]       # e.g. bolt test . tests/payroll.test.ts
 ```
 
 The workspace's own Vitest, in process, with the kit preconfigured: Svelte compiled, `@norbital-ai/bolt-cli/test` and
-`$bolt` resolved, forks without per-file isolation, a one-minute hang guard and the test lint. It needs no prior `bolt build`.
+forks without per-file isolation (one per free core, at least 4: each costs a cold start), a one-minute hang guard
+and the test lint. It needs no prior `bolt build`.
 The kit runs guest code on its own `node:vm` runner. `TestWorkspace.layer({ root })` seeds from the template's `test` pack: synthetic rows authored under `seed/test/`,
 built once per source hash. It never loads `base` or bank rows. The suite proves the template's own
 mechanisms; see the `authoring-test-suites` skill.

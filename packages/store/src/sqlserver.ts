@@ -1,5 +1,6 @@
 /** SQL Server integration programs. Declarations cross the guest boundary; only the host compiles TDS statements. */
 import { Schema } from 'effect';
+import { literal } from '@norbital-ai/std/sql';
 
 const Name = Schema.NonEmptyString.check(Schema.isMaxLength(128));
 const ParameterName = Name.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/));
@@ -13,7 +14,7 @@ const Arguments = Schema.Record(Schema.String, Scalar).check(
 const Table = Schema.Struct({ schema: Name, name: Name });
 const Values = Schema.Record(Name, Scalar);
 const common = {
-	maxRows: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 }))),
+	max_rows: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 }))),
 	transaction: Schema.optionalKey(Schema.Literal('serializable'))
 };
 const Position = Schema.String.check(Schema.isPattern(/^0x[0-9a-f]{20}$/i));
@@ -56,15 +57,15 @@ export const SqlServerRequest = Schema.Union([
 		...common
 	}),
 	Schema.Struct({
-		op: Schema.Literal('cdcCaptures'),
+		op: Schema.Literal('cdc_captures'),
 		captures: Schema.Array(Name).check(Schema.isMinLength(1)),
 		...common
 	}),
-	Schema.Struct({ op: Schema.Literal('cdcIdentity'), ...common }),
-	Schema.Struct({ op: Schema.Literal('cdcClock'), ...common }),
-	Schema.Struct({ op: Schema.Literal('cdcAge'), baseline: Position, ...common }),
+	Schema.Struct({ op: Schema.Literal('cdc_identity'), ...common }),
+	Schema.Struct({ op: Schema.Literal('cdc_clock'), ...common }),
+	Schema.Struct({ op: Schema.Literal('cdc_age'), baseline: Position, ...common }),
 	Schema.Struct({
-		op: Schema.Literal('cdcPage'),
+		op: Schema.Literal('cdc_page'),
 		source: SqlServerProjection,
 		after: Schema.String,
 		changes: Schema.optionalKey(
@@ -73,7 +74,7 @@ export const SqlServerRequest = Schema.Union([
 		...common
 	}),
 	Schema.Struct({
-		op: Schema.Literal('insertOnce'),
+		op: Schema.Literal('insert_once'),
 		table: Table,
 		identity: Schema.Struct({ id: Name, key: Name, hash: Name }),
 		key: Schema.String,
@@ -96,9 +97,9 @@ export const SqlServerRequest = Schema.Union([
 	})
 ]);
 export type SqlServerRequest = typeof SqlServerRequest.Type;
-export type SqlServerStatement = {
+type SqlServerStatement = {
 	readonly parameters: Readonly<Record<string, Scalar>>;
-	readonly maxRows: number;
+	readonly max_rows: number;
 	readonly transaction?: 'serializable';
 } & (
 	| { readonly statement: string; readonly procedure?: never }
@@ -106,9 +107,8 @@ export type SqlServerStatement = {
 );
 const q = (name: string) => `[${name.replaceAll(']', ']]')}]`;
 const table = (source: typeof Table.Type) => `${q(source.schema)}.${q(source.name)}`;
-const literal = (text: string) => `'${text.replaceAll("'", "''")}'`;
 /** A compiler, never an executor or an entry point for caller-authored SQL. Input has been decoded at the host boundary. */
-export function compileSqlServer(request: SqlServerRequest): SqlServerStatement {
+export function compile_sql_server(request: SqlServerRequest): SqlServerStatement {
 	const parameters: Record<string, Scalar> = {};
 	let nextParameter = 0;
 	const bind = (value: Scalar) => {
@@ -122,7 +122,7 @@ export function compileSqlServer(request: SqlServerRequest): SqlServerStatement 
 		);
 		return clauses.length === 0 ? '' : ` WHERE ${clauses.join(' AND ')}`;
 	};
-	const maxRows = request.op === 'insertOnce' ? 1 : (request.maxRows ?? 1000);
+	const maxRows = request.op === 'insert_once' ? 1 : (request.max_rows ?? 1000);
 	let statement: string;
 	switch (request.op) {
 		case 'values':
@@ -137,26 +137,26 @@ export function compileSqlServer(request: SqlServerRequest): SqlServerStatement 
 			return {
 				procedure: table(request.procedure),
 				parameters: request.arguments,
-				maxRows,
+				max_rows: maxRows,
 				...(request.transaction === undefined ? {} : { transaction: request.transaction })
 			};
-		case 'cdcCaptures':
+		case 'cdc_captures':
 			statement = `SELECT ct.capture_instance,ct.object_id,CONVERT(varchar(33),obj.create_date,121) AS created,sys.fn_cdc_get_min_lsn(ct.capture_instance) AS minimum
 FROM cdc.change_tables ct JOIN sys.objects obj ON obj.object_id=ct.object_id
 WHERE ct.capture_instance IN (${request.captures.map(bind).join(', ')}) ORDER BY ct.capture_instance`;
 			break;
-		case 'cdcIdentity':
+		case 'cdc_identity':
 			statement =
 				'SELECT database_guid,recovery_fork_guid FROM sys.database_recovery_status WHERE database_id=DB_ID()';
 			break;
-		case 'cdcClock':
+		case 'cdc_clock':
 			statement =
 				'SELECT sys.fn_cdc_get_max_lsn() AS maximum,CAST(DATEDIFF(second,sys.fn_cdc_map_lsn_to_time(sys.fn_cdc_get_max_lsn()),GETDATE()) AS bigint)*1000 AS lag';
 			break;
-		case 'cdcAge':
+		case 'cdc_age':
 			statement = `SELECT CAST(DATEDIFF(second,sys.fn_cdc_map_lsn_to_time(CONVERT(binary(10),${bind(request.baseline)},1)),GETDATE()) AS bigint)*1000 AS age`;
 			break;
-		case 'cdcPage': {
+		case 'cdc_page': {
 			const source = request.source,
 				key = q(source.key),
 				capture = source.capture ?? `${source.table.schema}_${source.table.name}`;
@@ -201,7 +201,7 @@ ORDER BY __$start_lsn,__$seqval,__$operation,__event_key COLLATE Latin1_General_
 			}
 			break;
 		}
-		case 'insertOnce': {
+		case 'insert_once': {
 			const target = table(request.table),
 				id = q(request.identity.id),
 				key = q(request.identity.key),
@@ -250,8 +250,8 @@ SELECT ${id} AS remote,${hash} AS hash FROM ${target} WHERE ${key}=${keyValue};`
 	return {
 		statement,
 		parameters,
-		maxRows,
-		...(request.op === 'insertOnce' || request.transaction !== undefined
+		max_rows: maxRows,
+		...(request.op === 'insert_once' || request.transaction !== undefined
 			? { transaction: 'serializable' as const }
 			: {})
 	};

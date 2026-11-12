@@ -19,15 +19,21 @@
 				"$TURBO_DEFAULT$",
 				".env*",
 				"!build/**",
+				"!src/system/index.ts",
+				"!src/system/names.ts",
 				"!.generated/**",
 				"!.norbital/dist/**",
 				"!.svelte-kit/**",
 				"!.vercel/**"
 			],
-			"outputs": ["build/**", ".generated/**", ".norbital/dist/**", ".svelte-kit/**", ".vercel/**"]
+			"outputs": ["build/**", "src/system/index.ts", "src/system/names.ts", ".generated/**", ".norbital/dist/**", ".svelte-kit/**", ".vercel/**"]
 		},
 		"lint": {
 			"dependsOn": ["^build", "^lint"]
+		},
+		// UI's test fixtures exercise the built Bolt page client. This dependency is test-only.
+		"@norbital-ai/ui#lint": {
+			"dependsOn": ["^build", "^lint", "@norbital-ai/bolt#build"]
 		},
 		"types:compat": {
 			"dependsOn": ["^build"]

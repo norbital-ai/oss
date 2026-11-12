@@ -5,10 +5,10 @@ import { Effect, Predicate } from 'effect';
 import type { Json } from '../values.ts';
 import type { Order, Pred, SelectIR } from '../ir.ts';
 import { StoreError } from '../errors.ts';
-import { exposureOf, q, type Catalog, type ExposureInfo, type FieldInfo } from '../catalog.ts';
+import { exposure_of, q, type Catalog, type ExposureInfo, type FieldInfo } from '../catalog.ts';
 import { Build, items, pred, RAW, type Sql } from '../read/sql.ts';
 import { cells } from '../read/values.ts';
-import { nullRowSql } from './row.ts';
+import { null_row_sql } from './row.ts';
 
 type Fx<A> = Effect.Effect<A, StoreError>;
 /** A row's values in wire form, by field (a polymorphic ref as `{ model, id }`, a decimal as `{ $dec }`). */
@@ -17,7 +17,7 @@ export type WireRow = { readonly [field: string]: Json };
  * An atomic change of an inline value, sent as the field's value: `$patch` merges an object at its paths (absent
  * paths are created), `$append` adds a list's items, `$remove` drops the items equal to any it names.
  */
-export type InlineChange =
+type InlineChange =
 	| { readonly $patch: { readonly [key: string]: Json } }
 	| { readonly $append: readonly Json[] }
 	| { readonly $remove: readonly Json[] };
@@ -83,17 +83,17 @@ export type WriteIR =
 			readonly select: SelectIR;
 	  };
 /** Who writes, for an audited table's `created_by` / `updated_by`. */
-export type WriteOptions = { readonly actor?: string | undefined };
+type WriteOptions = { readonly actor?: string | undefined };
 /**
  * A compiled write: its statement answers one row `{ matched, j }`, `j` the written rows (a delete's keys) as a json
  * array and `matched` the rows its condition found before any revision check — more than were written is `stale`.
  */
-export type CompiledWrite = {
+type CompiledWrite = {
 	readonly sql: Sql;
 	readonly observed: boolean;
 	/** A non-null `refused` result indexes the admission failure; every mutation was gated off. */
 	readonly refusals: readonly {
-		readonly code: 'invalidInput' | 'forbidden';
+		readonly code: 'invalid_input' | 'forbidden';
 		readonly message: string;
 	}[];
 };
@@ -143,7 +143,7 @@ const clockFields = (c: ExposureInfo, names: readonly string[]): Fx<readonly Fie
 	});
 
 const nullRow = (c: ExposureInfo): string =>
-	nullRowSql(
+	null_row_sql(
 		c.model.name,
 		Array.from(c.model.fields.values(), (field) => field.column)
 	);
@@ -214,6 +214,15 @@ const leaves = (
 const assignedValue = (b: Build, f: FieldInfo, column: string, v: Json): Fx<string> => {
 	const C = `a.${q(column)}`;
 	if (!isChange(v)) return Effect.succeed(incomingValue(f, column));
+	if (f.many === true) {
+		const held = `coalesce(${C}, ARRAY[]::text[])`;
+		if ('$append' in v) return Effect.succeed(`${held} || ${b.bind(v.$append, 'text[]')}`);
+		if ('$remove' in v)
+			return Effect.succeed(
+				`ARRAY(SELECT e FROM unnest(${held}) WITH ORDINALITY x(e, n) WHERE NOT e = ANY(${b.bind(v.$remove, 'text[]')}) ORDER BY n)`
+			);
+		return invalid(`'${f.name}' admits append or remove, not a patch`);
+	}
 	if (f.pg !== 'jsonb') return invalid(`'${f.name}' is no inline value; set it whole`);
 	if ('$patch' in v)
 		return Effect.succeed(
@@ -232,12 +241,12 @@ const assignedValue = (b: Build, f: FieldInfo, column: string, v: Json): Fx<stri
 };
 
 /** A write as one statement over the schema's catalog. */
-export const compileWrite = Effect.fn('Store.compileWrite')(function* (
+export const compile_write = Effect.fn('Store.compile_write')(function* (
 	cat: Catalog,
 	w: WriteIR,
 	options: WriteOptions = {}
 ) {
-	const c = yield* exposureOf(cat, w.table);
+	const c = yield* exposure_of(cat, w.table);
 	const b = new Build(cat);
 	const T = b.from(c.model.name);
 	const key = c.model.key;
@@ -327,9 +336,9 @@ export const compileWrite = Effect.fn('Store.compileWrite')(function* (
 		if (w.kind === 'upsert' && states.length > 0 && (w.update !== 'keep' || clocks.length > 0))
 			return yield* Effect.fail(
 				StoreError.of(
-					'invalidInput',
+					'invalid_input',
 					'admission',
-					`an upsert of stateful '${c.name}' must use update: 'keep'; use create or update in a transaction for state transitions and edit locks`
+					`an upsert of stateful '${c.name}' must use update: 'keep'; use create or update in a transaction for state transitions and row constraints`
 				)
 			);
 		if (w.kind === 'upsert' && w.update === 'keep' && clocks.length > 0)
@@ -357,7 +366,7 @@ export const compileWrite = Effect.fn('Store.compileWrite')(function* (
 				if (row[field.name] !== undefined && row[field.name] !== field.state?.initial)
 					return yield* Effect.fail(
 						StoreError.of(
-							'invalidInput',
+							'invalid_input',
 							'admission',
 							`a new '${c.name}' row starts with '${field.name}' = '${field.state?.initial}'`
 						)
@@ -485,7 +494,7 @@ export const compileWrite = Effect.fn('Store.compileWrite')(function* (
 		Effect.gen(function* () {
 			let result = yield* pred(b, c, alias, w.where, RAW);
 			if (w.kind === 'delete' && w.absent !== undefined) {
-				const target = yield* exposureOf(cat, w.absent.table),
+				const target = yield* exposure_of(cat, w.absent.table),
 					other = b.alias();
 				const links = yield* Effect.forEach(Object.entries(w.absent.on), ([left, right]) => {
 					const l = c.model.fields.get(left),
@@ -588,9 +597,9 @@ SELECT (SELECT n FROM seen) AS matched, coalesce((SELECT jsonb_agg(to_jsonb(w)) 
 		const blocked = unique('__store_state_blocked');
 		const values = `jsonb_populate_record(${nullRow(c)}, ${b.bind(plain, 'jsonb')}) v`;
 		const checks: string[] = [];
-		const refuse = (code: 'invalidInput' | 'forbidden', message: string, condition: string) => {
+		const refuse = (message: string, condition: string) => {
 			const reason = refusals.length;
-			refusals.push({ code, message });
+			refusals.push({ code: 'invalid_input', message });
 			checks.push(
 				`SELECT ${reason} AS reason FROM ${targets} a CROSS JOIN ${values} WHERE ${condition}`
 			);
@@ -608,23 +617,9 @@ SELECT (SELECT n FROM seen) AS matched, coalesce((SELECT jsonb_agg(to_jsonb(w)) 
 							`(${current} = ${b.bind(from, 'text')} AND ${next} IN (${state.to.map((to) => b.bind(to, 'text')).join(', ')}))`
 						);
 				refuse(
-					'invalidInput',
 					`'${c.name}.${field.name}' cannot move along an undeclared state edge`,
 					`NOT coalesce((${allowed.join(' OR ')}), false)`
 				);
-			}
-			for (const [from, state] of Object.entries(spec.states)) {
-				const edit = state.edit ?? 'all';
-				if (edit === 'all') continue;
-				const locked = [...changes]
-					.filter(([name]) => name !== field.name && (edit === 'none' || !edit.includes(name)))
-					.flatMap(([, changed]) => changed);
-				if (locked.length > 0)
-					refuse(
-						'forbidden',
-						`'${c.name}' is locked while '${field.name}' is '${from}'`,
-						`${current} = ${b.bind(from, 'text')} AND (${locked.join(' OR ')})`
-					);
 			}
 		}
 		const admitted = `NOT EXISTS (SELECT 1 FROM ${blocked})`;

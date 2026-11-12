@@ -1,26 +1,28 @@
 import { Effect } from 'effect';
 import { StoreError } from '../errors.ts';
 import { canonical } from '@norbital-ai/std/hash';
+import { equal_json } from '@norbital-ai/std/json';
 import {
 	APPLIED,
 	MIGRATION_GUARD_CODES,
-	checkFile,
-	lockOf,
+	check_file,
+	lock_of,
 	pending,
-	physicalHash,
-	readLock,
+	physical_hash,
+	read_lock,
 	type Applied,
 	type MigrationFile
 } from '../migrate.ts';
 import { INTROSPECT } from '../migration-introspect.ts';
 import type { Sql } from '../read/sql.ts';
-import { logLiteral as lit, logSpec, readLogSnapshot, type AppendOnlyLogSpec } from './spec.ts';
+import { log_spec, read_log_snapshot, type AppendOnlyLogSpec } from './spec.ts';
+import { literal as lit } from '@norbital-ai/std/sql';
 
 const invalid = (message: string) =>
-	StoreError.of('migrationChanged', 'admission', `append-only log: ${message}`);
+	StoreError.of('migration_changed', 'admission', `append-only log: ${message}`);
 
 /** Native definitions and effective privileges; owners normalize only when they are the executing deployment role. */
-export function logIntrospect(spec: AppendOnlyLogSpec): string {
+export function log_introspect(spec: AppendOnlyLogSpec): string {
 	const namespace = lit(spec.namespace);
 	const definitions = INTROSPECT.replaceAll('current_schema()', namespace);
 	const role = (value: string) =>
@@ -54,16 +56,16 @@ UNION ALL SELECT 'extension placement ' || e.extname || ' ' || n.nspname || ' ' 
 ORDER BY 1`;
 }
 
-export const logCurrent = (snapshot: string, declaration: AppendOnlyLogSpec) =>
+export const log_current = (snapshot: string, declaration: AppendOnlyLogSpec) =>
 	Effect.gen(function* () {
-		const actual = yield* readLogSnapshot(snapshot),
-			expected = yield* logSpec(declaration);
+		const actual = yield* read_log_snapshot(snapshot),
+			expected = yield* log_spec(declaration);
 		if (canonical(actual) !== canonical(expected))
 			return yield* invalid('source declaration differs from the committed snapshot');
 	});
 
 /** A host independently replays files and compiles the declaration, then supplies their native catalogues here. */
-export const verifyLog = (
+export const verify_log = (
 	files: readonly MigrationFile[],
 	snapshot: string,
 	declaration: AppendOnlyLogSpec,
@@ -72,31 +74,31 @@ export const verifyLog = (
 	physical: Readonly<Record<string, readonly string[]>>
 ) =>
 	Effect.gen(function* () {
-		yield* logCurrent(snapshot, declaration);
-		yield* Effect.forEach(files, checkFile);
+		yield* log_current(snapshot, declaration);
+		yield* Effect.forEach(files, check_file);
 		const names = ['', ...files.map((file) => file.name)].sort();
-		if (JSON.stringify(Object.keys(physical).sort()) !== JSON.stringify(names))
+		if (!equal_json(Object.keys(physical).sort(), names))
 			return yield* invalid('physical proof must cover every migration prefix exactly');
 		const last = files.at(-1)?.name ?? '';
 		if (
-			physicalHash(replayed) !== physicalHash(declared) ||
-			physicalHash(physical[last] ?? []) !== physicalHash(replayed)
+			physical_hash(replayed) !== physical_hash(declared) ||
+			physical_hash(physical[last] ?? []) !== physical_hash(replayed)
 		)
 			return yield* invalid(
 				'edited migrations do not reach the declared native log schema and privileges'
 			);
-		const lock = lockOf(snapshot, files, {
+		const lock = lock_of(snapshot, files, {
 			physical: Object.fromEntries(
-				Object.entries(physical).map(([name, lines]) => [name, physicalHash(lines)])
+				Object.entries(physical).map(([name, lines]) => [name, physical_hash(lines)])
 			)
 		});
 		// Validate numbering, checksums and file structure through the same immutable-history machinery as tables.
-		yield* pending(files, yield* readLock(lock), [], snapshot);
+		yield* pending(files, yield* read_lock(lock), [], snapshot);
 		return lock;
 	});
 
 /** Physical and ledger observations are rechecked within the exact same bounded migration transaction. */
-export function logMigrationGuard(
+export function log_migration_guard(
 	spec: AppendOnlyLogSpec,
 	applied: readonly Applied[],
 	definitions: readonly string[],
@@ -110,7 +112,7 @@ export function logMigrationGuard(
 WITH actual AS (${APPLIED}), expected AS (SELECT x->>'name' AS name,x->>'checksum' AS checksum FROM jsonb_array_elements(${lit(JSON.stringify(applied))}::jsonb) x)
 SELECT EXISTS ((SELECT * FROM actual EXCEPT SELECT * FROM expected) UNION ALL (SELECT * FROM expected EXCEPT SELECT * FROM actual)) INTO moved;
 IF moved THEN RAISE EXCEPTION USING ERRCODE='${ledgerCode}', MESSAGE='the log migration ledger moved'; END IF;
-WITH actual AS (${logIntrospect(spec)}), expected AS (SELECT jsonb_array_elements_text(${lit(JSON.stringify(definitions))}::jsonb) AS line)
+WITH actual AS (${log_introspect(spec)}), expected AS (SELECT jsonb_array_elements_text(${lit(JSON.stringify(definitions))}::jsonb) AS line)
 SELECT EXISTS ((SELECT line FROM actual EXCEPT SELECT line FROM expected) UNION ALL (SELECT line FROM expected EXCEPT SELECT line FROM actual)) INTO moved;
 IF moved THEN RAISE EXCEPTION USING ERRCODE='${physicalCode}', MESSAGE='the native log schema or privileges moved'; END IF;
 END`;

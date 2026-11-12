@@ -4,7 +4,9 @@
 import { Schema } from 'effect';
 import type { Address, Email, Mailbox } from 'postal-mime';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
+import { json } from '../http.ts';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 // a watch lapses after seven days, and only a watch makes Gmail push
@@ -59,12 +61,12 @@ const incoming = (
 	return {
 		id: message.id,
 		thread: message.threadId,
-		sentAt: new Date(Number(message.internalDate)).toISOString(),
+		sent_at: new Date(Number(message.internalDate)).toISOString(),
 		from: { handle: sender?.address.toLowerCase() ?? 'unknown', name: sender?.name || null },
 		text: (mail.text || (mail.html ?? '').replace(TAGS, '')).trim(),
 		group: [...to, ...addresses(mail.cc)].some((one) => one !== account),
 		mentioned: to.includes(account),
-		replyTo: mail.inReplyTo ?? null,
+		reply_to: mail.inReplyTo ?? null,
 		...(mail.subject ? { title: mail.subject } : {}),
 		files: mail.attachments.map((file, index) => ({
 			name: file.filename ?? 'attachment',
@@ -74,10 +76,10 @@ const incoming = (
 	};
 };
 /** A deleted message's thread is gone with it, and most deletes are of mail never stored, so it goes by id alone. */
-const deletion = (id: string, sentAt: string): Incoming => ({
+const deletion = (id: string, sent_at: string): Incoming => ({
 	id,
 	thread: '',
-	sentAt,
+	sent_at,
 	from: { handle: '', name: null },
 	text: '',
 	deleted: true
@@ -136,9 +138,9 @@ export const gmail: ChatPlatform = {
 				throw new PlatformError(
 					`Gmail answered ${response.status}`,
 					response.status,
-					Number(response.headers.get('retry-after') ?? Number.NaN) * 1000 || undefined
+					retry_after_ms(response.headers.get('retry-after'))
 				);
-			return Schema.decodeUnknownSync(schema)(await response.json());
+			return json(schema, response);
 		};
 		const read = (id: string) => api(Message, `messages/${id}?format=raw`);
 		const parsed = (message: typeof Message.Type) =>
@@ -184,7 +186,7 @@ export const gmail: ChatPlatform = {
 				const claims =
 					idToken === undefined
 						? undefined
-						: await google.verifyIdToken({ idToken, audience: host.webhookUrl }).then(
+						: await google.verifyIdToken({ idToken, audience: host.webhook_url }).then(
 								(ticket) => ticket.getPayload(),
 								() => undefined
 							);

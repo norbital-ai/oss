@@ -17,7 +17,7 @@ import {
 } from '../contracts.ts';
 import type { EngineError } from '../errors.ts';
 import { fromBase64 } from '../crypto.ts';
-import { DOWNLOAD, mediaType } from '../files/media.ts';
+import { DOWNLOAD, media_type } from '../files/media.ts';
 import { PRELUDE } from '../guest/prelude.ts';
 import { Port, type PortFailure } from '../port.ts';
 import type { Bundler, GuestIsolates, Http } from '../ports.ts';
@@ -75,7 +75,7 @@ const located = (text: string, where: string | undefined) =>
 
 /** A wall a session hit, by name. */
 const wallOf = (error: BoltError): string | undefined =>
-	error.code === 'cpuBudget'
+	error.code === 'cpu_budget'
 		? `the script used its ${LIMITS.guestCpuMs / 1000} s of CPU`
 		: error.code === 'memory'
 			? `the script used its ${LIMITS.guestMemoryMiB} MiB of memory`
@@ -123,7 +123,7 @@ const answered = (value: Json): Answer => ({ text: JSON.stringify(value), bins: 
 const refuse = (message: string) => answered({ ok: false, error: { kind: 'invalid', message } });
 /** One request under the script egress policy: no redirects, at most 4 MiB, 20 s. */
 const fetchOne = (http: Http['Service'], req: HttpRequest) =>
-	http.fetch(req, { redirects: 0, maxBytes: RUN_JS.httpBytes }).pipe(
+	http.fetch(req, { redirects: 0, max_bytes: RUN_JS.httpBytes }).pipe(
 		Port.call('http', RUN_JS.httpMs),
 		Effect.map((response): Result.Result<HttpResponse, Answer> => Result.succeed(response)),
 		Effect.catch((failure: PortFailure) =>
@@ -212,7 +212,7 @@ const execute = (
 			{
 				prelude: PRELUDE,
 				seed: globalThis.crypto.randomUUID(),
-				memoryMiB: LIMITS.guestMemoryMiB,
+				memory_mib: LIMITS.guestMemoryMiB,
 				once: true
 			}
 		);
@@ -336,7 +336,7 @@ const isUtf8 = (bytes: Uint8Array) => {
  * What a returned file is, by its bytes (the name only tells office documents and text kinds apart): media, an office
  * document or a PDF, an archive, or UTF-8 text. An executable or any other binary is refused.
  */
-export function outputType(
+export function output_type(
 	bytes: Uint8Array,
 	name: string
 ): { mime: string } | { refused: string } {
@@ -346,7 +346,7 @@ export function outputType(
 	// every executable header holds a NUL, so a text that happens to start "MZ" stays text
 	if (binary && EXECUTABLES.some((magic) => starts(head, magic)))
 		return { refused: 'an executable' };
-	const media = mediaType(head);
+	const media = media_type(head);
 	if (media !== undefined) return { mime: media };
 	if (ascii(head, 0, 4) === 'PK\x03\x04' || ascii(head, 0, 4) === 'PK\x05\x06')
 		return { mime: ZIPPED[ext] ?? 'application/zip' };
@@ -417,7 +417,7 @@ const keepAll = Effect.fn('Agents.runJsKeep')(function* (
 	const kept: Json[] = [],
 		refused: Json[] = [];
 	for (const file of files) {
-		const type = outputType(file.bytes, file.name);
+		const type = output_type(file.bytes, file.name);
 		if ('refused' in type) refused.push({ name: file.name, reason: type.refused });
 		else if (keep === undefined)
 			refused.push({ name: file.name, reason: 'this workspace keeps no files' });
@@ -483,7 +483,7 @@ export const REFERENCE = {
 export const ReferenceIndex = Schema.Struct({
 	repository: Schema.String,
 	commit: Schema.NullOr(Schema.String),
-	/** `treeDigest` of the tree: the bundler's cache key. */
+	/** `tree_digest` of the tree: the bundler's cache key. */
 	digest: Schema.String,
 	files: Schema.Array(
 		Schema.Struct({ path: Schema.String, key: Schema.String, bytes: Schema.Number })

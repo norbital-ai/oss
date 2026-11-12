@@ -3,9 +3,12 @@
 The live status of one automation run: queued, running with its progress, or its result or error.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { RunRow } from '../client/contract.js';
 	/** `run` is a run id, a `RunHandle`, or a row already read (RunsFor), which is shown without a second read. */
-	export type RunStatusProps = {
+	type RunStatusProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		automation: string;
 		run: string | { readonly id: string } | RunRow;
 		/** The automation's name; else its catalog label (`automations.<key>.label`), else its name in words (`jobs.send_pdf` → `Send pdf`). */
@@ -17,16 +20,16 @@ The live status of one automation run: queued, running with its progress, or its
 
 <script lang="ts">
 	// One run, live (rule 56): status, progress, the error code, and download links for the files it returned.
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
-	import { humanize, msg } from '../text/messages.js';
+	import { humanize, msg, catalogText } from '../text/messages.js';
 	import { progressOf, runFiles } from './facts.js';
 	import ReadGate from '../read/ReadGate.svelte';
 
-	let { automation, run, title, download = false }: RunStatusProps = $props();
-	const bolt = useBolt();
+	let { ctx, automation, run, title, download = false }: RunStatusProps = $props();
+	const bolt = $derived(bolt_of(ctx));
 	const id = $derived(typeof run === 'string' ? run : run.id);
-	const runs = bolt.runs;
+	const runs = $derived(bolt.runs);
 	const given = $derived(
 		typeof run !== 'string' && 'status' in run ? { rows: [run], next: null } : null
 	);
@@ -52,15 +55,15 @@ The live status of one automation run: queued, running with its progress, or its
 
 {#if runs === undefined && given === null}
 	<p role="status" class="text-muted-foreground text-sm" data-run={id}>
-		{msg(bolt, 'run.unavailable', 'Run {id} started; its status is not readable here.', { id })}
+		{msg(bolt, 'run.unavailable', { id })}
 	</p>
 {:else}
-	<ReadGate {state} what={automation}>
+	<ReadGate {ctx} {state} what={automation}>
 		{#snippet children(page)}
 			{@const r = page.rows[0]}
 			{#if r === undefined}
 				<p role="status" class="text-muted-foreground text-sm" data-run={id}>
-					{msg(bolt, 'run.notFound', 'Run {id} is not found or not yours to see.', { id })}
+					{msg(bolt, 'run.not_found', { id })}
 				</p>
 			{:else}
 				{@const p = progressOf(r)}
@@ -73,10 +76,10 @@ The live status of one automation run: queued, running with its progress, or its
 									: bolt.t(`automations.${automation}.label`))}</span
 						>
 						<span class="text-muted-foreground"
-							>{msg(bolt, `run.status.${r.status}`, r.status)}</span
+							>{catalogText(bolt, `run.status.${r.status}`, r.status)}</span
 						>
 						{#if (r.attempt_count ?? 0) > 1}<span class="text-muted-foreground text-xs"
-								>{msg(bolt, 'run.attempt', 'attempt {n}', { n: r.attempt_count ?? 0 })}</span
+								>{msg(bolt, 'run.attempt', { n: r.attempt_count ?? 0 })}</span
 							>{/if}
 					</div>
 					{#if p !== null && r.status === 'running'}<progress class="h-1 w-full" max="1" value={p}
@@ -87,8 +90,8 @@ The live status of one automation run: queued, running with its progress, or its
 					{#each runFiles(r) as f (f.id)}
 						<a
 							class="text-primary text-xs underline-offset-4 hover:underline"
-							href={bolt.fileUrl(f)}
-							download={f.name}>{msg(bolt, 'run.download', 'Download {name}', { name: f.name })}</a
+							href={bolt.file_url(f)}
+							download={f.name}>{msg(bolt, 'run.download', { name: f.name })}</a
 						>
 					{/each}
 				</div>

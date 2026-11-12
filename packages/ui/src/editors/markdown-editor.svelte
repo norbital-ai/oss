@@ -14,7 +14,7 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 	 */
 	export type MarkdownEditorProps = {
 		value: string;
-		onChange?(next: string): void;
+		on_change?(next: string): void;
 		readonly?: boolean;
 		preview?: boolean;
 		/** The `/` rows, or a scoped search provider; `[]` turns `/` off. */
@@ -22,7 +22,7 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 			| readonly CommandItem[]
 			| ((query: string) => EffectType.Effect<readonly CommandItem[], ReadError | Error>);
 		/** Where `/` counts: a line's start (Markdown blocks), or only as the text's first character (an agent command). */
-		commandStart?: 'line' | 'text' | 'word';
+		command_start?: 'line' | 'text' | 'word';
 		mentions?(query: string): EffectType.Effect<readonly CommandItem[], ReadError | Error>;
 		placeholder?: string;
 		rows?: number;
@@ -50,11 +50,11 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 
 	let {
 		value,
-		onChange,
+		on_change,
 		readonly = false,
 		preview = false,
 		commands = BLOCKS,
-		commandStart = 'line',
+		command_start = 'line',
 		mentions,
 		placeholder,
 		rows = 8,
@@ -76,7 +76,7 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 			: [
 					{
 						char: '/',
-						start: commandStart,
+						start: command_start,
 						spaces: typeof commands === 'function',
 						items: commandItems
 					}
@@ -99,7 +99,7 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 					{ name: 'write', title: 'Write' },
 					{ name: 'preview', title: 'Preview' }
 				]}
-				onValueChange={(next) => (tab = next === 'preview' ? 'preview' : 'write')}
+				on_value_change={(next) => (tab = next === 'preview' ? 'preview' : 'write')}
 			/>
 		{/if}
 		{#if tab === 'preview' && preview}
@@ -117,7 +117,7 @@ Markdown as plain text with the `/` block menu and `@` mentions, and an optional
 				aria-label={ariaLabel}
 				aria-invalid={invalid ? 'true' : undefined}
 				class="field-sizing-fixed"
-				oninput={(e) => onChange?.(e.currentTarget.value)}
+				oninput={(e) => on_change?.(e.currentTarget.value)}
 			/>
 			<CommandMenu textarea={ta} {triggers} />
 		{/if}

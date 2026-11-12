@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import type { Authority } from '../../engine/contracts.ts';
-import { automationInputs, kioskNav } from '../nav.ts';
+import { automation_inputs, kiosk_nav } from '../nav.ts';
 
 /** Discoverable declaration metadata; never declaration bodies, credentials or record data. */
 export const ManifestItemSchema = Schema.Struct({
@@ -9,14 +9,12 @@ export const ManifestItemSchema = Schema.Struct({
 		'automation',
 		'integration',
 		'connection',
-		'envoy',
 		'mcp',
 		'policy',
 		'team',
 		'relationship',
 		'field',
 		'skill',
-		'tool',
 		'secret',
 		'kiosk',
 		'group',
@@ -35,7 +33,7 @@ export function manifestItems(
 	studio: boolean
 ): ManifestItem[] {
 	const source = (path: string) => `/studio?file=${encodeURIComponent(path)}`;
-	const automations = automationInputs(m, authority);
+	const automations = automation_inputs(m, authority);
 	const items: ManifestItem[] = Object.entries(automations).map(([name, spec]) => ({
 		kind: 'automation',
 		name,
@@ -43,7 +41,7 @@ export function manifestItems(
 		href: `/command-center/automations?automation=${encodeURIComponent(name)}`
 	}));
 	items.push(
-		...kioskNav(m, authority).map((kiosk) => ({
+		...kiosk_nav(m, authority).map((kiosk) => ({
 			kind: 'kiosk' as const,
 			name: kiosk.name,
 			description: kiosk.title,
@@ -63,15 +61,12 @@ export function manifestItems(
 	};
 	add('automation', m.automations, (name) => `src/automation/+${name}.automation.ts`);
 	add('integration', m.integrations, (name) => `src/integration/${name}/+integration.ts`);
-	add('connection', m.connections, () => 'src/+workspace.ts');
-	add('envoy', m.envoys, (name) => `src/agent/envoy/+${name}.envoy.ts`);
 	add('mcp', m.mcp, (name) => `src/agent/mcp/+${name}.mcp.ts`);
 	add('policy', m.policies, (name) => `src/access_control/policy/+${name}.policy.ts`);
 	add('team', m.teams, () => 'src/access_control/team/+team.ts');
 	add('relationship', m.relationships, (name) => `src/data/model/${name.split('.')[0]}/+model.ts`);
-	add('field', m.customFields, (name) => `src/data/custom_field/${name}/+definition.ts`);
+	add('field', m.custom_fields, (name) => `src/data/custom_field/${name}/+definition.ts`);
 	add('skill', m.agent.skills, (name) => `src/agent/skill/${name}/+skill.md`);
-	add('tool', m.agent.tools ?? {}, (name) => `src/agent/tool/${name}/+tool.ts`);
 	add('secret', m.workspace.secrets, () => 'src/+secrets.ts');
 	add('group', m.groups, (name) => `src/app/${name}/+group.ts`);
 	items.push({

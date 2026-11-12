@@ -8,13 +8,13 @@ import { vi } from 'vitest';
 import { createChat, type SendPayload } from '@xdevplatform/chat-xdk';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { xchat } from '../../src/chat/xchat/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
-const juicebox = vi.hoisted(() => ({
+const juicebox = vi.hoisted((): { secret: Uint8Array; pins: string[]; tokens: unknown[] } => ({
 	secret: new Uint8Array(),
-	pins: [] as string[],
-	tokens: [] as unknown[]
+	pins: [],
+	tokens: []
 }));
 vi.mock('@xdevplatform/chat-xdk', async (original) => {
 	const real = await original<typeof import('@xdevplatform/chat-xdk')>();
@@ -185,7 +185,7 @@ const activity = (
 	});
 const connect = () =>
 	Effect.promise(() =>
-		xchat.connect(settings, { fetch, webhookUrl: 'https://hook.test/', receive: async () => {} })
+		xchat.connect(settings, { fetch, webhook_url: 'https://hook.test/', receive: async () => {} })
 	);
 
 describe('XChat', () => {
@@ -196,7 +196,7 @@ describe('XChat', () => {
 				body = activity(says('11', 'hello there'));
 			expect(h.status).toMatchObject({ state: 'connected', account: 'nor_bot' });
 			expect(juicebox.tokens.at(-1)).toBe('realm-token');
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
@@ -204,7 +204,7 @@ describe('XChat', () => {
 						id: '11',
 						thread: conversation,
 						text: 'hello there',
-						sentAt: new Date(Number(CREATED)).toISOString(),
+						sent_at: new Date(Number(CREATED)).toISOString(),
 						from: { handle: '200' },
 						group: false,
 						invocation: 'direct'
@@ -234,7 +234,7 @@ describe('XChat', () => {
 					}
 				}
 			});
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({ messages: [{ id: '12', text: 'carried' }] });
 		})
 	);
@@ -271,8 +271,8 @@ describe('XChat', () => {
 					])
 				)
 			);
-			yield* h.link.webhook!(webhook(edit, sign(edit)));
-			yield* h.link.webhook!(webhook(gone, sign(gone)));
+			yield* required(h.link.webhook)(webhook(edit, sign(edit)));
+			yield* required(h.link.webhook)(webhook(gone, sign(gone)));
 			const at = new Date(Number(CREATED)).toISOString();
 			expect(h.events[0]).toMatchObject({ messages: [{ id: '11', text: 'edited', version: at }] });
 			expect(h.events[1]).toMatchObject({ messages: [{ id: '11', text: '', deleted: true }] });
@@ -283,9 +283,9 @@ describe('XChat', () => {
 			yield* platformApi(answering());
 			const h = yield* connected(xchat, settings);
 			const reply = activity(written('15', quoting('quoted')));
-			yield* h.link.webhook!(webhook(reply, sign(reply)));
+			yield* required(h.link.webhook)(webhook(reply, sign(reply)));
 			expect(h.events[0]).toMatchObject({
-				messages: [{ id: '15', replyTo: '9', invocation: 'direct' }]
+				messages: [{ id: '15', reply_to: '9', invocation: 'direct' }]
 			});
 		})
 	);
@@ -302,7 +302,7 @@ describe('XChat', () => {
 				wrote('43', human.chat.encryptMessage({ ...group, text: 'hi @nor_bot2' })),
 				wrote('44', quoting('quoted', 'g1'))
 			])
-				yield* h.link.webhook!(webhook(body, sign(body)));
+				yield* required(h.link.webhook)(webhook(body, sign(body)));
 			expect(h.events).toMatchObject([
 				{ messages: [{ thread: 'g1', group: true, invocation: 'mention' }] },
 				{ messages: [{ invocation: 'ambient' }] },
@@ -341,7 +341,7 @@ describe('XChat', () => {
 					})
 				)
 			);
-			yield* h.link.webhook!(webhook(body, sign(body)));
+			yield* required(h.link.webhook)(webhook(body, sign(body)));
 			const stored = h.events[0];
 			expect(stored).toMatchObject({
 				messages: [
@@ -362,7 +362,7 @@ describe('XChat', () => {
 			yield* platformApi(answering());
 			const h = yield* connected(xchat, settings),
 				body = activity(says('17', 'hello'));
-			const refused = yield* h.link.webhook!(
+			const refused = yield* required(h.link.webhook)(
 				webhook(body, { 'x-twitter-webhooks-signature': 'sha256=forged' })
 			);
 			expect(refused.status).toBe(401);
@@ -382,7 +382,7 @@ describe('XChat', () => {
 					Buffer.concat([field(STRUCT, 1, Buffer.from(payload.encryptedContent, 'base64')), END])
 				)
 			);
-			const failure = yield* Effect.flip(h.link.webhook!(webhook(unsigned, sign(unsigned))));
+			const failure = yield* Effect.flip(required(h.link.webhook)(webhook(unsigned, sign(unsigned))));
 			expect(failure.message).toContain('decrypted and verified');
 			expect(h.events).toEqual([]);
 		})
@@ -394,7 +394,7 @@ describe('XChat', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = activity(says('19', 'hello'));
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(500);
 		})
 	);
 	it.live('ignores the bot own messages and a join', () =>
@@ -404,7 +404,7 @@ describe('XChat', () => {
 				own = activity('ignored', 'chat.received', '100'),
 				sent = activity('ignored', 'chat.sent'),
 				join = activity('ignored', 'chat.conversation_join');
-			for (const body of [own, sent, join]) yield* h.link.webhook!(webhook(body, sign(body)));
+			for (const body of [own, sent, join]) yield* required(h.link.webhook)(webhook(body, sign(body)));
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -413,13 +413,13 @@ describe('XChat', () => {
 			yield* platformApi(answering());
 			const h = yield* connected(xchat, settings),
 				token = 'abcdefghijklmnop1234';
-			const answered = yield* h.link.webhook!(
+			const answered = yield* required(h.link.webhook)(
 				new Request(`https://hook.test/?crc_token=${token}`)
 			);
 			expect(yield* Effect.promise(() => answered.json())).toEqual({
 				response_token: `sha256=${createHmac('sha256', 'consumer-secret').update(token).digest('base64')}`
 			});
-			const oracle = yield* h.link.webhook!(
+			const oracle = yield* required(h.link.webhook)(
 				new Request(`https://hook.test/?crc_token=${encodeURIComponent('{"data":{}}')}`)
 			);
 			expect(oracle.status).toBe(401);
@@ -437,11 +437,11 @@ describe('XChat', () => {
 				])
 			);
 			const h = yield* connected(xchat, settings);
-			const sent = yield* h.link.send!({ to: conversation, text: 'Hello back' }, []);
+			const sent = yield* required(h.link.send)({ to: conversation, text: 'Hello back' }, []);
 			const call = api.calls.at(-1),
 				body = JSON.parse(call?.body ?? '');
 			expect(call?.url).toBe('https://api.x.com/2/chat/conversations/200/messages');
-			expect(body).toMatchObject({ message_id: sent.providerId, conversation_token: 'conv-token' });
+			expect(body).toMatchObject({ message_id: sent.provider_id, conversation_token: 'conv-token' });
 			expect(body.encoded_message_create_event).not.toContain('Hello');
 			const read = human.chat.decryptEvent(
 				written(
@@ -482,7 +482,7 @@ describe('XChat', () => {
 				answering([], (call) => (call.url.includes('/events') ? json({ data: [] }) : undefined))
 			);
 			const h = yield* connected(xchat, settings);
-			const failure = yield* Effect.flip(h.link.send!({ to: conversation, text: 'hi' }, []));
+			const failure = yield* Effect.flip(required(h.link.send)({ to: conversation, text: 'hi' }, []));
 			expect(failure.message).toContain('no conversation key');
 		})
 	);
@@ -490,10 +490,10 @@ describe('XChat', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answering());
 			const h = yield* connected(xchat, settings);
-			yield* h.link.typing!(conversation, true);
+			yield* required(h.link.typing)(conversation, true);
 			expect(api.calls.at(-1)?.url).toBe('https://api.x.com/2/chat/conversations/200/typing');
 			const before = api.calls.length;
-			yield* h.link.typing!(conversation, false);
+			yield* required(h.link.typing)(conversation, false);
 			expect(api.calls).toHaveLength(before);
 		})
 	);
@@ -501,7 +501,7 @@ describe('XChat', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answering());
 			const wrong = yield* host(chatProvider(xchat), fetch);
-			yield* Effect.flip(wrong.link.pair!({ ...settings, pin: '0000' }));
+			yield* Effect.flip(required(wrong.link.pair)({ ...settings, pin: '0000' }));
 			expect(juicebox.pins.at(-1)).toBe('0000');
 			expect(wrong.values.size).toBe(0);
 		}).pipe(
@@ -509,7 +509,7 @@ describe('XChat', () => {
 				Effect.gen(function* () {
 					yield* platformApi(() => json({ title: 'Unauthorized' }, 401));
 					const refused = yield* host(chatProvider(xchat), fetch);
-					yield* Effect.flip(refused.link.pair!(settings));
+					yield* Effect.flip(required(refused.link.pair)(settings));
 					expect(refused.values.size).toBe(0);
 				})
 			)
@@ -523,7 +523,7 @@ describe('XChat', () => {
 				)
 			);
 			const h = yield* host(chatProvider(xchat), fetch);
-			const failure = yield* Effect.flip(h.link.pair!(settings));
+			const failure = yield* Effect.flip(required(h.link.pair)(settings));
 			expect(failure.message).toContain('no XChat keys');
 		})
 	);
@@ -562,7 +562,7 @@ describe('XChat', () => {
 			);
 			const connection = yield* connect();
 			const read = yield* Effect.promise(() =>
-				connection.history!(conversation, '2026-09-15T00:00:00.000Z')
+				required(connection.history)(conversation, '2026-09-15T00:00:00.000Z')
 			);
 			expect(read.complete).toBe(true);
 			expect(read.messages.map((message) => [message.id, message.text])).toEqual([
@@ -579,7 +579,7 @@ describe('XChat', () => {
 			);
 			const connection = yield* connect();
 			const read = yield* Effect.promise(() =>
-				connection.history!(conversation, '2026-09-15T00:00:00.000Z')
+				required(connection.history)(conversation, '2026-09-15T00:00:00.000Z')
 			);
 			expect(read).toEqual({ messages: [], complete: false });
 		})

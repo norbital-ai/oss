@@ -8,9 +8,9 @@ form fields stay two to a row down to 20rem: a field that needs the row spans it
 	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
 	/** The number of columns of a `Columns`. */
-	export type ColumnCount = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+	type ColumnCount = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 	/** The props of `Columns`. */
-	export interface ColumnsProps extends LayoutAttributes {
+	interface ColumnsProps extends LayoutAttributes {
 		as?: LayoutElement;
 		count?: ColumnCount;
 		gap?: LayoutGap;

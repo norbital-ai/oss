@@ -23,13 +23,13 @@ export const importStartDraft = (
 	provider: ProviderChoice,
 	fresh = false
 ): ImportStartInput => {
-	if (provider.importStart?.kind === 'native')
+	if (provider.import_start?.kind === 'native')
 		return {
 			kind: 'native',
 			provider: provider.id,
 			values: {
 				...Object.fromEntries(
-					provider.importStart.fields.flatMap((field): [string, string][] =>
+					provider.import_start.fields.flatMap((field): [string, string][] =>
 						field.options?.[0] === undefined ? [] : [[field.name, field.options[0].value]]
 					)
 				),
@@ -48,8 +48,8 @@ export const validImportStart = (input: ImportStartInput, provider: ProviderChoi
 	if (input.kind === 'native')
 		return (
 			input.provider === provider.id &&
-			provider.importStart?.kind === 'native' &&
-			provider.importStart.fields.every(
+			provider.import_start?.kind === 'native' &&
+			provider.import_start.fields.every(
 				(field) =>
 					field.optional === true ||
 					(input.values[field.name] ?? field.options?.[0]?.value ?? '').trim() !== ''

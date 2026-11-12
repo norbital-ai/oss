@@ -1,12 +1,12 @@
 // A conversation (§5.9, rules 57–63): an in-app agent thread, a sub-agent's, one chat or mail thread of an
 // integration instance (`integration`, deleted with it), or an automation run's inference transcript (`run`). Grantable;
 // written through the agent panel's actions.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_conversation', {
+export default bind_system_model('sys_conversation')({
 	description:
 		"A conversation: an agent thread or an integration's chat or mail thread, with its status, plan and goals.",
-	label: 'title',
+	record_label: 'record.title',
 	fields: {
 		created_at: { kind: 'instant', default: { var: 'now' } },
 		title: { kind: 'text', optional: true },
@@ -15,10 +15,13 @@ export default model('sys_conversation', {
 		thread: { kind: 'text', optional: true },
 		kind: { kind: 'text', optional: true },
 		/** The integration instance a chat or mail thread travels on. */
-		integration: { kind: 'ref', to: 'sys_integration', optional: true, onDelete: 'cascade' },
+		integration: { kind: 'ref', to: 'sys_integration', optional: true, on_delete: 'cascade' },
 		/** Provider membership for personal sync, shared by the conversation rather than copied into every message. */
 		participants: { kind: 'json', optional: true },
 		parent: { kind: 'text', optional: true },
+		/** Restart lineage is evidence, not ownership: deleting the original must not delete the new chat. */
+		restart_from: { kind: 'text', optional: true },
+		restart_at: { kind: 'text', optional: true },
 		/** An automation run's inference (`ctx.ai.sys_2.infer`): its transcript, read-only, for administrators. */
 		run: { kind: 'text', optional: true },
 		/**
@@ -38,5 +41,5 @@ export default model('sys_conversation', {
 		updated_at: { kind: 'instant', default: { var: 'now' } }
 	},
 	table: { primary: 'text' },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

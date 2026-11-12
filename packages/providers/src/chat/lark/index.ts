@@ -1,6 +1,8 @@
 // Lark and Feishu, through their own SDK's client and message normalizer. Deliveries are event webhooks, so the app needs
 // an Encrypt Key: that is what the signature covers. A recall names no sender or thread. No event for an edit exists in
 // the SDK, so `history` carries those, and a send's `uuid` makes a resend safe for the hour Lark keeps it.
+import { Predicate, Schema } from 'effect';
+import { parse as parseJson } from '../http.ts';
 import { createHash } from 'node:crypto';
 import type { normalize } from '@larksuiteoapi/node-sdk';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
@@ -10,13 +12,47 @@ import { same, signed } from '../verify.ts';
 const UUID_MAX = 50;
 const PAGES = 10;
 type Raw = Parameters<typeof normalize>[0];
-type Envelope = {
-	readonly type?: string;
-	readonly token?: string;
-	readonly challenge?: string;
-	readonly header?: { readonly event_type?: string };
-	readonly event?: Raw & { readonly message_id?: string };
-};
+const Envelope = Schema.Struct({
+	type: Schema.optionalKey(Schema.String),
+	token: Schema.optionalKey(Schema.String),
+	challenge: Schema.optionalKey(Schema.String),
+	header: Schema.optionalKey(Schema.Struct({ event_type: Schema.optionalKey(Schema.String) })),
+	event: Schema.optionalKey(Schema.Json)
+});
+const UserId = Schema.Struct({
+	open_id: Schema.optionalKey(Schema.String),
+	user_id: Schema.optionalKey(Schema.String),
+	union_id: Schema.optionalKey(Schema.String)
+});
+const Raw: Schema.Codec<Raw> = Schema.Struct({
+	sender: Schema.Struct({
+		sender_id: UserId,
+		sender_type: Schema.optionalKey(Schema.String),
+		tenant_key: Schema.optionalKey(Schema.String)
+	}),
+	message: Schema.Struct({
+		message_id: Schema.String,
+		root_id: Schema.optionalKey(Schema.String),
+		parent_id: Schema.optionalKey(Schema.String),
+		create_time: Schema.optionalKey(Schema.String),
+		update_time: Schema.optionalKey(Schema.String),
+		chat_id: Schema.String,
+		thread_id: Schema.optionalKey(Schema.String),
+		chat_type: Schema.Literals(['p2p', 'group']),
+		message_type: Schema.String,
+		content: Schema.String,
+		mentions: Schema.optionalKey(
+			Schema.Array(
+				Schema.Struct({
+					key: Schema.String,
+					id: UserId,
+					name: Schema.optionalKey(Schema.String),
+					tenant_key: Schema.optionalKey(Schema.String)
+				})
+			).pipe(Schema.mutable)
+		)
+	})
+});
 const MIME: Readonly<Record<string, string>> = {
 	image: 'image/*',
 	sticker: 'image/*',
@@ -29,7 +65,11 @@ const answered = async <A extends { code?: number | undefined; msg?: string | un
 	work: Promise<A>
 ) => {
 	const answer = await work.catch((error: unknown) => {
-		const status = (error as { response?: { status?: number } } | null)?.response?.status;
+		const response = Predicate.hasProperty(error, 'response') ? error.response : undefined;
+		const status =
+			Predicate.hasProperty(response, 'status') && typeof response.status === 'number'
+				? response.status
+				: undefined;
 		throw status === undefined ? error : new PlatformError(`Lark answered ${status}`, status);
 	});
 	if ((answer.code ?? 0) !== 0)
@@ -100,12 +140,12 @@ export const lark: ChatPlatform = {
 			return {
 				id: messageId,
 				thread: threadId === undefined ? chatId : `${chatId}:${rootId ?? messageId}:${threadId}`,
-				sentAt: new Date(message.createTime).toISOString(),
+				sent_at: new Date(message.createTime).toISOString(),
 				from: { handle: message.senderId, name: message.senderName ?? null },
 				text: message.content,
 				group: message.chatType !== 'p2p',
 				mentioned: message.mentionedBot,
-				replyTo: message.replyToMessageId ?? null,
+				reply_to: message.replyToMessageId ?? null,
 				files: message.resources.map(({ type, fileKey, fileName }) => ({
 					name: fileName ?? fileKey,
 					mime: MIME[type] ?? 'application/octet-stream',
@@ -122,11 +162,14 @@ export const lark: ChatPlatform = {
 		const connection: ChatConnection = {
 			account: bot?.app_name ?? openId,
 			async deliver(request, body) {
-				const { encrypt } = JSON.parse(body) as { encrypt?: string };
+				const { encrypt } = await parseJson(
+					Schema.Struct({ encrypt: Schema.optionalKey(Schema.String) }),
+					body
+				);
 				if (encrypt === undefined) throw new Unverified('not encrypted');
-				let plain: Envelope;
+				let plain: typeof Envelope.Type;
 				try {
-					plain = JSON.parse(cipher.decrypt(encrypt)) as Envelope;
+					plain = await parseJson(Envelope, cipher.decrypt(encrypt));
 				} catch {
 					throw new Unverified('not this app');
 				}
@@ -143,25 +186,29 @@ export const lark: ChatPlatform = {
 				const type = plain.header?.event_type,
 					event = plain.event;
 				if (event === undefined) return nothing();
-				if (type === 'im.message.recalled_v1' && event.message_id !== undefined)
+				if (type === 'im.message.recalled_v1') {
+					const { message_id } = await Schema.decodeUnknownPromise(
+						Schema.Struct({ message_id: Schema.String })
+					)(event);
 					return {
 						messages: [
 							{
-								id: event.message_id,
+								id: message_id,
 								thread: '',
-								sentAt: new Date().toISOString(),
+								sent_at: new Date().toISOString(),
 								from: { handle: '', name: null },
 								text: '',
 								deleted: true
 							}
 						]
 					};
+				}
 				if (type !== 'im.message.receive_v1') return nothing();
-				const message = await parse(event);
+				const message = await parse(await Schema.decodeUnknownPromise(Raw)(event));
 				if (message === null) return nothing();
-				const parent = message.group ? message.replyTo : null;
+				const parent = message.group ? message.reply_to : null;
 				return {
-					messages: [{ ...message, repliedTo: parent != null && (await answersBot(parent)) }]
+					messages: [{ ...message, replied_to: parent != null && (await answersBot(parent)) }]
 				};
 			},
 			async send(thread, text, key) {

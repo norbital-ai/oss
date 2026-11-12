@@ -1,24 +1,17 @@
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { Effect, Result } from 'effect';
-import { TestClock } from 'effect/testing';
 import { RateWindows } from '../src/engine/access/rate.ts';
 import type { RowData } from '../src/engine/contracts.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import {
-	authenticate,
-	defaultName,
-	forget,
-	makeIdentityHost
-} from '../src/engine/identity/session.ts';
+import { authenticate, defaultName, make_identity_host } from '../src/engine/identity/session.ts';
 
 /** An identity host whose native database answers one session row (or fails), counting reads. */
 const host = Effect.fnUntraced(function* (
 	answer: () => Effect.Effect<readonly RowData[], DbError>
 ) {
-	let clock = Date.parse('2026-09-26T00:00:00Z'),
-		reads = 0;
+	let reads = 0;
 	const db = TenantDb.typed({
 		read: () =>
 			Effect.gen(function* () {
@@ -26,24 +19,16 @@ const host = Effect.fnUntraced(function* (
 				return [{ rows: yield* answer(), affected: 0 }];
 			}),
 		write: () => Effect.succeed({ rows: [], affected: 0 }),
-		session: () =>
-			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 		transaction: () => Effect.die(new Error('unused'))
 	});
-	const h = yield* makeIdentityHost({
+	const h = yield* make_identity_host({
 		db,
-		now: Effect.sync(() => new Date(clock)),
+		now: Effect.sync(() => new Date('2026-09-26T00:00:00Z')),
 		windows: new RateWindows(),
 		keys: { session: Buffer.alloc(32), ipMac: Buffer.alloc(32) },
-		publicUrl: 'https://w.test'
+		public_url: 'https://w.test'
 	}).pipe(Effect.provide(NodeCrypto.layer));
-	return {
-		h,
-		reads: () => reads,
-		tick: (ms: number) => {
-			clock += ms;
-		}
-	};
+	return { h, reads: () => reads };
 });
 const row = {
 	id: 's1',
@@ -52,42 +37,38 @@ const row = {
 	agent: null,
 	via: 'code',
 	refreshed_at: '2026-09-26T00:00:00Z',
-					last_seen: '2026-09-26T00:00:00Z',
+	last_seen: '2026-09-26T00:00:00Z',
 	expires_at: '2026-10-03T00:00:00Z'
 };
 
-describe('session memo (L-COL-034)', () => {
-	it.effect('reads once per token for fifteen minutes, single-flight, and re-reads after', () =>
+describe('session authentication', () => {
+	it.effect('checks a previously accepted token again after its row is removed', () =>
 		Effect.gen(function* () {
-			const t = yield* host(() => Effect.succeed([row]));
-			const [a, b] = yield* Effect.all([authenticate(t.h, 'tok'), authenticate(t.h, 'tok')], {
-				concurrency: 'unbounded'
-			});
-			expect(a).toEqual({
+			let rows: readonly RowData[] = [row];
+			const t = yield* host(() => Effect.succeed(rows));
+			expect(yield* authenticate(t.h, 'tok')).toEqual({
 				user: 'u1',
 				session: 's1',
 				impersonatedBy: null,
 				agent: null,
 				expiresAt: expect.any(Number)
 			});
-			expect(b).toEqual(a);
-			expect(yield* authenticate(t.h, 'tok')).toEqual(a);
 			expect(t.reads()).toBe(1);
-			t.tick(900_001);
-			yield* TestClock.adjust(900_001);
-			yield* authenticate(t.h, 'tok');
+			rows = [];
+			expect(t.h.db.identityWrites()).toBe(0);
+			expect(yield* Effect.flip(authenticate(t.h, 'tok'))).toMatchObject({ code: 'not_member' });
 			expect(t.reads()).toBe(2);
 		})
 	);
 
-	it.effect('never keeps a miss or a failure, and forgets a signed-out token', () =>
+	it.effect('preserves the difference between a missing session and a database failure', () =>
 		Effect.gen(function* () {
 			let answer: () => Effect.Effect<readonly RowData[], DbError> = () => Effect.succeed([]);
 			const t = yield* host(() => answer());
 			const absent = yield* Effect.result(authenticate(t.h, 'tok'));
 			expect(Result.isFailure(absent) && absent.failure).toMatchObject({
 				_tag: 'IdentityRefusal',
-				code: 'notMember'
+				code: 'not_member'
 			});
 			const failure = DbError.make('08006', 'db down');
 			answer = () => Effect.fail(failure);
@@ -96,17 +77,10 @@ describe('session memo (L-COL-034)', () => {
 			answer = () => Effect.succeed([row]);
 			expect(yield* authenticate(t.h, 'tok')).toMatchObject({ user: 'u1' });
 			expect(t.reads()).toBe(3);
-			yield* forget(t.h, 'tok');
-			answer = () => Effect.succeed([]);
-			const signedOut = yield* Effect.result(authenticate(t.h, 'tok'));
-			expect(Result.isFailure(signedOut) && signedOut.failure).toMatchObject({
-				_tag: 'IdentityRefusal',
-				code: 'notMember'
-			});
 		})
 	);
 
-	it.effect('is per identity host, so a new generation starts empty', () =>
+	it.effect('reads the database of the identity host receiving the token', () =>
 		Effect.gen(function* () {
 			const a = yield* host(() => Effect.succeed([row])),
 				b = yield* host(() => Effect.succeed([]));
@@ -114,7 +88,7 @@ describe('session memo (L-COL-034)', () => {
 			const absent = yield* Effect.result(authenticate(b.h, 'tok'));
 			expect(Result.isFailure(absent) && absent.failure).toMatchObject({
 				_tag: 'IdentityRefusal',
-				code: 'notMember'
+				code: 'not_member'
 			});
 		})
 	);

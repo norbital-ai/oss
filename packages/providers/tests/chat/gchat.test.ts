@@ -5,7 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { gchat } from '../../src/chat/gchat/index.ts';
-import { host, HOOK } from '../kit.ts';
+import { required, host, HOOK } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const google = generateKeyPairSync('rsa', { modulusLength: 2048 }),
@@ -71,7 +71,7 @@ describe('Google Chat', () => {
 				state: 'connected',
 				account: 'bot@acme.iam.gserviceaccount.com'
 			});
-			expect((yield* h.link.webhook!(webhook(body, chatToken()))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, chatToken()))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				bins: [new Uint8Array([9])],
@@ -79,12 +79,12 @@ describe('Google Chat', () => {
 					{
 						id: 'spaces/AAA/messages/m1',
 						thread: 'spaces/AAA/threads/t1',
-						sentAt: '2026-11-05T10:00:00.000Z',
+						sent_at: '2026-11-05T10:00:00.000Z',
 						from: { handle: 'users/1', name: 'Ann' },
 						text: 'hello',
 						group: true,
 						title: 'Town',
-						replyTo: 'spaces/AAA/messages/m0',
+						reply_to: 'spaces/AAA/messages/m0',
 						invocation: 'mention',
 						attachments: [
 							{ name: 'a.png', mime: 'image/png', bin: 0 },
@@ -107,7 +107,7 @@ describe('Google Chat', () => {
 			const bot = addOnEvent({ sender: { name: 'users/9', type: 'BOT' } });
 			const added = JSON.stringify({ type: 'ADDED_TO_SPACE', space });
 			for (const body of [classic, bot, added])
-				expect((yield* h.link.webhook!(webhook(body, chatToken()))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, chatToken()))).status).toBe(200);
 			expect(h.events.length).toBe(1);
 			expect(h.events[0]).toMatchObject({
 				messages: [{ thread: 'spaces/DM1', group: false, text: 'plain', invocation: 'direct' }]
@@ -128,12 +128,12 @@ describe('Google Chat', () => {
 				})}`
 			});
 			const add = 'service-123456@gcp-sa-gsuiteaddons.iam.gserviceaccount.com';
-			expect((yield* h.link.webhook!(webhook(body, idToken(CHAT)))).status).toBe(200);
-			expect((yield* h.link.webhook!(webhook(body, idToken(add)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, idToken(CHAT)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, idToken(add)))).status).toBe(200);
 			const other = 'service-999@gcp-sa-gsuiteaddons.iam.gserviceaccount.com';
-			expect((yield* h.link.webhook!(webhook(body, idToken(other)))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, idToken(other)))).status).toBe(401);
 			expect(
-				(yield* h.link.webhook!(webhook(body, idToken(CHAT, 'https://other.test')))).status
+				(yield* required(h.link.webhook)(webhook(body, idToken(CHAT, 'https://other.test')))).status
 			).toBe(401);
 			expect(h.events.length).toBe(2);
 		})
@@ -144,10 +144,10 @@ describe('Google Chat', () => {
 			const h = yield* connected(gchat, settings),
 				body = addOnEvent();
 			const forged = chatToken({}, stranger.privateKey);
-			expect((yield* h.link.webhook!(webhook(body, forged))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, forged))).status).toBe(401);
 			const otherProject = chatToken({ aud: '999' });
-			expect((yield* h.link.webhook!(webhook(body, otherProject))).status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, otherProject))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -158,18 +158,18 @@ describe('Google Chat', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = addOnEvent();
-			expect((yield* h.link.webhook!(webhook(body, chatToken()))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, chatToken()))).status).toBe(500);
 		})
 	);
 	it.live('sends with a request id, into a thread, and finds a direct space', () =>
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(gchat, settings);
-			const sent = yield* h.link.send!(
+			const sent = yield* required(h.link.send)(
 				{ id: 'r1', to: 'spaces/AAA/threads/t1', text: 'Hello' },
 				[]
 			);
-			expect(sent).toMatchObject({ providerId: 'spaces/AAA/messages/out1' });
+			expect(sent).toMatchObject({ provider_id: 'spaces/AAA/messages/out1' });
 			const call = api.calls.at(-1);
 			const url = new URL(call?.url ?? '');
 			expect(url.pathname).toBe('/v1/spaces/AAA/messages');
@@ -182,11 +182,11 @@ describe('Google Chat', () => {
 				text: 'Hello',
 				thread: { name: 'spaces/AAA/threads/t1' }
 			});
-			yield* h.link.send!({ id: 'r1', to: 'spaces/AAA/threads/t1', text: 'Hello' }, []);
+			yield* required(h.link.send)({ id: 'r1', to: 'spaces/AAA/threads/t1', text: 'Hello' }, []);
 			expect(new URL(api.calls.at(-1)?.url ?? '').searchParams.get('requestId')).toBe(
 				url.searchParams.get('requestId')
 			);
-			yield* h.link.test!({ to: 'users/1' });
+			yield* required(h.link.test)({ to: 'users/1' });
 			expect(new URL(api.calls.at(-2)?.url ?? '').searchParams.get('name')).toBe('users/1');
 			expect(new URL(api.calls.at(-1)?.url ?? '').pathname).toBe('/v1/spaces/DM1/messages');
 		})
@@ -195,8 +195,8 @@ describe('Google Chat', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: 'invalid_grant' }, 400));
 			const h = yield* host(chatProvider(gchat), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
-			yield* Effect.flip(h.link.pair!({ ...settings, credentials: 'not json' }));
+			yield* Effect.flip(required(h.link.pair)(settings));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, credentials: 'not json' }));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -217,10 +217,10 @@ describe('Google Chat', () => {
 				call.url.includes('/messages?') ? json(pages.shift() ?? {}) : answer(call)
 			);
 			const connection = yield* Effect.promise(() =>
-				gchat.connect(settings, { fetch, webhookUrl: HOOK, receive: () => Promise.resolve() })
+				gchat.connect(settings, { fetch, webhook_url: HOOK, receive: () => Promise.resolve() })
 			);
 			const read = yield* Effect.promise(() =>
-				connection.history!('spaces/AAA/threads/t1', '2026-11-05T00:00:00.000Z')
+				required(connection.history)('spaces/AAA/threads/t1', '2026-11-05T00:00:00.000Z')
 			);
 			expect(read.complete).toBe(true);
 			expect(read.messages).toMatchObject([
@@ -243,9 +243,9 @@ describe('Google Chat', () => {
 				call.url.includes('/messages?') ? json({ error: { code: 403 } }, 403) : answer(call)
 			);
 			const connection = yield* Effect.promise(() =>
-				gchat.connect(settings, { fetch, webhookUrl: HOOK, receive: () => Promise.resolve() })
+				gchat.connect(settings, { fetch, webhook_url: HOOK, receive: () => Promise.resolve() })
 			);
-			const read = yield* Effect.promise(() => connection.history!('spaces/DM1', 'x'));
+			const read = yield* Effect.promise(() => required(connection.history)('spaces/DM1', 'x'));
 			expect(read).toEqual({ messages: [], complete: false });
 		})
 	);

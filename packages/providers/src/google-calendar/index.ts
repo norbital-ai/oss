@@ -123,7 +123,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 	};
 	const client = () =>
 		Effect.gen(function* () {
-			const configured = yield* Effect.promise(() => ctx.oauthClient('google'));
+			const configured = yield* hostCall('read Google OAuth client', () => ctx.oauth_client('google'));
 			return yield* configured === undefined
 				? Effect.fail(
 						new ProviderUnavailable({ message: 'this host has no Google sign-in configured' })
@@ -397,8 +397,8 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 		now: number
 	) {
 		const watch: Watch = {
-			id: yield* Effect.promise(() => ctx.state()),
-			token: yield* Effect.promise(() => ctx.state()),
+			id: yield* hostCall('read pairing state', () => ctx.state()),
+			token: yield* hostCall('read pairing state', () => ctx.state()),
 			calendar,
 			resource: null,
 			expiration: now + WATCH_MS,
@@ -412,7 +412,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 				id: watch.id,
 				token: watch.token,
 				type: 'web_hook',
-				address: ctx.webhookUrl,
+				address: ctx.webhook_url,
 				expiration: String(watch.expiration)
 			}
 		});
@@ -456,7 +456,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			return pending !== null && now - pending.at <= STATE_MS
 				? new Date(now + 15000).toISOString()
 				: null;
-		const hook = new URL(ctx.webhookUrl),
+		const hook = new URL(ctx.webhook_url),
 			wanted = calendars();
 		if (
 			hook.protocol === 'http:' &&
@@ -584,7 +584,7 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 							grant(app, yield* client(), {
 								grant_type: 'authorization_code',
 								code: query.get('code') ?? '',
-								redirect_uri: ctx.redirectUrl,
+								redirect_uri: ctx.redirect_url,
 								code_verifier: pairing.verifier
 							})
 						);
@@ -637,12 +637,12 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 			completion.reset(
 				Effect.gen(function* () {
 					pending = null;
-					const pairing = attempt(yield* Effect.promise(() => ctx.state())),
+					const pairing = attempt(yield* hostCall('read pairing state', () => ctx.state())),
 						account = yield* client();
 					const url = authorizeUrl(
 						app,
 						account.id,
-						ctx.redirectUrl,
+						ctx.redirect_url,
 						pairing.state,
 						pairing.challenge
 					);
@@ -654,14 +654,14 @@ const open = Effect.fn('GoogleCalendar.open')(function* (ctx: DriverOpen) {
 						path === null
 							? null
 							: yield* Effect.try({
-									try: () => new URL(path, ctx.webhookUrl),
+									try: () => new URL(path, ctx.webhook_url),
 									catch: () => new PairingInvalid({ message: 'The return URL is invalid' })
 								});
 					pending = {
 						state: pairing.state,
 						verifier: pairing.verifier,
 						at: yield* Clock.currentTimeMillis,
-						returnTo: target?.origin === new URL(ctx.webhookUrl).origin ? target.href : null
+						returnTo: target?.origin === new URL(ctx.webhook_url).origin ? target.href : null
 					};
 					yield* Effect.sync(() =>
 						ctx.pairing({ kind: 'oauth', value: url, label: 'Sign in with Google' })

@@ -4,16 +4,17 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
 import { DbError } from '../src/engine/errors.ts';
+import { inline } from '../src/engine/db/wire.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
+import { PgliteDb, Pristine, type PgliteClient } from '../src/node/db/pglite.ts';
 import { Drivers } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import {
-	validateDatabaseRequest,
-	validateDatabaseResult,
+	validate_database_request,
+	validate_database_result,
 	DATABASE_MAX_BYTES
 } from '../src/engine/integrations/database.ts';
 import { instanceRequest } from '../src/engine/integrations/instances.ts';
@@ -46,8 +47,7 @@ const db = TenantDb.typed({
 			}
 		]),
 	write: () => Effect.succeed({ rows: [], affected: 0 }),
-	session: () =>
-		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
+
 	transaction: () => Effect.fail(DbError.make('XX000', 'this test opens no transaction'))
 });
 const drivers = (request: Drivers['Service']['request']): Drivers['Service'] => ({
@@ -58,6 +58,26 @@ const drivers = (request: Drivers['Service']['request']): Drivers['Service'] => 
 	read: () => Port.unavailable('link'),
 	changed: () => Port.unavailable('link')
 });
+
+it('rejects unterminated SQL quotes', () => {
+	for (const quote of ["'", '"'])
+		expect(() => inline({ text: 'select $1, ' + quote, params: ['value'] })).toThrowError(
+			expect.objectContaining({ sqlstate: '42601' })
+		);
+});
+
+it.live('refuses writes through a PGlite read batch and leaves the table intact', () =>
+	Effect.gen(function* () {
+		const db = PgliteDb.make(yield* PgliteDb.open());
+		yield* db.write({ text: 'create table read_probe (value text)', params: [] });
+		const select = { text: 'select value from read_probe', params: [] };
+		const answer = yield* Effect.result(
+			db.read([select, { text: 'insert into read_probe values ($1)', params: ['unexpected'] }])
+		);
+		expect(answer).toMatchObject({ _tag: 'Failure', failure: { sqlstate: '25006' } });
+		expect(yield* db.read([select])).toEqual([{ rows: [], affected: 0 }]);
+	}).pipe(Effect.provide(Pristine.layer))
+);
 
 it.live('interrupts a SQL batch and drains native rollback before closing its database', () =>
 	Effect.gen(function* () {
@@ -146,10 +166,12 @@ it.live('interrupts a SQL batch and drains native rollback before closing its da
 	})
 );
 
-it('request shape and transport-independent bounds reject malformed operations', () => {
+it.effect('request shape and transport-independent bounds reject malformed operations', () =>
+	Effect.gen(function* () {
 	for (const value of [
-		{ ...request, maxRows: 1001 },
-		{ ...request, maxRows: 1.5 },
+		{ ...request, maxRows: 10 },
+		{ ...request, max_rows: 1001 },
+		{ ...request, max_rows: 1.5 },
 		{ ...request, transaction: 'unsafe' },
 		{ ...request, values: { value: Infinity } },
 		{
@@ -157,15 +179,23 @@ it('request shape and transport-independent bounds reject malformed operations',
 			procedure: { schema: 'dbo', name: 'submit' },
 			arguments: { 'name; DROP TABLE x': 'Ada' }
 		},
+		{
+			op: 'read',
+			table: { schema: 'dbo', name: 'contacts', extra: 'not part of the table descriptor' },
+			columns: ['name']
+		},
 		{ ...request, values: { text: 'x'.repeat(DATABASE_MAX_BYTES + 1) } }
 	])
-		expect(() => validateDatabaseRequest(value)).toThrow();
-	expect(validateDatabaseRequest(request)).toEqual(request);
-	expect(() => validateDatabaseResult({ rows: [{ v: 'x'.repeat(DATABASE_MAX_BYTES) }] })).toThrow(
+		expect(yield* Effect.flip(validate_database_request(value))).toMatchObject({ code: 'invalid_input' });
+	expect(yield* validate_database_request(request)).toEqual(request);
+	expect(
+		(yield* Effect.flip(validate_database_result({ rows: [{ v: 'x'.repeat(DATABASE_MAX_BYTES) }] }))).message
+	).toContain('bounds');
+	expect((yield* Effect.flip(validate_database_result({ rows: [{ v: 1 }, { v: 2 }] }, 1))).message).toContain(
 		'bounds'
 	);
-	expect(() => validateDatabaseResult({ rows: [{ v: 1 }, { v: 2 }] }, 1)).toThrow('bounds');
-});
+	})
+);
 
 it.effect(
 	'an instance runs a checked statement through its link; an invalid op never reaches it, a result over its rows is refused',
@@ -184,18 +214,18 @@ it.effect(
 			});
 			expect(sent).toEqual([['books', request]]);
 			expect(
-				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, maxRows: 0 })
-			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalidInput' } });
+				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, max_rows: 0 })
+			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalid_input' } });
 			expect(sent).toHaveLength(1);
 			expect(
-				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, maxRows: 1 })
+				yield* instanceRequest({ manifest: m, db, links }, 'books', { ...request, max_rows: 1 })
 			).toMatchObject({
 				ok: false,
 				error: { kind: 'upstream', message: expect.stringContaining('bounds') }
 			});
 			expect(
 				yield* instanceRequest({ manifest: m, db, links }, 'books', { method: 'GET', path: 'x' })
-			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalidInput' } });
+			).toMatchObject({ ok: false, error: { kind: 'bolt', code: 'invalid_input' } });
 		})
 );
 

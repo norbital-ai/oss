@@ -10,7 +10,7 @@ export type DeviceAccessState = {
 export type DeviceAccess = {
 	check(requirement: DeviceRequirement): Effect.Effect<DeviceAccessState>;
 	request(requirement: DeviceRequirement): Effect.Effect<void>;
-	openSettings(requirement: DeviceRequirement): Effect.Effect<void>;
+	open_settings(requirement: DeviceRequirement): Effect.Effect<void>;
 };
 class DeviceAccessFailure extends Schema.TaggedError<DeviceAccessFailure>()('DeviceAccessFailure', {
 	operation: Schema.String
@@ -20,12 +20,12 @@ const attempt = <A>(operation: string, promise: () => Promise<A>, fallback: A) =
 		try: promise,
 		catch: () => new DeviceAccessFailure({ operation })
 	}).pipe(Effect.catch(() => Effect.succeed(fallback)));
-const query = (name: string) =>
+const query = (name: PermissionName) =>
 	typeof navigator === 'undefined' || navigator.permissions === undefined
 		? Effect.succeed<Access | null>(null)
 		: attempt<PermissionStatus | null>(
 				'permissions.query',
-				() => navigator.permissions.query({ name: name as PermissionName }),
+				() => navigator.permissions.query({ name }),
 				null
 			).pipe(Effect.map((status) => status?.state ?? null));
 const proven = new Set<'camera' | 'location'>();
@@ -125,14 +125,14 @@ export function deviceAccess(device: DeviceApi): DeviceAccess {
 				for (const track of stream.getTracks()) track.stop();
 			}
 		});
-	const openSettings = (requirement: DeviceRequirement) => {
+	const open_settings = (requirement: DeviceRequirement) => {
 		const permission = native(requirement);
 		if (permission !== undefined)
-			return attempt('native.openSettings', () => permission.openSettings(), undefined);
+			return attempt('native.open_settings', () => permission.open_settings(), undefined);
 		const background = geo?.background;
 		return (requirement === 'location' || requirement === 'location:background') &&
 			background !== undefined
-			? attempt('background.openSettings', () => background.openSettings(), undefined)
+			? attempt('background.open_settings', () => background.open_settings(), undefined)
 			: Effect.void;
 	};
 	const table: Record<
@@ -140,33 +140,33 @@ export function deviceAccess(device: DeviceApi): DeviceAccess {
 		{
 			check: Effect.Effect<DeviceAccessState>;
 			request: Effect.Effect<void>;
-			openSettings: Effect.Effect<void>;
+			open_settings: Effect.Effect<void>;
 		}
 	> = {
 		camera: {
 			check: check('camera'),
 			request: request('camera'),
-			openSettings: openSettings('camera')
+			open_settings: open_settings('camera')
 		},
 		location: {
 			check: check('location'),
 			request: request('location'),
-			openSettings: openSettings('location')
+			open_settings: open_settings('location')
 		},
 		'location:background': {
 			check: check('location:background'),
 			request: request('location:background'),
-			openSettings: openSettings('location:background')
+			open_settings: open_settings('location:background')
 		},
 		notifications: {
 			check: check('notifications'),
 			request: request('notifications'),
-			openSettings: openSettings('notifications')
+			open_settings: open_settings('notifications')
 		}
 	};
 	return {
 		check: (requirement) => table[requirement].check,
 		request: (requirement) => table[requirement].request,
-		openSettings: (requirement) => table[requirement].openSettings
+		open_settings: (requirement) => table[requirement].open_settings
 	};
 }

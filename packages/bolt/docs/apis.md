@@ -1,21 +1,22 @@
 # APIs and execution
 
-Page code imports `bolt` from `$bolt`. Server bodies are Effect generators and call `yield* ctx.…`.
-A click handler can `await bolt.query(...)`; other Effects cross the page edge through `run`,
-`fork` or `attach`. Returned values retain their declared ids, decimals and dates.
+Page code receives `ctx` as a prop. Server bodies are Effect generators and call `yield* ctx.…`.
+A click handler can `await ctx.query(...)`. Run other Effects with `run`, `fork` or `attach`
+from `@norbital-ai/ui/effect`. Returned values retain their declared ids, decimals and dates.
 
-| API                           | Page                | Write callback            | Policy check              | Automation           | Sync                          | Notify                 |
+| API                           | Page                | Write transform           | Policy verdict            | Automation           | Sync                          | Effect                 |
 | ----------------------------- | ------------------- | ------------------------- | ------------------------- | -------------------- | ----------------------------- | ---------------------- |
-| `query`                       | live / once         | `ctx.db.query`, workspace | `ctx.db.query`, workspace | its policies         | file: caller; remote: trusted | workspace              |
-| `act`                         | yes                 | return rows               | none (returns a verdict)  | yes                  | return changes                | none                   |
-| `transaction`                 | none                | none                      | none                      | native session       | none                          | none                   |
-| `start` / `schedule`          | `bolt.start`        | none                      | none                      | yes                  | none                          | none                   |
-| `ai`                          | start an automation | none                      | none                      | infer, decide, embed | none                          | none                   |
-| `request`                     | none                | none                      | none                      | selected instance    | own instance                  | none                   |
-| `send` / `notify`             | none                | none                      | none                      | yes                  | remote write                  | notify returns notices |
-| `convert`                     | yes                 | none                      | none                      | yes                  | file export document          | notice attachment      |
-| `web`, `files`, `geo`         | upload / fileUrl    | none                      | none                      | yes                  | none                          | none                   |
-| `approvals`, history, restore | yes                 | none                      | none                      | none                 | none                          | none                   |
+| `query`                       | live / once         | `ctx.query`, workspace | `ctx.query`, workspace | its policies         | file: caller; remote: trusted | writer                 |
+| `act`                         | yes                 | return sets and carried writes | none (returns a verdict) | yes                  | return changes                | writer                 |
+| `run` / `schedule`             | `ctx.run`           | none                      | none                      | jobs / calls; schedule jobs | none                     | yes                    |
+| `ai`                          | start an automation | none                      | none                      | infer, decide, embed | none                          | without extra tools    |
+| `request`                     | none                | none                      | none                      | selected instance    | own instance                  | selected instance      |
+| `send` / `notify`              | none                | none                      | none                      | yes                  | remote write                  | yes                    |
+| `convert`                     | `preview_pdf`       | none                      | none                      | yes                  | file export document          | yes                    |
+| `web`, `files`, `geo`          | upload / file_url   | none                      | none                      | yes                  | selected file facilities      | yes                    |
+| `browser`                     | none                | none                      | none                      | run-scoped tab       | none                          | run-scoped tab         |
+| `history`                     | yes                 | none                      | none                      | its policies         | none                          | writer                 |
+| `approvals`, restore          | yes                 | none                      | none                      | none                 | none                          | none                   |
 | `device`                      | yes                 | none                      | none                      | none                 | none                          | none                   |
 
 Each guest invocation has 3 s cumulative CPU and 256 MiB heap. Ordinary bodies allow 40 facility
@@ -28,25 +29,25 @@ chunk; business I/O belongs in an automation or remote sync, not a transform.
 
 ```svelte
 <script lang="ts">
-	import { bolt } from '$bolt';
-	let { customer } = $props();
-	const day = bolt.clock('day');
+	import type { Id } from '@norbital-ai/bolt';
+	import type { PageContext } from '@norbital-ai/bolt/page';
+	let { ctx, customer }: { ctx: PageContext; customer: Id<'customers'> } = $props();
+	const day = ctx.clock('day');
 	const open = $derived(
-		bolt.query({
+		ctx.query({
 			orders: { where: { customer: { eq: customer }, status: { ne: 'shipped' } }, limit: 50 }
 		})
 	);
 	// one read request: a root, its declared layers and a second root; then a pure src/lib helper
 	const book = $derived(
-		bolt.query({
-			orders: { where: { due_on: { lt: day.today } }, fields: ['number', 'total', 'due_on'] },
-			'orders.party': { fields: ['name'] },
+		ctx.query({
+			orders: { where: { due_on: { lt: day.today } }, fields: ['number', 'total', 'due_on'], party: { fields: ['name'] } },
 			commercial_settings: { limit: 1 }
 		})
 	);
-	const aging = $derived(book.current && arAging(book.current, day.today));
-	async function exportOpen() {
-		const snapshot = await bolt.query({ orders: { where: { status: { eq: 'placed' } } } });
+	const aging = $derived(book.current && ar_aging(book.current, day.today));
+	async function export_open() {
+		const snapshot = await ctx.query({ orders: { where: { status: { eq: 'placed' } } } });
 		// snapshot is a single decoded answer: snapshot.orders.rows
 	}
 </script>
@@ -60,16 +61,20 @@ Reactive reads subscribe on first use, identical calls share a subscription, and
 leaving releases it after a 30 s grace. Outside reactive code, await reads once. `yield*` composes
 the same Query as an Effect. `aggregate` and `history` share those semantics. `query` takes only a
 read request: one record is `query({ orders: { where: { id: { eq: id } } } })`, a past state is
-`asOf` on the root (or `history(…, { at: { revision } })` for revisions), and an index search is
+`as_of` on the root (or `history(…, { at: { revision } })` for revisions), and an index search is
 `query({ trials: { search: { colour: input }, limit: 20 } })`, its rows carrying `$distance`.
 
-A read request is one JSON layer map, the same on a page (`bolt.query({...})`), in server code
-(`ctx.query({...})`), in a policy check (`ctx.db.query({...})`) and for the agent's `read` tool. Each
-key without a dot is a root (a model with `read`), at most once per request. A root reads one of its
-model's outputs (`output`, `default` when absent), which a held policy must grant; `'<root>.<rel>…'`
-is a layer of that output, and naming a deep path implies its parents. A layer takes `where`,
-`fields` (without it, every field the output's layer declares), `orderBy`, `limit`, `search` and `aggregate`;
-a root also takes `output`, `after` and `asOf`. `history(model, id, { output })` names one too. Unknown keys and options are refused. Every
+Server `query` exposes `ReadFailed` for recoverable read failures. Page reads also expose
+`TransportFailed`. Historical revision changes retain their schema version and archived wire values;
+they are not typed as today's row. Server history corruption remains an engine defect.
+
+A read request is one nested JSON tree, the same on a page (`ctx.query({...})`), in server code
+(`ctx.query({...})`), in a policy verdict (`ctx.query({...})`) and for the agent's `read` tool. Each
+top-level key is a root with `outputs.default`, at most once per request. A root reads one of its
+model's outputs (`output`, `default` when absent), which a held policy must grant; relation nodes
+are nested under their parent, never dotted keys. A layer takes `where`,
+`fields` (without it, every field the output's layer declares), `order_by`, `limit`, `search` and `aggregate`;
+a root also takes `output`, `after` and `as_of`. `history(model, id, { output })` names one too. Unknown keys and options are refused. Every
 list (a root page, or a nested many-layer per parent row) defaults to `limit` 10,000 and the root's
 default order; the 4 MiB page budget still applies. The answer is a tree typed from the named
 layers: per root `{ rows, next, total }` (`total` counts every row the root matches under the same
@@ -82,79 +87,88 @@ that one read.
 An `aggregate` without `by` answers one row of the measures asked (`count: true` for a count); with
 `by` it answers a page of buckets, each with its `key` and row `count` always, plus the other measures.
 
-Time is explicit: `bolt.clock('day').today` or `bolt.clock('minute' | 'hour').now` updates at that
+Time is explicit: `ctx.clock('day').today` or `ctx.clock('minute' | 'hour').now` updates at that
 grain, while server transforms and automations use invocation-bound `ctx.today`/`ctx.now`. Live clocks tick only while the page is visible;
-`bolt.clock()` without a unit is a fixed page-opening snapshot.
+`ctx.clock()` without a unit is a fixed page-opening snapshot.
 Read predicates, including grant scopes, contain literal date/instant values, not clock operators.
 
-## act and start
+## act and run
 
-`bolt.act('orders.update', [{ target: id, set: { notes } }])` uses the same typed callable catalogue
-as `ctx.act`. A generated write (`create`, `update`, `delete`, `upsert`) always takes an array of
-rows on every surface (pages, `ctx.act`, the HTTP act route, the agent's `act` tool and the test
-kit), so the model's write callback sees the whole batch; a single-row object is refused
-`invalidInput`. The agent's `act` takes one `{ callable, input }` per call; several different
-callables are separate calls. Success is `committed` or `pendingApproval`; the latter is a provisional write held
-by its request. Handle `ActRefused`, `ActConflict` and `ActUnknown` through the typed failure channel.
-Carry the observed revision when I/O separates a read from a write.
-A keyed model's `import` is one act taking `{ rows, onConflict, onMissing?, prune?, dryRun? }`: it matches rows by
-the key, runs the ordinary per-verb callbacks in one transaction and reports each row's resolution; `dryRun: true`
-runs them and writes nothing, so a page can show a file's refusals before writing it.
-Model writes expose only `create`, `update`, `delete` and keyed `upsert`. Use `ctx.act.many(...)`
-for independent writes that must commit together, and the model's write layers (nested child rows)
-for dependent creates.
-For a batch assembled at runtime (a rule engine's operations), `ctx.act.checked(...)` takes
-`{ callable, input, observed?, onConflict }` rows and runs the same native input decoding, guarded
-writes and atomic batch as `many`; its outputs remain JSON. Prefer `many` when the inputs are
-statically typed.
+`yield* ctx.act({ 'orders.update': [{ target: order, set: { notes } }] })` plans one
+atomic map of generated writes. Its successful output is keyed by the same callable names.
+`create`, `update` and `delete` take batches; update and delete targets carry the observed row
+and its revision. A transform may carry dependent rows into the same commit. Independent writes
+that must commit together are entries in the same map. A runtime-indexed map crosses the same
+strict native decoder. There are no `many` or `checked` variants.
+
+A model with a declared `import_key` supports `import`: `{ rows, on_conflict, on_missing?, prune?,
+dry_run? }`. It matches by that key, runs the ordinary per-verb callbacks in one transaction and
+reports each row's resolution. `on_conflict` is `update`, `keep` or `refuse`; `on_missing` defaults
+to `create` and may be `skip`. A dry run runs the callbacks and writes nothing. Imports own their
+conflict policy; acts have none.
+
+Pages, bodies and the test kit use this map contract. The agent's `act` tool accepts one
+`{ callable, input }`, then uses that same native map decoder and commit path. A successful write
+is `committed` or `pending_approval`; the latter carries `request_id` for the provisional write.
+Handle `ActRefused`, `ActConflict` and `ActUnknown` through the typed failure channel. `key` supplies
+explicit idempotency; a run retry may repeat earlier writes.
+
 Business operations live in named automations with explicit typed inputs.
 
-For a read followed by dependent writes, use `ctx.transaction(function* (tx) { ... })`.
-`tx.query` reads current model records or pages under the run's authority; `tx.act` applies
-the same guarded create, update, upsert and delete verbs. Later reads see earlier writes.
-No manual `observed` map is needed. Inner answers contain provisional `output` and `records`;
-only the outer answer is `committed` or `pendingApproval`, and the held arm has no callback
-output. Refusal or failure rolls the whole transaction back.
+A write based on a previously read row carries its observed revision. The engine checks the revision before it commits. A transform can read workspace data and carry related rows into the same commit.
 
-The native session has a fixed five-second deadline and requires PostgreSQL 17 or newer.
-PGlite explicitly refuses this capability. The callback yields only transaction model reads
-and guarded writes: no facilities, nested transactions, async callbacks, raw SQL or captured
-outer ctx Effects. Prepare external data before entering it. The platform does not replay the
-callback automatically.
-
-`bolt.start(name, input)` starts an automation or file sync. `ctx.schedule(name, input, { at?, key? })`
-queues after commit; a key replaces queued work with that key. Use the runs catalogue for progress
-and result. An automation declares `policies` (at least one); every run executes as the reserved
+`ctx.run(name, input)` invokes a declared automation: server code gets a durable handle for a job
+or the declared output for a call. On a page a job handle exposes `.id`, `.ids` and `.automation`;
+yielding it confirms queue admission through the normal outcome, not completed execution. A page
+call yields its output. `ctx.schedule(name, input, { at?, key? })` queues jobs after commit; a key
+replaces queued work with that key. Use the runs catalogue for progress and result. An automation declares `policies` (at least one); every run executes as the reserved
 system identity (`ctx.actor.kind === 'system'`) holding exactly them, whoever started it. The run
 records who did as `sys_run.trigger`, read in the body as `ctx.run.trigger`: `{ kind: 'person', actor,
 agent? }` for a manual start (`agent: { conversation }` when Norbius started it for them), else
-`{ kind: 'system', cause }` — `cron`, `webhook`, `effect` (with the `model`, `verb` and `records` whose
+`{ kind: 'system', cause }` — `cron`, `effect` (with the `model`, `verb` and `records` whose
 effect scheduled it) or `schedule` (with `by`, the run whose code scheduled it). The trigger never
 grants authority: `{ var: 'requestor.*' }` in a run names the system identity, so a requestor-scoped
 grant matches nothing there and a ref's `requestor.id` default does not apply. Code that acts for its
 starter checks the trigger explicitly — "a customer cancels only their own booking" reads the booking
-and refuses unless its customer is `trigger.actor.party`. A policy's `automations` grants manual starts
-only (a person or the agent), rate limited per starter by the automation's `limit`; code that
+and refuses unless its customer is `trigger.actor.party`. A policy's `capabilities.automations` grants manual starts
+only (a person or the agent), with a quota of 30 starts per automation and starter per minute; code that
 schedules needs no start grant. Automations cannot approve, reject or request changes on a request.
-`ctx.approvals.withdraw(requestId, reason?)` takes back an open request the same automation asked for
+`ctx.approvals.withdraw(request_id, reason?)` takes back an open request the same automation asked for
 (any of its runs; in a model effect, its writer's own), restoring the held records as a rejection does;
 it fails `ActRefused` for anyone else's request or a decided one. The Command center's
 Automations list and run detail show each run's trigger.
 
-A model's `effect` (`created`, `updated`, `deleted`) is the work that follows a committed write: a
+A model's `create.effect`, `update.effect` or `delete.effect` is the work that follows a committed write: a
 durable run `<model>.effect.<verb>` per committed batch, queued by the write's own statement,
-retried for over an hour on a transient failure and never rate limited. It receives the rows (`updated`:
-`[{ before, after }]` for changes to a stored field) as the root fields of the writer's output of the
+retried for over an hour on a transient failure and never rate limited. It receives changes with
+`before`, `set`, `after` and `changed(...fields)` as the root fields of the writer's output of the
 model (`default` when it holds it, else the first named output it holds) and runs as the writer —
 the member, envoy, visitor or automation run (that run's policies) — holding no policy of its own,
 with an automation's ctx (`EffectCtx`). An effect's writes run effects one level deeper; past 8 levels the
 run is recorded failed with `depth`. The writer sees its effect run's status and error code; an
-administrator sees its input.
+administrator sees its input. Approval-held write effects keep frozen changes and their original
+writer until final approval releases them atomically; rejection discards them. Lifecycle moves
+instead arrive with empty changes and `ctx.event.kind === 'approval'`. Cached calls have no starter
+metadata and cannot write, send, notify or schedule.
 
 ## I/O and notices
 
 Automations use `ctx.request(instance, operation)` and `ctx.send(instance, message)` through sealed
 host links. Remote syncs request through their own instance. Decode provider answers once.
+
+`ctx.send` returns the durable `sys_message` id after queue admission. An account that is not paired keeps the message
+queued without spending provider attempts; connecting releases its queue, including after a host restart. Save that id
+on the business record. With an explicit `sys_message` output grant, read its actual status and `sent_at` before marking
+the business record Sent. Queue admission, an in-app notification and provider-id registration are separate from external
+acceptance. Queued messages have no sent timestamp; an uncertain send must not be automatically sent again unless the
+provider guarantees idempotency.
+
+`ctx.browser` owns one tab for the run and carries no person's cookies. `navigate` and `snapshot`
+answer a typed snapshot; `act` takes typed `BrowserStep` refs from that snapshot, `evaluate`
+answers JSON, and `download(url, { for })` stores supported media. The tab closes when the run's
+scope ends, including failure or interruption; `close` ends it early. Use `ctx.web.read(url)` for
+page text that needs no interaction. The host must provide the browser facility; no fake or
+source declaration proves live access to a target site.
 `ai.sys_2.infer`, `ai.sys_1.decide` and `ai.embed` are automation facilities; inference progress is
 described in [the runtime overview](./README.md#authoring-and-pages).
 
@@ -170,7 +184,7 @@ before its one decision call, reusing the ingestion cache. Unreadable or truncat
 be discarded as noise. Native audio is not a Jev input. Decision images are omitted from retained logs.
 
 ```ts
-function* chooseFilter(ctx: AutomationCtx) {
+function* choose_filter(ctx: AutomationCtx) {
 	const { answers } = yield* ctx.ai.sys_1.decide({
 		state: { description: 'Show open jobs' },
 		questions: {
@@ -192,9 +206,9 @@ Choice returns the supplied option key and probabilities. Score returns its nume
 expected score, probabilities, and the selected structured level; Noul returns the
 probability of true. Code composes the selected entries and validates the resulting
 read filter. Structured criteria do not request arbitrary JSON Schema generation.
-The `decisionsSystem1` adapter uses Jev/OpenRouter's Decisions wire format;
-`structuredSystem1` implements the same contract over structured-output chat completions.
-For OpenAI's native `/v1/decisions`, set `decisionsSystem1`'s `format: 'openai'`
+The `decisions_system_1` adapter uses Jev/OpenRouter's Decisions wire format;
+`structured_system_1` implements the same contract over structured-output chat completions.
+For OpenAI's native `/v1/decisions`, set `decisions_system_1`'s `format: 'openai'`
 (or the Bolt server's System 1 provider to `openai-decisions`, with its full endpoint URL).
 The adapter translates structured question entries to JSON text and normalizes native
 predicate, choice and score answers back to this same Bolt contract.
@@ -202,7 +216,13 @@ Each decision also emits the retained `ai.call` resource record (`category: 'dec
 provider call identity, input/output tokens, provider cost, elapsed time, request bytes and question count.
 The detailed `decision.made` record remains separate. The host meters the provider call once as AI usage.
 
-`ctx.notify` accepts the same notices returned by [model notify callbacks](./notifications.md).
+`ctx.notify` queues [notices](./notifications.md) from automations and per-verb effects.
 [Documents](./documents.md) covers conversion, [Device](./device.md) covers browser resources.
-`bolt.approvals.decide` and `bolt.restore.preview/run` apply current authority and approval locks;
+`ctx.approvals.decide` and `ctx.restore.preview/run` apply current authority and approval locks;
 see [approvals and restore](./README.md#approvals).
+
+## Runtime AI administration
+
+An administrator chooses allowed chat models and monthly spending limits in Settings → Organization. The settings live in `sys_config` under `agent` and apply at the next step without a source release. An empty allowed-model list permits the host catalogue; otherwise the first allowed model is the fallback when a conversation's choice is no longer allowed. The host resolves the `default` model class.
+
+Source `workspace.ai` requires AI facilities and optionally names embedding models; it declares neither allowed chat models nor a chat default. Policy `limits.agent` still limits request rate. Monthly USD caps are separate runtime settings, including the workspace cap, the default member cap and per-policy member caps.

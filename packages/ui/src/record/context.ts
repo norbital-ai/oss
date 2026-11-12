@@ -5,11 +5,11 @@ const RECORD_VIEW = Symbol('ui.views.recordView');
 export const provideRecordView = (v: { readonly current: RecordView | null }) =>
 	setContext(RECORD_VIEW, v);
 /** The record the nearest `RecordShell` shows (`current` is the scrubbed revision while one is picked); absent outside one. */
-export const useRecordView = () =>
+export const use_record_view = () =>
 	getContext<{ readonly current: RecordView | null } | undefined>(RECORD_VIEW);
 const REPRESENTATIONS = Symbol('ui.views.representations');
 /** The workspace's representations per model (the generated registry), set by the shell above every page. */
-export const provideRepresentations = (map: {
+export const provide_representations = (map: {
 	readonly [model: string]: RepresentationLoader;
 }) => setContext(REPRESENTATIONS, map);
 export const representations = () =>

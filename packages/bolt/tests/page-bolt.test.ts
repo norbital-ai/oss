@@ -1,22 +1,50 @@
 // Browser reads and operations have one Effect contract; live answers have one Stream contract.
-import { Cause, Effect, Deferred, Exit, Fiber, Layer, ManagedRuntime, Queue, Stream } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import {
+	Cause,
+	Effect,
+	Deferred,
+	Exit,
+	Fiber,
+	Layer,
+	ManagedRuntime,
+	Queue,
+	Schema,
+	Stream
+} from 'effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { describe, expect, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { createBolt, patched } from '../src/page/bolt.ts';
+import { input_schema } from '@norbital-ai/std/kind';
+import { create_bolt, patched } from '../src/page/bolt.ts';
 import type { EventSourceLike } from '../src/page/stream.ts';
 import {
 	ActConflict,
 	ActRefused,
-	ActUnknown,
 	ReadFailed,
-	Refusal,
-	TransportFailed,
 	Unavailable
 } from '../src/decl/errors.ts';
+import { TransportFailed } from '../src/decl/errors/browser.ts';
+import { ActUnknown } from '../src/decl/errors/act.ts';
+import { Refusal } from '../src/decl/errors/refusal.ts';
 import type { ApprovalView } from '../src/engine/approvals/approvals.ts';
 import { PATHS, type Frame } from '../src/protocol/wire.ts';
 import type {} from './types/registry.ts';
+
+const page = <Row extends Schema.Struct.Fields>(row: Row) =>
+	Schema.Struct({
+		jobs: Schema.Struct({
+			rows: Schema.Array(Schema.Struct(row)),
+			next: Schema.NullOr(Schema.String),
+			total: Schema.Number
+		})
+	});
+const Amounts = page({ id: Schema.String, amount: input_schema({ kind: 'decimal', scale: 2 }) });
+const Ids = page({ id: Schema.String });
+const decimal = (value: unknown) => {
+	if (!(value instanceof Decimal)) throw new Error('Expected a Decimal');
+	return value;
+};
+const all_jobs = { read: { m: 'query', a: [{ jobs: {} }] } } as const;
 
 const client = (answer: (url: string, body: unknown) => Response) =>
 	Effect.gen(function* () {
@@ -32,7 +60,8 @@ const client = (answer: (url: string, body: unknown) => Response) =>
 			sent.push(body);
 			return answer(new URL(request.url).pathname, body);
 		};
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -48,20 +77,21 @@ describe('reads', () => {
 		Effect.gen(function* () {
 			const { bolt, sent } = yield* client(() =>
 				Response.json({
-					answers: [{ jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null } }]
+					answers: [
+						{ jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null, total: 1 } }
+					]
 				})
 			);
-			type Jobs = { jobs: { rows: { amount: Decimal }[] } };
-			const read = bolt.query<Jobs>({ jobs: { limit: 1 } });
+			const read = bolt.native_query({ m: 'query', a: [{ jobs: { limit: 1 } }] }, Amounts);
 			expect(read.read).toEqual({ m: 'query', a: [{ jobs: { limit: 1 } }] });
 			expect('then' in read).toBe(true);
 			expect(sent).toHaveLength(0);
 			const answer = yield* read;
 			expect(answer.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
-			expect(answer.jobs.rows[0]?.amount.plus('1').toString()).toBe('2.50');
+			expect(decimal(answer.jobs.rows[0]?.amount).plus('1').toString()).toBe('2.50');
 			expect(sent).toHaveLength(1);
 			yield* Effect.acquireRelease(
-				Effect.sync(() => mountEdge(ManagedRuntime.make(Layer.empty))),
+				Effect.sync(() => mount_edge(ManagedRuntime.make(Layer.empty))),
 				(dispose) => Effect.promise(dispose)
 			);
 			const awaited = yield* Effect.promise(async () => await read);
@@ -74,10 +104,13 @@ describe('reads', () => {
 			const { bolt } = yield* client(() =>
 				Response.json({ error: { code: 'forbidden', message: 'No access' } }, { status: 403 })
 			);
-			const failure = yield* Effect.flip(bolt.query({ jobs: { limit: 1 } }));
+			const failure = yield* Effect.flip(
+				bolt.native_query({ m: 'query', a: [{ jobs: { limit: 1 } }] }, Amounts)
+			);
 			expect(failure).toBeInstanceOf(ReadFailed);
 			expect(failure).toMatchObject({ code: 'forbidden', message: 'No access' });
-			const offline = yield* createBolt({
+			const offline = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'https://workspace.test',
@@ -86,7 +119,9 @@ describe('reads', () => {
 				}
 			});
 			expect(
-				yield* Effect.flip(offline.query({ jobs: { where: { id: { eq: 'j1' } } } }))
+				yield* Effect.flip(
+					offline.native_query({ m: 'query', a: [{ jobs: { where: { id: { eq: 'j1' } } } }] }, Ids)
+				)
 			).toBeInstanceOf(TransportFailed);
 		})
 	);
@@ -95,9 +130,10 @@ describe('reads', () => {
 			let source: EventSourceLike | undefined;
 			const opened = yield* Deferred.make<void>();
 			const registered = yield* Deferred.make<void>();
-			type Jobs = { jobs: { rows: { amount: Decimal }[] } };
+			type Jobs = typeof Amounts.Type;
 			const answered = yield* Queue.unbounded<Jobs>();
-			const bolt = yield* createBolt({
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'https://workspace.test',
@@ -105,7 +141,7 @@ describe('reads', () => {
 					Deferred.doneUnsafe(registered, Effect.void);
 					return Response.json({ errors: [] });
 				},
-				openStream: () => {
+				open_stream: () => {
 					let handler: EventSourceLike['onmessage'] = null;
 					source = {
 						get onmessage() {
@@ -121,7 +157,7 @@ describe('reads', () => {
 					return source;
 				}
 			});
-			const view = bolt.observe<Jobs>(bolt.query({ jobs: {} }));
+			const view = bolt.observe(all_jobs, Amounts);
 			const seen: Jobs[] = [];
 			const fiber = yield* Stream.runForEach(view, (answer) =>
 				Effect.sync(() => {
@@ -138,26 +174,25 @@ describe('reads', () => {
 				t: 'answer',
 				view: 'v1',
 				v: 1,
-				value: { jobs: { rows: [{ id: 'a', amount: { $dec: '2' } }], next: null } }
+				value: { jobs: { rows: [{ id: 'a', amount: { $dec: '2' } }], next: null, total: 1 } }
 			});
 			yield* Queue.take(answered);
 			expect(seen[0]?.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
-			push({ t: 'error', view: 'v1', code: 'tooLarge', message: 'too big' });
+			push({ t: 'error', view: 'v1', code: 'too_large', message: 'too big' });
 			const exit = yield* Fiber.await(fiber);
 			expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toEqual(
-				new ReadFailed({ code: 'tooLarge', message: 'too big' })
+				new ReadFailed({ code: 'too_large', message: 'too big' })
 			);
 		})
 	);
 	it.live('a live link a release closed comes back on the next generation', () =>
 		Effect.gen(function* () {
 			const opened = yield* Queue.unbounded<EventSourceLike>();
-			const registers: Deferred.Deferred<void>[] = [
-				yield* Deferred.make<void>(),
-				yield* Deferred.make<void>()
-			];
-			type Jobs = { jobs: { rows: { id: string }[] } };
-			const bolt = yield* createBolt({
+			const firstRegistration = yield* Deferred.make<void>();
+			const secondRegistration = yield* Deferred.make<void>();
+			const registers = [firstRegistration, secondRegistration];
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'https://workspace.test',
@@ -166,7 +201,7 @@ describe('reads', () => {
 					if (next !== undefined) Deferred.doneUnsafe(next, Effect.void);
 					return Response.json({ errors: [] });
 				},
-				openStream: () => {
+				open_stream: () => {
 					let handler: EventSourceLike['onmessage'] = null;
 					const source: EventSourceLike = {
 						get onmessage() {
@@ -186,19 +221,19 @@ describe('reads', () => {
 			yield* Stream.runForEach(bolt.sync, (state) =>
 				Effect.sync(() => void states.push(state))
 			).pipe(Effect.forkScoped);
-			yield* Stream.runDrain(bolt.observe<Jobs>(bolt.query({ jobs: {} }))).pipe(Effect.forkScoped);
+			yield* Stream.runDrain(bolt.observe(all_jobs, Ids)).pipe(Effect.forkScoped);
 			const push = (source: EventSourceLike, frame: Frame) =>
 				source.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
 			const first = yield* Queue.take(opened);
 			push(first, { t: 'hello', conn: 'c1', v: 0 });
-			yield* Deferred.await(registers[0]!);
+			yield* Deferred.await(firstRegistration);
 			push(first, { t: 'close', release: 'r1' });
 			first.onerror?.(new Event('error'));
 			const second = yield* Queue.take(opened);
 			expect(bolt.closed).toBe('r1');
 			push(second, { t: 'hello', conn: 'c2', v: 0 });
 			// the views register again on the new connection
-			yield* Deferred.await(registers[1]!);
+			yield* Deferred.await(secondRegistration);
 			expect(bolt.closed).toBeNull();
 			expect(states).toContain('closed');
 			expect(states.at(-1)).toBe('live');
@@ -210,9 +245,9 @@ describe('reads', () => {
 			const opened = yield* Deferred.make<void>();
 			const registered = yield* Deferred.make<void>();
 			const reply = yield* Deferred.make<Response>();
-			type Jobs = { jobs: { rows: { id: string; amount: Decimal }[] } };
-			const answered = yield* Queue.unbounded<Jobs>();
-			const bolt = yield* createBolt({
+			const answered = yield* Queue.unbounded<typeof Amounts.Type>();
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'https://workspace.test',
@@ -221,7 +256,7 @@ describe('reads', () => {
 					Deferred.doneUnsafe(registered, Effect.void);
 					return Response.json({ errors: [] });
 				},
-				openStream: () => {
+				open_stream: () => {
 					let handler: EventSourceLike['onmessage'] = null;
 					source = {
 						get onmessage() {
@@ -237,7 +272,7 @@ describe('reads', () => {
 					return source;
 				}
 			});
-			yield* Stream.runForEach(bolt.observe<Jobs>(bolt.query({ jobs: {} })), (answer) =>
+			yield* Stream.runForEach(bolt.observe(all_jobs, Amounts), (answer) =>
 				Queue.offer(answered, answer)
 			).pipe(Effect.forkScoped);
 			yield* Deferred.await(opened);
@@ -250,19 +285,21 @@ describe('reads', () => {
 				view: 'v1',
 				v: 1,
 				value: {
-					jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null }
+					jobs: { rows: [{ id: 'a', amount: { $dec: '1.50' } }], next: null, total: 1 }
 				}
 			});
 			yield* Queue.take(answered);
 			const act = yield* bolt
-				.act('jobs.update', { target: 'a', set: { amount: Decimal.of('0') } })
+				.act({
+					'jobs.update': [{ target: { id: 'a', revision: 1 }, set: { amount: Decimal.of('0') } }]
+				})
 				.pipe(Effect.forkScoped);
 			const painted = yield* Queue.take(answered);
 			expect(painted.jobs.rows[0]?.amount).toBeInstanceOf(Decimal);
-			expect(painted.jobs.rows[0]?.amount.toNumber()).toBe(0);
+			expect(decimal(painted.jobs.rows[0]?.amount).to_number()).toBe(0);
 			yield* Deferred.succeed(
 				reply,
-				Response.json({ outcome: { kind: 'committed', output: null, records: [] }, v: 1 })
+				Response.json({ outcome: { kind: 'committed', output: { 'jobs.update': null }, records: [] }, v: 1 })
 			);
 			yield* Fiber.join(act);
 		})
@@ -272,12 +309,13 @@ describe('reads', () => {
 		Effect.gen(function* () {
 			let source: EventSourceLike | undefined;
 			const opened = yield* Deferred.make<void>();
-			const bolt = yield* createBolt({
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'https://workspace.test',
 				fetch,
-				openStream: () => {
+				open_stream: () => {
 					let handler: EventSourceLike['onmessage'] = null;
 					source = {
 						get onmessage() {
@@ -293,9 +331,7 @@ describe('reads', () => {
 					return source;
 				}
 			});
-			const fiber = yield* Stream.runDrain(bolt.observe(bolt.query({ jobs: {} }))).pipe(
-				Effect.forkScoped
-			);
+			const fiber = yield* Stream.runDrain(bolt.observe(all_jobs, Ids)).pipe(Effect.forkScoped);
 			yield* Deferred.await(opened);
 			const push = (frame: Frame) =>
 				source?.onmessage?.(new MessageEvent('message', { data: JSON.stringify(frame) }));
@@ -327,90 +363,39 @@ describe('reads', () => {
 	);
 });
 
-describe('document conversion', () => {
-	it.effect('conversion is lazy, sends one declared request and decodes its stored file', () =>
+describe('PDF preview', () => {
+	it.effect('returns PDF bytes from a lazy preview', () =>
 		Effect.gen(function* () {
-			const file = {
-				id: '0199a000-0000-7000-8000-000000000002',
-				name: 'report.pdf',
-				mime: 'application/pdf',
-				size: 12
-			};
+			const pdf = new TextEncoder().encode('%PDF');
 			const { bolt, sent } = yield* client(
-				outcome({ kind: 'committed', output: file, records: [] })
+				() => new Response(pdf, { headers: { 'content-type': 'application/pdf' } })
 			);
-			const converted = bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' });
+			const preview = bolt.preview_pdf({ markdown: '# Report' }, { page: 'A4' });
 			expect(sent).toHaveLength(0);
-			expect(yield* converted).toEqual(file);
+			expect(yield* preview).toEqual(pdf);
 			expect(sent).toEqual([
 				{
-					callable: 'convert.document',
-					input: {
-						source: { markdown: '# Report' },
-						request: { to: 'pdf', name: 'report.pdf' }
-					},
-					issuedAt: expect.any(String)
+					callable: 'convert.previewPdf',
+					input: { source: { markdown: '# Report' }, options: { page: 'A4' } },
+					issued_at: expect.any(String)
 				}
 			]);
 		})
 	);
-	it.effect('conversion preserves host unavailability and authored refusals', () =>
+	it.effect('reports an unavailable PDF preview as a typed failure', () =>
 		Effect.gen(function* () {
-			const { bolt, sent } = yield* client(() =>
+			const { bolt } = yield* client(() =>
 				Response.json(
 					{ error: { code: 'unavailable', message: 'No document converter is bound.' } },
 					{ status: 503 }
 				)
 			);
-			expect(
-				yield* Effect.flip(
-					bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' })
-				)
-			).toEqual(
+			expect(yield* Effect.flip(bolt.preview_pdf({ markdown: '# Report' }))).toEqual(
 				new Unavailable({
-					facility: 'convert.document',
+					facility: 'convert.previewPdf',
 					reason: 'No document converter is bound.'
 				})
 			);
-			expect(sent).toHaveLength(1);
-			const refused = (yield* client(
-				outcome({ kind: 'refused', code: 'refused', message: 'Closed', field: 'name' })
-			)).bolt;
-			const failure = yield* Effect.flip(
-				refused.convert({ html: '<p>Report</p>' }, { to: 'pdf', name: 'report.pdf' })
-			);
-			expect(failure).toBeInstanceOf(ActRefused);
-			expect(failure).toMatchObject({ code: 'refused', message: 'Closed', field: 'name' });
-		})
-	);
-	it.effect('conversion rejects malformed file answers and noncommitted outcomes', () =>
-		Effect.gen(function* () {
-			for (const answer of [
-				{
-					kind: 'committed',
-					output: { id: 'f1', name: 'report.pdf', mime: 'application/pdf', size: 1 },
-					records: []
-				},
-				{
-					kind: 'committed',
-					output: {
-						id: '0199a000-0000-7000-8000-000000000002',
-						name: 'report.pdf',
-						mime: 'application/pdf',
-						size: { $dec: '1' }
-					},
-					records: []
-				},
-				{ kind: 'conflict', records: [{ model: 'jobs', id: 'j1', fields: ['title'] }] },
-				{ kind: 'unknown', invocation: 'k1' }
-			]) {
-				const { bolt } = yield* client(outcome(answer));
-				expect(
-					yield* Effect.flip(
-						bolt.convert({ markdown: '# Report' }, { to: 'pdf', name: 'report.pdf' })
-					)
-				).toEqual(new TransportFailed({ status: 0 }));
-			}
 		})
 	);
 });
@@ -421,7 +406,9 @@ describe('acts, starts, uploads and the session', () => {
 			const { bolt, sent } = yield* client(
 				outcome({ kind: 'refused', code: 'refused', message: 'Closed', field: 'status' })
 			);
-			const act = bolt.act('jobs.update', [{ target: 'j1', set: { status: 'x' } }]);
+			const act = bolt.act({
+				'jobs.update': [{ target: { id: 'j1', revision: 1 }, set: { status: 'x' } }]
+			});
 			expect(sent).toHaveLength(0);
 			const field = yield* act.pipe(
 				Effect.map(() => null),
@@ -436,13 +423,16 @@ describe('acts, starts, uploads and the session', () => {
 			const conflict = (yield* client(
 				outcome({
 					kind: 'conflict',
-					records: [{ model: 'jobs', id: 'j1', fields: ['title'] }]
+					records: [{ model: 'jobs', id: 'j1' }]
 				})
 			)).bolt;
 			expect(
-				yield* Effect.flip(conflict.act('jobs.update', [{ target: 'j1', set: {} }]))
+				yield* Effect.flip(
+					conflict.act({ 'jobs.update': [{ target: { id: 'j1', revision: 1 }, set: {} }] })
+				)
 			).toBeInstanceOf(ActConflict);
-			const offline = yield* createBolt({
+			const offline = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'https://workspace.test',
@@ -451,34 +441,66 @@ describe('acts, starts, uploads and the session', () => {
 					throw new TypeError('offline');
 				}
 			});
-			expect(yield* Effect.flip(offline.act('jobs.create', [{}]))).toEqual(
+			expect(yield* Effect.flip(offline.act({ 'jobs.create': [{}] }))).toEqual(
 				new ActUnknown({ invocation: 'k9' })
 			);
-			const done = (yield* client(
-				outcome({ kind: 'committed', output: { total: { $dec: '9.00' } }, records: [] })
-			)).bolt;
-			const committed = yield* done.act('jobs.total', {});
-			if (committed.kind !== 'committed') throw new Error('expected committed');
-			expect(Object.values(committed.output ?? {})[0]).toBeInstanceOf(Decimal);
+			const done = yield* create_bolt({
+				actor: null,
+				locale: 'en',
+				base: 'https://workspace.test',
+				operation_outputs: {
+					automations: {
+						total: {
+							mode: 'call',
+							output: {
+								kind: 'object',
+								fields: {
+									total: {
+										optional: false,
+										value: { kind: 'atom', spec: { kind: 'decimal', scale: 2 } }
+									}
+								}
+							}
+						}
+					}
+				},
+				fetch: async () =>
+					Response.json({
+						outcome: { kind: 'committed', output: { total: { $dec: '9.00' } }, records: [] },
+						v: 0
+					})
+			});
+			const call = done.run('total', {});
+			if (call.mode !== 'call') throw new Error('expected an in-request call');
+			expect(yield* call).toMatchObject({ total: expect.any(Decimal) });
 			const refused = (yield* client(
 				outcome({ kind: 'refused', code: 'forbidden', message: 'No.' })
 			)).bolt;
-			expect(yield* Effect.flip(refused.act('jobs.create', [{}]))).toBeInstanceOf(ActRefused);
+			expect(yield* Effect.flip(refused.act({ 'jobs.create': [{}] }))).toBeInstanceOf(ActRefused);
 		})
 	);
-	it.effect('start names its run at once and sends one request when run', () =>
+	it.effect('run names its job at once and submits it when executed', () =>
 		Effect.gen(function* () {
 			const { bolt, sent } = yield* client(
-				outcome({ kind: 'committed', output: null, records: [] })
+				outcome({
+					kind: 'committed',
+					output: { id: 'k1', ids: ['k1'], automation: 'sync' },
+					records: []
+				})
 			);
-			const start = bolt.start('sync', {});
-			expect([start.id, start.automation]).toEqual(['k1', 'sync']);
-			expect(yield* start).toMatchObject({ kind: 'committed' });
+			expect(() => bolt.run('sync', [])).toThrow('An automation batch needs at least one input.');
+			const run = bolt.run('sync', {});
+			if (run.mode !== 'job') throw new Error('expected a durable job');
+			expect([run.mode, run.id, run.ids, run.automation]).toEqual(['job', 'k1', ['k1'], 'sync']);
+			expect(yield* run).toMatchObject({
+				kind: 'committed',
+				output: { id: 'k1', ids: ['k1'], automation: 'sync' }
+			});
 			expect(sent).toEqual([
 				{
-					callable: 'start',
+					callable: 'run',
 					input: { automation: 'sync', runs: [{ input: {}, id: 'k1' }] },
-					issuedAt: expect.any(String)
+					issued_at: expect.any(String)
 				}
 			]);
 		})
@@ -495,8 +517,8 @@ describe('acts, starts, uploads and the session', () => {
 				step: 0,
 				steps: [{ name: 'Review', teams: ['finance'], users: [] }],
 				superseded_by: [],
-				teamNames: { finance: 'Finance' },
-				userNames: {},
+				team_names: { finance: 'Finance' },
+				user_names: {},
 				requestor: { ref: 'member:u1', name: 'Ada' },
 				log: [
 					{
@@ -506,10 +528,7 @@ describe('acts, starts, uploads and the session', () => {
 						from: null,
 						to: 'Pending',
 						step: 0,
-						reason: 'Review the new job.',
-						changed: undefined,
-						rolledBack: undefined,
-						skipped: undefined
+						reason: 'Review the new job.'
 					}
 				],
 				records: [{ model: 'jobs', id: 'j1', op: 'create' }],
@@ -531,20 +550,32 @@ describe('acts, starts, uploads and the session', () => {
 			expect(view?.moves).toEqual([{ decision: 'approve', reason: 'optional' }]);
 			expect(yield* bolt.upload(new Blob(['x']), 'jobs.file')).toEqual(file);
 			const refusing = (yield* client(() =>
-				Response.json({ error: { code: 'tooLarge', message: 'Too large.' } }, { status: 413 })
+				Response.json({ error: { code: 'too_large', message: 'Too large.' } }, { status: 413 })
 			)).bolt;
 			expect(yield* Effect.flip(refusing.upload(new Blob(['x']), 'jobs.file'))).toMatchObject({
 				_tag: 'ActRefused',
-				code: 'tooLarge'
+				code: 'too_large'
 			});
 		})
 	);
+	it.effect('approval reads reject malformed request views at the wire boundary', () =>
+		Effect.gen(function* () {
+			const malformed = { id: 'ap1', status: 'Pending' };
+			const one = (yield* client(() => Response.json({ value: malformed }))).bolt;
+			const list = (yield* client(() => Response.json({ value: [malformed] }))).bolt;
+			expect(yield* Effect.flip(one.approvals.get('ap1'))).toMatchObject({
+				_tag: 'ProtocolFailed'
+			});
+			expect(yield* Effect.flip(list.approvals.list())).toMatchObject({ _tag: 'ProtocolFailed' });
+		})
+	);
+
 	it.effect('a sign-in refusal is a Refusal with the host message', () =>
 		Effect.gen(function* () {
 			const { bolt } = yield* client(() =>
-				Response.json({ error: { code: 'invalidInput', message: 'Wrong code.' } }, { status: 400 })
+				Response.json({ error: { code: 'invalid_input', message: 'Wrong code.' } }, { status: 400 })
 			);
-			expect(yield* Effect.flip(bolt.session.sendCode('+6590000000'))).toEqual(
+			expect(yield* Effect.flip(bolt.session.send_code('+6590000000'))).toEqual(
 				new Refusal({ message: 'Wrong code.' })
 			);
 		})
@@ -552,12 +583,14 @@ describe('acts, starts, uploads and the session', () => {
 });
 
 describe('live patches on a page value', () => {
-	it('set a top-level value beside the rows (meta) without touching them, and refuse it on a single row', () => {
+	it('set a top-level value beside the rows (meta) without touching them, on a single record too, and refuse it on no record', () => {
 		const page = { status: 'running', rows: [{ id: 'a' }] };
 		expect(patched(page, [{ op: 'meta', key: 'status', value: 'stopped' }])).toEqual({
 			status: 'stopped',
 			rows: [{ id: 'a' }]
 		});
-		expect(patched({ id: 'a' }, [{ op: 'meta', key: 'status', value: 'stopped' }])).toBe(undefined);
+		expect(patched({ id: 'a', status: 'running' }, [{ op: 'meta', key: 'status', value: 'stopped' }])).toEqual({ id: 'a', status: 'stopped' });
+		expect(patched({ id: 'a', status: 'running' }, [{ op: 'unset', key: 'status' }])).toEqual({ id: 'a' });
+		expect(patched(null, [{ op: 'meta', key: 'status', value: 'stopped' }])).toBe(undefined);
 	});
 });

@@ -8,7 +8,7 @@
 	import type { Snippet } from 'svelte';
 
 	/** The shared app banner, identity and scope controls used by workspace and host shells. */
-	export interface AppHeaderProps {
+	interface AppHeaderProps {
 		/**
 		 * App banner image (`bolt:banner`). Decorative only — copy sits on the dark scrim.
 		 * Optional: without one the header keeps its base wash and stays legible.
@@ -29,7 +29,7 @@
 		/** The phone's top bar: one line, the banner behind it, the description behind an info button, the actions in a popover. */
 		compact?: boolean;
 		/** The accessible name of the compact actions button. */
-		actionsLabel?: string;
+		actions_label?: string;
 		/** Shell controls before the identity (the navigation button). Compact only. */
 		leading?: Snippet;
 		/** Shell controls after the identity (the bell, Norbius). Compact only. */
@@ -57,7 +57,7 @@
 		description = null,
 		actions,
 		compact = false,
-		actionsLabel = 'Page scope',
+		actions_label = 'Page scope',
 		leading,
 		trailing,
 		class: className
@@ -83,7 +83,7 @@
 				loading="eager"
 				fetchpriority="high"
 				class="size-full"
-				imageClass="size-full object-cover object-center"
+				image_class="size-full object-cover object-center"
 			/>
 		</Imposter>
 	{/if}
@@ -122,7 +122,7 @@
 				>
 					<Icon name="lucide:info" class="size-4" />
 				</Popover.Trigger>
-				<Popover.Content align="start" maxWidth={288} class="p-3 text-sm"
+				<Popover.Content align="start" max_width={288} class="p-3 text-sm"
 					>{description}</Popover.Content
 				>
 			</Popover.Root>
@@ -187,7 +187,7 @@
 			{#if actions}
 				<Popover.Root>
 					<Popover.Trigger
-						aria-label={actionsLabel}
+						aria-label={actions_label}
 						class={cn(
 							'flex size-11 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
 							scrim ? 'text-white' : 'text-foreground'

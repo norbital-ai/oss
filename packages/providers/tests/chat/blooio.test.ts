@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { blooio } from '../../src/chat/blooio/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { apiKey: 'key', webhookSecret: 'whsec_hook' },
@@ -52,7 +52,7 @@ const direct = (seen?: string[]) =>
 				seen?.push(init?.method ?? 'GET');
 				return fetch(input, init);
 			},
-			webhookUrl: 'https://hook.test/',
+			webhook_url: 'https://hook.test/',
 			receive: () => Promise.resolve()
 		})
 	);
@@ -64,14 +64,14 @@ describe('Blooio', () => {
 			const h = yield* connected(blooio, settings),
 				body = message();
 			expect(h.status).toMatchObject({ state: 'connected', account: '+16290000000' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'm1',
 						thread: person,
-						sentAt: new Date(at).toISOString(),
+						sent_at: new Date(at).toISOString(),
 						text: 'Hello',
 						from: { handle: person, name: null },
 						group: false,
@@ -93,7 +93,7 @@ describe('Blooio', () => {
 				{},
 				{ 'x-blooio-signature': 'nonsense' }
 			])
-				expect((yield* h.link.webhook!(webhook(body, headers))).status).toBe(401);
+				expect((yield* required(h.link.webhook)(webhook(body, headers))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -104,7 +104,7 @@ describe('Blooio', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = message();
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('stores only received messages, the header naming the event first', () =>
@@ -114,9 +114,9 @@ describe('Blooio', () => {
 			const sent = message({ event: 'message.sent' }),
 				reaction = message({ event: 'message.reaction' }),
 				named = message();
-			yield* h.link.webhook!(webhook(sent, signature(sent)));
-			yield* h.link.webhook!(webhook(reaction, signature(reaction)));
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(webhook(sent, signature(sent)));
+			yield* required(h.link.webhook)(webhook(reaction, signature(reaction)));
+			yield* required(h.link.webhook)(
 				webhook(named, { ...signature(named), 'x-blooio-event': 'message.delivered' })
 			);
 			expect(h.events).toEqual([]);
@@ -132,7 +132,7 @@ describe('Blooio', () => {
 				group_name: 'Crew',
 				participants: [{ contact_id: 'c1', identifier: person, name: 'Ann' }]
 			});
-			yield* h.link.webhook!(webhook(body, signature(body)));
+			yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events[0]).toMatchObject({
 				messages: [
 					{
@@ -144,7 +144,7 @@ describe('Blooio', () => {
 					}
 				]
 			});
-			yield* h.link.send!({ to: 'group:grp_1', text: 'Hi all' }, []);
+			yield* required(h.link.send)({ to: 'group:grp_1', text: 'Hi all' }, []);
 			expect(api.calls.at(-1)?.url).toMatch(/\/chats\/grp_1\/messages$/);
 		})
 	);
@@ -153,7 +153,7 @@ describe('Blooio', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(blooio, settings),
 				body = message({ attachments: ['https://cdn.test/photo.png?sig=1'] });
-			yield* h.link.webhook!(webhook(body, signature(body)));
+			yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2, 3])],
 				messages: [{ attachments: [{ name: 'photo.png', mime: 'image/png', bytes: 3, bin: 0 }] }]
@@ -164,8 +164,8 @@ describe('Blooio', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(blooio, { ...settings, fromNumber: '+16291111111' });
-			const sent = yield* h.link.send!({ id: 'r1', to: person, text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: person, text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe(
 				`https://backend.blooio.com/v2/api/chats/${encodeURIComponent(person)}/messages`
@@ -186,11 +186,11 @@ describe('Blooio', () => {
 					: answer(call)
 			);
 			const h = yield* connected(blooio, settings);
-			const refused = yield* Effect.flip(h.link.send!({ to: person, text: 'Hello' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ to: person, text: 'Hello' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			status = 429;
-			const later = yield* Effect.flip(h.link.send!({ to: person, text: 'Hello' }, []));
-			expect(later).toMatchObject({ _tag: 'ProviderUnavailable', retryAfterMs: 2000 });
+			const later = yield* Effect.flip(required(h.link.send)({ to: person, text: 'Hello' }, []));
+			expect(later).toMatchObject({ _tag: 'ProviderUnavailable', retry_after_ms: 2000 });
 		})
 	);
 	it.live('starts and stops typing', () =>
@@ -265,7 +265,7 @@ describe('Blooio', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: 'unauthorized' }, 401));
 			const h = yield* host(chatProvider(blooio), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

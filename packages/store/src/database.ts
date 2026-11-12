@@ -2,11 +2,11 @@ import { q } from './catalog.ts';
 import type { Sql } from './read/sql.ts';
 
 /** Fixed PostgreSQL catalog/administration programs. Identifiers are quoted; values stay parameters. */
-export const postgresMaintenance = {
+export const postgres_maintenance = {
 	identity: { text: 'SELECT current_database() AS name', params: [] } satisfies Sql,
 	wal: { text: 'SELECT pg_current_wal_lsn()::text AS lsn', params: [] } satisfies Sql,
 	checkpoint: { text: 'CHECKPOINT', params: [] } satisfies Sql,
-	preferClone: { text: 'SET file_copy_method = clone', params: [] } satisfies Sql,
+	prefer_clone: { text: 'SET file_copy_method = clone', params: [] } satisfies Sql,
 	create: (name: string, template?: string): Sql => ({
 		text: `CREATE DATABASE ${q(name)}${template === undefined ? '' : ` TEMPLATE ${q(template)} STRATEGY FILE_COPY`}`,
 		params: []
@@ -34,4 +34,4 @@ export const postgresMaintenance = {
 };
 
 /** Native SQLite file ownership: the connection retains exclusion until it closes. */
-export const sqliteOwnership = { text: 'BEGIN EXCLUSIVE', params: [] } satisfies Sql;
+export const sqlite_ownership = { text: 'BEGIN EXCLUSIVE', params: [] } satisfies Sql;

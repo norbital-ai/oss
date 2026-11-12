@@ -6,8 +6,8 @@ export const StudioTestRun = Schema.Struct({
 	id: Schema.String,
 	commit: Schema.String,
 	state: Schema.Literals(['running', 'passed', 'failed', 'empty']),
-	startedAt: Schema.String,
-	finishedAt: Schema.optionalKey(Schema.String),
+	started_at: Schema.String,
+	finished_at: Schema.optionalKey(Schema.String),
 	summary: Schema.optionalKey(
 		Schema.Struct({
 			files: count,
@@ -15,7 +15,7 @@ export const StudioTestRun = Schema.Struct({
 			passed: count,
 			failed: count,
 			skipped: count,
-			durationMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+			duration_ms: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 		})
 	),
 	files: Schema.Array(
@@ -27,7 +27,7 @@ export const StudioTestRun = Schema.Struct({
 				Schema.Struct({
 					name: Schema.String,
 					state: Schema.Literals(['passed', 'failed', 'skipped']),
-					durationMs: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
+					duration_ms: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
 					error: Schema.optionalKey(Schema.String)
 				})
 			)

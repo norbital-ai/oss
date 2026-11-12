@@ -22,7 +22,7 @@ it.live('a file input mounts without binding value and reports its files', () =>
 		let seen: FileList | null | undefined;
 		const app = mount(Input, {
 			target,
-			props: { type: 'file', onFiles: (files: FileList | null) => (seen = files) }
+			props: { type: 'file', on_files: (files: FileList | null) => (seen = files) }
 		});
 		try {
 			flushSync();

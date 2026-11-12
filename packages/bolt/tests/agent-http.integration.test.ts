@@ -1,3 +1,5 @@
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // The agent's conversation controls over `/__bolt/act` (§5.9's generated actions; parity 2.17, 3.2–3.6, 3.13): the
 // author alone revises, reorders and removes queued input; stop, resume, the model class, plan execution and discard;
 // an envoy conversation is read-only here (rule 61) and visible only to its own DM sender, a group's participants, or
@@ -5,65 +7,83 @@
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';
 import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } from 'effect';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Agents } from '../src/engine/services.ts';
 import { Ai, type AiEvent } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
-import { ActRefused, actFailure } from '../src/decl/errors.ts';
+import { ActRefused } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse } from '../src/engine/contracts.ts';
+import { transcriptRow } from '../src/engine/agent/schema.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
-import { KitInvalid, respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { KitInvalid, respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+
+const runtime_accounts = [
+	{ id: 'field', integration: 'whatsapp' },
+	{ id: 'desk', integration: 'whatsapp' },
+] as const;
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 		models: {
-			quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } }
+			quotes: {
+				description: 'A quote',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {
-			quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } }
-		},
-		policies: { rep: { description: 'Rep', grants: { quotes: { read: true } } } },
-		envoys: {
-			field: {
-				audience: 'private',
-				name: 'Norbius',
-				policies: ['rep'],
-				triage: false,
-				groupMessages: 'mention_or_reply',
-				delegation: 'disabled',
-				task: 'Help.'
-			},
-			desk: {
-				audience: 'public',
-				name: 'Norbius',
-				policies: ['rep'],
-				triage: false,
-				groupMessages: 'disabled',
-				delegation: 'disabled',
-				task: 'Help.'
+			quotes: {
+				outputs: { default: { quotes: { fields: 'all' } } },
+				create: { columns: { quotes: ['title'] } }
 			}
 		},
-		connections: {
-			field: { integration: 'whatsapp', envoy: 'field' },
-			desk: { integration: 'whatsapp', envoy: 'desk' }
-		},
+		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: {} } } } } },
+
+		
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},
 		teams: {},
 		automations: {},
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
+const fieldEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const deskEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const runtimeEnvoys = [
+	{
+		id: fieldEnvoy,
+		accounts: ['field'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['rep'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Help.'
+	},
+	{
+		id: deskEnvoy,
+		accounts: ['desk'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['rep'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		task: 'Help.'
+	}
+] as const;
 
 const reply = (text: string): AiResponse => ({
 	content: text,
-	toolCalls: [],
+	tool_calls: [],
 	finish: 'stop',
 	usage: { input: 1, output: 1 }
 });
@@ -71,7 +91,7 @@ const reply = (text: string): AiResponse => ({
 const build = Effect.gen(function* () {
 	const answers: string[] = [];
 	const ports = Layer.succeed(Ai, {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Port.unavailable('ai.catalog'),
@@ -95,7 +115,9 @@ const build = Effect.gen(function* () {
 				})
 			)
 	});
-	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports }));
+	const context = yield* Layer.build(
+		with_envoys(with_accounts(TestWorkspace.layer({ manifest, ports }), runtime_accounts), runtimeEnvoys)
+	);
 	const t = Context.get(context, TestWorkspace),
 		agent = Context.get(context, Agents);
 	for (const [id, kind, admin, phone] of [
@@ -132,7 +154,7 @@ const build = Effect.gen(function* () {
 			const response = yield* call(as, 'POST', '/__bolt/act', {
 				callable,
 				input,
-				issuedAt: t.clock.now()
+				issued_at: t.clock.now()
 			});
 			const raw = yield* Effect.tryPromise({
 				try: () => response.json(),
@@ -148,7 +170,7 @@ const build = Effect.gen(function* () {
 				return yield* Effect.fail(new ActRefused(failure.error));
 			}
 			const outcome = (yield* Schema.decodeUnknownEffect(ActReply)(raw)).outcome;
-			const failure = actFailure(outcome);
+			const failure = act_failure(outcome);
 			return Option.isSome(failure) ? yield* Effect.fail(failure.value) : outcome;
 		});
 	const rows = (c: string) =>
@@ -184,7 +206,7 @@ describe('conversation controls over /__bolt/act', () => {
 						yield* Effect.flip(
 							act('bob', 'sys_message.revise', { message: one.id, text: 'hijack' })
 						)
-					).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+					).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 					expect(
 						yield* act('ann', 'sys_message.reorder', {
 							conversation: c,
@@ -201,7 +223,7 @@ describe('conversation controls over /__bolt/act', () => {
 					]);
 					expect(
 						yield* Effect.flip(
-							act('ann', 'sys_conversation.setModel', { conversation: c, model: 'vision' })
+							act('ann', 'sys_conversation.set_model', { conversation: c, model: 'vision' })
 						)
 					).toMatchObject({ _tag: 'ActRefused' });
 					expect(
@@ -224,16 +246,67 @@ describe('conversation controls over /__bolt/act', () => {
 						params: [c]
 					});
 					expect(
-						yield* Effect.flip(act('bob', 'sys_message.executePlan', { conversation: c }))
-					).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
-					yield* act('ann', 'sys_message.executePlan', { conversation: c });
+						yield* Effect.flip(act('bob', 'sys_message.execute_plan', { conversation: c }))
+					).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
+					yield* act('ann', 'sys_message.execute_plan', { conversation: c });
 					yield* t.settled();
 					expect((yield* agent.conversation(c)).plan).toMatchObject({ status: 'verified' });
 					expect(answers.at(-1)).toBe('verdict');
-					yield* act('ann', 'sys_message.discardPlan', { conversation: c });
+					yield* act('ann', 'sys_message.discard_plan', { conversation: c });
 					expect((yield* agent.conversation(c)).plan).toBeNull();
 				})
 			)
+	);
+
+	it.live(
+		'restarts at an arbitrary earlier input in a new chat, preserving the original and keeping copied controls inactive',
+		() => Effect.scoped(Effect.gen(function* () {
+			const { t, agent, call, act } = yield* setup;
+			const original = yield* agent.start({ owner: 'ann' });
+			const ids = Array.from({ length: 8 }, (): string => crypto.randomUUID());
+			const [first, assistant, tool, question, report, second, answer, third] = ids;
+			if (first === undefined || assistant === undefined || tool === undefined || question === undefined || report === undefined || second === undefined || answer === undefined || third === undefined)
+				throw new Error('restart fixture needs eight native messages');
+			const stored: readonly { id: string; role: 'user' | 'assistant' | 'tool'; text: string | null; content: Json; state: 'consumed' | null; meta: Json }[] = [
+				{ id: first, role: 'user', text: 'First question', content: { text: 'First question' }, state: 'consumed', meta: null },
+				{ id: assistant, role: 'assistant', text: '', content: { text: '', toolCalls: [{ id: 'historical-page', name: 'page', input: { path: '/inbox' } }] }, state: null, meta: null },
+				{ id: tool, role: 'tool', text: null, content: { id: 'historical-page', assistant, name: 'page', behavior: { page: true }, result: { navigation: '/inbox', page: { click: 'Open' }, requested: true } }, state: null, meta: null },
+				{ id: question, role: 'assistant', text: '', content: { text: '' }, state: null, meta: { tag: 'reply', receipts: [], asked: true, question: { question: 'Which account?', options: ['Singapore', 'Malaysia'] } } },
+				{ id: report, role: 'assistant', text: 'Research completed.', content: { text: 'Research completed.' }, state: null, meta: { tag: 'report', conversation: 'historical-child', asked: true } },
+				{ id: second, role: 'user', text: 'Restart from this earlier question', content: { text: 'Restart from this earlier question' }, state: 'consumed', meta: null },
+				{ id: answer, role: 'assistant', text: 'Second answer', content: { text: 'Second answer' }, state: null, meta: { tag: 'reply', receipts: [] } },
+				{ id: third, role: 'user', text: 'Latest question', content: { text: 'Latest question' }, state: 'consumed', meta: null }
+			];
+			for (const row of stored)
+				yield* t.db.write({ text: `INSERT INTO sys_message (id,conversation,role,text,content,state,mode,"as",author,meta)
+					VALUES ($1,$2,$3,$4,$5::jsonb,$6,'agent',$7::jsonb,$8,$9::jsonb)`, params: [row.id, original, row.role, row.text, row.content, row.state, row.role === 'user' ? { member: 'ann' } : null, row.role === 'user' ? 'ann' : null, row.meta] });
+			const before = yield* agent.transcript(original);
+			expect(before.flatMap((row) => row.id === question ? [transcriptRow(row, true, false)] : [])).toMatchObject([{ asked: true, question: { question: 'Which account?' } }]);
+			expect(before.flatMap((row) => row.id === report ? [transcriptRow(row, true, false)] : [])).toMatchObject([{ report: { conversation: 'historical-child', asked: true } }]);
+			expect(yield* Effect.flip(act('bob', 'sys_message.restart', { message: second }))).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
+			const restarted = yield* Schema.decodeUnknownEffect(Schema.Struct({ kind: Schema.Literal('committed'), output: Schema.Struct({ conversation: Schema.String, message: AgentRow }) }))(yield* act('ann', 'sys_message.restart', { message: second }));
+			expect(restarted.output.conversation).not.toBe(original);
+			expect(restarted.output.message).toMatchObject({ id: second, text: 'Restart from this earlier question' });
+			expect(yield* agent.transcript(original)).toEqual(before);
+			const copied = yield* agent.transcript(restarted.output.conversation);
+			expect(copied.filter((row) => row.copied_from != null).map((row) => row.copied_from)).toEqual([first, assistant, tool, question, report]);
+			expect(copied.find((row) => row.copied_from === report)?.text).toBe('Research completed.');
+			expect(copied.every((row) => !ids.includes(row.id))).toBe(true);
+			expect(copied.some((row) => row.text === 'Latest question')).toBe(false);
+			expect(yield* agent.conversation(restarted.output.conversation)).toMatchObject({ status: 'idle', owner: 'ann', parent: null, plan: null });
+			const response = yield* call('ann', 'GET', `/__bolt/agent?conversation=${restarted.output.conversation}`);
+			const raw = yield* Effect.tryPromise({ try: () => response.json(), catch: (error) => new KitInvalid({ message: String(error) }) });
+			const projected = yield* Schema.decodeUnknownEffect(Schema.Struct({ value: Schema.Struct({ rows: Schema.Array(AgentRow) }) }))(raw);
+			for (const row of projected.value.rows) {
+				expect(row.call).toBeUndefined();
+				expect(row.tool?.navigation).toBeUndefined();
+				expect(row.tool?.page).toBeUndefined();
+				expect(row.tool?.runs).toBeUndefined();
+				expect(row.question).toBeUndefined();
+				expect(row.asked).toBeUndefined();
+				expect(row.report).toBeUndefined();
+			}
+		}))
 	);
 
 	it.live(
@@ -246,7 +319,7 @@ describe('conversation controls over /__bolt/act', () => {
 					const child = yield* agent.start({ owner: 'ann', parent: c });
 					expect(
 						yield* Effect.flip(act('bob', 'sys_conversation.stop', { conversation: child }))
-					).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+					).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 					expect(yield* act('ann', 'sys_conversation.stop', { conversation: child })).toMatchObject(
 						{ kind: 'committed' }
 					);
@@ -256,15 +329,21 @@ describe('conversation controls over /__bolt/act', () => {
 						{ kind: 'committed', runs: [{ run: 'r1', automation: 'tidy' }] },
 						{ run: 'r2', outcome: { kind: 'committed' } },
 						{ results: [{ run: 'r2', alreadyActive: true }, { kind: 'committed' }, { run: 'r3' }] }
-					].entries())
+					].entries()) {
+						const assistant = crypto.randomUUID();
+						yield* t.db.write({
+							text: `INSERT INTO sys_message (id,conversation,role,content) VALUES ($1,$2,'assistant',$3::jsonb)`,
+							params: [assistant, c, { text: '', toolCalls: [{ id: `call-${i}`, name: 'act', input: {} }] }]
+						});
 						yield* t.db.write({
 							text: `INSERT INTO sys_message (id, conversation, role, content) VALUES ($1, $2, 'tool', $3::jsonb)`,
 							params: [
 								crypto.randomUUID(),
 								c,
-								JSON.stringify({ id: `call-${i}`, name: 'act', args: '{}', result })
+								JSON.stringify({ id: `call-${i}`, assistant, name: 'act', behavior: { data: true }, args: '{}', result })
 							]
 						});
+					}
 					const response = yield* call('ann', 'GET', `/__bolt/agent?conversation=${c}`);
 					const body = yield* Effect.tryPromise({
 						try: () => response.json(),
@@ -273,7 +352,7 @@ describe('conversation controls over /__bolt/act', () => {
 					const { value } = yield* Schema.decodeUnknownEffect(
 						Schema.Struct({ value: Schema.Struct({ rows: Schema.Array(AgentRow) }) })
 					)(body);
-					expect(value.rows.map((r) => r.tool?.runs)).toEqual([['r1'], ['r2'], ['r2', 'r3']]);
+					expect(value.rows.flatMap((row) => row.tool === undefined ? [] : [row.tool.runs])).toEqual([['r1'], ['r2'], ['r2', 'r3']]);
 				})
 			)
 	);
@@ -284,6 +363,9 @@ describe('conversation controls over /__bolt/act', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, call, act } = yield* setup;
+					expect(yield* t.db.rows(Schema.Struct({ id: Schema.String, status: Schema.Null }), {
+						text: `SELECT id, status FROM sys_integration WHERE id IN ('field', 'desk') ORDER BY id`, params: []
+					})).toEqual([{ id: 'desk', status: null }, { id: 'field', status: null }]);
 					const say = (
 						instance: string,
 						id: string,
@@ -294,7 +376,7 @@ describe('conversation controls over /__bolt/act', () => {
 						t.receive(instance, {
 							id,
 							thread,
-							sentAt: t.clock.now(),
+							sent_at: t.clock.now(),
 							from: { handle, name: id },
 							text: 'hello?',
 							attachments: [],
@@ -309,18 +391,18 @@ describe('conversation controls over /__bolt/act', () => {
 					for (const who of ['ann', 'adm']) expect(yield* sees(who, dm)).toBe(404);
 					// nobody speaks into it or drives its agent from the chat UI
 					expect(
-						(yield* call('kim', 'POST', '/__bolt/act', {
+						yield* call('kim', 'POST', '/__bolt/act', {
 							callable: 'sys_message.reply',
 							input: { conversation: dm, text: 'x' },
-							issuedAt: t.clock.now()
-						}))!.status
-					).toBe(404);
+							issued_at: t.clock.now()
+						})
+					).toMatchObject({ status: 404 });
 					expect(
 						yield* Effect.flip(act('kim', 'sys_conversation.stop', { conversation: dm }))
-					).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+					).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 					expect(
 						yield* Effect.flip(act('kim', 'sys_message.post', { conversation: dm, text: 'x' }))
-					).toMatchObject({ _tag: 'ActRefused', code: 'notFound' });
+					).toMatchObject({ _tag: 'ActRefused', code: 'not_found' });
 					// a group: whoever posted in it
 					yield* say('field', 'g1', '1203@g.us', '6590000002@s.whatsapp.net', {
 						group: true,

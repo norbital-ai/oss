@@ -9,13 +9,14 @@
 	buttons, and under a coarse pointer the header wraps. Studio's preview pane and the agent panel both use it.
 -->
 <script lang="ts">
+	import { everySecond } from '../seconds.ts';
 	import { Button, Icon, Popover, Spinner, TabStrip } from '@norbital-ai/ui';
 	import { Cluster, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
 	import type { Snippet } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { elapsedText } from '../studio/model.ts';
+	import { elapsed_text } from '../studio/model.ts';
 	import type { StudioTestRun } from '../studio/test-results.ts';
 	import TestResults from './TestResults.svelte';
 
@@ -28,7 +29,7 @@
 		status,
 		details,
 		menu,
-		onClose,
+		on_close,
 		t = (key: string) => key
 	}: {
 		src: string | null;
@@ -44,7 +45,7 @@
 		details?: Snippet;
 		/** The caller's actions (rebuild, live data, exit): behind …; each receives a closer for the menu. */
 		menu?: Snippet<[() => void]>;
-		onClose?: () => void;
+		on_close?: () => void;
 		t?: (key: string) => string;
 	} = $props();
 
@@ -115,7 +116,7 @@
 			since = now = Date.now();
 			failure = null;
 			if (src === null) return;
-			const timer = setInterval(() => (now = Date.now()), 1_000);
+			const stopClock = everySecond((at) => (now = at));
 			let retry: ReturnType<typeof setTimeout> | undefined;
 			// the address itself: an error status is a reason to show, except a busy host (503), which is waited out
 			// with the loading card up; a redirect (the hand-off) or a cross-origin address answers nothing readable
@@ -129,7 +130,7 @@
 				() => {}
 			);
 			return () => {
-				clearInterval(timer);
+				stopClock();
 				clearTimeout(retry);
 			};
 		}
@@ -203,7 +204,7 @@
 		class="px-4"
 		label={t('Preview panels')}
 		value={pane}
-		onValueChange={(value) => (pane = value)}
+		on_value_change={(value) => (pane = value)}
 		items={[
 			{ name: 'preview', title: t('Preview'), icon: 'lucide:monitor' },
 			{
@@ -213,7 +214,7 @@
 						? t('Tests')
 						: `${t('Tests')} · ${t(tests.state === 'running' ? 'Running' : tests.state === 'passed' ? 'Passed' : tests.state === 'failed' ? 'Failed' : 'Empty')}`,
 				icon: 'lucide:flask-conical',
-				iconClass: testColor
+				icon_class: testColor
 			}
 		]}
 	/>
@@ -292,13 +293,13 @@
 				<Icon name="lucide:rotate-cw" class="size-3.5" />
 			</Button>
 		{:else}<span class="flex-1"></span>{/if}
-		{#if onClose !== undefined}
+		{#if on_close !== undefined}
 			<Button
 				variant="ghost"
 				class="size-7 shrink-0 p-0"
 				aria-label={t('Close preview')}
 				title={t('Close preview')}
-				onclick={onClose}
+				onclick={on_close}
 				data-preview-close
 			>
 				<Icon name="lucide:x" class="size-3.5" />
@@ -370,7 +371,7 @@
 										<Spinner class="size-4" />
 										<p class="text-sm font-medium text-foreground">{t('Starting the preview…')}</p>
 										<p class="text-meta">
-											{label ?? t('Preview')} · {elapsedText(now - since)}
+											{label ?? t('Preview')} · {elapsed_text(now - since)}
 										</p>
 									{:else}
 										<Icon name="lucide:circle-alert" class="size-4 text-destructive" />

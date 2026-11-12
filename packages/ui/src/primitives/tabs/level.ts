@@ -14,7 +14,7 @@ export function tabLevel(
 	parent: TabLevel | undefined,
 	explicit: TabLevel | undefined
 ): { level: TabLevel; warning?: string } {
-	const expected = Math.min((parent ?? 0) + 1, 3) as TabLevel;
+	const expected: TabLevel = parent === undefined ? 1 : parent === 1 ? 2 : 3;
 	const level = explicit ?? expected;
 	if (parent === 3)
 		return { level, warning: 'Tabs nested under chips (level 3): there is no fourth tab level.' };

@@ -1,4 +1,4 @@
-import { formatValue as show } from '../kinds/kind.js';
+import { format_value as show } from '../kinds/kind.js';
 import { flat } from '../read/aggregate.js';
 import type { SourceRows } from '../read/source.js';
 /** Chart data: rows (read, query or aggregate) as flat records, `x` as text, each `y` a number. */

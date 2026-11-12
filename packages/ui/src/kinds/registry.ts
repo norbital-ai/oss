@@ -37,7 +37,6 @@ export const KINDS = {
 	number: entry('number', 'typed'),
 	decimal: entry('decimal', 'typed'),
 	money: entry('money', 'typed'),
-	duration: entry('duration', 'typed'),
 	currency: entry('currency', 'currency'),
 	bool: entry('bool', 'bool'),
 	date: entry('date', 'time'),
@@ -50,14 +49,12 @@ export const KINDS = {
 	sum: entry('sum', 'show', true),
 	count: entry('count', 'show', true),
 	vector: entry('vector', 'show', true),
-	id: entry('id', 'id'),
 	ref: entry('ref', 'id'),
 	json: entry('json', 'json'),
 	custom: entry('custom', 'json'),
 	file: entry('file', 'show'),
 	point: entry('point', 'show'),
 	object: entry('object', 'schema'),
-	list: entry('list', 'schema'),
 	union: entry('union', 'schema'),
 	record: entry('record', 'schema')
 } satisfies { readonly [K in FieldKind]: Presentation };
@@ -65,6 +62,8 @@ export const KINDS = {
 /** Select the editor for a declared kind, including text formats, many-valued enums and shaped JSON, while retaining canonical numeric, sortable and derived traits. */
 export function presentation(kind: Kind): Presentation {
 	const base = KINDS[kind.kind];
+	if (kind.many === true && !['text', 'enum', 'file'].includes(kind.kind))
+		return { ...base, editor: 'schema' };
 	if (kind.kind === 'text') {
 		const editor = kind.many
 			? 'tags'
@@ -86,6 +85,4 @@ export function presentation(kind: Kind): Presentation {
 
 /** Lists and many-valued fields have no scalar ordering. */
 export const sortable = (kind: Kind): boolean =>
-	KINDS[kind.kind].sortable &&
-	!('many' in kind && kind.many === true) &&
-	!('multiple' in kind && kind.multiple === true);
+	KINDS[kind.kind].sortable && !('many' in kind && kind.many === true);

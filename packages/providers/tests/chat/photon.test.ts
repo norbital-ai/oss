@@ -6,7 +6,7 @@ import { imessage } from '@spectrum-ts/imessage';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { photon } from '../../src/chat/photon/index.ts';
-import { host, until } from '../kit.ts';
+import { required, host, until } from '../kit.ts';
 import { connected, json, platformApi, webhook } from './kit.ts';
 
 const settings = { projectId: 'p1', projectSecret: 'secret', webhookSecret: 'hook' },
@@ -60,7 +60,7 @@ const open = () =>
 	Effect.promise(() =>
 		photon.connect(settings, {
 			fetch,
-			webhookUrl: 'https://hook.test/',
+			webhook_url: 'https://hook.test/',
 			receive: () => Promise.resolve()
 		})
 	);
@@ -112,17 +112,17 @@ describe('Photon', () => {
 			const h = yield* connected(photon, settings),
 				body = delivery();
 			expect(h.status).toMatchObject({ state: 'connected', account: 'p1' });
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'guid1',
 						thread: direct,
-						sentAt: at,
+						sent_at: at,
 						text: 'Hello',
 						from: { handle: person, name: null },
-						replyTo: null,
+						reply_to: null,
 						group: false,
 						invocation: 'direct'
 					}
@@ -137,7 +137,7 @@ describe('Photon', () => {
 				body = delivery();
 			const stale = sign(body, 'hook', Math.floor(Date.now() / 1000) - 301);
 			for (const headers of [sign(body, 'forged'), stale, {}])
-				expect((yield* h.link.webhook!(webhook(body, headers))).status).toBe(401);
+				expect((yield* required(h.link.webhook)(webhook(body, headers))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -148,7 +148,7 @@ describe('Photon', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = delivery();
-			expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(500);
 		})
 	);
 	it.live('stores neither its own, a reaction, a rename, another platform nor another event', () =>
@@ -162,7 +162,7 @@ describe('Photon', () => {
 				delivery({ platform: 'WhatsApp' }),
 				JSON.stringify({ ...JSON.parse(delivery()), event: 'other' })
 			])
-				expect((yield* h.link.webhook!(webhook(body, sign(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, sign(body)))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -181,11 +181,11 @@ describe('Photon', () => {
 				}
 			});
 			const ambient = delivery({ id: 'guid2', space });
-			yield* h.link.webhook!(webhook(reply, sign(reply)));
-			yield* h.link.webhook!(webhook(ambient, sign(ambient)));
+			yield* required(h.link.webhook)(webhook(reply, sign(reply)));
+			yield* required(h.link.webhook)(webhook(ambient, sign(ambient)));
 			expect(h.events[0]).toMatchObject({
 				messages: [
-					{ thread: group, group: true, text: 'Sure', replyTo: 'guid0', invocation: 'reply' }
+					{ thread: group, group: true, text: 'Sure', reply_to: 'guid0', invocation: 'reply' }
 				]
 			});
 			expect(remote.client.messages.get).toHaveBeenCalledWith('guid0');
@@ -215,7 +215,7 @@ describe('Photon', () => {
 					]
 				}
 			});
-			yield* h.link.webhook!(webhook(body, sign(body)));
+			yield* required(h.link.webhook)(webhook(body, sign(body)));
 			expect(h.events[0]).toMatchObject({
 				bins: [new Uint8Array([1, 2, 3])],
 				messages: [
@@ -233,8 +233,8 @@ describe('Photon', () => {
 			const remote = line();
 			seam(remote);
 			const h = yield* connected(photon, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: direct, text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: direct, text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			expect(remote.client.messages.sendText).toHaveBeenCalledWith(direct, 'Hello', {
 				clientMessageId: 'r1'
 			});
@@ -251,12 +251,12 @@ describe('Photon', () => {
 			remote.client.messages.sendText.mockRejectedValueOnce(
 				Object.assign(new Error('no such chat'), { retryable: false })
 			);
-			const refused = yield* Effect.flip(h.link.send!({ to: direct, text: 'Hello' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ to: direct, text: 'Hello' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			remote.client.messages.sendText.mockRejectedValueOnce(
 				Object.assign(new Error('unreachable'), { retryable: true })
 			);
-			const down = yield* Effect.flip(h.link.send!({ to: direct, text: 'Hello' }, []));
+			const down = yield* Effect.flip(required(h.link.send)({ to: direct, text: 'Hello' }, []));
 			expect(down).toMatchObject({ _tag: 'ProviderUnavailable' });
 		})
 	);
@@ -288,9 +288,9 @@ describe('Photon', () => {
 			const space = { id: direct, phone: '+16290000002' },
 				body = delivery({ space }),
 				thread = `${direct}~+16290000002`;
-			yield* h.link.webhook!(webhook(body, sign(body)));
+			yield* required(h.link.webhook)(webhook(body, sign(body)));
 			expect(h.events[0]).toMatchObject({ messages: [{ thread }] });
-			yield* h.link.send!({ to: thread, text: 'Hello' }, []);
+			yield* required(h.link.send)({ to: thread, text: 'Hello' }, []);
 			expect(two.client.messages.sendText).toHaveBeenCalledWith(direct, 'Hello', expect.anything());
 			expect(one.client.messages.sendText).not.toHaveBeenCalled();
 			const connection = yield* open();
@@ -362,11 +362,11 @@ describe('Photon', () => {
 				{
 					id: 'm1',
 					thread: group,
-					sentAt: at,
+					sent_at: at,
 					group: true,
 					title: 'Crew',
 					text: 'Look',
-					replyTo: 'm0',
+					reply_to: 'm0',
 					files: [{ name: 'a.png', mime: 'image/png', bytes: 3 }]
 				},
 				{
@@ -376,7 +376,7 @@ describe('Photon', () => {
 					version: edited.toISOString(),
 					from: { handle: person }
 				},
-				{ id: 'm3', thread: group, deleted: true, sentAt: unsent.toISOString() }
+				{ id: 'm3', thread: group, deleted: true, sent_at: unsent.toISOString() }
 			]);
 			expect(answer?.messages).toHaveLength(3);
 		})
@@ -481,7 +481,7 @@ describe('Photon', () => {
 		Effect.gen(function* () {
 			seam();
 			const h = yield* host(chatProvider(photon), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -489,7 +489,7 @@ describe('Photon', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(() => json({ code: 'unauthorized', message: 'no' }, 401));
 			const h = yield* host(chatProvider(photon), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 			const call = api.calls[0];
 			expect(call?.url).toMatch(/\/projects\/p1\/imessage\/tokens$/);

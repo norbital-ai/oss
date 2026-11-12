@@ -8,10 +8,11 @@ import {
 	LAYOUT_HELP,
 	NAME,
 	ROLES,
-	fileRe,
-	matchDir,
-	type Role
+	file_re,
+	match_dir
 } from '@norbital-ai/bolt/tooling';
+
+type Role = (typeof ROLES)[number]['role'];
 
 /**
  * A discovered role file. `name` is the path-derived name: the folder's (`orders`, `hr/kiosk`) or the file's
@@ -70,11 +71,12 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	const paths = yield* walk(src);
 	for (const path of paths) {
 		const segs = path.split('/').slice(system ? 2 : 1);
-		const base = segs.pop()!;
+		const base = segs.pop() ?? '';
 		if (!base.startsWith('+')) continue;
-		const byFile = ROLES.map((r) => ({ r, m: fileRe(r.file).exec(base) })).filter(
-			(x) => x.m !== null
-		);
+		const byFile = ROLES.flatMap((r) => {
+			const match = file_re(r.file).exec(base);
+			return match === null ? [] : [{ r, fileName: match[1] }];
+		});
 		if (byFile.length === 0) {
 			const own = ROLES.find((r) => !r.file.includes('*') && base.endsWith(`.${r.file.slice(1)}`));
 			if (own)
@@ -91,9 +93,10 @@ export const discover = Effect.fn('bolt.discover')(function* (
 				);
 			continue;
 		}
-		const hit = byFile
-			.map(({ r, m }) => ({ r, fileName: m![1], folder: matchDir(r.dir, segs) }))
-			.find((x) => x.folder !== undefined);
+		const hit = byFile.flatMap(({ r, fileName }) => {
+			const folder = match_dir(r.dir, segs);
+			return folder === undefined ? [] : [{ r, fileName, folder }];
+		}).at(0);
 		if (!hit) {
 			const plural = segs.find((s) => s.endsWith('s') && FOLDERS.has(s.slice(0, -1)));
 			const where = byFile
@@ -109,7 +112,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			continue;
 		}
 		const { r, fileName, folder } = hit;
-		const bad = [...folder!.split('/'), fileName].find(
+		const bad = [...folder.split('/'), fileName].find(
 			(s) => s !== undefined && s !== '' && !NAME.test(s)
 		);
 		if (bad !== undefined) {
@@ -117,20 +120,13 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			continue;
 		}
 		const name =
-			r.role === 'page' ||
-			r.role === 'page_server' ||
-			r.role === 'kiosk_page' ||
-			r.role === 'kiosk_page_server'
+			r.role === 'page'
 				? `${folder}/${fileName}`
 				: r.role === 'model' || r.role === 'representation'
-					? folder!.split('/').at(-1)!
-					: (fileName ?? folder!);
+					? folder.slice(folder.lastIndexOf('/') + 1)
+					: (fileName ?? folder);
 		files.push({ role: r.role, name, path });
 	}
-
-	for (const file of files.filter((file) => file.role === 'tool'))
-		if (!paths.includes(file.path.replace('+tool.ts', 'run.ts')))
-			fail('tool-entry', file.path, "a tool's body is run.ts beside its +tool.ts");
 
 	// A source declaration has one owner.
 	const declarations = new Map<string, Discovered>();
@@ -168,26 +164,6 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			fail('session-without-app', f.path, 'a session sits in a folder with +app.ts');
 		if (f.role === 'page' && !has('app', f.name.slice(0, f.name.lastIndexOf('/'))))
 			fail('page-without-app', f.path, 'a page sits in a folder with +app.ts');
-		if (f.role === 'kiosk_page' && !has('kiosk', f.name.slice(0, f.name.lastIndexOf('/'))))
-			fail('kiosk-page-without-kiosk', f.path, 'a kiosk page sits in a folder with +kiosk.ts');
-		if (f.role === 'page_server' || f.role === 'kiosk_page_server') {
-			const pageRole = f.role === 'page_server' ? 'page' : 'kiosk_page';
-			if (!has(pageRole, f.name))
-				fail('server-without-page', f.path, 'a server loader sits beside its +<page>.page.svelte');
-			const data = f.path.replace(/\+([^/]+)\.page\.server\.ts$/, '$1.page.data.ts');
-			if (!paths.includes(data))
-				fail(
-					'page-data-missing',
-					f.path,
-					`share its default data codec through the ordinary helper ${data}`
-				);
-		}
-		if (f.role === 'kiosk' && f.name.includes('/'))
-			fail(
-				'kiosk-nesting',
-				f.path,
-				'a kiosk is top-level: src/kiosk/<name>/ holds +kiosk.ts, never a nested path'
-			);
 		if ((f.role === 'app' || f.role === 'group') && has(f.role === 'app' ? 'group' : 'app', f.name))
 			fail('app-and-group', f.path, 'a folder holds +app.ts or +group.ts, never both');
 		if (f.role === 'app' || f.role === 'group') {
@@ -236,11 +212,11 @@ export const discover = Effect.fn('bolt.discover')(function* (
 	const spaced = ['model', 'automation', 'integration_definition'] as const;
 	const seen = new Map<string, Discovered>();
 	for (const f of files
-		.filter((x) => spaced.includes(x.role as (typeof spaced)[number]))
+		.filter((x) => spaced.some((role) => role === x.role))
 		.sort(
 			(a, b) =>
-				spaced.indexOf(a.role as (typeof spaced)[number]) -
-				spaced.indexOf(b.role as (typeof spaced)[number])
+				spaced.findIndex((role) => role === a.role) -
+				spaced.findIndex((role) => role === b.role)
 		)) {
 		const first = seen.get(f.name);
 		if (first) fail('name-clash', f.path, `'${f.name}' is already the ${first.role} ${first.path}`);
@@ -256,13 +232,14 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			if (path === 'seed/+seeder.ts') continue;
 			if (/^seed\/(?:public|test)\/assets(?:\.json$|\/)/.test(path)) continue;
 			const m = /^seed\/(?:public|test)\/(?:.+\/)?([^/]+)\.json(?:\.gz)?$/.exec(path);
-			if (m === null)
+			const model = m?.[1];
+			if (model === undefined)
 				fail(
 					'seed-layout',
 					path,
 					'seed/ holds +seeder.ts and public/** and test/** rows and their assets; private rows live in a bank tree'
 				);
-			else if (!models.has(m[1]!)) fail('seed-unknown-model', path, `'${m[1]}' names no model`);
+			else if (!models.has(model)) fail('seed-unknown-model', path, `'${model}' names no model`);
 		}
 	return { files, errors };
 });
@@ -273,11 +250,7 @@ export function sourcePath(role: Role, name: string, files: readonly Discovered[
 	if (found !== undefined) return found.path;
 	const entry = ROLES.find((entry) => entry.role === role);
 	if (entry === undefined) throw new Error(`unknown compiler role ${role}`);
-	const page =
-		role === 'page' ||
-		role === 'page_server' ||
-		role === 'kiosk_page' ||
-		role === 'kiosk_page_server';
+	const page = role === 'page';
 	const at = name.lastIndexOf('/');
 	const folder = page ? name.slice(0, at) : name;
 	const leaf = page ? name.slice(at + 1) : name;

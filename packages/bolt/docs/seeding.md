@@ -21,7 +21,7 @@ release, a host's disk or a template checkout.
 seed/
   +seeder.ts                  optional: names the bank tree (below)
   public/**/<model>.json[.gz] public rows; a directory groups files, the file name is the model
-  public/assets.json          public assets: [{ path, sha256, bytes, contentType }]
+  public/assets.json          public assets: [{ path, sha256, bytes, content_type }]
   public/assets/**            their bytes
   test/**/<model>.json[.gz]   test rows (a directory may name a scenario)
   test/assets.json, test/assets/**
@@ -77,4 +77,4 @@ reads). `bolt check` (public rows) and `bolt build` (every pack) check the datat
 and a property naming a datatype must have exactly its shape (keys, value types, required keys).
 Errors are `seed/datatype`, naming the row, field and JSON Pointer and the missing, extra or
 mistyped keys. An unnamed exact shape is read as the datatype at run time only
-(`jsonSchemaKind` in `@norbital-ai/ui`); no near miss is reported.
+(`json_schema_kind` in `@norbital-ai/ui`); no near miss is reported.

@@ -5,7 +5,8 @@ import { Effect } from 'effect';
 import { vi } from 'vitest';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Row } from '../src/model/types.ts';
-import { fromWhere, matches } from '../src/filter/filter.ts';
+import { fromWhere } from '../src/filter/where.ts';
+import { matches } from '../src/filter/local.ts';
 import { element } from './elements.ts';
 import { browser, required, viewFixture, type ReadOptions } from './view-fixture.ts';
 
@@ -16,6 +17,7 @@ const { default: Board } = await import('../src/board/Board.svelte');
 // An expanded lane: the lane's cards in a modal grid, searched within that lane only, closing back to its button.
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		search: ['title'],
 		fields: {
@@ -26,11 +28,11 @@ const catalog = {
 	}
 } satisfies NonNullable<KindsHost['catalog']>;
 const rows: readonly Row[] = [
-	{ id: 't1', title: 'Pump alpha', group: 'mine', status: 'todo' },
-	{ id: 'd1', title: 'Valve alpha', group: 'mine', status: 'done' },
-	{ id: 'd2', title: 'Valve beta', group: 'mine', status: 'done' },
-	{ id: 'd3', title: 'Meter alpha', group: 'mine', status: 'done' },
-	{ id: 'x1', title: 'Hidden alpha', group: 'theirs', status: 'done' }
+	{ id: 't1', revision: 1, title: 'Pump alpha', group: 'mine', status: 'todo' },
+	{ id: 'd1', revision: 1, title: 'Valve alpha', group: 'mine', status: 'done' },
+	{ id: 'd2', revision: 1, title: 'Valve beta', group: 'mine', status: 'done' },
+	{ id: 'd3', revision: 1, title: 'Meter alpha', group: 'mine', status: 'done' },
+	{ id: 'x1', revision: 1, title: 'Hidden alpha', group: 'theirs', status: 'done' }
 ];
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
@@ -59,6 +61,7 @@ function filtered(options: ReadOptions) {
 async function show() {
 	const reads: ReadOptions[] = [];
 	const fixture = await viewFixture({
+		catalog,
 		read: (_model, options) => {
 			reads.push(options);
 			return { rows: filtered(options), next: null };

@@ -1,10 +1,12 @@
 // The names index (§3.1, rule 8). `bolt sync` evaluates the declarations and prints each part's data into
 // `.norbital/names.ts` as literal type text (functions dropped), augmenting `Names`; every cross-file type below is read
 // from it. No part reads its own file, so a body typed from it is never circular; it is one sync behind an edit.
-import type { SystemNames } from '../system/index.ts';
+import type { InitialStampFields } from '@norbital-ai/std/kind';
+import type { SystemNames } from '../system/names.ts';
 import type { BuiltinFields } from './builtin-fields.ts';
 import type { KeyFor, Simplify, ValueOf } from './fields.ts';
 import type { ExposureSpec, ModelSpec, NullableOfExpr } from './model.ts';
+import type { RelationshipData } from './model-data.ts';
 import type { ApprovalStep } from './access/policy.ts';
 import type { CurrencyCode, Id, RecordRef } from './values.ts';
 
@@ -16,24 +18,20 @@ export interface Names {}
 type NamesShape = {
 	workspace: {
 		currency?: CurrencyCode;
-		/** Named instances: the slot name is the `sys_integration` id source addresses. */
-		connections?: { readonly [slot: string]: { integration: string; envoy?: string } };
 	};
 	/** `src/+secrets.ts`: the workspace's secret names. */
 	secrets: { readonly [name: string]: unknown };
-	/** Each model's storage (`splitModel(name, literal).model`). */
+	/** Each model's storage (`split_model(name, literal).model`). */
 	models: { [model: string]: ModelSpec };
-	/** Each ref field, keyed `'<model>.<field>'` (`splitModel(name, literal).relationships`). */
+	/** Each ref field, keyed `'<model>.<field>'` (`split_model(name, literal).relationships`). */
 	relationships: { [key: `${string}.${string}`]: RelationshipSpec };
-	/** Each exposed model's exposure (`splitModel(name, literal).exposure`); a model without `read` has none. */
+	/** Each exposed model's exposure (`split_model(name, literal).exposure`); a model without `read` has none. */
 	exposures: { [model: string]: ExposureSpec };
-	/** Each exposed model's declared layer paths below its root → the model behind each (`layerModels`). */
+	/** Each exposed model's declared layer paths below its root → the model behind each (`layer_models`). */
 	layers: { [model: string]: { [path: string]: string } };
 	/** Each `src/integration/<name>/+integration.ts`: the workspace's definitions (bolt's own are `SystemNames`). */
 	integrations: { [integration: string]: unknown };
-	/** Each `src/agent/envoy/+<id>.envoy.ts`. */
-	envoys: { [envoy: string]: unknown };
-	customFields: { [field: string]: { spec: { shape: unknown } } };
+	custom_fields: { [field: string]: { spec: { shape: unknown } } };
 	teams: { [team: string]: unknown };
 	/** The base catalogue `src/i18n/+messages.ts`: its keys are the message keys. */
 	messages: { [key: string]: string };
@@ -41,36 +39,24 @@ type NamesShape = {
 	locales: { [locale: string]: { [key: string]: string } };
 	policies: { [policy: string]: unknown };
 	apps: { [app: string]: unknown };
-	/** Each `src/kiosk/<k>/+kiosk.ts`, by its folder path. */
-	kiosks: { [kiosk: string]: unknown };
 	automations: { [automation: string]: unknown };
 	mcp: { [server: string]: unknown };
 	skills: { [skill: string]: unknown };
 	/** Each app (its folder path) → the union of its `+<page>.page.svelte` names. */
 	pages: { [app: string]: string };
-	/** Each kiosk (its folder path) → the union of its `+<page>.page.svelte` names. */
-	kioskPages: { [kiosk: string]: string };
 	/** Each group (its folder path) → the union of its child app and group folder names. */
 	groups: { [group: string]: string };
 	/** The tools the host advertises (rule 58), written by the build from the host it compiles for. */
-	hostTools: { [tool: string]: unknown };
+	host_tools: { [tool: string]: unknown };
 };
 // Indexed access touches only the one part, so a part may depend on another (models ← relationships ← models).
 export type NamesPart<K extends keyof NamesShape> = K extends keyof Names ? Names[K] : {};
 
 /**
  * One ref field as the relationships part holds it (`'<model>.<field>'`): its target (`to`), the `inverse` many-relation
- * name, `optional`, a default from the requestor, `onDelete`, `owned` children and a `where` on the target.
+ * name, `optional`, a default from the requestor, `on_delete`, `owned` children and a `where` on the target.
  */
-export type RelationshipSpec = {
-	to: string | readonly string[];
-	inverse?: string;
-	optional?: true;
-	default?: { var: 'requestor.id' | 'requestor.party' };
-	onDelete?: 'restrict' | 'cascade' | 'setNull';
-	owned?: true;
-	where?: object;
-};
+export type RelationshipSpec = typeof RelationshipData.Type;
 
 // The built-in layer (`src/system/**`, X-18): its models are declared as a workspace's are and its index holds the same
 // three parts. Its models are the exposed system models; its private models (sys_session, sys_challenge,
@@ -95,7 +81,7 @@ export type Ledger = 'sys_run';
 /** A model a trigger or a read may name: every model but the ledgers. */
 export type ReadableName = Exclude<ModelName, Ledger>;
 /** Every custom field: the built-ins (`money`, `file`, `point`, `phone`) and the workspace's (`src/data/custom_field/<f>/`), one namespace. */
-type CustomFields = BuiltinFields & NamesPart<'customFields'>;
+type CustomFields = BuiltinFields & NamesPart<'custom_fields'>;
 /** A custom field name a model may store as `{ kind: 'custom', of }`: a built-in's or the workspace's own. */
 export type CustomFieldName = keyof CustomFields & string;
 /** The team names `+team.ts` declares. */
@@ -104,12 +90,8 @@ export type TeamName = keyof NamesPart<'teams'> & string;
 export type PolicyName = keyof NamesPart<'policies'> & string;
 /** The app names (`src/app/<a>/+app.ts`). */
 export type AppName = keyof NamesPart<'apps'> & string;
-/** The kiosk names (`src/kiosk/<k>/+kiosk.ts`). */
-export type KioskName = keyof NamesPart<'kiosks'> & string;
 /** The automation names (`src/automation/+<a>.automation.ts`). */
 export type AutomationName = keyof NamesPart<'automations'> & string;
-/** The envoy names (`src/agent/envoy/+<id>.envoy.ts`). */
-export type EnvoyName = keyof NamesPart<'envoys'> & string;
 type Definitions = NamesPart<'integrations'> & SystemNames['integrations'];
 /** The integration definitions: the workspace's (`src/integration/<name>/`) and bolt's conversation definitions. */
 export type IntegrationName = keyof Definitions & string;
@@ -128,7 +110,7 @@ export type InstanceId<D extends string = IntegrationName> = Id<'sys_integration
 export type McpName = keyof NamesPart<'mcp'> & string;
 /** The agent skill names (`src/agent/skill/<n>/+skill.md`). */
 /** The host tools a policy's `capabilities.tools` may name (the host's Studio and browser tools). */
-export type HostToolName = keyof NamesPart<'hostTools'> & string;
+export type HostToolName = keyof NamesPart<'host_tools'> & string;
 export type CustomShape<F> = F extends keyof CustomFields
 	? CustomFields[F] extends { spec: { shape: infer S } }
 		? S
@@ -247,7 +229,6 @@ type OwnedInverseOf<M, R = ManyRelKeys<M>, Keys extends keyof R = keyof R> = {
 	[I in Keys]: AllRels[R[I] & keyof AllRels] extends { owned: true } ? I : never;
 }[Keys] &
 	string;
-export type RelNameOf<M> = (keyof OneRels<M> | keyof ManyRels<M>) & string;
 type FkValue<R, Targets = TargetsOf<R>> =
 	| ([Targets] extends [infer T extends string]
 			? [T] extends [TargetName]
@@ -268,14 +249,14 @@ export type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : t
 // ── columns ──
 /** Read-only system columns on every workspace row (§3.3.9); a built-in layer row has its key alone (`table`). */
 export type SystemColumns<M> = M extends SystemModelName
-	? { id: { kind: 'id'; of: M & string } }
+	? { id: { kind: 'ref'; to: M & string } }
 	: {
-			id: { kind: 'id'; of: M & string };
+			id: { kind: 'ref'; to: M & string };
 			revision: { kind: 'int' };
 			created_at: { kind: 'instant' };
 			updated_at: { kind: 'instant' };
-			created_by: { kind: 'id'; of: 'sys_user'; optional: true };
-			updated_by: { kind: 'id'; of: 'sys_user'; optional: true };
+			created_by: { kind: 'ref'; to: 'sys_user'; optional: true };
+			updated_by: { kind: 'ref'; to: 'sys_user'; optional: true };
 		};
 type ColumnsOf<M> = FieldsOf<M> & ComputedOf<M> & SystemColumns<M>;
 // Cache concrete columns; keep the original intersection semantics for union names.
@@ -322,7 +303,7 @@ export type RequiredBtreeField<M> = Exclude<
 export type TextField<M> = OfKind<M, { kind: 'text' }>;
 /** The `period` fields of model `M`. */
 export type PeriodField<M> = OfKind<M, { kind: 'period' }>;
-/** The `file` fields of model `M`: what `$bolt.upload` names as `'<c>.<field>'`. */
+/** The `file` fields of model `M`: what `ctx.upload` names as `'<c>.<field>'`. */
 export type FileField<M> = OfKind<M, { kind: 'file' }>;
 /** The `vector` fields of model `M`. */
 export type VectorField<M> = OfKind<M, { kind: 'vector' }>;
@@ -330,8 +311,6 @@ export type VectorField<M> = OfKind<M, { kind: 'vector' }>;
 export type SearchableField<M> = OfKind<M, { kind: 'text' | 'enum' }>;
 /** Fields a read returns only when its `select` names them (a `get` returns them too): json, custom and file. */
 export type HeavyField<M> = OfKind<M, { kind: 'json' | 'custom' | 'file' }>;
-/** The relation names of model `M`: its FKs and the inverse many-relations. */
-export type RelName<M> = RelNameOf<M>;
 /** A roll-up path: `<many-relation>.<child field>`. */
 export type RelPath<M> = {
 	[R in keyof ManyRels<M> & string]: `${R}.${FieldName<ManyRels<M>[R]>}`;
@@ -349,16 +328,12 @@ type SpecOf<C> = C extends keyof Exposed
 	? Exposed[C]
 	: C extends SystemName
 		? SystemNames['exposures'][C]
-		: { read: { readonly [path: string]: { fields: 'all' } } };
+		: { outputs: { default: { readonly [path: string]: { fields: 'all' } } } };
 type OutputsOf<C> = SpecOf<C> extends { outputs: infer O } ? O : {};
-/** The read outputs model `C` declares: `default` (its `read`) and each named one of its `outputs`. */
-export type OutputName<C> = 'default' | (keyof OutputsOf<C> & string);
-/** The layer map of output `O` of `C` (`default`: its `read`). */
-type ReadSpec<C, O = 'default'> = O extends 'default'
-	? SpecOf<C> extends { read: infer R }
-		? R
-		: never
-	: OutputsOf<C>[O & keyof OutputsOf<C>];
+/** The read outputs model `C` declares, including `default`. */
+export type OutputName<C> = keyof OutputsOf<C> & string;
+/** The layer map of output `O` of `C`. */
+type ReadSpec<C, O = 'default'> = OutputsOf<C>[O & keyof OutputsOf<C>];
 type RootSpec<C, O> = ReadSpec<C, O> extends infer R ? (C extends keyof R ? R[C] : never) : never;
 /** Fields of `C`'s root layer in output `O` (system columns always). */
 export type ReadField<C, O = 'default'> =
@@ -391,15 +366,6 @@ export type ReadPath<C, O = 'default'> = keyof ReadSpec<C, O> & string;
 type WriteLayers<C, V> = SpecOf<C> extends { [P in V & string]: { columns: infer L } } ? L : {};
 /** The write paths `C`'s `create` or `update` declares: `'<C>'` and each child layer of its `columns`. */
 export type WritePath<C, V extends 'create' | 'update'> = keyof WriteLayers<C, V> & string;
-type AttachesOf<C> = SpecOf<C> extends { create: { attaches: infer A } } ? A : {};
-/** The attach layers `C`'s create payload accepts. */
-export type AttachName<C> = keyof AttachesOf<C> & string;
-/** The existing model an attach layer of `C` names. */
-export type AttachModel<C, A> = A extends keyof AttachesOf<C>
-	? AttachesOf<C>[A] extends { model: infer M extends TargetName }
-		? M
-		: never
-	: never;
 /** The root of a path: the model before its first dot. */
 export type RootOf<P> = P extends `${infer C}.${string}` ? C : P;
 /** The model behind path `P` of `C`'s declaration (`'orders.lines'` → `'order_lines'`). */
@@ -453,7 +419,7 @@ export type FileSyncName<C, S = SyncsOf<C>> = {
 	[N in keyof S]: S[N] extends { with: 'file' } ? N : never;
 }[keyof S] &
 	string;
-type ReadSyncName<C, S = SyncsOf<C>> = {
+export type ReadSyncName<C, S = SyncsOf<C>> = {
 	[N in keyof S]: S[N] extends { with: infer W; read: true }
 		? W extends 'file'
 			? never
@@ -461,9 +427,9 @@ type ReadSyncName<C, S = SyncsOf<C>> = {
 		: never;
 }[keyof S] &
 	string;
-/** A remote sync that reads, as a run a policy's `automations` may start and `bolt.start` runs: `'<model>.sync.<name>'`. */
-export type SyncCallable = {
-	[C in ModelName]: `${C}.sync.${ReadSyncName<C> | FileSyncName<C>}`;
+/** A remote read the native manual sync control may refresh, granted by `capabilities.syncs`. */
+export type SyncKey = {
+	[C in ModelName]: `${C}.${ReadSyncName<C>}`;
 }[ModelName];
 
 // ── search indexes (`search.indexes` of the models part) ──
@@ -485,7 +451,9 @@ export type ColumnValue<M, P> = P extends keyof OneRels<M>
 		? ValueOf<Columns<M>[P]>
 		: never;
 /** A column an insert may omit: optional, defaulted, or an FK filled from the writer (rule 23a). */
-export type OmittableOnInsert<M, P> = P extends keyof OneRels<M>
+export type OmittableOnInsert<M, P> = P extends InitialStampFields<FieldsOf<M>>
+	? true
+	: P extends keyof OneRels<M>
 	? OneRels<M>[P] extends { optional: true } | { default: unknown }
 		? true
 		: false
@@ -511,7 +479,7 @@ type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
 export type Row<C, O = 'default'> = RowOf<C, O> & RowState;
 /** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
 export type RowState = {
-	/** A live reference's authorized target record_label (e.g. an approval's target); derived at read time, never copied to a field. */
+	/** An authorized relation-dependent record_label or live reference's target label; derived at read time, never copied to a field. */
 	readonly $label?: string | null;
 	readonly $sync?: { readonly [sync: string]: SyncState };
 	readonly $approval?: RowApproval;
@@ -521,20 +489,20 @@ export type RowState = {
  * decided by its teams or users) or `ChangesRequested`, and who asked. Absent once the request closes.
  */
 export type RowApproval = {
-	readonly requestId: string;
+	readonly request_id: string;
 	readonly state: 'Pending' | 'ChangesRequested';
 	readonly step: number;
 	readonly steps: readonly ApprovalStep[];
-	readonly requestedBy: string;
+	readonly requested_by: string;
 };
 /** Where a row's latest change stands with one write sync (`$sync.<name>`): queued, acknowledged, or refused with `message`. */
-export type SyncState = {
+type SyncState = {
 	readonly status: 'pending' | 'ok' | 'failed';
 	readonly message?: string;
 };
 type RowOf<C, O> = Simplify<{
 	readonly [P in ReadField<C, O> & (keyof Columns<C> | keyof OneRels<C>)]: ColumnValue<C, P>;
 }>;
-/** A stored row as write callbacks see it (`before`, `delete.check`'s rows, `ctx.db`): never masked, every stored field,
+/** A stored row as write callbacks see it (`before`, `ctx.query`): never masked, every stored field,
  * no seq, roll-up or computed (rule 10). */
 export type StoredRow<M> = Simplify<ColumnValues<M, WritableField<M> | keyof SystemColumns<M>>>;

@@ -1,5 +1,6 @@
 // Hosts execute committed SQL. Store owns immutable histories, alternatives and their physical replay proofs.
 import { Clock, Effect, FileSystem, Path, Schema } from 'effect';
+import { literal } from '@norbital-ai/std/sql';
 import {
 	APPLIED,
 	AppliedRow,
@@ -7,63 +8,82 @@ import {
 	IntrospectRow,
 	MIGRATIONS_TABLE,
 	MIGRATION_GUARD_CODES,
-	checksumOf,
+	checksum_of,
+	canonical,
 	current,
-	impactCount,
-	migrationGuard,
-	migrationStatements,
-	migrationStatus,
+	impact_count,
+	migration_guard,
+	migration_statements,
+	migration_status,
 	pending,
-	readLock,
-	readPhysicalDefinitions,
-	readSnapshot,
-	recordApplied,
-	sha256Hex,
-	physicalHash,
+	read_lock,
+	read_physical_definitions,
+	read_snapshot,
+	record_applied,
+	sha256_hex,
+	physical_hash,
 	type Applied,
 	type MigrationFile,
-	type MigrationLock,
+	MigrationLock,
 	type SchemaObject,
-	type SchemaSpec
+	SchemaSpec
 } from '@norbital-ai/store';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { Rows, Sql } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { DbError } from '../errors.ts';
-import { BoltError, fromStore } from '../../protocol/errors.ts';
-import { auditTriggers } from './audit.ts';
-import { engineOwned, engineOwns, sourceObjects } from './engine.ts';
-import { historySchemaObjects } from './history.ts';
-import { engineBeside, fingerprint, schemaSlice } from './plan.ts';
-import { impactText, type MigrationImpact } from '../../protocol/migration-impact.ts';
+import { BoltError, from_store } from '../../protocol/errors.ts';
+import { audit_triggers } from './audit.ts';
+import { engineOwned, engineOwns, source_objects } from './engine.ts';
+import { history_schema_objects } from './history.ts';
+import { engineBeside, fingerprint, readAppliedRecord, schema_slice, type AppliedSchemaRecord, type SchemaSlice } from './plan.ts';
+import { impact_text, type MigrationImpact } from '../../protocol/migration-impact.ts';
 
-export type MigrationBundle = {
-	readonly files: readonly MigrationFile[];
-	readonly squashes: readonly MigrationFile[];
-	readonly snapshotText: string;
-	readonly snapshot: SchemaSpec;
-	readonly lock: MigrationLock;
-	readonly physical: Readonly<Record<string, readonly string[]>>;
-};
-export const migrationSchema = (manifest: EngineManifest): SchemaSpec => {
-	const { tables, tz, currency } = schemaSlice(manifest);
+const MigrationFileSchema = Schema.Struct({ name: Schema.String, sql: Schema.String });
+export const MigrationBundleSchema = Schema.Struct({
+	files: Schema.Array(MigrationFileSchema),
+	squashes: Schema.Array(MigrationFileSchema),
+	snapshotText: Schema.String,
+	snapshot: SchemaSpec,
+	lock: MigrationLock,
+	physical: Schema.Record(Schema.String, Schema.Array(Schema.String))
+});
+export type MigrationBundle = typeof MigrationBundleSchema.Type;
+const invalidMigration = (message: string) => BoltError.make('migration_invalid', 'admission', message);
+const changedMigration = (message: string) => BoltError.make('migration_changed', 'admission', message);
+/** The verified native record must still be the record this transaction is adopting. */
+function appliedGuard(held: AppliedSchemaRecord | null): Sql {
+	const expected = held === null ? [] : [{ fingerprint: held.fingerprint, slice: held.original }];
+	const body = `declare actual jsonb := '[]'::jsonb; begin
+		if to_regclass('bolt_schema') is not null then
+			select coalesce(jsonb_agg(jsonb_build_object('fingerprint', fingerprint, 'slice', slice)), '[]'::jsonb)
+			into actual from bolt_schema;
+		end if;
+		if actual is distinct from ${literal(JSON.stringify(expected))}::jsonb then
+			raise exception using errcode = '${MIGRATION_GUARD_CODES.beforePhysical}', message = 'the preserved applied schema moved';
+		end if;
+	end`;
+	return { text: `do ${literal(body)}`, params: [] };
+}
+export const migration_schema = (next: EngineManifest | SchemaSlice): SchemaSpec => {
+	const { tables, tz, currency } = 'workspace' in next ? schema_slice(next) : next;
 	return { tables, tz, currency };
 };
 
-/** What a generated migration keeps beside a schema's tables: these exact native triggers are source definitions, including every historical prefix's own arguments. */
-export const migrationObjects = (schema: SchemaSpec): readonly SchemaObject[] =>
+/** What a generated migration keeps beside a schema's tables: these exact native triggers are source definitions. */
+export const migration_objects = (schema: SchemaSpec): Effect.Effect<readonly SchemaObject[], BoltError> =>
 	Object.values(schema.tables).some(
-		(table) => table.nativeRules !== undefined && table.audit === true
+		(table) => table.audit === true || table.fields['revision']?.kind === 'int'
 	)
-		? [
-				...sourceObjects(),
-				...historySchemaObjects(schema.tables, schema.currency),
-				...auditTriggers(schema.tables)
-			]
-		: [];
+		? Effect.map(history_schema_objects(schema.tables, schema.currency), (history) => [
+				...source_objects(),
+				...history,
+				...audit_triggers(schema.tables)
+			])
+		: Effect.succeed([]);
 
 /** Exact engine registry exclusions; an unexpected user object is never hidden by a name prefix. */
-export const migrationLines = (
+export const migration_lines = (
 	rows: readonly (typeof IntrospectRow.Type)[],
 	includeMinor = false,
 	sourceNative = false
@@ -79,7 +99,7 @@ export const migrationLines = (
 		.map((row) => row.line);
 
 /** Reassemble the original chain without changing the bytes retained by any verified archive. */
-export const readMigrationSources = /*#__PURE__*/ (() =>
+export const read_migration_sources = /*#__PURE__*/ (() =>
 	Effect.fn('Bolt.readMigrationSources')(function* (directory: string, lock?: MigrationLock) {
 		const fs = yield* FileSystem.FileSystem;
 		const path = yield* Path.Path;
@@ -87,11 +107,7 @@ export const readMigrationSources = /*#__PURE__*/ (() =>
 		const add = Effect.fn('Bolt.readMigrationSource')(function* (file: MigrationFile) {
 			const existing = originals.get(file.name);
 			if (existing !== undefined && existing.sql !== file.sql)
-				return yield* BoltError.make(
-					'migrationChanged',
-					'admission',
-					`${file.name} differs from its retained archive; archived SQL never changes`
-				);
+				return yield* changedMigration(`${file.name} differs from its retained archive; archived SQL never changes`);
 			originals.set(file.name, file);
 		});
 		if (yield* fs.exists(directory))
@@ -101,11 +117,7 @@ export const readMigrationSources = /*#__PURE__*/ (() =>
 		const squashes: MigrationFile[] = [];
 		for (const receipt of lock?.squashes ?? []) {
 			if (!/^[a-f0-9]{64}$/.test(receipt.archive) || !/^\d{4}_[a-z0-9_]+\.sql$/.test(receipt.file))
-				return yield* BoltError.make(
-					'migrationInvalid',
-					'admission',
-					'a squash receipt has an invalid archive or filename'
-				);
+				return yield* invalidMigration('a squash receipt has an invalid archive or filename');
 			const archive = path.join(directory, 'archive', receipt.archive);
 			const names = (yield* fs.readDirectory(archive))
 				.filter((name) => name.endsWith('.sql'))
@@ -117,28 +129,16 @@ export const readMigrationSources = /*#__PURE__*/ (() =>
 					.sort()
 					.join('\n')
 			)
-				return yield* BoltError.make(
-					'migrationChanged',
-					'admission',
-					`${receipt.file}: the retained archive is incomplete or contains unknown SQL`
-				);
+				return yield* changedMigration(`${receipt.file}: the retained archive is incomplete or contains unknown SQL`);
 			for (const saved of receipt.replaces) {
 				if (!/^\d{4}_[a-z0-9_]+\.sql$/.test(saved.name))
-					return yield* BoltError.make(
-						'migrationInvalid',
-						'admission',
-						'an archive receipt has an invalid filename'
-					);
+					return yield* invalidMigration('an archive receipt has an invalid filename');
 				const file = {
 					name: saved.name,
 					sql: yield* fs.readFileString(path.join(archive, saved.name))
 				};
-				if (checksumOf(file) !== saved.checksum)
-					return yield* BoltError.make(
-						'migrationChanged',
-						'admission',
-						`${saved.name}: archived SQL changed`
-					);
+				if (checksum_of(file) !== saved.checksum)
+					return yield* changedMigration(`${saved.name}: archived SQL changed`);
 				yield* add(file);
 			}
 			squashes.push({
@@ -152,44 +152,28 @@ export const readMigrationSources = /*#__PURE__*/ (() =>
 		};
 	}))();
 
-export const readMigrations = /*#__PURE__*/ (() =>
-	Effect.fn('Bolt.readMigrations')(function* (directory: string) {
+export const read_migrations = /*#__PURE__*/ (() =>
+	Effect.fn('Bolt.read_migrations')(function* (directory: string) {
 		const fs = yield* FileSystem.FileSystem;
 		const path = yield* Path.Path;
 		if (!(yield* fs.exists(directory)))
-			return yield* BoltError.make(
-				'migrationInvalid',
-				'admission',
-				'migrations/ is missing; run bolt build and commit it'
-			);
+			return yield* invalidMigration('migrations/ is missing; run bolt build and commit it');
 		const snapshotText = yield* fs.readFileString(path.join(directory, 'snapshot.json'));
-		const snapshot = yield* readSnapshot(snapshotText).pipe(Effect.mapError(fromStore));
-		const lock = yield* readLock(
+		const lock = yield* read_lock(
 			yield* fs.readFileString(path.join(directory, 'migrations.lock.json'))
-		).pipe(Effect.mapError(fromStore));
-		const { files, squashes } = yield* readMigrationSources(directory, lock);
+		).pipe(Effect.mapError(from_store));
+		const { files, squashes } = yield* read_migration_sources(directory, lock);
 		if (files.length === 0)
-			return yield* BoltError.make(
-				'migrationInvalid',
-				'admission',
-				'migrations/ holds no SQL history; run bolt build'
-			);
-		if (lock.snapshot !== sha256Hex(snapshotText))
-			return yield* BoltError.make(
-				'migrationChanged',
-				'admission',
-				'migrations/snapshot.json changed since verification; run bolt build'
-			);
-		yield* pending(files, lock, [], snapshotText, squashes).pipe(Effect.mapError(fromStore));
+			return yield* invalidMigration('migrations/ holds no SQL history; run bolt build');
+		if (lock.snapshot !== sha256_hex(snapshotText))
+			return yield* changedMigration('migrations/snapshot.json changed since verification; run bolt build');
+		const snapshot = (yield* read_snapshot(snapshotText).pipe(Effect.mapError(from_store))).schema;
+		yield* pending(files, lock, [], snapshotText, squashes).pipe(Effect.mapError(from_store));
 		const physicalFile = path.join(directory, 'physical.json');
 		if (!(yield* fs.exists(physicalFile)))
-			return yield* BoltError.make(
-				'migrationChanged',
-				'admission',
-				'migrations/physical.json is missing; run bolt build to derive verified definitions'
-			);
-		const physical = yield* readPhysicalDefinitions(yield* fs.readFileString(physicalFile)).pipe(
-			Effect.mapError(fromStore)
+			return yield* changedMigration('migrations/physical.json is missing; run bolt build to derive verified definitions');
+		const physical = yield* read_physical_definitions(yield* fs.readFileString(physicalFile)).pipe(
+			Effect.mapError(from_store)
 		);
 		if (
 			Object.keys(physical).sort().join('\n') !==
@@ -197,18 +181,10 @@ export const readMigrations = /*#__PURE__*/ (() =>
 				.sort()
 				.join('\n')
 		)
-			return yield* BoltError.make(
-				'migrationChanged',
-				'admission',
-				'physical.json does not cover exactly the verified migration prefixes'
-			);
+			return yield* changedMigration('physical.json does not cover exactly the verified migration prefixes');
 		for (const [name, lines] of Object.entries(physical))
-			if (physicalHash(lines) !== lock.physical?.[name])
-				return yield* BoltError.make(
-					'migrationChanged',
-					'admission',
-					`${name || 'empty history'}: physical definitions differ from the verified lock`
-				);
+			if (physical_hash(lines) !== lock.physical?.[name])
+				return yield* changedMigration(`${name || 'empty history'}: physical definitions differ from the verified lock`);
 		return { files, squashes, snapshotText, snapshot, lock, physical } satisfies MigrationBundle;
 	}))();
 
@@ -230,52 +206,40 @@ const readState = /*#__PURE__*/ (() =>
 		const applied = yield* Schema.decodeUnknownEffect(AppliedRows)(
 			tracked ? (results[0]?.rows ?? []) : []
 		).pipe(
-			Effect.mapError((cause) => BoltError.make('migrationInvalid', 'decode', cause.message, cause))
+			Effect.mapError((cause) => BoltError.make('migration_invalid', 'decode', cause.message, cause))
 		);
 		const inspected = yield* Schema.decodeUnknownEffect(Inspected)(
 			results[tracked ? 1 : 0]?.rows ?? []
 		).pipe(
-			Effect.mapError((cause) => BoltError.make('migrationInvalid', 'decode', cause.message, cause))
+			Effect.mapError((cause) => BoltError.make('migration_invalid', 'decode', cause.message, cause))
 		);
 		return { applied, inspected };
 	}))();
 const liveStatus = /*#__PURE__*/ (() =>
 	Effect.fn('Bolt.liveMigrationStatus')(function* (db: TenantDbShape, bundle: MigrationBundle) {
 		const { applied, inspected } = yield* readState(db);
-		const expected = yield* migrationStatus(bundle.files, bundle.lock, applied, {
+		const expected = yield* migration_status(bundle.files, bundle.lock, applied, {
 			snapshot: bundle.snapshotText,
 			squashes: bundle.squashes
-		}).pipe(Effect.mapError(fromStore));
+		}).pipe(Effect.mapError(from_store));
 		const last =
 			[...expected.applied].sort((a, b) => a.name.localeCompare(b.name)).at(-1)?.name ?? '';
 		const definitions = bundle.physical[last] ?? [];
 		const sourceMinor = definitions.some((line) => line.startsWith('function bolt_minor_units '));
 		const sourceNative = definitions.some((line) => line.startsWith('function bolt_audit '));
-		const physical = migrationLines(inspected, sourceMinor, sourceNative);
-		const status = yield* migrationStatus(bundle.files, bundle.lock, applied, {
+		const physical = migration_lines(inspected, sourceMinor, sourceNative);
+		const status = yield* migration_status(bundle.files, bundle.lock, applied, {
 			snapshot: bundle.snapshotText,
 			squashes: bundle.squashes,
 			physical
-		}).pipe(Effect.mapError(fromStore));
+		}).pipe(Effect.mapError(from_store));
 		return { status, inspected };
-	}))();
-/** Read-only source/ledger/physical status. Application rechecks every observation with SQL guards under its lock. */
-export const statusMigrations = /*#__PURE__*/ (() =>
-	Effect.fn('Bolt.statusMigrations')(function* (
-		db: TenantDbShape,
-		manifest: EngineManifest,
-		bundle: MigrationBundle
-	) {
-		yield* current(bundle.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
-		return (yield* liveStatus(db, bundle)).status;
 	}))();
 const requirePhysical = (status: { readonly physical: string }) =>
 	status.physical === 'current' || status.physical === 'prefix'
 		? Effect.void
 		: Effect.fail(
-				BoltError.make(
-					'migrationChanged',
-					'admission',
+				changedMigration(
 					status.physical === 'unverified'
 						? 'this history has no physical prefix proof; rebuild and commit migrations.lock.json'
 						: 'the database differs from its verified migration prefix; inspect migration status and restore the declared schema before retrying (an untracked database requires an explicit data-preserving migration into a verified database)'
@@ -289,13 +253,9 @@ function guard(
 ): Effect.Effect<Sql, BoltError> {
 	const last = [...applied].sort((a, b) => a.name.localeCompare(b.name)).at(-1)?.name ?? '';
 	const definitions = bundle.physical[last];
-	if (definitions === undefined || physicalHash(definitions) !== bundle.lock.physical?.[last])
+	if (definitions === undefined || physical_hash(definitions) !== bundle.lock.physical?.[last])
 		return Effect.fail(
-			BoltError.make(
-				'migrationChanged',
-				'admission',
-				`${last || 'empty history'} has no verified physical definitions; rebuild migrations`
-			)
+			changedMigration(`${last || 'empty history'} has no verified physical definitions; rebuild migrations`)
 		);
 	const sourceMinor = definitions.some((line) => line.startsWith('function bolt_minor_units '));
 	// Native source files own the audit functions and support definitions recorded in this exact prefix's proof.
@@ -304,7 +264,7 @@ function guard(
 	const excluded = owned.filter(
 		([kind, owner]) => !(sourceMinor && kind === 'function' && owner === 'bolt_minor_units(c text)')
 	);
-	return Effect.succeed(migrationGuard(applied, definitions, stage, excluded));
+	return Effect.succeed(migration_guard(applied, definitions, stage, excluded));
 }
 /** The rows a step's count answers: what a destructive drop discards, or every row a backfill fills or a check reads. */
 const countedBy = (id: string, hazard: string): readonly [string, string?] | undefined => {
@@ -326,15 +286,15 @@ type Measured = {
  * Each file and its receipt use one immutable SQL batch, guarded under the same advisory lock before and after DDL.
  * Answers what it did: each step's rows (counted before the step, in the same transaction) and the whole duration.
  */
-export const applyMigrations = /*#__PURE__*/ (() =>
-	Effect.fn('Bolt.applyMigrations')(function* (
+export const apply_migrations = /*#__PURE__*/ (() =>
+	Effect.fn('Bolt.apply_migrations')(function* (
 		db: TenantDbShape,
-		manifest: EngineManifest,
+		next: EngineManifest | SchemaSlice,
 		bundle: MigrationBundle
 	) {
-		yield* current(bundle.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
+		yield* current(bundle.snapshot, migration_schema(next)).pipe(Effect.mapError(from_store));
 		yield* pending(bundle.files, bundle.lock, [], bundle.snapshotText, bundle.squashes).pipe(
-			Effect.mapError(fromStore)
+			Effect.mapError(from_store)
 		);
 		const started = yield* Clock.currentTimeMillis;
 		const report: MigrationImpact['steps'][number][] = [];
@@ -347,36 +307,47 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 			const steps = new Map<string, Measured>();
 			const reads: { readonly at: number; readonly step: Measured; readonly count: boolean }[] = [];
 			if (file !== undefined) {
-				for (const statement of migrationStatements(file)) {
+				for (const statement of migration_statements(file)) {
 					let step = steps.get(statement.step);
 					if (step === undefined) {
 						step = { id: statement.step, hazard: statement.hazard };
 						steps.set(statement.step, step);
 						const counted = countedBy(statement.step, statement.hazard);
 						if (counted !== undefined) {
-							for (const text of impactCount(...counted)) statements.push({ text, params: [] });
+							for (const text of impact_count(...counted)) statements.push({ text, params: [] });
 							reads.push({ at: statements.length - 1, step, count: true });
 						}
 					}
 					statements.push({ text: statement.text, params: [] });
 					if (statement.writes) reads.push({ at: statements.length - 1, step, count: false });
 				}
-				statements.push(recordApplied(file));
+				statements.push(record_applied(file));
 				statements.push(
 					yield* guard(
 						bundle,
-						[...status.applied, { name: file.name, checksum: checksumOf(file) }],
+						[...status.applied, { name: file.name, checksum: checksum_of(file) }],
 						'after'
 					)
 				);
 			} else {
-				const slice = schemaSlice(manifest);
-				for (const object of engineBeside(slice))
+				const held = yield* readAppliedRecord(db);
+				const slice = 'workspace' in next ? schema_slice(next) : next;
+				const encoded = canonical(slice);
+				const target = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)))(encoded).pipe(
+					Effect.mapError((error) => BoltError.make('schema', 'decode', error.message, error))
+				);
+				for (const object of yield* engineBeside(slice))
 					for (const text of object.create) statements.push({ text, params: [] });
+				statements.push(appliedGuard(held));
 				statements.push({
-					text: 'insert into bolt_schema (one, fingerprint, slice) values (true, $1, $2::jsonb) on conflict (one) do update set fingerprint = excluded.fingerprint, slice = excluded.slice, applied_at = now()',
-					params: [fingerprint(slice), JSON.stringify(slice)]
+					text: `insert into bolt_schema (one, fingerprint, slice) values (true, $1, $2::jsonb) on conflict (one) ${held === null
+						? 'do nothing'
+						: 'do update set fingerprint = excluded.fingerprint, slice = excluded.slice, applied_at = now() where bolt_schema.fingerprint = $3 and bolt_schema.slice = $4::jsonb'}`,
+					params: held === null
+						? [fingerprint(slice), encoded]
+						: [fingerprint(slice), encoded, held.fingerprint, JSON.stringify(held.original)]
 				});
+				statements.push(appliedGuard({ fingerprint: fingerprint(slice), original: target }));
 				// Reasserting host objects must not silently replace a definition owned by the verified source prefix.
 				statements.push(yield* guard(bundle, status.applied, 'after'));
 			}
@@ -400,7 +371,7 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 							)
 								return yield* Effect.fail(
 									BoltError.make(
-										'migrationInvalid',
+										'migration_invalid',
 										'commit',
 										'the migration did not reach its verified physical prefix; its SQL and ledger record were rolled back',
 										error
@@ -419,11 +390,11 @@ export const applyMigrations = /*#__PURE__*/ (() =>
 			for (const { id, hazard, count, written } of steps.values()) {
 				// a drop reports what it discards; any other step what it wrote, else what its count read
 				const rows = (hazard === 'destructive' ? (count ?? written) : (written ?? count)) ?? 0;
-				report.push({ id, hazard, rows, summary: impactText({ id, hazard, rows }) });
+				report.push({ id, hazard, rows, summary: impact_text({ id, hazard, rows }) });
 			}
 			if (file === undefined)
 				return {
-					durationMs: (yield* Clock.currentTimeMillis) - started,
+					duration_ms: (yield* Clock.currentTimeMillis) - started,
 					steps: report
 				} satisfies MigrationImpact;
 		}

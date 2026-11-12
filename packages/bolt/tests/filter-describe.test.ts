@@ -1,19 +1,20 @@
 // AI filtering's schema and strict decode (rule 16a, P34, P35) without a database: the options System 1 chooses among
 // are the caller's exposure (own fields, one hop through exposed relations: `is`, has any / all / none, count, child
-// aggregates) and nothing else, and `decodeDescribed` refuses any field, relation or sort key outside it.
+// aggregates) and nothing else. The real native read boundary also exercises strict exposure, variable and sort
+// refusals, independently of the planner's internal validator.
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import type { Arm, Authority, ModelAuthority } from '../src/engine/contracts.ts';
-import { Effect, Layer, Schema } from 'effect';
+import { Deferred, Effect, Fiber, Layer, Schema } from 'effect';
+import { TestClock } from 'effect/testing';
 import { Ai, Logs } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { DecisionsLive } from '../src/engine/decisions/index.ts';
-import { catalogFor, type Pred } from '@norbital-ai/store';
+import { DecisionsLive } from '../src/engine/decision.ts';
+import type { Pred } from '@norbital-ai/store';
 import { viewOutput } from '../src/engine/access/authority.ts';
-import { storeSync } from '../src/protocol/errors.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type {
@@ -21,22 +22,23 @@ import type {
 	DecisionQuestion,
 	System1Port,
 	System1Request
-} from '../src/engine/decisions/index.ts';
-import { decodeDescribed, filterDescribe, literals } from '../src/engine/filter-describe/index.ts';
-import { catalog } from '../src/protocol/catalog.ts';
+} from '../src/engine/decision.ts';
+import { filter_describe } from '../src/engine/filter-describe/index.ts';
+import { lower_read, read_engine } from '../src/engine/query/engine.ts';
+import { materialize } from '../src/engine/runs/time.ts';
 
 const manifest = {
 	workspace: { tz: 'Asia/Singapore', locale: 'en' },
 	models: {
 		members: {
 			description: 'm',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, rate: { kind: 'money' } }
 		},
-		audits: { description: 'a', label: 'note', fields: { note: { kind: 'text' } } },
+		audits: { description: 'a', record_label: 'record.note', fields: { note: { kind: 'text' } } },
 		jobs: {
 			description: 'j',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				hours: { kind: 'decimal', scale: 1 },
@@ -51,7 +53,7 @@ const manifest = {
 		},
 		job_lines: {
 			description: 'l',
-			label: 'item',
+			record_label: 'record.item',
 			fields: { item: { kind: 'text' }, qty: { kind: 'int' }, amount: { kind: 'money' } }
 		}
 	},
@@ -62,13 +64,31 @@ const manifest = {
 		'job_lines.job': { to: 'jobs', inverse: 'lines' }
 	},
 	exposures: {
-		members: { read: { members: { fields: 'all' } } },
-		job_lines: { read: { job_lines: { fields: 'all' } } },
+		members: { outputs: { default: { members: { fields: 'all' } } } },
+		job_lines: { outputs: { default: { job_lines: { fields: 'all' } } } },
 		// `internal_code` is not exposed; `audits` is no model at all and `jobs.audit` no layer: a `where` hops only the
 		// layers jobs' output declares, read under jobs' own arms. `dispatch` omits `notes` and the assignee's `rate`;
 		// `bare` declares no layer and no `assignee`.
 		jobs: {
 			outputs: {
+				default: {
+					'jobs.assignee': { fields: 'all' },
+					'jobs.assignee.manager': { fields: 'all' },
+					'jobs.lines': { fields: 'all' },
+					jobs: {
+						fields: [
+							'title',
+							'hours',
+							'notes',
+							'scheduled_on',
+							'spot',
+							'window',
+							'status',
+							'tags',
+							'assignee'
+						]
+					}
+				},
 				dispatch: {
 					jobs: {
 						fields: [
@@ -87,24 +107,6 @@ const manifest = {
 					'jobs.lines': { fields: 'all' }
 				},
 				bare: { jobs: { fields: ['title', 'hours'] } }
-			},
-			read: {
-				'jobs.assignee': { fields: 'all' },
-				'jobs.assignee.manager': { fields: 'all' },
-				'jobs.lines': { fields: 'all' },
-				jobs: {
-					fields: [
-						'title',
-						'hours',
-						'notes',
-						'scheduled_on',
-						'spot',
-						'window',
-						'status',
-						'tags',
-						'assignee'
-					]
-				}
 			}
 		}
 	},
@@ -112,11 +114,9 @@ const manifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -124,13 +124,19 @@ const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
 	return value;
 };
-const cat = catalog(manifest);
 
+const exposures: EngineManifest['exposures'] = manifest.exposures;
 const TRUE: Pred = { t: 'const', value: true };
 const arm: Arm = { policy: 'dispatch', where: TRUE };
+/** A policy's read of `model`'s `output`: one arm per path the output declares, as a compiled authority holds it. */
 const grant = (model: string, output = 'default'): ModelAuthority => ({
-	read: { [output]: { [model]: [arm] } },
-	history: [],
+	read: {
+		[output]: Object.fromEntries(
+			Object.keys(
+				present(present(exposures[model]).outputs[output])
+			).map((path) => [path, [arm]])
+		)
+	},
 	create: [],
 	update: [],
 	delete: [],
@@ -153,7 +159,7 @@ const caller = (
 	limits: [],
 	teamTree: [],
 	scopes: {},
-	capabilities: { apps: [], tools: [], mcp: [] },
+	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	actor: {
 		kind: 'member',
 		id: 'u1',
@@ -161,109 +167,132 @@ const caller = (
 		phone: null,
 		external: false,
 		teams: [],
-		teamPath: [],
+		team_path: [],
 		admin: false,
 		party: null
 	}
 });
 /** The read's own day and instant: what a described filter's time variables are. */
 const AT = { today: '2026-09-26', now: '2026-09-26T00:00:00.000Z' };
-const decode =
-	(where: Json, orderBy?: Json, a = caller()) =>
-	() =>
-		decodeDescribed(
-			storeSync(catalogFor(cat, 'jobs', viewOutput(manifest, a, 'jobs'))),
-			a,
-			'jobs',
-			{ where, ...(orderBy === undefined ? {} : { orderBy }) },
-			AT
-		);
-
-describe("decodeDescribed: the caller's exposed query shape, exactly", () => {
-	it('refuses a field outside the exposure, a field its view output omits and an unexposed relation', () => {
-		expect(decode({ internal_code: { eq: 'X1' } })).toThrow(/not a field this caller reads/);
-		expect(decode({ notes: { like: '%pump%' } })).toThrow(/not a field this caller reads/);
-		expect(decode({ audit: { is: { note: { eq: 'x' } } } })).toThrow(
-			/is not read by this caller|is not a relation this caller reads/
-		);
-		expect(decode({ assignee: { is: { rate: { gt: 10 } } } })).toThrow(/jobs\.assignee\.rate/); // the output's layer omits it
-		expect(decode({ bogus: { eq: 1 } })).toThrow(/unknown field/); // the grammar's own refusal
+let queryCrossings = 0;
+const queryDb = TenantDb.typed({
+	read: (statements) => Effect.sync(() => {
+		queryCrossings++;
+		return statements.map(() => ({ rows: [], affected: 0 }));
+	}),
+	write: () => Effect.fail(DbError.make('XX000', 'A read validation must not write.')),
+	transaction: () => Effect.fail(DbError.make('XX000', 'A read validation must not transact.'))
+});
+const reader = read_engine({ manifest, db: queryDb });
+/**
+ * The wire decoder and native query engine used by HTTP reads; no private filter validator. A described filter's time
+ * variables are its read's literals before lowering (`materialize`), as the edge sends them; `raw` skips that.
+ */
+const query = (where: Json, order_by?: Json, authority = caller(), raw = false) => Effect.gen(function* () {
+	const ir = yield* lower_read(manifest, 'query', [{
+			jobs: {
+				where: raw ? where : yield* Effect.try({ try: () => materialize(where, AT), catch: (error) => error }),
+				fields: ['id'],
+				limit: 1,
+				output: viewOutput(manifest, authority, 'jobs') ?? 'default',
+				...(order_by === undefined ? {} : { order_by })
+			}
+		}]);
+	return yield* reader.run([ir], { as: 'caller', authority }, { ...AT, tz: 'Asia/Singapore' });
+});
+const acceptsQuery = (where: Json, order_by?: Json, authority = caller()) => Effect.gen(function* () {
+	const before = queryCrossings;
+	expect(yield* query(where, order_by, authority)).toEqual([{ jobs: { rows: [], next: null } }]);
+	expect(queryCrossings).toBe(before + 1);
+});
+const refusesQuery = (where: Json, message: RegExp = /./s, order_by?: Json, authority = caller(), raw = false) =>
+	Effect.gen(function* () {
+		const before = queryCrossings;
+		const error = yield* Effect.flip(query(where, order_by, authority, raw));
+		expect(error).toEqual(expect.objectContaining({ message: expect.stringMatching(message) }));
+		expect(queryCrossings).toBe(before);
 	});
 
-	it('accepts relation filters: one-relation `is`, has any / all / none, count and a child aggregate', () => {
-		expect(decode({ assignee: { is: { name: { like: '%bob%' } } } })).not.toThrow();
-		expect(decode({ lines: { some: { qty: { gt: 2 } } } })).not.toThrow();
-		expect(decode({ lines: { every: { amount: { gte: 10 } } } })).not.toThrow();
-		expect(decode({ lines: { none: { item: { eq: 'pump' } } } })).not.toThrow();
-		expect(
-			decode({
-				and: [{ lines: { count: { gt: 1 } } }, { lines: { sum: { of: 'amount', gte: 100 } } }]
-			})
-		).not.toThrow();
-	});
+describe('the real read boundary strictly validates the query shape the planner must obey', () => {
+	it.effect('refuses hidden fields, fields omitted by the caller output, unexposed relations and unknown fields', () =>
+		Effect.gen(function* () {
+			yield* refusesQuery({ internal_code: { eq: 'X1' } }, /'jobs' has no readable field 'internal_code'/);
+			yield* refusesQuery({ notes: { like: '%pump%' } }, /'jobs' has no readable field 'notes'/);
+			yield* refusesQuery({ audit: { is: { note: { eq: 'x' } } } }, /'jobs' declares no read layer 'audit'/);
+			yield* refusesQuery({ assignee: { is: { rate: { gt: 10 } } } }, /'jobs\.assignee' has no readable field 'rate'/);
+			yield* refusesQuery({ bogus: { eq: 1 } }, /unknown field/);
+		})
+	);
 
-	it("reads a layer under its root's policies; refuses a relation the read declares no layer for", () => {
-		const noMembers = caller({ jobs: grant('jobs') });
-		expect(
-			decode({ assignee: { is: { name: { eq: 'Bob' } } } }, undefined, noMembers)
-		).not.toThrow();
-		expect(decode({ audit: { is: { note: { eq: 'x' } } } })).toThrow(
-			/'jobs\.audit' is not a relation this caller reads/
-		);
-		expect(
-			decode({ assignee: { eq: '00000000-0000-4000-8000-000000000001' } }, undefined, noMembers)
-		).not.toThrow(); // the key itself is jobs'
-	});
+	it.effect('accepts one-relation, any/all/none, count and child aggregate predicates', () =>
+		Effect.gen(function* () {
+			yield* acceptsQuery({ assignee: { is: { name: { like: '%bob%' } } } });
+			yield* acceptsQuery({ lines: { some: { qty: { gt: 2 } } } });
+			yield* acceptsQuery({ lines: { every: { amount: { gte: 10 } } } });
+			yield* acceptsQuery({ lines: { none: { item: { eq: 'pump' } } } });
+			yield* acceptsQuery({ and: [
+				{ lines: { count: { gt: 1 } } }, { lines: { sum: { of: 'amount', gte: 100 } } }
+			] });
+		})
+	);
 
-	it('takes the variables: the requestor bound by the read, today and now materialized; a bad expression is refused', () => {
-		expect(
-			decode({
-				scheduled_on: {
-					gte: { var: 'today - days(7)' },
-					lt: { var: 'today + days(1)' }
-				}
-			})
-		).not.toThrow();
-		expect(decode({ window: { contains: { var: 'today' } } })).not.toThrow();
-		expect(decode({ scheduled_on: { eq: { var: 'now' } } })).toThrow(/ISO date/); // an instant is no date
-		expect(decode({ scheduled_on: { eq: { var: 'today - hours(1)' } } })).toThrow(/whole days/);
-		expect(decode({ scheduled_on: { eq: { var: 'tomorrow' } } })).toThrow(/Unknown variable/);
-		expect(decode({ scheduled_on: { eq: { var: 'requestor.email' } } })).toThrow(/not a date/);
-		expect(decode({ scheduled_on: { eq: { clock: 'today' } } })).toThrow(); // the former spelling
-		expect(decode({ title: { eq: { var: 'requestor.id' } } })).not.toThrow();
-	});
+	it.effect('accepts canonical membership and empty lists; refuses retired predicate sugar', () =>
+		Effect.gen(function* () {
+			yield* acceptsQuery({ not: { hours: { in: [1, 2] } } });
+			yield* acceptsQuery({ and: [{ tags: { has: 'pump' } }, { tags: { has: 'repair' } }] });
+			yield* acceptsQuery({ tags: { eq: [] } });
+			const retired: readonly Json[] = [
+				{ hours: { nin: [1, 2] } },
+				{ tags: { hasAny: ['pump', 'repair'] } },
+				{ tags: { hasAll: ['pump', 'repair'] } },
+				{ tags: { isEmpty: true } }
+			];
+			for (const condition of retired) yield* refusesQuery(condition);
+		})
+	);
 
-	it('sorts where OrderBy allows: own sortable fields, a one-relation (by id), a related field its output reads, at most 4 keys', () => {
-		expect(decode({}, [{ scheduled_on: 'desc' }, { hours: 'asc' }])).not.toThrow();
-		expect(decode({}, { assignee: 'asc' })).not.toThrow(); // the relation's key
-		expect(decode({}, { assignee: { name: 'asc' } })).not.toThrow(); // through an exposed relation, a readable target field
-		expect(decode({}, [{ assignee: { name: 'desc' } }, { title: 'asc' }])).not.toThrow();
-		expect(decode({}, { assignee: { rate: 'asc' } })).toThrow(/jobs\.assignee\.rate/); // the output's layer omits it: no ordering by it either
-		expect(decode({}, { audit: { note: 'asc' } })).toThrow(
-			/is not read by this caller|is not a relation this caller reads/
-		); // unexposed relation
-		expect(decode({}, { assignee: { bogus: 'asc' } })).toThrow(/not sortable/); // the grammar's own refusal
-		expect(decode({}, { 'assignee.name': 'asc' })).toThrow(/one \{ field/); // one grammar: nested keys, not a dotted string
-		expect(
-			decode(
-				{},
-				{ assignee: 'asc' },
-				caller({ jobs: grant('jobs', 'bare'), members: grant('members') })
-			)
-		).toThrow(/not a field this caller reads/);
-		expect(
-			decode(
-				{},
-				{ assignee: { name: 'asc' } },
-				caller({ jobs: grant('jobs', 'bare'), members: grant('members') })
-			)
-		).toThrow(/is not read by this caller|is not a relation this caller reads/);
-		expect(decode({}, { notes: 'asc' })).toThrow(/not a field this caller reads/);
-		expect(decode({}, { internal_code: 'asc' })).toThrow(/not a field this caller reads/);
-		expect(decode({}, ['title', 'hours', 'status', 'scheduled_on', 'created_at'])).toThrow(
-			/at most 4 keys/
-		);
-	});
+	it.effect('admits declared relation layers under the root grant without a separate target-root grant', () =>
+		Effect.gen(function* () {
+			const noMembers = caller({ jobs: grant('jobs') });
+			yield* acceptsQuery({ assignee: { is: { name: { eq: 'Bob' } } } }, undefined, noMembers);
+			yield* refusesQuery({ audit: { is: { note: { eq: 'x' } } } }, /'jobs' declares no read layer 'audit'/);
+			yield* acceptsQuery({ assignee: { eq: '00000000-0000-4000-8000-000000000001' } }, undefined, noMembers);
+		})
+	);
+
+	it.effect('binds requestor/time variables and refuses invalid dates, expressions and the retired clock spelling', () =>
+		Effect.gen(function* () {
+			yield* acceptsQuery({ scheduled_on: { gte: { var: 'today - days(7)' }, lt: { var: 'today + days(1)' } } });
+			yield* acceptsQuery({ window: { contains: { var: 'today' } } });
+			yield* refusesQuery({ scheduled_on: { eq: { var: 'now' } } }, /ISO date/);
+			yield* refusesQuery({ scheduled_on: { eq: { var: 'today - hours(1)' } } }, /whole days/);
+			yield* refusesQuery({ scheduled_on: { eq: { var: 'tomorrow' } } }, /Unknown variable/);
+			yield* refusesQuery({ scheduled_on: { eq: { var: 'requestor.email' } } }, /not a date/);
+			yield* refusesQuery({ scheduled_on: { eq: { clock: 'today' } } });
+			yield* acceptsQuery({ title: { eq: { var: 'requestor.id' } } });
+			// the store never carries a time variable: one that reaches the boundary unmaterialized is refused
+			yield* refusesQuery({ scheduled_on: { gte: { var: 'today - days(7)' } } }, /materialize time before reading/, undefined, caller(), true);
+		})
+	);
+
+	it.effect('admits readable sort keys and refuses hidden, unexposed, unknown, dotted and over-limit sorts', () =>
+		Effect.gen(function* () {
+			yield* acceptsQuery({}, [{ scheduled_on: 'desc' }, { hours: 'asc' }]);
+			yield* acceptsQuery({}, { assignee: 'asc' });
+			yield* acceptsQuery({}, { assignee: { name: 'asc' } });
+			yield* acceptsQuery({}, [{ assignee: { name: 'desc' } }, { title: 'asc' }]);
+			yield* refusesQuery({}, /'members\.rate' is not a field this caller reads/, { assignee: { rate: 'asc' } });
+			yield* refusesQuery({}, /order_by 'audit\.note': 'jobs' declares no read layer 'audit'/, { audit: { note: 'asc' } });
+			yield* refusesQuery({}, /not sortable/, { assignee: { bogus: 'asc' } });
+			yield* refusesQuery({}, /one \{ field/, { 'assignee.name': 'asc' });
+			const bare = caller({ jobs: grant('jobs', 'bare'), members: grant('members') });
+			yield* refusesQuery({}, /'jobs' has no readable field 'assignee'/, { assignee: 'asc' }, bare);
+			yield* refusesQuery({}, /'jobs' declares no read layer 'assignee'/, { assignee: { name: 'asc' } }, bare);
+			yield* refusesQuery({}, /'jobs' has no readable field 'notes'/, { notes: 'asc' });
+			yield* refusesQuery({}, /'jobs' has no readable field 'internal_code'/, { internal_code: 'asc' });
+			yield* refusesQuery({}, /at most 4 keys/, ['title', 'hours', 'status', 'scheduled_on', 'created_at']);
+		})
+	);
 });
 
 /** A scripted System 1: `pick` names the chosen option per question; others take their first option (or false). */
@@ -282,7 +311,7 @@ function system1(pick: (r: System1Request) => { readonly [id: string]: string | 
 			port.requests.push(r);
 			const chosen = pick(r);
 			return {
-				costUsd: 0,
+				cost_usd: 0,
 				provider: 'scripted',
 				answers: Object.fromEntries(
 					Object.entries(r.questions).map(([id, q]) => [id, answer(q, chosen[id])])
@@ -295,14 +324,12 @@ function system1(pick: (r: System1Request) => { readonly [id: string]: string | 
 const db = TenantDb.typed({
 	read: () => Effect.fail(DbError.make('XX000', 'Unexpected filter fixture database read')),
 	write: () => Effect.succeed({ rows: [], affected: 1 }),
-	session: () =>
-		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'Unexpected filter fixture transaction'))
 });
 const nativeDescriber = (
 	port: System1Port,
 	m: EngineManifest = manifest,
-	read: ReadsShape['run'] = (batch) => Effect.succeed(batch.map(() => ({ rows: [] })))
+	read: ReadsShape['run'] = (batch) => Effect.succeed(batch.map(() => ({ rows: [], next: null, total: 0 })))
 ) => {
 	const ports = Layer.mergeAll(
 		NodeCrypto.layer,
@@ -321,11 +348,11 @@ const nativeDescriber = (
 			embed: off
 		})
 	);
-	const native = filterDescribe.pipe(Effect.provide(DecisionsLive.pipe(Layer.provideMerge(ports))));
+	const native = filter_describe.pipe(Effect.provide(DecisionsLive.pipe(Layer.provideMerge(ports))));
 	return {
-		describe: (input: Parameters<Effect.Success<typeof filterDescribe>['describe']>[0]) =>
+		describe: (input: Parameters<Effect.Success<typeof filter_describe>['describe']>[0]) =>
 			Effect.flatMap(native, (service) => service.describe(input)),
-		options: (input: Parameters<Effect.Success<typeof filterDescribe>['options']>[0]) =>
+		options: (input: Parameters<Effect.Success<typeof filter_describe>['options']>[0]) =>
 			Effect.flatMap(native, (service) => service.options(input))
 	};
 };
@@ -414,6 +441,82 @@ const byField =
 	};
 
 describe('filter.describe offers System 1 the exposure and maps its choices onto the grammar', () => {
+	it.effect('public options and decision choices exclude hidden fields, omitted output fields and unexposed relations', () =>
+		Effect.gen(function* () {
+			const port = system1((request) => {
+				const labels = askedFields(request);
+				for (const hidden of ['Internal code', 'Notes', 'Audit', 'Assignee › Rate'])
+					expect(labels).not.toContain(hidden);
+				return byField({ Hours: { op: 'more than', value: '3' } })(request);
+			});
+			const filters = describer(port);
+			expect(yield* filters.describe({
+				model: 'jobs', text: 'jobs with hours over 3, notes and an internal code',
+				authority: caller(), bindings
+			})).toEqual({ ok: true, where: { hours: { gt: 3 } } });
+			expect(port.requests).toHaveLength(1);
+			const bare = yield* filters.options({
+				model: 'jobs', authority: caller({ jobs: grant('jobs', 'bare') }), bindings
+			});
+			if (!bare.ok) throw new Error(bare.message);
+			// every output reads the system timestamps beside its own fields
+			expect([...new Set(bare.fields.map((field) => field.label))]).toEqual(['Created', 'Updated', 'Title', 'Hours']);
+			const denied = system1(byField({}));
+			expect(yield* describer(denied).describe({
+				model: 'jobs', text: 'jobs with hours over 3', authority: caller({}), bindings
+			})).toMatchObject({ ok: false, code: 'not_found' });
+			expect(denied.requests).toHaveLength(0);
+		})
+	);
+
+	it.effect('unoffered provider choices cannot insert hidden predicates or sorts', () =>
+		Effect.gen(function* () {
+			const port = system1((request) => Object.fromEntries(
+				Object.entries(request.questions)
+					.filter(([id, question]) => question.type === 'choice' && (/^f\d+$/.test(id) || id === 'sort'))
+					.map(([id]) => [id, id === 'sort' ? 'Internal code, A to Z' : 'Internal code is X1'])
+			));
+			const result = yield* describer(port).describe({
+				model: 'jobs', text: 'internal code is X1, ordered by internal code',
+				authority: caller(), bindings
+			});
+			expect(result).toMatchObject({ ok: false });
+			expect(result).not.toHaveProperty('where');
+			expect(result).not.toHaveProperty('order_by');
+			expect(port.requests).toHaveLength(1);
+		})
+	);
+
+	it.effect('the whole deadline interrupts a stalled lookup before asking System 1', () =>
+		Effect.gen(function* () {
+			const entered = yield* Deferred.make<void>();
+			let interrupted = false;
+			const port = system1(byField({}));
+			const builder = nativeDescriber(port, manifest, () =>
+				Deferred.succeed(entered, undefined).pipe(
+					Effect.andThen(Effect.never),
+					Effect.ensuring(
+						Effect.sync(() => {
+							interrupted = true;
+						})
+					)
+				)
+			);
+			const pending = yield* builder
+				.describe({ model: 'jobs', text: 'jobs for bob tan', authority: caller(), bindings })
+				.pipe(Effect.forkChild);
+			yield* Deferred.await(entered);
+			yield* TestClock.adjust('3 seconds');
+			expect(yield* Fiber.join(pending)).toEqual({
+				ok: false,
+				code: 'timeout',
+				message: 'Could not build a filter from that description.'
+			});
+			expect(interrupted).toBe(true);
+			expect(port.requests).toEqual([]);
+		})
+	);
+
 	it.effect(
 		'a phrase a found record holds is read once, loosely, through its relation; "not" before it negates it; its words echo nowhere else',
 		() =>
@@ -430,9 +533,10 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				const found = (port: System1Port) =>
 					nativeDescriber(port, searchable, (batch) =>
 						Effect.succeed(
-							batch.map((q) => ({
-								rows: 'model' in q && q.model === 'members' ? [{ id: 'm1', name: 'Bob Tan' }] : []
-							}))
+							batch.map((q) => {
+								const rows = 'model' in q && q.model === 'members' ? [{ id: 'm1', name: 'Bob Tan' }] : [];
+								return { rows, next: null, total: rows.length };
+							})
 						)
 					);
 				const reading = 'one whose Name contains \u201cbob tan\u201d';
@@ -524,7 +628,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				expect(choices(q[spot])).toEqual(['no condition', 'Spot is empty', 'Spot is not empty']);
 				expect(q[spot]).toMatchObject({
 					instructions: { question: expect.any(String), field: { label: 'Spot', kind: 'point' } },
-					criteria: { 'Spot is empty': { where: { spot: { isNull: true } } } }
+					criteria: { 'Spot is empty': { where: { spot: { is_null: true } } } }
 				});
 				expect(port.requests).toHaveLength(1);
 			})
@@ -546,7 +650,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				authority: caller({}),
 				bindings
 			});
-			expect(r).toEqual({ ok: true, where: { number: { gt: 20 } }, orderBy: { name: 'asc' } });
+			expect(r).toEqual({ ok: true, where: { number: { gt: 20 } }, order_by: { name: 'asc' } });
 			expect(askedFields(present(port.requests[0]))).toEqual(['Number', 'Name']);
 		})
 	);
@@ -561,7 +665,10 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					...manifest,
 					exposures: {
 						...manifest.exposures,
-						jobs: { ...manifest.exposures.jobs, outputs: { dispatch: narrow } }
+						jobs: {
+							...manifest.exposures.jobs,
+							outputs: { ...manifest.exposures.jobs.outputs, dispatch: narrow }
+						}
 					}
 				}).describe({
 					model: 'jobs',
@@ -638,7 +745,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			expect(r).toEqual({
 				ok: true,
 				where: { lines: { some: { qty: { gt: 2 } } } },
-				orderBy: { scheduled_on: 'desc' }
+				order_by: { scheduled_on: 'desc' }
 			});
 		})
 	);
@@ -673,7 +780,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 			expect(r).toEqual({
 				ok: true,
 				where: { title: { like: '%pump%' } },
-				orderBy: { assignee: { name: 'asc' } }
+				order_by: { assignee: { name: 'asc' } }
 			});
 		})
 	);
@@ -732,7 +839,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 					})
 				).toEqual({
 					ok: true,
-					where: { window: { startsWithin: { from: '2026-01-01', to: '2026-12-31' } } }
+					where: { window: { starts_within: { from: '2026-01-01', to: '2026-12-31' } } }
 				});
 			})
 	);
@@ -751,7 +858,7 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 	);
 
 	it.effect(
-		"the builder's grammar is the catalogue: many-valued fields, in/nin, null tests, two hops",
+		"the builder's grammar is the catalogue: many-valued fields, membership, null tests, two hops",
 		() =>
 			Effect.gen(function* () {
 				const r = yield* describer(system1(byField({}))).options({
@@ -763,20 +870,23 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				const ops = (label: string) => r.fields.filter((f) => f.label === label).map((f) => f.op);
 				const path = (label: string) => r.fields.find((f) => f.label === label)?.path;
 				// a many-valued field offers the builder's list operators (ir's grammar), never a comparison on the list itself
-				expect(ops('Tags')).toEqual(['has', 'hasAny', 'hasAll', 'isEmpty', 'notEmpty']);
+				expect(ops('Tags')).toEqual(['has', 'has_any', 'has_all', 'is_empty', 'not_empty']);
 				expect(path('Tags')).toEqual([{ k: 'field', name: 'tags' }]);
-				// `in`/`nin` and the null tests are offered; a field the view output omits never is
-				expect(ops('Hours')).toEqual(
-					expect.arrayContaining(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin'])
-				);
+				// Negative membership is lowered to canonical `not` + `in`; hidden fields are never offered.
+				expect(ops('Hours')).toEqual(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in']);
+				expect(ops('Assignee')).toEqual(['eq', 'ne', 'in', 'not_in']);
+				expect(ops('Scheduled on')).toEqual(['during', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte']);
+				expect(r.fields.filter((f) => f.label === 'Number of lines').map((f) => f.opLabel)).toEqual([
+					'is', 'is not', 'more than', 'at least', 'less than', 'at most'
+				]);
 				expect(ops('Window')).toEqual([
 					'contains',
 					'overlaps',
-					'within',
-					'startsWithin',
-					'endsWithin',
-					'isNull',
-					'notNull'
+					'contained_by',
+					'starts_within',
+					'ends_within',
+					'is_null',
+					'not_null'
 				]);
 				expect(ops('Notes')).toEqual([]); // `dispatch` omits it
 				expect(r.fields.some((f) => f.label === 'Internal code')).toBe(false);
@@ -796,11 +906,11 @@ describe('filter.describe offers System 1 the exposure and maps its choices onto
 				expect(ops('Window')).toEqual([
 					'contains',
 					'overlaps',
-					'within',
-					'startsWithin',
-					'endsWithin',
-					'isNull',
-					'notNull'
+					'contained_by',
+					'starts_within',
+					'ends_within',
+					'is_null',
+					'not_null'
 				]);
 			})
 	);
@@ -891,14 +1001,16 @@ describe('described choices preserve scalar kinds', () => {
 				exposures: {
 					...manifest.exposures,
 					jobs: {
-						read: {
-							jobs: {
-								fields: [
-									...manifest.exposures.jobs.read.jobs.fields,
-									'urgent',
-									'priority',
-									'visits'
-								]
+						outputs: {
+							default: {
+								jobs: {
+									fields: [
+										...manifest.exposures.jobs.outputs.default.jobs.fields,
+										'urgent',
+										'priority',
+										'visits'
+									]
+								}
 							}
 						}
 					}
@@ -993,7 +1105,7 @@ describe('described selection must fit the exposed grammar', () => {
 					authority: caller(),
 					bindings
 				})
-			).toEqual({ ok: true, orderBy: { scheduled_on: 'desc' } });
+			).toEqual({ ok: true, order_by: { scheduled_on: 'desc' } });
 		})
 	);
 
@@ -1016,7 +1128,7 @@ describe('described selection must fit the exposed grammar', () => {
 					authority: caller({}),
 					bindings
 				})
-			).toMatchObject({ ok: true, orderBy: { version: 'desc' } });
+			).toMatchObject({ ok: true, order_by: { version: 'desc' } });
 		})
 	);
 	it.effect(
@@ -1056,25 +1168,100 @@ describe('a description fails closed', () => {
 	);
 });
 
-it('literals: quoted strings, numbers and dates from the text', () => {
-	expect(
-		literals(
-			'jobs over 3 hours named "pump room" before 2026-10-01 or 5/10/2026',
-			'en',
-			'2026-10-08'
-		)
-	).toEqual({ strings: ['pump room'], numbers: [3], dates: ['2026-10-01', '2026-10-05'] });
-	// a named month, its year today's unless stated; a day the month lacks is no date
-	expect(
-		literals(
-			'after 3rd October, before Oct 9th 2027, the 1st of jan or 31 June',
-			'en',
-			'2026-10-08'
-		).dates.sort()
-	).toEqual(['2026-01-01', '2026-10-03', '2027-10-09']);
-	expect(literals('jobs with 3 decimal places in march', 'en', '2026-10-08')).toEqual({
-		strings: [],
-		numbers: [3],
-		dates: []
-	});
-});
+it.effect('the public description uses its parsed literals in both decision state and the chosen predicate', () =>
+	Effect.gen(function* () {
+		const cases: readonly {
+			text: string;
+			locale?: string;
+			literals: { strings: readonly string[]; numbers: readonly number[]; dates: readonly string[] };
+			plan: Plan;
+			where: Json;
+		}[] = [
+			{
+				text: 'jobs over 3 hours named "pump room" before 2026-10-01 or 5/10/2026',
+				literals: { strings: ['pump room'], numbers: [3], dates: ['2026-10-01', '2026-10-05'] },
+				plan: { Hours: { op: 'more than', value: '3' } },
+				where: { hours: { gt: 3 } }
+			},
+			{
+				// A named month uses today's year unless stated; a day the month lacks is no date.
+				text: 'after 3rd October, before Oct 9th 2027, the 1st of jan or 31 June',
+				literals: { strings: [], numbers: [], dates: ['2026-01-01', '2026-10-03', '2027-10-09'] },
+				plan: { 'Scheduled on': { op: 'after', value: '2026-10-03' } },
+				where: { scheduled_on: { gt: '2026-10-03' } }
+			},
+			{
+				text: 'jobs with 3 decimal places in march',
+				literals: { strings: [], numbers: [3], dates: [] },
+				plan: { Hours: { op: 'more than', value: '3' } },
+				where: { hours: { gt: 3 } }
+			},
+			{
+				text: 'scheduled on 5/10/2026',
+				locale: 'en-US',
+				literals: { strings: [], numbers: [], dates: ['2026-05-10'] },
+				plan: { 'Scheduled on': { op: 'is', value: '2026-05-10' } },
+				where: { scheduled_on: { eq: '2026-05-10' } }
+			}
+		];
+		for (const sample of cases) {
+			const port = system1(byField(sample.plan));
+			const r = yield* nativeDescriber(port, {
+				...manifest,
+				workspace: { ...manifest.workspace, locale: sample.locale ?? 'en' }
+			}).describe({
+				model: 'jobs',
+				text: sample.text,
+				authority: caller(),
+				bindings: { ...bindings, today: '2026-10-08', now: '2026-10-08T00:00:00.000Z' }
+			});
+			expect(r).toEqual({ ok: true, where: sample.where });
+			expect(port.requests).toHaveLength(1);
+			const state = Schema.decodeUnknownSync(Schema.Struct({
+				literals: Schema.Struct({
+					strings: Schema.Array(Schema.String),
+					numbers: Schema.Array(Schema.Number),
+					dates: Schema.Array(Schema.String)
+				})
+			}))(present(port.requests[0]).state);
+			expect({ ...state.literals, dates: [...state.literals.dates].sort() }).toEqual(sample.literals);
+		}
+	})
+);
+
+it.effect('local text, number and boolean fields share the public description values', () =>
+	Effect.gen(function* () {
+		const port = system1(
+			byField({
+				Title: { op: 'contains', value: 'pump room' },
+				Hours: { op: 'more than', value: '3' },
+				Active: { op: 'is', value: 'yes' }
+			})
+		);
+		const r = yield* describer(port).describe({
+			model: '$local',
+			text: 'active title contains "pump room" and hours over 3',
+			localFields: [
+				{ name: 'title', label: 'Title', kind: 'text' },
+				{ name: 'hours', label: 'Hours', kind: 'number' },
+				{ name: 'active', label: 'Active', kind: 'bool' }
+			],
+			authority: caller({}),
+			bindings
+		});
+		expect(r).toMatchObject({
+			ok: true,
+			where: {
+				and: expect.arrayContaining([
+					{ title: { like: '%pump%room%' } },
+					{ hours: { gt: 3 } },
+					{ active: { eq: true } }
+				])
+			}
+		});
+		expect(port.requests).toHaveLength(1);
+		expect(Schema.decodeUnknownSync(Schema.Struct({
+			literals: Schema.Json
+		}))(present(port.requests[0]).state).literals).toEqual({ strings: ['pump room'], numbers: [3], dates: [] });
+	})
+);

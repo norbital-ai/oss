@@ -1,10 +1,10 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import {
-	publicAddresses,
-	publicDestination,
-	connectPublic,
-	pinnedLookup
+	public_addresses,
+	public_destination,
+	connect_public,
+	pinned_lookup
 } from '../src/node/net.ts';
 
 it.effect(
@@ -22,13 +22,13 @@ it.effect(
 					'fc00::1',
 					'::ffff:127.0.0.1'
 				]) {
-					expect(yield* Effect.flip(connectPublic(address, 1433))).toMatchObject({
+					expect(yield* Effect.flip(connect_public(address, 1433))).toMatchObject({
 						kind: 'invalid'
 					});
 				}
 				expect(
 					yield* Effect.flip(
-						publicDestination('mixed.example', 993, async () => [
+						public_destination('mixed.example', 993, async () => [
 							{ address: '8.8.8.8', family: 4 },
 							{ address: '127.0.0.1', family: 4 }
 						])
@@ -42,13 +42,13 @@ it.effect(
 	'pins connector lookup to the checked DNS answers instead of resolving its hostname again',
 	() =>
 		Effect.gen(function* () {
-			const destination = yield* publicDestination('mail.example', 993, async () => [
+			const destination = yield* public_destination('mail.example', 993, async () => [
 				{ address: '8.8.8.8', family: 4 },
 				{ address: '2606:4700:4700::1111', family: 6 }
 			]);
 			const result = yield* Effect.callback<string | import('node:dns').LookupAddress[], Error>(
 				(resume) => {
-					pinnedLookup(destination.addresses)(
+					pinned_lookup(destination.addresses)(
 						'rebound.example',
 						{ all: true },
 						(error, addresses) =>
@@ -60,6 +60,19 @@ it.effect(
 		})
 );
 
+it.effect('normalizes bracketed IPv6 at TCP and HTTP admission without weakening the loopback guard', () =>
+	Effect.gen(function* () {
+		const address = '2606:4700:4700::1111';
+		expect(yield* public_destination(`[${address}]`, 443)).toMatchObject({
+			hostname: address,
+			addresses: [{ address, family: 6 }]
+		});
+		expect(yield* public_addresses(new URL(`https://[${address}]/`))).toEqual([{ address, family: 6 }]);
+		expect(yield* Effect.flip(public_addresses(new URL('https://[::1]/')))).toMatchObject({ kind: 'invalid' });
+		expect(yield* public_addresses(new URL('http://[::1]:8000/'), undefined, true)).toEqual([{ address: '::1', family: 6 }]);
+	})
+);
+
 it.effect(
 	'keeps the original TLS hostname and checked numeric endpoint while allowing non-HTTP ports',
 	() =>
@@ -69,24 +82,24 @@ it.effect(
 				queries++;
 				return [{ address: queries === 1 ? '8.8.8.8' : '127.0.0.1', family: 4 }];
 			};
-			expect(yield* publicDestination('mail.example', 993, resolve)).toMatchObject({
+			expect(yield* public_destination('mail.example', 993, resolve)).toMatchObject({
 				hostname: 'mail.example',
 				port: 993,
 				address: { address: '8.8.8.8', family: 4 }
 			});
-			expect(yield* Effect.flip(publicDestination('mail.example', 993, resolve))).toMatchObject({
+			expect(yield* Effect.flip(public_destination('mail.example', 993, resolve))).toMatchObject({
 				kind: 'invalid'
 			});
 			expect(queries).toBe(2);
 			for (const port of [0, -1, 65536, 1.5, Number.NaN])
-				expect(yield* Effect.flip(publicDestination('8.8.8.8', port))).toMatchObject({
+				expect(yield* Effect.flip(public_destination('8.8.8.8', port))).toMatchObject({
 					kind: 'invalid'
 				});
 			expect(
-				yield* Effect.flip(publicAddresses(new URL('https://mail.example:993/'), resolve))
+				yield* Effect.flip(public_addresses(new URL('https://mail.example:993/'), resolve))
 			).toMatchObject({ kind: 'invalid' });
 			expect(
-				yield* Effect.flip(publicAddresses(new URL('http://mail.example/'), resolve))
+				yield* Effect.flip(public_addresses(new URL('http://mail.example/'), resolve))
 			).toMatchObject({ kind: 'invalid' });
 		})
 );

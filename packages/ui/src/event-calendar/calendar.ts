@@ -7,12 +7,12 @@ export type CalendarEvent = {
 	start: Date;
 	end: Date;
 	title: string;
-	allDay?: boolean;
+	all_day?: boolean;
 	/** A CSS colour for the event's accent; the brand colour by default. */
 	color?: string;
-	/** `false` locks a timed event against moving and resizing; `lockedReason` is its tooltip. */
+	/** `false` locks a timed event against moving and resizing; `locked_reason` is its tooltip. */
 	editable?: boolean;
-	lockedReason?: string;
+	locked_reason?: string;
 };
 /** Where an event is drawn: a timed `box`, an all-day or multi-day `bar`, or a month cell's `pill`. */
 export type EventRenderContext = { view: CalendarView; mode: 'box' | 'bar' | 'pill' };
@@ -37,7 +37,7 @@ function startOfWeek(d: Date): Date {
 }
 /** A timed box when the event starts and ends on one day; otherwise a bar across the all-day band. */
 export const isTimed = (e: CalendarEvent) =>
-	e.allDay !== true && sameDay(e.start, e.end) && e.end.getTime() - e.start.getTime() < DAY;
+	e.all_day !== true && sameDay(e.start, e.end) && e.end.getTime() - e.start.getTime() < DAY;
 /** The first day shown by `view` around `date`. */
 export const viewStart = (view: CalendarView, date: Date) =>
 	view === 'day'
@@ -67,18 +67,17 @@ export const onDay = (events: readonly CalendarEvent[], day: Date) => {
  * Side-by-side lanes for overlapping timed events: each event's lane, and the lane count of the cluster it overlaps
  * with, so a cluster shares its column's width and a lone event takes all of it.
  */
-export function lanes(
-	events: readonly CalendarEvent[]
-): Map<CalendarEvent['id'], { lane: number; of: number }> {
+type Lane = { lane: number; of: number };
+export function lanes(events: readonly CalendarEvent[]): Map<CalendarEvent['id'], Lane> {
 	const sorted = [...events].sort(
 		(a, b) => a.start.getTime() - b.start.getTime() || b.end.getTime() - a.end.getTime()
 	);
-	const out = new Map<CalendarEvent['id'], { lane: number; of: number }>();
-	let cluster: CalendarEvent[] = [],
+	const out = new Map<CalendarEvent['id'], Lane>();
+	let cluster: Lane[] = [],
 		ends: number[] = [],
 		clusterEnd = -Infinity;
 	const close = () => {
-		for (const e of cluster) out.get(e.id)!.of = ends.length;
+		for (const placement of cluster) placement.of = ends.length;
 		cluster = [];
 		ends = [];
 	};
@@ -88,8 +87,9 @@ export function lanes(
 		if (lane === -1) lane = ends.length;
 		ends[lane] = e.end.getTime();
 		clusterEnd = Math.max(clusterEnd, e.end.getTime());
-		out.set(e.id, { lane, of: 0 });
-		cluster.push(e);
+		const placement = { lane, of: 0 };
+		out.set(e.id, placement);
+		cluster.push(placement);
 	}
 	close();
 	return out;

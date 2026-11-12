@@ -3,14 +3,20 @@
 Declare the entity in `src/data/model/<name>/+model.ts`. Reads, policies, views, the agent and
 seeds all name that model. Its optional `+representation.svelte` receives `RecordView<'name'>`.
 Model folders may nest under other models or ordinary grouping folders. For example,
-`src/data/model/payroll/payroll_run/payslip/+model.ts` declares `model('payslip', …)`;
+`src/data/model/payroll/payroll_run/payslip/+model.ts` declares `model(spec)`;
 the leaf name remains unique across the workspace. Grouping folders need no declaration, and a
 representation stays beside its own `+model.ts`.
 
-```ts
-import { model } from '@norbital-ai/bolt';
+`bolt check` generates one typed binding per model under `.norbital/models/`. Import the
+binding for this file and call `model(spec)`. The binding supplies the row and callback types,
+and the compiler verifies that it matches the file's leaf name. The relative path below is
+for `src/data/model/orders/+model.ts`. Nested model folders need the corresponding extra
+parent segments.
 
-export default model('orders', {
+```ts
+import { model } from '../../../../.norbital/models/orders.ts';
+
+export default model({
 	description: 'Customer orders.',
 	record_label: 'record.number',
 	fields: {
@@ -25,48 +31,48 @@ export default model('orders', {
 		notes: { kind: 'text', optional: true },
 		placed_at: { kind: 'instant', optional: true }
 	},
-	read: {
-		orders: { fields: ['number', 'customer', 'status', 'notes', 'placed_at'] },
-		'orders.customer': { fields: ['name', 'code'] },
-		'orders.lines': { fields: ['product', 'quantity', 'net'] },
-		'orders.lines.product': { fields: ['code', 'name'] }
-	},
 	// a named output beside `default`: what the warehouse reads
 	outputs: {
+		default: {
+			fields: ['number', 'customer', 'status', 'notes', 'placed_at'],
+			customer: { fields: ['name', 'code'] },
+			lines: { fields: ['product', 'quantity', 'net'], product: { fields: ['code', 'name'] } }
+		},
 		logistics: {
-			orders: { fields: ['number', 'status'] },
-			'orders.lines': { fields: ['product', 'quantity'] }
+			fields: ['number', 'status'],
+			lines: { fields: ['product', 'quantity'] }
 		}
 	},
 	create: {
-		columns: { orders: ['customer', 'notes'], 'orders.lines': ['product', 'quantity', 'net'] },
-		transform: function* (rows, ctx) {
-			const { customers } = yield* ctx.db.query({
-				customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['blocked'] }
+		columns: { fields: ['customer', 'notes'], lines: { fields: ['product', 'quantity', 'net'] } },
+		transform: function* (changes, ctx) {
+			const { customers } = yield* ctx.query({
+				customers: { where: { id: { in: changes.map((c) => c.after.customer) } }, fields: ['blocked'] }
 			});
 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
-			const at = rows.findIndex((r) => blocked.has(r.customer));
+			const at = changes.findIndex((c) => blocked.has(c.after.customer));
 			if (at >= 0)
-				return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });
-			return rows;
+				return yield* ctx.refuse('errors.customer_blocked', { field: 'customer', row: at });
+			return changes.map((c) => c.set);
 		}
 	},
 	update: {
-		columns: { orders: ['status', 'notes'], 'orders.lines': ['product', 'quantity', 'net'] },
+		columns: { fields: ['status', 'notes'], lines: { fields: ['product', 'quantity', 'net'] } },
 		transform: function* (changes, ctx) {
-			return changes.map(({ before, set }) =>
-				set.status === 'placed' && before.status === 'draft' ? { ...set, placed_at: ctx.now } : set
+			// `after` is the row as this write leaves it: the stored values with `set` applied
+			return changes.map((c) =>
+				c.changed('status') && c.after.status === 'placed' ? { ...c.set, placed_at: ctx.now } : c.set
 			);
 		}
 	},
 	// a matching row is read-only: update and delete are refused on every path, and the record page shows a lock
-	locked: { status: { eq: 'placed' } }
+	constraints: { placed: { locked: { status: { eq: 'placed' } } } }
 });
 ```
 
 The example assumes `customers` (with `code`, `blocked`), `order_lines` (`order` owned, inverse
 `lines`) and `products`. Model writes are the standard guarded `create`, `update`, `delete` and, on
-a model with a key, `upsert` verbs. A model declares no named queries: callers read the layers
+a model with an `import_key`, `import` verbs. A model declares no named queries: callers read the layers
 they need and transform them with a pure `src/lib` helper on their own side.
 
 ## One record identifier
@@ -75,33 +81,41 @@ Optionally declare `record_label` as a pure CEL expression over `record`:
 
 ```ts
 record_label: "record.code + ' · ' + record.name",
-search: { text: ['email'] } // additional search terms; the identifier is indexed automatically
+indexes: { find: { text: ['email'] } } // additional terms beside the identifier
 ```
 
 This is the default identifier for `RecordShell` titles, the primary text column and compact
 list headings produced by `Table`, default board card headings, pickers, relationship references,
 and record results in Find and Norbius. Explicit authored titles or cell/card snippets override
 the default. Declare the identifier once instead of reconstructing it in each representation.
-Field captions continue to use ordinary `label` text.
+Field captions and help come from the message catalog by convention, with humanized captions
+when no override exists. Declaration fields do not accept inline `label` or `help`.
 
 Omitting it is valid: no identifier column or automatic label index is created. Record views, lists, pickers and references use the record id (UUID) as their identifier;
-approvals use the target record UUID from the existing reference. Explicit `search.text` indexes still work
+approvals use the target record UUID from the existing reference. Explicit text indexes still work
 without a label. With neither a label nor a text index, record search is unavailable and Find
 explains that no search index is declared. Model discovery itself remains available.
 
 Use own stored fields, sequences, computed fields, or nested values inside an inline field.
 For optional values use a conditional, such as `record.name != null ? record.name : 'Unnamed'`;
-use `string(record.quantity)` to include a number. Cross-record lookups, clocks and requestor
-variables are excluded: a persisted identifier must depend only on its record. Related records
-render their own identifiers through the normal relation controls. `bolt check` reports invalid
+use `string(record.quantity)` to include a number. A label may also read a to-one relation's
+fields one hop deep when the selected output exposes them, including a named output whose
+default hides them.
+Clocks and requestor variables are excluded. Relation-dependent labels resolve with their related
+rows through the normal read path. `bolt check` reports invalid
 CEL, unsupported operators and unknown fields at the declaring model.
 
-The compiler creates an engine-owned generated text column, `bolt_record_label`, and includes
+For an own-field label, the compiler creates an engine-owned generated text column, `bolt_record_label`, and includes
 its value in the GIN-backed `bolt_search` document. No duplicate field or explicit label search
 index is needed. Sequence and computed values are available before it is calculated; inserts,
 updates, imports and restores recalculate it. Changing the expression generates a migration that
-rebuilds stored identifiers and their search document for existing rows. `search.text` adds other
+rebuilds stored identifiers and their search document for existing rows. Text indexes add other
 fields, while semantic and custom indexes keep their existing roles.
+
+A relation-dependent label is evaluated while reading its declared output layers. It has no
+stored label column or copied target text. Its lexical search uses that current authorized label,
+and a related-row change refreshes affected live reads. Hiding a dependency or its related row
+uses the record id without matching the hidden text.
 
 Approval requests reuse their existing `collection_name` and `record_id` reference. Search joins
 the target's indexed label and resolves its current identifier at read time; no target label is
@@ -111,29 +125,22 @@ The target's row grants and readable label dependencies apply, including named-o
 A missing, inaccessible or unlabelled target uses its existing record UUID as the fallback. The approval
 model has its own text index for that model name.
 
-Read outputs must expose the fields used by the expression. A restricted output neither receives
-an identifier derived from hidden fields nor matches their terms in search. Legacy model `label`
-field names/lists remain compatible and normalize to the same calculation for workspace models;
-new declarations should use `record_label`. This is model metadata, not a writable data field.
+The selected output's fields, layers and row grants determine whether its label is visible.
+An output that hides a dependency uses the record id, while another output may expose the label.
+`record_label` is model metadata.
 
-## Layer maps
+## Output trees and write layers
 
-`read`, each output, `create` and `update` are layer maps: a flat object keyed by path in the read or write
-tree. `'orders'` is the root layer, `'orders.customer'` and `'orders.lines'` the layers under it,
-`'orders.lines.product'` one deeper; at most five levels. Each segment is a relation of the layer
-above (a ref, an inverse many-relation or an owned child), and each layer's parent is declared too
-(`bolt check`: `model/layer`). `read: 'all'` is `{ <model>: { fields: 'all' } }`.
-
-- `read` declares the `default` output; `outputs` declares named ones (never `default`), each a fixed
-  layer map (`'all'` allowed). Every read names one output (`output`, `default` when absent) and its
-  layer keys are that output's layers. Policies grant outputs and filter their rows; they never change
-  a shape. Without `read` a model is no read root; it can still store data and be a layer of another
-  model's `read`.
+- `outputs` declares `default` and any named outputs. Each output lists `fields` (or `'all'`) and
+  nests a projection under each relation it exposes. For example, use
+  `{ fields: ['number'], customer: { fields: ['name'] } }`. A read uses `default` unless it
+  names another `output`. Policies grant outputs and filter their rows. A model without an output
+  can still store data and appear in another model's output tree.
 - `create.columns` / `update.columns` declare the writable columns per layer. A write layer is a
   many-relation (the child rows); it never lists the key that ties a child to its parent.
   `create.filled` names columns the transform fills when the writer omits them.
 - A write payload stays a tree. A create row is `{ customer, notes, lines: [{ product, quantity, net }] }`
-  (a non-owned child may also be an existing row's id, which links it). An update `set` names the
+  (a non-owned child may also be an existing row, `{ id, revision }`, which links it). An update `set` names the
   root columns and, per child layer, `{ create?, update?: [{ target, set }], delete?, link?, unlink? }`.
 - `.norbital/names.ts` generates the path unions (`ReadPath<'orders'>`, `WritePath<'orders', 'create'>`)
   and the model behind each path, so every layer value types against the right model.
@@ -142,34 +149,34 @@ above (a ref, an inverse many-relation or an owned child), and each layer's pare
 
 Declare application-layer immutability once, on the model or the field:
 
-- `locked: { status: { eq: 'paid' } }` is an own-field predicate. A matching row refuses update and
-  delete on every write path (page, agent, automation, import, bulk edit, approval resubmit); the
-  record page offers a lock with a reason instead of Edit. It is not a database permission and is
-  not inherited by related rows unless their own model declares it.
+- `constraints: { paid: { locked: { status: { eq: 'paid' } } } }` makes a matching row read-only.
+  Add `except: ['note']` to allow edits to selected fields. Each matching lock must allow a field
+  for it to be editable. A matching row cannot be deleted. Related rows use their own model's rules.
 - An `enum` field may declare `transitions: { draft: ['placed'], placed: [] }`. An update naming a
   target outside the current state's list is refused. The enum editor offers only those targets
   plus the current value.
-- A `state` field remains the stricter lifecycle: `initial`, per-state `to`, and `edit` (which fields
-  the state permits). Use `state` when the lifecycle owns field edits; use `enum` transitions when
-  the record has independent fields and only the status moves.
+- A `state` field declares `initial`, per-state `to` and optional transition `stamp` fields.
+  Named lock constraints own editable exceptions through `except`. Policies authorize edges through
+  `update.moves`.
 
-Do not reimplement either rule in `update.transform`, a delete check, or a template form: the host
+Do not reimplement either rule in `update.transform` or a template form: the host
 and the generated record UI already enforce them.
 
 Work that follows a committed write is the model's `effect`, one generator per verb:
 
 ```ts
-effect: {
-	created: function* (rows, ctx) {},              // the committed rows
-	updated: function* (changes, ctx) {},           // [{ before, after }], a stored field changed
-	deleted: function* (rows, ctx) {}               // the stored rows
-}
+create: { /* columns, transform, ... */ effect: function* (changes, ctx) {} },
+update: { /* columns, transform, ... */ effect: function* (changes, ctx) {} },
+delete: { effect: function* (changes, ctx) {} }
 ```
 
 Each runs after the commit, once per committed batch, as the durable run `<model>.effect.<verb>`
 (retried, shown in the Command center's runs). It runs as the writer and holds no policy; its rows
 are the root fields of the writer's output of the model (`default` when it holds it, else the first
-named output it holds). See [APIs](./apis.md) for depth and authority.
+named output it holds). Each change carries `before`, `set`, `after` and `changed(...fields)`.
+Approval lifecycle events carry an empty change list and `ctx.event.kind === 'approval'`.
+Held write effects are frozen until final approval, then released atomically; rejection discards
+them. See [APIs](./apis.md) for depth and authority.
 
 A business operation is a separately declared automation with explicit input. The system identity
 runs it with its declared `policies`; `ctx.run.trigger` records who started it:
@@ -177,28 +184,20 @@ runs it with its declared `policies`; `ctx.run.trigger` records who started it:
 ```ts
 // src/automation/+orders_duplicate.automation.ts
 import { automation } from '@norbital-ai/bolt';
-import { Effect } from 'effect';
-import { Refusal } from '@norbital-ai/bolt/errors';
 
-export default automation('orders_duplicate', {
+export default automation({
 	description: 'Copy an order as a new draft.',
-	input: { order: { kind: 'id', of: 'orders' } },
+	// the caller sends ids; the body receives the rows, read under the run's policies (an unreadable id refuses the start)
+	input: { orders: { kind: 'rows', of: 'orders' } },
 	policies: ['order_duplicating'],
-	run: function* ({ order: id }, ctx) {
-		const { orders } = yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } });
-		const order = orders.rows[0];
+	run: function* ({ orders }, ctx) {
 		const by = ctx.run.trigger;
 		// only the starter's own orders: the run's authority is its policies, so the body checks the starter
-		if (
-			order === undefined ||
-			by.kind !== 'person' ||
-			by.actor.kind !== 'member' ||
-			order.owner !== by.actor.id
-		)
-			return yield* Effect.fail(new Refusal({ message: 'This order is unavailable.' }));
-		yield* ctx.act('orders.create', [
-			{ customer: order.customer, notes: order.notes, owner: order.owner }
-		]);
+		const row = orders.findIndex((order) =>
+			by.kind !== 'person' || by.actor.kind !== 'member' || order.owner !== by.actor.id);
+		if (row >= 0) return yield* ctx.refuse('errors.order_unavailable', { row });
+		yield* ctx.act({ 'orders.create': orders.map((order) =>
+			({ customer: order.customer, notes: order.notes, owner: order.owner })) });
 	}
 });
 ```
@@ -206,22 +205,17 @@ export default automation('orders_duplicate', {
 `order_duplicating` grants the order read and create the run uses. Its `requestor.*` operands name
 the system identity, so a rule about the starter is code over `ctx.run.trigger`, and a ref the run
 writes is set explicitly (a `requestor.id` default does not apply). A person or the agent starts it by hand
-only through a held policy's `automations: ['orders_duplicate']`; code that schedules it needs none. A page starts it with `bolt.start('orders_duplicate', { order: id })` and
-shows its run status. Several independent writes belong in one `ctx.act.many(...)` call when
+only through a held policy's `capabilities.automations`; code that schedules it needs none. A page starts it with `ctx.run('orders_duplicate', { orders: [id] })` and
+shows its run status. Several independent writes belong in one `ctx.act({ ... })` map when
 they must commit atomically; dependent parent/child creates nest the child rows in the parent's
-write layers. For dependent reads and writes, `ctx.transaction(function* (tx) { ... })` uses one
-native session with read-your-writes and a fixed five-second deadline; it needs no manual
-observations. Its model reads and guarded CRUD retain the run's authority. Inner write answers
-are provisional; the outer answer alone is committed or held. This requires PostgreSQL 17+
-and is explicitly unsupported by PGlite. Keep external I/O outside the callback.
-A whole automation is durable work and may contain several transactions.
+write layers. A transform can carry other rows into the same commit. A whole automation is durable work and may contain several independent commits.
 
 ## Relations
 
-A ref carries `to`, optional `inverse`, `optional`, `owned`, `onDelete`, `where` and `default`.
+A ref carries `to`, optional `inverse`, `optional`, `owned`, `on_delete`, `where` and `default`.
 `to: ['customers', 'suppliers']` is a polymorphic arc; a many-to-many link is a model with two refs.
-`onDelete` is `restrict` by default, `cascade`, or `setNull` for an optional ref; owned refs cascade.
-The authoring API has no `onUpdate` option. Foreign-key actions run in the database, including
+`on_delete` is `restrict` by default, `cascade`, or `set_null` for an optional ref; owned refs cascade.
+Foreign-key update actions are not authored. Delete actions run in the database, including
 cascades; callbacks should not reproduce them with delete loops.
 Owned children are write layers of the parent's create/update. Every nested child runs its own
 write callback after the parent, batched by child model. Do not derive a child's stored values
@@ -229,48 +223,65 @@ again in the parent.
 Authority is per access point: `read`, `create`, `update` and `delete` of a model are access points,
 guarded by that model's policy only, every layer under them included. A child written through its
 parent's layers, or a related row read as a layer, is judged by the root model's grant alone; the
-child model's own policy is never consulted on that path. Its `transform`/`check` still run as
+child model's own policy is never consulted on that path. Its transforms and constraints still run as
 business validation. Reading or writing the child model directly is its own access point.
 
 ## Every write path
 
 Native defaults, checks, uniqueness, foreign keys and state triggers own expressible database
-invariants. Audited model tables also have native history triggers, including changes caused by
-referential actions. Policies enforce caller authority; JavaScript callbacks retain business
+invariants. An act's one statement writes the history of its rows and of the cascades and unlinks
+its deletes imply; audited model tables keep a native history trigger for raw SQL. Policies enforce caller authority; JavaScript callbacks retain business
 validation that cannot be expressed by these native rules. A raw SQL connection is privileged
 and does not acquire application policy checks merely by reaching the same table.
 
 Every generated write's input is an array of rows (`[{ … }]`, `[{ target, set }]`, `[{ target }]`);
-there is no single-row form. `create.transform(rows, ctx)` returns the rows to insert; each row it receives carries the `id` it will have. `update.transform(changes, ctx)` receives
-`{ before, set }` for each change and returns its sets. `delete.check(rows, ctx)` may refuse and
-returns no replacement rows. Shared logic is an ordinary helper called by both verbs.
+there is no single-row form. Create and update transforms receive `{ before, set, after, changed }`
+changes and return sets in order. `after` is the row as the write leaves it: the stored values with
+`set` applied, so read a value from `c.after.x`, never `c.set.x ?? c.before.x`, and test a change with
+`c.changed('x')`. A create's `after` carries its future id. Delete has no transform;
+policies and native constraints judge deletion. Shared logic is an ordinary helper called by both verbs.
 
-A transform may instead return `{ rows, with, onApproved }`, and a delete check `{ with, onApproved }`,
-each `{ [model]: { create?: [row], update?: [{ target, set, observed? }] } }`: rows of other models the
-write carries into its own transaction. They run their own model's callbacks (`ctx.carriedBy` names the
-carrying model), the root write's grant admits them, and an `observed` revision older than the stored
-one is a conflict.
+`target` is a row: pass the row you read or received (it carries its `id` and `revision`, and a newer
+stored revision is a conflict). An automation that acts on records takes them as
+`{ kind: 'rows', of: '<model>' }`: a caller sends ids, and the body receives the rows read under the
+run's policies, so `ctx.act({ 'orders.update': orders.map((order) => ({ target: order, set })) })`
+needs no read of its own.
+
+A body says no with `return yield* ctx.refuse('<message key>', { row?, field?, values? })`. The message
+is a key of the workspace catalogue (`src/i18n/+messages.ts`); `row` is the offending row's index in the
+batch or list the body received, and `field` one of its root columns. A message with `{placeholders}`
+(`'errors.short': 'Only {have} of {need} left.'`) takes exactly those `values`, typed from its base text
+(`values: { have, need }`); one without takes none. The failure is a `Refusal`; bodies never construct
+one. The engine renders the key with the workspace catalogue, the path `ctx.t` takes: a refused act's
+`message`, a run's error and the agent read the text, with `key` and `values` beside it.
+
+A transform may instead return `{ sets, with, on_approved }`,
+each carried map `{ [model]: { create?: [row], update?: [{ target, set }] } }`: rows of other models the
+write carries into its own transaction. They run their own model's callbacks (`ctx.carried_by` names the
+carrying model), the root write's grant admits them, and a target's selected revision older than the
+stored one is a conflict.
 
 - `with` is part of the write: held with it under an approval, locked like owned children, rolled back
   on rejection.
-- `onApproved` follows the write once it is approved: at once when no approval holds it. When one does,
+- `on_approved` follows the write once it is approved: at once when no approval holds it. When one does,
   the approving decision asks the request model's callback again (`ctx.approving`) for every held row
-  at once, one call per verb, on the records as they now stand (an update's `{ before: row, set: {} }`),
+  at once, one call per verb, on the records as they now stand (an update has current `before` and
+  `after` trees, an empty `set` and `changed(...)`),
   plans what they carry together and commits it in the decision's one statement. A refusal or conflict
   there leaves the request pending; a rejection writes none. A change to a held record waits the same
   way. Ledger and balance postings belong here.
 
 These callbacks run for Forms, pages, agent writes, automations, remote syncs, imports,
-upserts, bulk edits, approval resubmits, per-record restore and nested owned children. They do not
+bulk edits, approval resubmits, per-record restore and nested owned children. They do not
 run for seed restores or derived `sum`/`count` updates. They execute in the caller's transaction,
-read with workspace authority through `ctx.db.query`, and have no direct writes or I/O.
+read with workspace authority through `ctx.query`, and have no direct writes or I/O.
 
 ## Bulk budget
 
 One callback handles a batch, never one row at a time. The engine prefetches update `before` rows,
-delete rows and upsert matches. A callback may read up to ten times, one dependent wave per read;
+delete rows and import-key matches. A callback may read up to ten times, one dependent wave per read;
 each read is one read request naming every root it needs. Prefetch before mapping, and never yield a read inside the row loop. Each
-policy `check` that admits the batch is one more guest call per verb per model, with the same
+policy `verdict` that admits the batch is one more guest call per verb per model, with the same
 read budget.
 
 | Per N rows     | Cost                                       |

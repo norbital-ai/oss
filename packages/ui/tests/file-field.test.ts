@@ -17,7 +17,7 @@ const PDF = {
 	kind: 'file',
 	accept: ['application/pdf'],
 	max: '20MiB',
-	multiple: true
+	many: true
 } satisfies Kind;
 const PHOTO = { kind: 'file', accept: ['image/*'], max: '5MiB' } satisfies Kind;
 // A complete blank PDF lets the fixture host serve previews without an HTTP server.
@@ -59,7 +59,7 @@ const reads: [string, Value][] = [];
 const host = (over: Partial<KindsHost> = {}): KindsHost => ({
 	upload: (file) =>
 		Effect.succeed({ id: `up-${file.name}`, name: file.name, mime: file.type, size: file.size }),
-	fileUrl: (r) => (r.mime === 'application/pdf' ? PDF_URL : `/files/${r.id}`),
+	file_url: (r) => (r.mime === 'application/pdf' ? PDF_URL : `/files/${r.id}`),
 	query: (request) =>
 		Effect.sync(() =>
 			Object.fromEntries(
@@ -113,7 +113,7 @@ async function field({
 					name: 'documents',
 					id: 'documents',
 					disabled: false,
-					onChange: (v) => changes.push(v)
+					on_change: (v) => changes.push(v)
 				}
 			: { mode, kind, value, name: 'documents' };
 	const target = document.createElement('div');

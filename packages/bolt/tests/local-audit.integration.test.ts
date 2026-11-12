@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { localAudit } from '../src/node/audit.ts';
+import { local_audit } from '../src/node/audit.ts';
 import type { AuditEvent } from '../src/protocol/audit.ts';
 
 const scratch = (prefix: string) =>
@@ -15,7 +15,7 @@ const scratch = (prefix: string) =>
 	);
 const auditEvent = (id: string, status: AuditEvent['status'] = 'prepared'): AuditEvent => ({
 	id,
-	operationId: id.split(':')[0] ?? id,
+	operation_id: id.split(':')[0] ?? id,
 	at: '2001-01-01T00:00:00.000Z',
 	category: 'write',
 	action: 'ledger.update',
@@ -43,7 +43,7 @@ it.live('local development audit survives reopen with complete payloads and boun
 			];
 			const first = yield* Effect.scoped(
 				Effect.gen(function* () {
-					const port = yield* localAudit(directory);
+					const port = yield* local_audit(directory);
 					expect(existsSync(directory)).toBe(false);
 					yield* Effect.tryPromise((signal) => port.append(events, signal));
 					yield* Effect.tryPromise((signal) => port.append(events, signal));
@@ -54,7 +54,7 @@ it.live('local development audit survives reopen with complete payloads and boun
 								[candidate, { ...auditEvent('complete:prepared'), payload: { changed: true } }],
 								signal
 							)
-						).rejects.toMatchObject({ code: 'BA102' });
+						).rejects.toMatchObject({ sqlstate: 'BA102' });
 						expect(await port.detail(candidate.id, signal)).toBeNull();
 					});
 					const page = yield* Effect.tryPromise((signal) =>
@@ -71,12 +71,12 @@ it.live('local development audit survives reopen with complete payloads and boun
 			});
 			yield* Effect.scoped(
 				Effect.gen(function* () {
-					const port = yield* localAudit(directory);
+					const port = yield* local_audit(directory);
 					const detail = yield* Effect.tryPromise((signal) =>
 						port.detail('waiting-a:prepared', signal)
 					);
 					expect(detail).toMatchObject(auditEvent('waiting-a:prepared'));
-					expect(detail?.payloadBytes).toBeGreaterThan(4000);
+					expect(detail?.payload_bytes).toBeGreaterThan(4000);
 					const next = yield* Effect.tryPromise((signal) =>
 						port.query({ order: 'oldest', limit: 1, after: first.cursor }, signal)
 					);
@@ -85,8 +85,8 @@ it.live('local development audit survives reopen with complete payloads and boun
 						port.query(
 							{
 								text: 'needle%_\\',
-								actorKind: 'member',
-								actorId: 'admin',
+								actor_kind: 'member',
+								actor_id: 'admin',
 								category: 'write',
 								action: 'ledger.update',
 								status: 'prepared',

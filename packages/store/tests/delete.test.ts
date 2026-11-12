@@ -37,7 +37,7 @@ for (const audited of [false, true]) {
 					cascade: table({
 						...audit,
 						key: 'text',
-						fields: { parent: { kind: 'ref', to: 'parent', onDelete: 'cascade' } }
+						fields: { parent: { kind: 'ref', to: 'parent', on_delete: 'cascade' } }
 					}),
 					grandchild: table({
 						...audit,
@@ -47,12 +47,12 @@ for (const audited of [false, true]) {
 					nullable: table({
 						...audit,
 						key: 'text',
-						fields: { parent: { kind: 'ref', to: 'parent', optional: true, onDelete: 'setNull' } }
+						fields: { parent: { kind: 'ref', to: 'parent', optional: true, on_delete: 'set_null' } }
 					}),
 					restrict: table({
 						...audit,
 						key: 'text',
-						fields: { parent: { kind: 'ref', to: 'parent', onDelete: 'restrict' } }
+						fields: { parent: { kind: 'ref', to: 'parent', on_delete: 'restrict' } }
 					}),
 					default_ref: table({
 						...audit,
@@ -62,7 +62,7 @@ for (const audited of [false, true]) {
 					override: table({
 						...audit,
 						key: 'text',
-						fields: { parent: { kind: 'ref', to: 'parent', owned: true, onDelete: 'restrict' } }
+						fields: { parent: { kind: 'ref', to: 'parent', owned: true, on_delete: 'restrict' } }
 					})
 				});
 				const db = store(records),
@@ -138,53 +138,13 @@ for (const audited of [false, true]) {
 				expect(yield* execute(yield* db.get('grandchild', { id: 'grandchild' }))).toBeNull();
 				expect((yield* execute(yield* db.get('nullable', { id: 'nullable' })))?.parent).toBeNull();
 				expect(
-					(yield* execute(yield* db.read('parent', { orderBy: 'id', all: true }))).rows.map(
+					(yield* execute(yield* db.read('parent', { order_by: 'id', all: true }))).rows.map(
 						(row) => row.id
 					)
 				).toEqual(['default', 'kept', 'override', 'restricted']);
 			})
 	);
 }
-
-it.effect('preserves historical managed-delete DDL without changing its physical constraints', () =>
-	Effect.gen(function* () {
-		const target: 'parent' = 'parent';
-		const records = {
-			tables: {
-				parent: { key: 'text', fields: { name: { kind: 'text' } } },
-				child: {
-					audit: true,
-					managedDeletes: true,
-					key: 'text',
-					fields: { parent: { kind: 'ref', to: target, owned: true } }
-				}
-			},
-			tz: 'UTC',
-			currency: null
-		} satisfies SchemaSpec;
-		const db = store(records),
-			pg = yield* database,
-			execute = run(pg);
-		yield* script(pg, `${(yield* build(records)).join(';\n')};`);
-		expect(
-			yield* executeSql(pg)({
-				text: "SELECT count(*)::int AS n FROM pg_trigger WHERE tgrelid = 'child'::regclass AND tgname = 'store_audit_update'",
-				params: []
-			})
-		).toEqual([{ n: 0 }]);
-		yield* execute(yield* db.create('parent', { id: 'parent', name: 'Kept' }));
-		yield* execute(yield* db.create('child', { id: 'child', parent: 'parent' }));
-		expect(
-			yield* rejected(pg, (yield* db.delete('parent', { key: { id: 'parent' } })).sql)
-		).toEqual({ code: '23503' });
-		expect((yield* execute(yield* db.get('parent', { id: 'parent' })))?.name).toBe('Kept');
-		expect((yield* execute(yield* db.get('child', { id: 'child' })))?.revision).toBe(1);
-		yield* execute(yield* db.delete('child', { key: { id: 'child' }, observed: 1 }));
-		expect(yield* execute(yield* db.delete('parent', { key: { id: 'parent' } }))).toEqual([
-			{ id: 'parent' }
-		]);
-	})
-);
 
 it.effect(
 	'advances an audited child after native SET NULL and refuses its stale observed revision',
@@ -197,7 +157,7 @@ it.effect(
 					key: 'text',
 					fields: {
 						name: { kind: 'text' },
-						parent: { kind: 'ref', to: 'parent', optional: true, onDelete: 'setNull' }
+						parent: { kind: 'ref', to: 'parent', optional: true, on_delete: 'set_null' }
 					},
 					computed: { name_upper: { kind: 'text', expr: { upper: { field: 'name' } } } }
 				})

@@ -3,7 +3,7 @@ import {
 	filterBuilds,
 	filterMembers,
 	newestReleases,
-	releaseWindow
+	release_window
 } from '../src/workspaces/filters.js';
 
 const now = '2026-10-26T00:10:00.000Z';
@@ -13,29 +13,29 @@ const members = [
 		name: 'Ada Lovelace',
 		email: 'ada@example.com',
 		active: true,
-		lastSeen: '2026-10-26T00:05:00.001Z'
+		last_seen: '2026-10-26T00:05:00.001Z'
 	},
 	{
 		id: 'boundary',
 		name: 'Boundary',
 		email: null,
 		active: true,
-		lastSeen: '2026-10-26T00:05:00.000Z'
+		last_seen: '2026-10-26T00:05:00.000Z'
 	},
 	{
 		id: 'quiet',
 		name: 'Quiet',
 		email: 'quiet@example.com',
 		active: true,
-		lastSeen: '2026-10-25T00:00:00.000Z'
+		last_seen: '2026-10-25T00:00:00.000Z'
 	},
-	{ id: 'unknown', name: 'Unknown', email: null, active: true, lastSeen: null },
+	{ id: 'unknown', name: 'Unknown', email: null, active: true, last_seen: null },
 	{
 		id: 'disabled',
 		name: 'Disabled',
 		email: 'disabled@example.com',
 		active: false,
-		lastSeen: '2026-10-26T00:09:00.000Z'
+		last_seen: '2026-10-26T00:09:00.000Z'
 	}
 ] satisfies Parameters<typeof filterMembers>[0];
 const memberIds = (status: string, search = '') =>
@@ -63,7 +63,7 @@ describe('workspace member filters', () => {
 			name: 'Invalid',
 			email: null,
 			active: true,
-			lastSeen: 'invalid'
+			last_seen: 'invalid'
 		};
 		expect(filterMembers([invalid], '', 'unknown', now)).toEqual([invalid]);
 		expect(filterMembers([invalid], '', 'offline', now)).toEqual([]);
@@ -152,13 +152,13 @@ describe('release log windows', () => {
 	];
 	it('a release serves from its publication until the next one; the newest is open-ended', () => {
 		expect(newestReleases(releases).map((r) => r.commit)).toEqual(['ccc', 'bbb', 'aaa']);
-		expect(releaseWindow(releases, '2026-10-01T00:00:00.000Z')).toEqual({
+		expect(release_window(releases, '2026-10-01T00:00:00.000Z')).toEqual({
 			since: '2026-10-01T00:00:00.000Z',
 			until: '2026-10-02T00:00:00.000Z'
 		});
-		expect(releaseWindow(releases, '2026-10-03T00:00:00.000Z')).toEqual({
+		expect(release_window(releases, '2026-10-03T00:00:00.000Z')).toEqual({
 			since: '2026-10-03T00:00:00.000Z'
 		});
-		expect(releaseWindow(releases, null)).toEqual({});
+		expect(release_window(releases, null)).toEqual({});
 	});
 });

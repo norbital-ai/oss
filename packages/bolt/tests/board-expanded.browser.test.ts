@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
 import { Layer, ManagedRuntime } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import Board from '../../ui/src/board/Board.svelte';
@@ -9,8 +9,20 @@ import { scriptedBolt } from '../../ui/tests/scripted-bolt.ts';
 import './support/shell.css';
 
 it('expanding a lane leaves hints closed and keeps its search keyboard-accessible', async () => {
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
+	const catalog = {
+		jobs: {
+			record_label: 'record.title',
+			label: ['title'],
+			search: ['title'],
+			fields: {
+				title: { kind: 'text' },
+				status: { kind: 'enum', values: ['active'] }
+			}
+		}
+	} satisfies Parameters<typeof scriptedBolt>[0]['catalog'];
 	const fixture = await scriptedBolt({
+		catalog,
 		answer: (read) =>
 			read.m === 'aggregate'
 				? { rows: [{ key: { status: 'active' }, count: 2 }], next: null }
@@ -37,16 +49,7 @@ it('expanding a lane leaves hints closed and keeps its search keyboard-accessibl
 		target,
 		props: {
 			bolt: fixture.bolt,
-			catalog: {
-				jobs: {
-					label: ['title'],
-					search: ['title'],
-					fields: {
-						title: { kind: 'text' },
-						status: { kind: 'enum', values: ['active'] }
-					}
-				}
-			},
+			catalog,
 			part: 'board',
 			view: Board,
 			props: { of: 'jobs', by: 'status', card: ['title'], toolbar: false }

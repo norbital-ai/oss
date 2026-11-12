@@ -8,9 +8,9 @@ const Own = Schema.Struct({ name: Schema.String, version: Schema.String });
 const starterConfig = (
 	id: string,
 	name: string
-) => `import { defineApp } from '@norbital-ai/app-shell';
+) => `import { define_app } from '@norbital-ai/app-shell';
 
-export default defineApp({
+export default define_app({
 	id: ${JSON.stringify(id)},
 	name: ${JSON.stringify(name)},
 	description: ${JSON.stringify(`${name} for workspace members.`)},
@@ -23,7 +23,7 @@ export default defineApp({
 	// Optional: pin the app to one workspace page. Unset, members pick and switch workspaces in the app.
 	// workspace: 'https://t-abc.workspaces.example.norbital.app/apps/cleaner',
 	capabilities: { notifications: true },
-	ios: { teamId: 'ABCDE12345', apsEnvironment: 'production' },
+	ios: { team_id: 'ABCDE12345', aps_environment: 'production' },
 	android: {}
 });
 `;
@@ -81,7 +81,7 @@ export const init = Effect.fn('AppShell.init')(
 				'',
 				'Next:',
 				`  1. Put a 1024×1024 PNG app icon at ${path.join(appDir, 'icon.png')} (no transparency on iOS).`,
-				'  2. Set id, name, host (and optionally workspace) and ios.teamId in norbital.app.ts.',
+				'  2. Set id, name, host (and optionally workspace) and ios.team_id in norbital.app.ts.',
 				'  3. Install (pnpm install), then `norbital-app doctor` and `norbital-app run --platform ios`.'
 			].join('\n')
 		);

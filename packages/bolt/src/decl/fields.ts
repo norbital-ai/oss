@@ -18,18 +18,16 @@ import type {
 	InstantPeriod,
 	Json,
 	MimePattern,
-	Msg,
 	PlainDate,
 	PlainTime,
 	Point,
-	Seconds,
 	Vector
 } from './values.ts';
 
 /**
  * The field kinds: built-in stored kinds (`text`, `int`, `decimal`, `money`, `bool`, `date`, `instant`, `enum`,
  * `state`, `ref`, `file`, `point`, `json`) and the input kinds. Use a built-in kind first; a reusable structured
- * value is a `customField`; a parent-owned value is typed `json` with a `shape`; a separate model is only for
+ * value is a `custom_field`; a parent-owned value is typed `json` with a `shape`; a separate model is only for
  * independent identity, lifecycle, permissions, history or relational queries. Every kind renders and edits itself in
  * cells, forms and history, so a page never maps labels or builds an editor by hand.
  */
@@ -48,31 +46,31 @@ export type {
 	Precision as InstantPrecision
 } from '@norbital-ai/std/kind';
 type SeqPattern = `${string}{${string}}${string}`;
-/** One state of a `state` field: where a write may move it, and what a write may change while the row is in it. */
+/** One state of a state field, its outgoing transitions and its automatic entry timestamp. */
 type StateSpec = {
 	/** The states a write may move to from this one. Absent, this state is terminal: any move out is refused. */
 	to?: readonly string[];
-	/** The other fields a write may change in this state: `'all'` (the default), `'none'`, or these fields. */
-	edit?: 'all' | 'none' | readonly string[];
+	/** The instant field filled with the invocation clock when a row enters this state. */
+	stamp?: string;
 };
-/** Options every field kind takes: `optional`, `default`, `unique`, a `label` and `help` message, and `hidden`. */
+/** Shared storage options. Labels and help text come from the message catalogue. */
 export type FieldCommon = {
+	many?: true;
+	min_items?: number;
+	max_items?: number;
+	/** A many-valued object's stable item key. */
+	key?: string;
 	/** Previous stored field name, preserved by a schema rename. Not on `state`, `seq`, `sum` or `count`, which cannot rename. */
 	was?: string;
 	/** The field may be left empty; without it a create must fill it, unless `default` does. */
 	optional?: true;
 	/** The value a create that omits the field stores. */
 	default?: Json;
-	/** No two rows hold the same value: a native constraint, so a duplicate write is refused. */
-	unique?: true;
-	label?: Msg;
-	/** Guidance shown under the field in a form. */
-	help?: Msg;
 	/** Left out of generated forms; the value is still stored and read. */
 	hidden?: true;
 };
 
-/** Each stored field kind with its own options, beside the options every field shares (`label`, `optional`, …). */
+/** Each stored field kind with its own options, beside the options every field shares (`optional`, `default`, …). */
 export type StoredArm =
 	| { kind: 'text'; format?: TextFormat; max?: number; many?: true }
 	| { kind: 'int'; min?: number; max?: number }
@@ -81,7 +79,6 @@ export type StoredArm =
 	| { kind: 'money'; currency?: string; scale?: number }
 	| { kind: 'currency' }
 	| { kind: 'bool' }
-	| { kind: 'duration' }
 	| { kind: 'date'; precision?: DatePrecision }
 	| { kind: 'instant'; precision?: InstantPrecision }
 	| { kind: 'time'; precision?: TimePrecision }
@@ -96,22 +93,17 @@ export type StoredArm =
 	  }
 	| { kind: 'state'; initial: string; states: { readonly [state: string]: StateSpec } }
 	| { kind: 'seq'; pattern?: SeqPattern; per?: readonly string[] }
-	| { kind: 'sum'; of: `${string}.${string}`; where?: { readonly [k: string]: unknown } } // checked by `Verify`
-	| { kind: 'count'; of: string; where?: { readonly [k: string]: unknown } }
+	| { kind: 'sum'; of: `${string}.${string}`; where?: KindWhere } // checked by `Verify`
+	| { kind: 'count'; of: string; where?: KindWhere }
 	| { kind: 'json'; shape?: InputKind }
-	/**
-	 * `key`: the field of the list's object items that names each one; keys are distinct and non-empty, and a draft
-	 * pointer addresses an item by its key instead of its index (`/leave/ANNUAL/days`).
-	 */
-	| { kind: 'list'; of: InputKind; min?: number; max?: number; key?: string }
 	| { kind: 'object'; fields: InputFields; rest?: InputKind }
-	| { kind: 'file'; accept: readonly MimePattern[]; max: FileSize; multiple?: true }
+	| { kind: 'file'; accept: readonly MimePattern[]; max: FileSize }
 	| { kind: 'point' }
 	| { kind: 'vector'; dim: number; metric: 'l2' | 'cosine' | 'ip' }
 	| { kind: 'custom'; of: string; many?: true };
 type InputArm =
 	| { kind: 'number'; min?: number; max?: number }
-	| { kind: 'id'; of: string; where?: KindWhere }
+	| { kind: 'ref'; to: string | readonly string[]; where?: KindWhere }
 	| { kind: 'union'; by: string; arms: { readonly [tag: string]: InputFields } }
 	/** Untagged: a value of any scalar arm, decoded by kind (the first arm that fits), e.g. `bool | number | text`. */
 	| { kind: 'union'; of: readonly ScalarKind[] }
@@ -123,7 +115,7 @@ type Flat<T> = T extends unknown ? { [K in keyof T]: T[K] } : never;
 /**
  * A stored field's kind literal in a model (`{ kind: 'text' }`, `{ kind: 'money' }`, `{ kind: 'state', … }`, …) with its options.
  */
-export type FieldKind = Flat<FieldCommon & StoredArm>;
+export type FieldKind = Flat<FieldCommon & (StoredArm | Extract<InputArm, { kind: 'ref' }>)>;
 /**
  * An input field's kind: every stored kind plus the input-only `number`, `id`, `union` and `record`.
  */
@@ -134,7 +126,6 @@ export type OutputKind =
 	| (FieldCommon &
 			(
 				| { kind: 'row'; of: string }
-				| { kind: 'list'; of: OutputKind; min?: number; max?: number }
 				| { kind: 'object'; fields: { readonly [name: string]: OutputKind }; rest?: OutputKind }
 				| { kind: 'record'; of: OutputKind }
 				| {
@@ -164,84 +155,72 @@ type Base<K> = K extends { kind: never }
 	? FieldValue<K>
 	: K extends { kind: 'row'; of: infer C extends string }
 		? Row<C>
-		: K extends { kind: 'id'; of: infer C extends string }
-			? Id<C>
+		: K extends { kind: 'ref'; to: infer C }
+			? C extends string
+				? Id<C>
+				: C extends readonly string[]
+					? { [M in C[number]]: { readonly model: M; readonly id: Id<M> } }[C[number]]
+					: never
 			: FieldValue<K>;
 // Unchecked descriptors and unchecked kind properties follow different original branches.
-type FieldValue<K> = K extends { kind: 'list' | 'object' | 'union' | 'record' }
+type FieldValue<K> = K extends { kind: 'object' | 'union' | 'record' }
 	? K extends { kind: never }
 		? PlainFieldValue<K>
 		: (unknown extends K ? false : string extends KindKey<K> ? true : false) extends true
 			? PlainFieldValue<K>
-			: K extends { kind: 'list'; of: infer O }
-				? readonly ValueOf<O>[]
-				: K extends { kind: 'object'; fields: infer F }
-					? K extends { rest: infer R }
-						? InputOf<F> & { readonly [key: string]: ValueOf<R> | ValueOf<F[keyof F]> }
-						: InputOf<F>
-					: K extends { kind: 'union'; of: readonly (infer O)[] }
-						? ValueOf<O>
-						: K extends { kind: 'union'; by: infer B extends string; arms: infer A }
-							? { [T in keyof A]: Simplify<{ readonly [P in B]: T } & InputOf<A[T]>> }[keyof A]
-							: K extends { kind: 'record'; of: infer O }
-								? { readonly [key: string]: ValueOf<O> }
-								: never
+			: K extends { kind: 'object'; fields: infer F }
+				? K extends { rest: infer R }
+					? InputOf<F> & { readonly [key: string]: ValueOf<R> | ValueOf<F[keyof F]> }
+					: InputOf<F>
+				: K extends { kind: 'union'; of: readonly (infer O)[] }
+					? ValueOf<O>
+					: K extends { kind: 'union'; by: infer B extends string; arms: infer A }
+						? { [T in keyof A]: Simplify<{ readonly [P in B]: T } & InputOf<A[T]>> }[keyof A]
+						: K extends { kind: 'record'; of: infer O }
+							? { readonly [key: string]: ValueOf<O> }
+							: never
 	: PlainFieldValue<K>;
-type PlainFieldValue<K> = K extends { kind: 'text'; many: true }
-	? readonly string[]
-	: K extends { kind: 'text' }
-		? string
-		: K extends { kind: 'state'; states: infer S }
-			? keyof S & string
-			: K extends { kind: 'int' | 'count' | 'number' }
-				? number
-				: K extends { kind: 'decimal' | 'money' | 'sum' }
-					? Decimal
-					: K extends { kind: 'currency' }
-						? CurrencyCode
-						: K extends { kind: 'bool' }
-							? boolean
-							: K extends { kind: 'date' }
-								? PlainDate
-								: K extends { kind: 'instant' }
-									? Instant
-									: K extends { kind: 'time' }
-										? PlainTime
-										: K extends { kind: 'duration' }
-											? Seconds
-											: K extends { kind: 'period'; of: 'date' }
-												? DatePeriod
-												: K extends { kind: 'period' }
-													? InstantPeriod
-													: K extends { kind: 'enum'; values: readonly (infer V)[]; many: true }
-														? readonly V[]
-														: K extends { kind: 'enum'; values: readonly (infer V)[] }
-															? V
-															: K extends { kind: 'seq'; pattern: string }
-																? string
-																: K extends { kind: 'seq' }
-																	? number
-																	: K extends { kind: 'json'; shape: infer S }
-																		? ValueOf<S>
-																		: K extends { kind: 'json' }
-																			? Json
-																			: K extends { kind: 'file'; multiple: true }
-																				? readonly FileRef[]
-																				: K extends { kind: 'file' }
-																					? FileRef
-																					: K extends { kind: 'point' }
-																						? Point
-																						: K extends { kind: 'vector' }
-																							? Vector
-																							: K extends {
-																										kind: 'custom';
-																										of: infer F;
-																										many: true;
-																								  }
-																								? readonly ValueOf<CustomShape<F>>[]
-																								: K extends { kind: 'custom'; of: infer F }
-																									? ValueOf<CustomShape<F>>
-																									: never;
+type PlainFieldValue<K> = K extends { kind: 'text' }
+	? string
+	: K extends { kind: 'state'; states: infer S }
+		? keyof S & string
+		: K extends { kind: 'int' | 'count' | 'number' }
+			? number
+			: K extends { kind: 'decimal' | 'money' | 'sum' }
+				? Decimal
+				: K extends { kind: 'currency' }
+					? CurrencyCode
+					: K extends { kind: 'bool' }
+						? boolean
+						: K extends { kind: 'date' }
+							? PlainDate
+							: K extends { kind: 'instant' }
+								? Instant
+								: K extends { kind: 'time' }
+									? PlainTime
+									: K extends { kind: 'period'; of: 'date' }
+										? DatePeriod
+										: K extends { kind: 'period' }
+											? InstantPeriod
+											: K extends { kind: 'enum'; values: readonly (infer V)[] }
+												? V
+												: K extends { kind: 'seq'; pattern: string }
+													? string
+													: K extends { kind: 'seq' }
+														? number
+														: K extends { kind: 'json'; shape: infer S }
+															? ValueOf<S>
+															: K extends { kind: 'json' }
+																? Json
+																: K extends { kind: 'file' }
+																	? FileRef
+																	: K extends { kind: 'point' }
+																		? Point
+																		: K extends { kind: 'vector' }
+																			? Vector
+																			: K extends { kind: 'custom'; of: infer F }
+																				? ValueOf<CustomShape<F>>
+																				: never;
 /**
  * The runtime value type of a field-kind declaration. `optional: true` adds `null`; it does not make an object key
  * optional. Numeric, date and id kinds retain their Bolt value types rather than accepting arbitrary wire strings.
@@ -249,7 +228,8 @@ type PlainFieldValue<K> = K extends { kind: 'text'; many: true }
  * type Notes = ValueOf<{ kind: 'text'; optional: true }>; // string | null
  * @see InputOf
  */
-export type ValueOf<K> = K extends { optional: true } ? Base<K> | null : Base<K>;
+type ManyValue<K> = K extends { many: true } ? readonly Base<K>[] : Base<K>;
+export type ValueOf<K> = K extends { optional: true } ? ManyValue<K> | null : ManyValue<K>;
 type OptionalKeys<F> = {
 	[P in keyof F]-?: F[P] extends { optional: true }
 		? P
@@ -283,13 +263,7 @@ export type Literal<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
 			? Instant | `${DateLiteral}T${string}`
 			: K extends { kind: 'time' }
 				? PlainTime | `${number}:${number}`
-				: K extends { kind: 'duration' }
-					? Seconds | Duration
-					: K extends { kind: 'state' | 'enum' | 'text'; many: true }
-						? Base<K> extends readonly (infer V)[]
-							? V
-							: never
-						: Base<K>;
+				: Base<K>;
 /** A clock default's shift: one span, whole days or weeks of `today`, also minutes or hours of `now`. */
 type Shift<U extends string> = '' | ` ${'+' | '-'} ${U}(${number})`;
 type DefaultOf<K> = K extends { kind: 'date' }
@@ -342,12 +316,9 @@ type Common<D> = {
 	was?: string;
 	optional?: true;
 	default?: D;
-	unique?: true;
-	label?: Msg;
-	help?: Msg;
 	hidden?: true;
 };
-type DerivedCommon = { unique?: true; label?: Msg; help?: Msg; hidden?: true };
+type DerivedCommon = { hidden?: true };
 // one table built once: `Extract` over the arms re-distributes for every literal
 type Arms = { [A in StoredArm | InputArm as A['kind']]: A };
 type ArmOf<K> = K extends keyof Arms ? Arms[K] : never;
@@ -362,22 +333,20 @@ type KindKey<T> = T extends { kind: infer K extends string } ? K : never;
 
 type ScalarInput = Exclude<
 	keyof Arms,
-	'object' | 'list' | 'record' | 'union' | 'json' | 'id' | 'custom' | 'enum' | DerivedKind | 'state'
+	'object' | 'record' | 'union' | 'json' | 'ref' | 'custom' | 'enum' | DerivedKind | 'state'
 >;
 /** The spec one input literal must satisfy (inputs, json shapes, custom shapes); pass it through `Exact`. */
-export type ValidInput<T, Stored = false> = T extends { kind: infer K extends ScalarInput }
+type SingleInput<T, Stored = false> = T extends { kind: infer K extends ScalarInput }
 	? T extends { kind: never }
 		? InputOptions<T, Stored>
-		: T extends { kind: 'text'; many: true }
-			? ArmOf<'text'> & Common<readonly string[]>
-			: InputSpec<T, unknown extends T ? KindKey<T> : K>
+		: InputSpec<T, unknown extends T ? KindKey<T> : K>
 	: InputOptions<T, Stored>;
 type InputOptions<T, Stored> = T extends { kind: 'object'; fields: infer F }
 	? { kind: 'object'; fields: ValidInputs<F, Stored> } & (T extends { rest: infer R }
 			? { rest: ValidInput<R, Stored> }
 			: { rest?: InputKind }) &
 			Common<never>
-	: T extends { kind: 'list' | 'record'; of: infer O }
+	: T extends { kind: 'record'; of: infer O }
 		? Omit<ArmOf<KindKey<T>>, 'of'> & { of: ValidInput<O, Stored> } & Common<never>
 		: T extends { kind: 'union'; of: infer O }
 			? { kind: 'union'; of: { [I in keyof O]: ValidInput<O[I], Stored> } } & Common<never>
@@ -389,23 +358,32 @@ type InputOptions<T, Stored> = T extends { kind: 'object'; fields: infer F }
 					} & Common<never>
 				: T extends { kind: 'json'; shape: infer S }
 					? { kind: 'json'; shape: ValidInput<S, Stored> } & Common<Json>
-					: T extends { kind: 'id'; of: infer C }
-						? { kind: 'id'; of: ModelName } & (Stored extends true ? {} : { where?: IdWhere<C> }) &
+					: T extends { kind: 'ref'; to: infer C }
+						? { kind: 'ref'; to: ModelName } & (Stored extends true ? {} : { where?: IdWhere<C> }) &
 								Common<never>
 						: T extends { kind: 'custom' }
 							? { kind: 'custom'; of: CustomFieldName; many?: true } & Common<DefaultOf<T>>
 							: T extends { kind: 'enum'; values: readonly (infer V)[] }
-								? ArmOf<'enum'> & Common<T extends { many: true } ? readonly V[] : V>
+								? ArmOf<'enum'> & Common<V>
 								: T extends { kind: DerivedKind | 'state' }
 									? `error: '${KindKey<T>}' is a stored-only kind`
 									: [ArmOf<KindKey<T>>] extends [never]
 										? InputKind
 										: InputSpec<T>;
+export type ValidInput<T, Stored = false> = T extends { many: true }
+	? Omit<SingleInput<Omit<T, 'many'>, Stored>, 'default'> & {
+			many: true;
+			min_items?: number;
+			max_items?: number;
+			key?: string;
+			default?: readonly Literal<Omit<T, 'many'>>[];
+		}
+	: SingleInput<T, Stored>;
 export type ValidInputs<F, Stored = false> = { [P in keyof F]: ValidInput<F[P], Stored> };
 /** Output validation follows nested values and resolves a row's model name from the generated catalogue. */
 export type ValidOutput<T> = T extends { kind: 'row' }
 	? { kind: 'row'; of: ModelName } & Common<never>
-	: T extends { kind: 'list' | 'record'; of: infer O }
+	: T extends { kind: 'record'; of: infer O }
 		? Omit<T, 'of'> & { of: ValidOutput<O> }
 		: T extends { kind: 'object'; fields: infer F }
 			? Omit<T, 'fields' | 'rest'> & {
@@ -422,24 +400,13 @@ type IdWhere<C> = C extends string ? ModelWhere<C> : never;
 
 /** The spec one stored field literal must satisfy, given its model's own field literals `F`. */
 export type ValidField<T, F> = T extends {
-	kind:
-		| 'state'
-		| 'money'
-		| DerivedKind
-		| 'json'
-		| 'number'
-		| 'id'
-		| 'list'
-		| 'object'
-		| 'union'
-		| 'record';
+	kind: 'state' | 'money' | DerivedKind | 'json' | 'number' | 'ref' | 'object' | 'union' | 'record';
 }
 	? T extends { kind: 'state'; states: infer S }
 		? {
 				kind: 'state';
 				initial: keyof S & string;
-				// `edit` may also name an owned relationship's inverse: checked by `Verify`, not here
-				states: StateTransitions<S>;
+				states: StateTransitions<S, KeyFor<F, { kind: 'instant'; many?: never }>>;
 			} & DerivedCommon
 		: T extends { kind: 'money' }
 			? {
@@ -450,9 +417,9 @@ export type ValidField<T, F> = T extends {
 					MoneyCurrency<T>
 			: T extends { kind: DerivedKind }
 				? ArmOf<KindKey<T>> & DerivedCommon
-				: T extends { kind: 'json' | 'list' | 'object' }
+				: T extends { kind: 'json' | 'object' }
 					? ValidInput<T, true>
-					: T extends { kind: 'number' | 'id' | 'union' | 'record' }
+					: T extends { kind: 'number' | 'ref' | 'union' | 'record' }
 						? `error: '${KindKey<T>}' is an input-only kind`
 						: ValidInput<T>
 	: ValidInput<T>;
@@ -466,5 +433,6 @@ type MoneyCurrency<T> = T extends { currency: string }
 		? unknown
 		: { currency: 'error: money needs a currency (none in +workspace.ts)' };
 
-type StateTransitions<S> = { [K in keyof S]: StateTransition<keyof S & string> };
-type StateTransition<Keys> = { to?: readonly Keys[]; edit?: 'all' | 'none' | readonly string[] };
+type StateTransitions<S, Stamp extends string> = {
+	[K in keyof S]: { to?: readonly (keyof S & string)[]; stamp?: Stamp };
+};

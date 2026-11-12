@@ -2,7 +2,14 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Cause, Context, Effect, Exit, Fiber, Layer, Stream } from 'effect';
 import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
-import type { AiPort, DeadlinesPort, LinksPort, TransportPort } from '../src/engine/contracts.ts';
+import type {
+	AiPort,
+	AiResponse,
+	BrowserPort,
+	DeadlinesPort,
+	LinksPort,
+	TransportPort
+} from '../src/engine/contracts.ts';
 import { SendRefused } from '../src/engine/conversations/status.ts';
 import {
 	Conflict,
@@ -17,12 +24,13 @@ import { BoltError } from '../src/protocol/errors.ts';
 import { Port } from '../src/engine/port.ts';
 import {
 	Ai,
+	Browser,
 	Convert,
 	DeadlinePort,
 	Drivers,
+	Docs,
 	Files,
 	Geo,
-	Speech,
 	Transport,
 	WebRead
 } from '../src/engine/ports.ts';
@@ -37,12 +45,44 @@ const using = <I, S, A, E>(
 const blob = { key: 'k1', bytes: 2, sha256: 'ab', mime: 'text/plain' };
 
 describe('fromAbi', () => {
+	it.effect('Docs rejects a malformed namespace through the typed failure channel', () =>
+		Effect.gen(function* () {
+			const loaded = Docs.fromAbi({
+				read: async (file) =>
+					JSON.stringify(
+						file === 'index.json'
+							? {
+									namespaces: [
+										{
+											namespace: 'bolt',
+											module: '@norbital-ai/bolt',
+											summary: 'Bolt',
+											symbols: 1,
+											reference: true
+										}
+									],
+									missing: [],
+									guides: [],
+									skills: []
+								}
+							: { namespace: 'bolt', module: '@norbital-ai/bolt', summary: 'Bolt', symbols: 'bad' }
+					)
+			});
+			expect(yield* Effect.flip(using(Docs, loaded, (d) => d.corpus))).toMatchObject({
+				_tag: 'FacilityFailure',
+				kind: 'invalid'
+			});
+		})
+	);
 	it.effect('Files: a call round-trips; a refusal keeps its kind', () =>
 		Effect.gen(function* () {
 			const files = Files.fromAbi({
 				put: async (bytes, meta) => ({ ...blob, bytes: bytes.length, mime: meta.mime }),
 				get: async () => new Uint8Array([1]),
-				url: async (key) => `https://files/${key}`,
+				async url(key) {
+					expect(this.download).toBeTypeOf('function');
+					return `https://files/${key}`;
+				},
 				remove: async () => {},
 				download: async (url) =>
 					url.endsWith('.png')
@@ -65,12 +105,79 @@ describe('fromAbi', () => {
 		})
 	);
 
+	it.effect('Browser optional methods and lifted methods keep their port receiver', () =>
+		Effect.gen(function* () {
+			const closed: string[] = [];
+			const snapshot = (profile: string) => ({ url: `https://${profile}.example`, title: profile, text: profile });
+			const port: BrowserPort = {
+				async open() {},
+				async navigate(profile) {
+					return snapshot(profile);
+				},
+				async snapshot(profile) {
+					expect(this).toBe(port);
+					return snapshot(profile);
+				},
+				async act(profile) {
+					return snapshot(profile);
+				},
+				async evaluate() {
+					return null;
+				},
+				async screenshot() {
+					return new Uint8Array();
+				},
+				async download() {
+					return { ...blob, name: 'file.txt' };
+				},
+				async open_workspace(profile) {
+					expect(this).toBe(port);
+					return snapshot(profile);
+				},
+				async close(profile) {
+					expect(this).toBe(port);
+					closed.push(profile);
+				}
+			};
+			yield* Effect.gen(function* () {
+				const browser = yield* Browser;
+				expect(yield* browser.snapshot('reader', {})).toEqual(snapshot('reader'));
+				expect(
+					yield* browser.openWorkspace?.(
+						'reader',
+						{ environment: 'live' },
+						{
+							actor: {
+								kind: 'member',
+								id: 'member',
+								external: false,
+								admin: false,
+								team_path: [],
+								email: null,
+								phone: null,
+								party: null,
+								teams: []
+							},
+							conversation: 'conversation'
+						}
+					) ?? Effect.die('openWorkspace missing')
+				).toEqual(snapshot('reader'));
+				const session = yield* browser.scoped('scoped');
+				expect(yield* session.snapshot({})).toEqual(snapshot('scoped'));
+				yield* browser.close?.('reader') ?? Effect.die('close missing');
+			}).pipe(Effect.provide(Browser.fromAbi(port)), Effect.scoped);
+			expect(closed).toEqual(['reader', 'scoped']);
+		})
+	);
+
 	it.effect('Convert, WebRead: a call round-trips; an `off` member is unavailable', () =>
 		Effect.gen(function* () {
 			const convert = Convert.fromAbi({
 				targets: ['pdf'],
 				convert: async (source, to) =>
-					new TextEncoder().encode(`${to}:${'html' in source ? source.html : 'markdown' in source ? source.markdown : ''}`)
+					new TextEncoder().encode(
+						`${to}:${'html' in source ? source.html : 'markdown' in source ? source.markdown : ''}`
+					)
 			});
 			expect(yield* using(Convert, convert, (c) => Effect.succeed(c.targets))).toEqual(['pdf']);
 			expect(
@@ -93,28 +200,6 @@ describe('fromAbi', () => {
 			);
 			expect(absent).toBeInstanceOf(Unavailable);
 			expect(absent).toMatchObject({ facility: 'convert' });
-		})
-	);
-
-	it.effect('Speech: a provider refusal keeps its kind; an `off` group is unavailable', () =>
-		Effect.gen(function* () {
-			const speech = Speech.fromAbi({
-				speak: async () =>
-					Promise.reject({ kind: 'tooLarge', message: 'the text is over 5,000 characters' })
-			});
-			const refused = yield* Effect.flip(
-				using(Speech, speech, (s) => s.speak('hi', { format: 'mp3' }))
-			);
-			expect(refused).toBeInstanceOf(FacilityFailure);
-			expect(refused).toMatchObject({
-				kind: 'tooLarge',
-				message: 'the text is over 5,000 characters'
-			});
-			expect(
-				yield* Effect.flip(
-					using(Speech, Speech.fromAbi(off), (s) => s.speak('hi', { format: 'mp3' }))
-				)
-			).toBeInstanceOf(Unavailable);
 		})
 	);
 
@@ -179,7 +264,7 @@ describe('fromAbi', () => {
 			const port: TransportPort = {
 				send: async (kind, message) => {
 					sent.push([kind, message]);
-					return { providerId: `p${sent.length}` };
+					return { provider_id: `p${sent.length}` };
 				}
 			};
 			const transport = Transport.fromAbi({ Mail: port, Sms: off, Push: port });
@@ -187,10 +272,11 @@ describe('fromAbi', () => {
 				yield* using(Transport, transport, (t) =>
 					t.send({ _tag: 'Mail', to: 'a@b.c', subject: 'Code', text: '123456' })
 				)
-			).toEqual({ providerId: 'p1' });
+			).toEqual({ provider_id: 'p1' });
 			yield* using(Transport, transport, (t) =>
 				t.send({
 					_tag: 'Push',
+					id: 'notice-1',
 					subscription: { kind: 'web', endpoint: 'https://push', keys: {} },
 					title: 'New',
 					body: null,
@@ -203,6 +289,7 @@ describe('fromAbi', () => {
 				[
 					'inbox',
 					{
+						id: 'notice-1',
 						subscription: { kind: 'web', endpoint: 'https://push', keys: {} },
 						title: 'New',
 						body: null,
@@ -223,13 +310,13 @@ describe('fromAbi', () => {
 		Effect.gen(function* () {
 			const calls: string[] = [];
 			const port: DeadlinesPort = {
-				announce: (s, at) => {
+				announce: async (s, at) => {
 					calls.push(`announce ${s} ${at}`);
 				},
-				settle: (s, at) => {
+				settle: async (s, at) => {
 					calls.push(`settle ${s} ${String(at)}`);
 				},
-				teardown: (s) => {
+				teardown: async (s) => {
 					calls.push(`teardown ${s}`);
 				}
 			};
@@ -274,14 +361,14 @@ describe('fromAbi', () => {
 		'Ai: ask round-trips, infer streams its deltas then the response, an embeddings-only port embeds',
 		() =>
 			Effect.gen(function* () {
-				const response = {
+				const response: AiResponse = {
 					content: 'hello',
-					toolCalls: [],
-					finish: 'stop' as const,
+					tool_calls: [{ id: 'call-1', name: 'lookup', input: { query: 'hello' } }],
+					finish: 'tool',
 					usage: { input: 1, output: 1 }
 				};
 				const port: AiPort = {
-					sys_1: { ask: async () => ({ answers: {}, costUsd: 0, provider: 'p' }) },
+					sys_1: { max_choices: 8, ask: async () => ({ answers: {}, cost_usd: 0, provider: 'p' }) },
 					sys_2: {
 						models: ['default'],
 						infer: async (_request, _signal, onDelta, onProgress) => {
@@ -293,9 +380,10 @@ describe('fromAbi', () => {
 					}
 				};
 				const ai = Ai.fromAbi({ system1: port.sys_1, system2: port.sys_2, embed: off });
+				expect(yield* using(Ai, ai, (a) => Effect.succeed(a.maxChoices))).toBe(8);
 				expect(yield* using(Ai, ai, (a) => a.ask({ state: {}, questions: {} }))).toEqual({
 					answers: {},
-					costUsd: 0,
+					cost_usd: 0,
 					provider: 'p'
 				});
 				expect(
@@ -306,8 +394,10 @@ describe('fromAbi', () => {
 					{ _tag: 'Delta', text: 'hel' },
 					{ _tag: 'Progress', reasoning: 'thinking' },
 					{ _tag: 'Delta', text: 'lo' },
-					{ _tag: 'Response', response }
+					{ _tag: 'Response', response: { content: response.content, tool_calls: response.tool_calls, finish: response.finish, usage: response.usage } }
 				]);
+				expect(response).not.toHaveProperty('toolCalls');
+				expect(response.tool_calls).toEqual([{ id: 'call-1', name: 'lookup', input: { query: 'hello' } }]);
 				expect(yield* Effect.flip(using(Ai, ai, (a) => a.embed(['x'], 'default')))).toMatchObject({
 					facility: 'ai.embed'
 				});
@@ -342,6 +432,20 @@ describe('fromAbi', () => {
 				).toMatchObject({ kind: 'upstream', message: 'the model stream failed' });
 			})
 	);
+
+	it.effect('Ai rejects a foreign host response using the stored transcript shape', () =>
+		Effect.gen(function* () {
+			const port: AiPort['sys_2'] = {
+				models: ['default'],
+				infer: async () => ({ content: 'hello', tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } })
+			};
+			Object.defineProperty(port, 'infer', {
+				value: async () => ({ content: 'hello', toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } })
+			});
+			const ai = Ai.fromAbi({ system1: off, system2: port, embed: off });
+			expect(yield* Effect.flip(using(Ai, ai, (a) => Stream.runCollect(a.infer({ model: 'default', messages: [] }))))).toMatchObject({ _tag: 'FacilityFailure', kind: 'upstream' });
+		})
+	);
 });
 
 describe('native tagged failures', () => {
@@ -368,7 +472,7 @@ describe('native tagged failures', () => {
 		'BoltError and DbError retain identity; an ABI throw is a typed failure that names it',
 		() =>
 			Effect.gen(function* () {
-				const bolt = BoltError.make('notFound', 'admission', 'gone'),
+				const bolt = BoltError.make('not_found', 'admission', 'gone'),
 					db = DbError.make('23505', 'duplicate key');
 				expect([
 					yield* Effect.flip(Effect.fail(bolt)),

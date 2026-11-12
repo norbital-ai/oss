@@ -3,12 +3,15 @@
 Edits a date, instant, time of day or month as typed segments with a calendar or unit grid, snapped to `precision`.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Result } from 'effect';
 	import type { Precision } from './precision.js';
 	/** A calendar date, an instant, a time of day or a month: typed segments, and a calendar or unit grid to pick from. */
 	export type DateInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: string | null;
-		onChange(next: string | null): void;
+		on_change(next: string | null): void;
 		/** `date` → `YYYY-MM-DD`; `instant` → ISO UTC; `time` → `HH:MM`; `month` → `YYYY-MM`. */
 		of?: 'date' | 'instant' | 'time' | 'month';
 		/**
@@ -81,18 +84,18 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 	import { DatePicker, TimeField } from 'bits-ui';
 	import { onDestroy } from 'svelte';
 	import { watch } from 'runed';
-	import { cn, narrowViewport, uiText, useControls } from '../primitives/utils.js';
+	import { cn, narrowViewport, ui_text, use_controls } from '../primitives/utils.js';
 	import CalendarGrid from './calendar-grid.svelte';
 	import { SEGMENT, SEGMENTS } from './classes.js';
-	import { useKinds } from './context.js';
 	import { datePrecision, snapTime, unitStart } from './precision.js';
 	import Show from './show.svelte';
 	import UnitPicker from './unit-picker.svelte';
 	import { fieldPopoverAlignment } from './popover-alignment.svelte.js';
 
 	let {
+		ctx,
 		value,
-		onChange,
+		on_change,
 		of = 'date',
 		precision,
 		id,
@@ -102,10 +105,10 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		min,
 		max
 	}: DateInputProps = $props();
-	const controls = useControls();
+	const controls = use_controls();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
-	const locale = useKinds().locale;
-	const t = uiText();
+	const locale = $derived(ctx.ui.kinds.locale);
+	const t = ui_text();
 	let fieldAnchor = $state<HTMLElement | null>(null);
 	let calendarContent = $state<HTMLElement | null>(null);
 	const calendarAlignment = fieldPopoverAlignment(
@@ -161,7 +164,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		held = undefined;
 		if (next === undefined || next === sent) return;
 		sent = next;
-		onChange(next);
+		on_change(next);
 	}
 	watch(
 		() => value,
@@ -175,12 +178,12 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 </script>
 
 {#if readonly ?? controls.readonly}
-	<Show readonly kind={displayKind} {value} {id} />
+	<Show {ctx} readonly kind={displayKind} {value} {id} />
 {:else if of === 'month'}
-	<UnitPicker
+	<UnitPicker {ctx}
 		unit="month"
 		value={value === null ? null : `${value.slice(0, 7)}-01`}
-		onChange={(d) => onChange(d === null ? null : d.slice(0, 7))}
+		on_change={(d) => on_change(d === null ? null : d.slice(0, 7))}
 		{id}
 		{disabled}
 		{invalid}
@@ -215,10 +218,10 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		</TimeField.Input>
 	</TimeField.Root>
 {:else if unit !== null}
-	<UnitPicker
+	<UnitPicker {ctx}
 		{unit}
 		value={unitValue}
-		onChange={(d) => onChange(d === null ? null : fromDay(kind, d))}
+		on_change={(d) => on_change(d === null ? null : fromDay(kind, d))}
 		{id}
 		{disabled}
 		{invalid}
@@ -284,7 +287,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 							{months}
 							{weekdays}
 							{placeholder}
-							onPlaceholder={(p) => (placeholder = p)}
+							on_placeholder={(p) => (placeholder = p)}
 							{locale}
 						/>
 					{/snippet}

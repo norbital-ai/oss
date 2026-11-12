@@ -1,5 +1,5 @@
 // Shared xlsx workbook reads and writes in the engine (raw DEFLATE by `fflate`): the agent's `read_file` sheets,
-// `ctx.files.sheet`, and a file sync's upload, template and export.
+// A file sync's upload, template and export.
 import { deflateSync, Inflate } from 'fflate';
 
 const CRC = Uint32Array.from({ length: 256 }, (_, n) => {
@@ -8,7 +8,11 @@ const CRC = Uint32Array.from({ length: 256 }, (_, n) => {
 });
 const crc32 = (bytes: Uint8Array): number => {
 	let c = ~0;
-	for (const b of bytes) c = CRC[(c ^ b) & 0xff]! ^ (c >>> 8);
+	for (const b of bytes) {
+		const entry = CRC[(c ^ b) & 0xff];
+		if (entry === undefined) throw new Error('The CRC table is incomplete.');
+		c = entry ^ (c >>> 8);
+	}
 	return ~c >>> 0;
 };
 /** A zip bomb stops here, whatever size the entry declares (writers may declare none). */
@@ -88,11 +92,11 @@ function worksheetRefs(read: (name: string) => string): { name: string; path: st
 		new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(xml)?.[1];
 	const rels = [
 		...read('xl/_rels/workbook.xml.rels').matchAll(/<(?:[\w.-]+:)?Relationship\b([^>]*?)\/?\s*>/g)
-	].map((m) => ({ id: attr(m[1]!, 'Id'), target: attr(m[1]!, 'Target') }));
+	].map((m) => ({ id: attr(m[0], 'Id'), target: attr(m[0], 'Target') }));
 	return [...read('xl/workbook.xml').matchAll(/<(?:[\w.-]+:)?sheet\b([^>]*?)\/?\s*>/g)].map(
 		(m, i) => {
-			const name = attr(m[1]!, 'name') ?? `Sheet ${i + 1}`;
-			const target = rels.find((r) => r.id === attr(m[1]!, '[\\w.-]+:id'))?.target;
+			const name = attr(m[0], 'name') ?? `Sheet ${i + 1}`;
+			const target = rels.find((r) => r.id === attr(m[0], '[\\w.-]+:id'))?.target;
 			return {
 				name: unxml(name),
 				path: target?.replace(/^\/?(xl\/)?/, 'xl/') ?? `xl/worksheets/sheet${i + 1}.xml`
@@ -110,14 +114,15 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 	const entries = xlsxEntries(zip);
 	const read = (name: string) => entries.get(name)?.() ?? '';
 	const refs = worksheetRefs(read);
-	if (!Number.isInteger(sheet) || sheet < 0 || sheet >= refs.length)
+	const selected = Number.isInteger(sheet) && sheet >= 0 ? refs[sheet] : undefined;
+	if (selected === undefined)
 		throw new Error(`worksheet ${sheet} does not exist`);
-	const path = refs[sheet]!.path;
+	const path = selected.path;
 	const shared = [
 		...read('xl/sharedStrings.xml').matchAll(
 			/<(?:[\w.-]+:)?si\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?si>/g
 		)
-	].map((m) => texts(m[1]!));
+	].map((m) => texts(m[0]));
 	const out: Cell[][] = [];
 	for (const row of read(path).matchAll(
 		/<(?:[\w.-]+:)?row\b[^>]*?\br="(\d+)"[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?row>)/g
@@ -126,8 +131,9 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 		for (const c of (row[2] ?? '').matchAll(
 			/<(?:[\w.-]+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?c>)/g
 		)) {
-			const attrs = c[1]!,
-				body = c[2] ?? '',
+			const attrs = c[1];
+			if (attrs === undefined) throw new Error('The worksheet cell has no attributes.');
+			const body = c[2] ?? '',
 				ref = /\br="([A-Z]+)\d+"/.exec(attrs)?.[1] ?? '';
 			const col =
 				ref === ''
@@ -157,11 +163,7 @@ export function xlsxCells(zip: Uint8Array, sheet = 0): Cell[][] {
 	return out;
 }
 
-const xml = (s: string) =>
-	s.replace(
-		/[<>&"]/g,
-		(c) => `&${({ '<': 'lt', '>': 'gt', '&': 'amp', '"': 'quot' } as const)[c as '<']};`
-	);
+const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const column = (i: number): string =>
 	(i >= 26 ? column(Math.floor(i / 26) - 1) : '') + String.fromCharCode(65 + (i % 26));
 

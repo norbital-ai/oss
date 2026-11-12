@@ -1,10 +1,10 @@
 // A stored file (rules 18, 38d): the bytes are the files port's; the row is keyed by the client-minted upload id.
 // Grantable; a /files upload inserts the row. The storage key stays the engine's.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_file', {
+export default bind_system_model('sys_file')({
 	description: 'A stored file: its name, type, size, digest and the field it was uploaded to.',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		mime: { kind: 'text' },
@@ -19,8 +19,8 @@ export default model('sys_file', {
 		updated_by: { kind: 'text', optional: true }
 	},
 	table: { primary: 'text' },
-	read: {
-		sys_file: {
+	outputs: {
+		default: {
 			fields: [
 				'name',
 				'mime',
@@ -33,8 +33,7 @@ export default model('sys_file', {
 				'updated_at',
 				'updated_by'
 			]
-		}
-	},
-	/** What a file picker or attachment list shows: its name and type, without size, digest or uploader. */
-	outputs: { meta: { sys_file: { fields: ['name', 'mime'] } } }
+		},
+		meta: { fields: ['name', 'mime'] }
+	}
 });

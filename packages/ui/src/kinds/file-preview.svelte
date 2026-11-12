@@ -2,28 +2,28 @@
 @component
 A stored file's popover body: its content where the browser can show it (an image, a PDF's first page, a text file's
 first lines, else its type's icon), its name, size, type, who uploaded it and when and its SHA-256 (read from `sys_file`
-when the host reads), Download, and Remove when `onRemove` is given.
+when the host reads), Download, and Remove when `on_remove` is given.
 -->
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import Icon from '@iconify/svelte';
 	import { Effect, Stream } from 'effect';
 	import { FetchHttpClient, HttpClient } from 'effect/http';
-	import { observeOnce } from '../effect/index.js';
+	import { observe_once } from '../effect/index.js';
 	import type { ReadError } from '../client/contract.js';
 	import type { Row } from '../model/types.js';
-	import { byId } from '../read/request.js';
+	import { by_id } from '../read/request.js';
 	import { withOutputs } from '../client/context.js';
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
-	import { formatFileSize, uiText } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
-	import { fileIcon, type FileRef, type Value } from './kind.js';
+	import { format_file_size, ui_text } from '../primitives/utils.js';
+	import { file_icon, type FileRef, type Value } from './kind.js';
 
-	let { file, onRemove }: { file: FileRef; onRemove?(): void } = $props();
-	const host = useKinds();
-	const t = uiText();
-	const url = $derived(host.fileUrl?.(file));
-	const imageUrl = $derived(host.fileUrl?.(file, { preview: 512 }));
+	let { ctx, file, on_remove }: { ctx: UiContext; file: FileRef; on_remove?(): void } = $props();
+	const host = $derived(ctx.ui.kinds);
+	const t = ui_text();
+	const url = $derived(host.file_url?.(file));
+	const imageUrl = $derived(host.file_url?.(file, { preview: 512 }));
 	const text = $derived(/^text\/|^application\/(json|xml|csv)/.test(file.mime));
 	const one = (
 		model: string,
@@ -33,7 +33,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 		const read = host.query;
 		return read === undefined
 			? Effect.succeed(undefined)
-			: read(withOutputs(byId(model, id, fields), host.catalog)).pipe(
+			: read(withOutputs(by_id(model, id, fields), host.catalog)).pipe(
 					Effect.map((answer) => answer[model]?.rows[0])
 				);
 	};
@@ -43,7 +43,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 			(f) => host.catalog === undefined || host.catalog['sys_file']?.fields[f] !== undefined
 		)
 	);
-	const meta = observeOnce(() =>
+	const meta = observe_once(() =>
 		host.query === undefined || details.length === 0
 			? null
 			: Effect.gen(function* () {
@@ -79,7 +79,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 				}).format(d);
 	};
 	// Reading one chunk closes the response stream when its preview leaves.
-	const content = observeOnce(() =>
+	const content = observe_once(() =>
 		url === undefined || !text
 			? null
 			: HttpClient.get(url).pipe(
@@ -100,7 +100,7 @@ when the host reads), Download, and Remove when `onRemove` is given.
 				alt={file.name}
 				loading="eager"
 				class="min-h-24 w-full"
-				imageClass="max-h-60 min-h-24 w-full object-contain"
+				image_class="max-h-60 min-h-24 w-full object-contain"
 			/>
 		{:else if url !== undefined && file.mime === 'application/pdf'}
 			<iframe
@@ -110,25 +110,25 @@ when the host reads), Download, and Remove when `onRemove` is given.
 			></iframe>
 		{:else if url !== undefined && text}
 			{#if content.loading || content.error !== undefined}<Icon
-					icon={fileIcon(file.mime)}
+					icon={file_icon(file.mime)}
 					class="size-8 text-muted-foreground"
 				/>
 			{:else}<pre class="max-h-60 w-full overflow-auto p-2 text-xs leading-snug">{content.current ??
 						''}</pre>{/if}
 		{:else}
-			<Icon icon={fileIcon(file.mime)} class="size-8 text-muted-foreground" />
+			<Icon icon={file_icon(file.mime)} class="size-8 text-muted-foreground" />
 		{/if}
 	</div>
 	<p class="truncate text-sm font-medium" title={file.name}>{file.name}</p>
 	<dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
 		{#if file.size !== undefined}<dt class="text-muted-foreground">{t('fileSize')}</dt>
-			<dd>{formatFileSize(file.size)}</dd>{/if}
+			<dd>{format_file_size(file.size)}</dd>{/if}
 		<dt class="text-muted-foreground">{t('fileType')}</dt>
 		<dd class="truncate">{file.mime}</dd>
 		{#if file.size === undefined && m?.size != null}<dt class="text-muted-foreground">
 				{t('fileSize')}
 			</dt>
-			<dd>{formatFileSize(m.size)}</dd>{/if}
+			<dd>{format_file_size(m.size)}</dd>{/if}
 		{#if m?.at}<dt class="text-muted-foreground">{t('uploaded')}</dt>
 			<dd>{m.at}</dd>{/if}
 		{#if m?.by}<dt class="text-muted-foreground">{t('uploadedBy')}</dt>
@@ -136,18 +136,18 @@ when the host reads), Download, and Remove when `onRemove` is given.
 		{#if m?.sha256}<dt class="text-muted-foreground">SHA-256</dt>
 			<dd class="truncate font-mono select-all" title={m.sha256}>{m.sha256}</dd>{/if}
 	</dl>
-	{#if url !== undefined || onRemove}
+	{#if url !== undefined || on_remove}
 		<div class="flex items-center gap-2">
 			{#if url !== undefined}
 				<Button variant="outline" href={url} download={file.name} target="_blank" rel="noopener"
 					><Icon icon="lucide:download" class="size-3.5" />{t('download')}</Button
 				>
 			{/if}
-			{#if onRemove}
+			{#if on_remove}
 				<Button
 					variant="ghost"
 					class="ml-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
-					onclick={onRemove}><Icon icon="lucide:trash-2" class="size-3.5" />{t('remove')}</Button
+					onclick={on_remove}><Icon icon="lucide:trash-2" class="size-3.5" />{t('remove')}</Button
 				>
 			{/if}
 		</div>

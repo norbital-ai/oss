@@ -3,7 +3,7 @@ import { Effect, FileSystem } from 'effect';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
 import { join } from 'node:path';
-import { readPack } from '../src/engine/write/pack.ts';
+import { read_pack } from '../src/engine/write/pack.ts';
 
 it.effect('a malformed rows line fails the pack read as a seed decode', () =>
 	Effect.scoped(
@@ -23,7 +23,7 @@ it.effect('a malformed rows line fails the pack read as a seed decode', () =>
 				})
 			);
 			yield* fs.writeFileString(join(dir, 'rows', 'orders.jsonl'), '{\n');
-			expect(yield* Effect.flip(readPack(dir))).toMatchObject({ code: 'seedDecode' });
+			expect(yield* Effect.flip(read_pack(dir))).toMatchObject({ code: 'seed_decode' });
 		})
 	).pipe(Effect.provide(NodeFileSystem.layer), Effect.provide(NodePath.layer))
 );

@@ -6,11 +6,14 @@ may decide now, a two-step form: pick Approve, Reject, Request changes or (the r
 reason and confirm.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ApprovalView, Outcome } from '../client/contract.js';
 	/** Every request of one record (or one request), and what to do after a decision settles. */
 	export type ApprovalPanelProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		requests: readonly ApprovalView[];
-		onOutcome?: (outcome: Outcome) => void;
+		on_outcome?: (outcome: Outcome) => void;
 	};
 </script>
 
@@ -22,16 +25,15 @@ reason and confirm.
 	import Textarea from '../primitives/textarea/textarea.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
-	import { useKinds } from '../kinds/context.js';
 	import { format } from '../kinds/kind.js';
-	import { useBolt } from '../client/context.js';
-	import { label, msg } from '../text/messages.js';
+	import { bolt_of } from '../client/context.js';
+	import { label, msg, catalogText } from '../text/messages.js';
 	import { skipText } from '../record/history.js';
 	import { approvalStatus } from './row.js';
 
-	let { requests, onOutcome }: ApprovalPanelProps = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	let { ctx, requests, on_outcome }: ApprovalPanelProps = $props();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const ids = $props.id();
 	type Entry = ApprovalView['log'][number];
 	type Move = ApprovalView['moves'][number];
@@ -57,7 +59,7 @@ reason and confirm.
 	const DECISIVE = new Set<Entry['move']>([
 		'approve',
 		'reject',
-		'requestChanges',
+		'request_changes',
 		'supersede',
 		'withdraw'
 	]);
@@ -76,7 +78,7 @@ reason and confirm.
 		request: 'Requested',
 		approve: 'Approved',
 		reject: 'Rejected',
-		requestChanges: 'Requested changes',
+		request_changes: 'Requested changes',
 		resubmit: 'Resubmitted',
 		supersede: 'Superseded',
 		withdraw: 'Withdrew'
@@ -84,7 +86,7 @@ reason and confirm.
 	const DECISION_TEXT: Readonly<Record<Move['decision'], string>> = {
 		approve: 'Approve',
 		reject: 'Reject',
-		requestChanges: 'Request changes',
+		request_changes: 'Request changes',
 		withdraw: 'Withdraw'
 	};
 	const LOOK_TEXT: Readonly<Record<Look, string>> = {
@@ -95,9 +97,9 @@ reason and confirm.
 		withdrawn: 'Withdrawn',
 		later: 'Later'
 	};
-	const lookText = (look: Look) => msg(bolt, `approval.look.${look}`, LOOK_TEXT[look]);
+	const lookText = (look: Look) => catalogText(bolt, `approval.look.${look}`, LOOK_TEXT[look]);
 	const decisionText = (d: Move['decision']) =>
-		msg(bolt, `approval.decision.${d}`, DECISION_TEXT[d]);
+		catalogText(bolt, `approval.decision.${d}`, DECISION_TEXT[d]);
 
 	function nodes(v: ApprovalView): Node[] {
 		const request = v.log.find((e) => e.move === 'request');
@@ -105,7 +107,7 @@ reason and confirm.
 		return [
 			{
 				key: 'request',
-				label: msg(bolt, 'approval.move.request', 'Requested'),
+				label: msg(bolt, 'approval.move.request'),
 				caption: `${who(request?.by ?? v.requestor)} · ${day(request?.at ?? v.at)}`,
 				look: 'done',
 				entries: request === undefined ? [] : [request]
@@ -150,7 +152,7 @@ reason and confirm.
 	};
 	const glyph = (look: Look): GlyphName | null =>
 		look === 'done' ? 'check' : look === 'changes' ? 'alert' : look === 'rejected' ? 'x' : null;
-	const DECISIONS = ['approve', 'reject', 'requestChanges', 'withdraw'] as const;
+	const DECISIONS = ['approve', 'reject', 'request_changes', 'withdraw'] as const;
 	/** The viewer's decisions in the form's order: Approve, Reject, Request changes, Withdraw. */
 	const decisions = (v: ApprovalView) =>
 		DECISIONS.flatMap((d) => v.moves.filter((m) => m.decision === d));
@@ -184,7 +186,7 @@ reason and confirm.
 							reason = '';
 							chosen = null;
 						}
-						onOutcome?.(outcome);
+						on_outcome?.(outcome);
 					})
 				),
 				Effect.ensuring(
@@ -192,7 +194,8 @@ reason and confirm.
 						busy = false;
 					})
 				)
-			)
+			),
+			(error) => { notice = bolt.t(error.message); }
 		);
 	}
 </script>
@@ -200,27 +203,27 @@ reason and confirm.
 {#snippet entry(v: ApprovalView, e: Entry)}
 	<li class="flex flex-col gap-0.5" data-move={e.move}>
 		<p class="text-sm font-medium">
-			{msg(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move])} · {who(e.by)}
+			{catalogText(bolt, `approval.move.${e.move}`, MOVE_TEXT[e.move])} · {who(e.by)}
 		</p>
 		<p class="text-meta"><time datetime={e.at}>{at(e.at)}</time></p>
 		{#if e.reason}<p class="text-caption whitespace-pre-wrap wrap-anywhere" data-reason>
 				“{e.reason}”
 			</p>{/if}
 		{#if e.move === 'resubmit' && changedText(v, e) !== ''}<p class="text-caption" data-changed>
-				{msg(bolt, 'approval.changed', 'Changed: {fields}', { fields: changedText(v, e) })}
+				{msg(bolt, 'approval.changed', { fields: changedText(v, e) })}
 			</p>{/if}
-		{#if e.rolledBack !== undefined && e.rolledBack.length > 0}
+		{#if e.rolled_back !== undefined && e.rolled_back.length > 0}
 			<p class="text-caption" data-rolled-back>
-				{msg(bolt, 'approval.rolledBack', 'Rolled back')}: {e.rolledBack
+				{msg(bolt, 'approval.rolled_back')}: {e.rolled_back
 					.map(
-						(r) => `${label(bolt, r.model)} ${msg(bolt, `approval.action.${r.action}`, r.action)}`
+						(r) => `${label(bolt, r.model)} ${catalogText(bolt, `approval.action.${r.action}`, r.action)}`
 					)
 					.join(', ')}
 			</p>
 		{/if}
 		{#if e.skipped !== undefined && e.skipped.length > 0}
 			<p class="text-caption text-warning-foreground dark:text-warning" data-skipped>
-				{msg(bolt, 'approval.skipped', 'Not restored')}: {e.skipped
+				{msg(bolt, 'approval.skipped')}: {e.skipped
 					.map((s) => `${label(bolt, s.model, s.field)} (${skipText(bolt, s.reason)})`)
 					.join(', ')}
 			</p>
@@ -236,7 +239,7 @@ reason and confirm.
 		{#if requests.length > 1}
 			<div class="flex flex-wrap items-center gap-2">
 				<label for={`${ids}-scope`} class="text-label"
-					>{msg(bolt, 'approval.request', 'Request')}</label
+					>{msg(bolt, 'approval.request')}</label
 				>
 				<select
 					id={`${ids}-scope`}
@@ -272,14 +275,14 @@ reason and confirm.
 						></span>{/if}
 					<Popover.Root
 						open={shown === node.key}
-						onOpenChange={(open) => {
+						on_open_change={(open) => {
 							shown = open ? node.key : shown === node.key ? null : shown;
 						}}
 					>
 						<Popover.Trigger
-							openOnHover
-							openDelay={100}
-							closeDelay={150}
+							open_on_hover
+							open_delay={100}
+							close_delay={150}
 							aria-label={`${node.label}: ${lookText(node.look)}`}
 							data-node={node.look}
 							class="focus-visible:ring-ring/40 relative z-10 grid size-7 shrink-0 place-items-center rounded-full border-2 focus-visible:ring-2 focus-visible:outline-none max-sm:size-11 {NODE[
@@ -309,15 +312,15 @@ reason and confirm.
 									/>{/if}{/if}
 						</Popover.Trigger>
 						<Popover.Content
-							trapFocus={false}
-							onOpenAutoFocus={(e) => e.preventDefault()}
+							trap_focus={false}
+							on_open_auto_focus={(e) => e.preventDefault()}
 							class="flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-2 p-3"
 							data-view="approval-step-log"
 						>
 							<p class="text-sm font-semibold">{node.label}</p>
 							{#if node.entries.length === 0}<p class="text-meta">
 									{node.look === 'active'
-										? msg(bolt, 'approval.noDecision', 'No decision yet')
+										? msg(bolt, 'approval.noDecision')
 										: lookText(node.look)}
 								</p>
 							{:else}<ol class="flex flex-col gap-2">
@@ -338,7 +341,7 @@ reason and confirm.
 				role="status"
 				data-view="approval-resubmit"
 			>
-				{msg(bolt, 'approval.resubmitOnSave', 'Saving resubmits for approval')}
+				{msg(bolt, 'approval.resubmitOnSave')}
 			</p>{/if}
 
 		{#if v.moves.length > 0}
@@ -370,8 +373,8 @@ reason and confirm.
 					>
 						<label for={`${ids}-reason`} class="text-label"
 							>{decisionText(decision.decision)} · {decision.reason === 'required'
-								? msg(bolt, 'approval.reasonRequired', 'reason (required)')
-								: msg(bolt, 'approval.reasonOptional', 'reason (optional)')}</label
+								? msg(bolt, 'approval.reasonRequired')
+								: msg(bolt, 'approval.reasonOptional')}</label
 						>
 						<Textarea
 							id={`${ids}-reason`}
@@ -388,7 +391,7 @@ reason and confirm.
 								data-back
 								onclick={() => {
 									chosen = null;
-								}}>{msg(bolt, 'approval.back', 'Back')}</Button
+								}}>{msg(bolt, 'approval.back')}</Button
 							>
 							<Button
 								type="submit"

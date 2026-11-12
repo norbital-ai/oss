@@ -11,8 +11,8 @@ const failed: StudioTestRun = {
 	id: 'run',
 	commit: 'abcdef1234567890',
 	state: 'failed',
-	startedAt: '2026-10-30T12:00:00Z',
-	summary: { files: 1, total: 1, passed: 0, failed: 1, skipped: 0, durationMs: 12 },
+	started_at: '2026-10-30T12:00:00Z',
+	summary: { files: 1, total: 1, passed: 0, failed: 1, skipped: 0, duration_ms: 12 },
 	files: [
 		{
 			path: 'tests/orders.test.ts',
@@ -62,7 +62,7 @@ it('running, passed and empty results use distinct text and status colors', asyn
 					...failed,
 					state,
 					files: [],
-					summary: { files: 0, total: 0, passed: 0, failed: 0, skipped: 0, durationMs: 0 }
+					summary: { files: 0, total: 0, passed: 0, failed: 0, skipped: 0, duration_ms: 0 }
 				}
 			}
 		});

@@ -1,10 +1,10 @@
 // Linear: its real SDK, deliveries signed as Linear signs them, and its GraphQL API faked behind `fetch`.
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { chatProvider, type ChatHost } from '../../src/chat/adapter.ts';
 import { linear } from '../../src/chat/linear/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { apiKey: 'lin_api_key', webhookSecret: 'secret' };
@@ -32,21 +32,18 @@ type Answers = {
 const answer =
 	({ comments, create, found }: Answers = {}) =>
 	({ body }: Call) => {
-		const { query, variables } = JSON.parse(body) as {
-			query: string;
-			variables: { after?: unknown; input?: { id: string } };
-		};
+		const { query, variables } = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ query: Schema.String, variables: Schema.JsonObject })))(body);
 		if (/mutation createComment/.test(query))
 			return (
 				create?.() ??
 				json({
 					data: {
-						commentCreate: { success: true, lastSyncId: 1, comment: { id: variables.input?.id } }
+						commentCreate: { success: true, lastSyncId: 1, comment: { id: Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(variables['input']).id } }
 					}
 				})
 			);
 		if (/query comments\(/.test(query))
-			return json({ data: { comments: comments?.(variables.after) } });
+			return json({ data: { comments: comments?.(variables['after']) } });
 		if (/query issue\(/.test(query))
 			return json({
 				data: {
@@ -95,13 +92,13 @@ const signature = (body: string, secret = 'secret') =>
 const delivery = (body: string) => webhook(body, { 'linear-signature': signature(body) });
 const history = (since: string) =>
 	Effect.promise(async () =>
-		(
+		required((
 			await linear.connect(settings, {
 				fetch,
-				webhookUrl: 'https://hook.test/',
+				webhook_url: 'https://hook.test/',
 				receive: async () => {}
 			} satisfies ChatHost)
-		).history!('I1', since)
+		).history)('I1', since)
 	);
 
 describe('Linear', () => {
@@ -110,14 +107,14 @@ describe('Linear', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(linear, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'norbius' });
-			expect((yield* h.link.webhook!(delivery(hook('create')))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(hook('create')))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'C1',
 						thread: 'I1',
-						sentAt: '2026-11-01T10:00:00.000Z',
+						sent_at: '2026-11-01T10:00:00.000Z',
 						from: { handle: 'U1', name: 'Ada' },
 						text: 'hello',
 						title: 'Bug',
@@ -134,9 +131,9 @@ describe('Linear', () => {
 			const h = yield* connected(linear, settings),
 				body = hook('create');
 			const forged = webhook(body, { 'linear-signature': signature(body, 'guess') });
-			expect((yield* h.link.webhook!(forged)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
 			const old = hook('create', {}, { webhookTimestamp: Date.now() - 120_000 });
-			expect((yield* h.link.webhook!(delivery(old))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(delivery(old))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -146,7 +143,7 @@ describe('Linear', () => {
 			const h = yield* connected(linear, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(hook('create')))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(hook('create')))).status).toBe(500);
 		})
 	);
 	it.live('reads an edit, a delete, a mention and a reply to it', () =>
@@ -154,10 +151,10 @@ describe('Linear', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(linear, settings);
 			const edit = { body: 'hi', editedAt: '2026-11-01T11:00:00.000Z' };
-			yield* h.link.webhook!(delivery(hook('update', edit, { updatedFrom: { body: 'hello' } })));
-			yield* h.link.webhook!(delivery(hook('remove')));
-			yield* h.link.webhook!(delivery(hook('create', { id: 'C2', body: 'ping @Norbius' })));
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(delivery(hook('update', edit, { updatedFrom: { body: 'hello' } })));
+			yield* required(h.link.webhook)(delivery(hook('remove')));
+			yield* required(h.link.webhook)(delivery(hook('create', { id: 'C2', body: 'ping @Norbius' })));
+			yield* required(h.link.webhook)(
 				delivery(hook('create', { id: 'C3', parentId: 'C0', parent: { id: 'C0', userId: 'U0' } }))
 			);
 			expect(h.events[0]).toMatchObject({
@@ -166,7 +163,7 @@ describe('Linear', () => {
 			expect(h.events[1]).toMatchObject({ messages: [{ id: 'C1', deleted: true, text: '' }] });
 			expect(h.events[2]).toMatchObject({ messages: [{ id: 'C2', invocation: 'mention' }] });
 			expect(h.events[3]).toMatchObject({
-				messages: [{ id: 'C3', replyTo: 'C0', invocation: 'reply' }]
+				messages: [{ id: 'C3', reply_to: 'C0', invocation: 'reply' }]
 			});
 		})
 	);
@@ -181,7 +178,7 @@ describe('Linear', () => {
 				hook('update', {}, { updatedFrom: { resolvedAt: null } }),
 				hook('create', {}, { type: 'Issue' })
 			])
-				expect((yield* h.link.webhook!(delivery(body))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(delivery(body))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -189,18 +186,17 @@ describe('Linear', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer());
 			const h = yield* connected(linear, settings);
-			const first = yield* h.link.send!({ id: 'r1', to: 'I1', text: 'Done' }, []);
+			const first = yield* required(h.link.send)({ id: 'r1', to: 'I1', text: 'Done' }, []);
 			const body = api.calls.at(-1)?.body ?? '';
-			const { input } = (JSON.parse(body) as { variables: { input: Record<string, string> } })
-				.variables;
+			const { input } = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ variables: Schema.Struct({ input: Schema.Record(Schema.String, Schema.String) }) })))(body).variables;
 			expect(input).toMatchObject({ issueId: 'I1', body: 'Done' });
 			expect(input['id']).toMatch(
 				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/
 			);
-			expect(first).toEqual({ providerId: input['id'] });
+			expect(first).toEqual({ provider_id: input['id'] });
 			expect(api.calls.at(-1)?.headers.get('authorization')).toBe('lin_api_key');
-			expect(yield* h.link.send!({ id: 'r1', to: 'I1', text: 'Done' }, [])).toEqual(first);
-			expect(yield* h.link.send!({ id: 'r2', to: 'I1', text: 'Done' }, [])).not.toEqual(first);
+			expect(yield* required(h.link.send)({ id: 'r1', to: 'I1', text: 'Done' }, [])).toEqual(first);
+			expect(yield* required(h.link.send)({ id: 'r2', to: 'I1', text: 'Done' }, [])).not.toEqual(first);
 		})
 	);
 	it.live('a resend that finds its id taken is the comment that landed', () =>
@@ -209,8 +205,8 @@ describe('Linear', () => {
 				json({ errors: [{ message: 'id taken', extensions: { type: 'invalid input' } }] }, 400);
 			yield* platformApi(answer({ create: taken, found: true }));
 			const h = yield* connected(linear, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: 'I1', text: 'Done' }, []);
-			expect(sent).toMatchObject({ providerId: expect.any(String) });
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 'I1', text: 'Done' }, []);
+			expect(sent).toMatchObject({ provider_id: expect.any(String) });
 		})
 	);
 	it.live('a refused send fails for good, and a rate limit stays retryable', () =>
@@ -221,7 +217,7 @@ describe('Linear', () => {
 			);
 			yield* platformApi(answer({ create: () => refusal.clone() }));
 			const h = yield* connected(linear, settings);
-			const lost = yield* Effect.flip(h.link.send!({ id: 'r1', to: 'I1', text: 'x' }, []));
+			const lost = yield* Effect.flip(required(h.link.send)({ id: 'r1', to: 'I1', text: 'x' }, []));
 			expect(lost).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			refusal = new Response(
 				'{"errors":[{"message":"slow","extensions":{"type":"ratelimited"}}]}',
@@ -230,15 +226,15 @@ describe('Linear', () => {
 					headers: { 'content-type': 'application/json', 'retry-after': '30' }
 				}
 			);
-			const held = yield* Effect.flip(h.link.send!({ id: 'r2', to: 'I1', text: 'x' }, []));
-			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retryAfterMs: 30_000 });
+			const held = yield* Effect.flip(required(h.link.send)({ id: 'r2', to: 'I1', text: 'x' }, []));
+			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retry_after_ms: 30_000 });
 		})
 	);
 	it.live('a key Linear refuses fails pairing and keeps nothing', () =>
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ errors: [{ message: 'Authentication required' }] }, 401));
 			const h = yield* host(chatProvider(linear), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -264,14 +260,12 @@ describe('Linear', () => {
 					expect.objectContaining({
 						id: 'C1',
 						thread: 'I1',
-						replyTo: 'C0',
+						reply_to: 'C0',
 						version: '2026-11-01T11:00:00.000Z',
 						from: { handle: 'U1', name: null }
 					})
 				]);
-				const { variables } = JSON.parse(api.calls.at(-1)?.body ?? '') as {
-					variables: Record<string, unknown>;
-				};
+				const { variables } = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ variables: Schema.JsonObject })))(api.calls.at(-1)?.body ?? '');
 				expect(variables).toMatchObject({
 					includeArchived: true,
 					filter: { issue: { id: { eq: 'I1' } }, updatedAt: { gte: '2026-11-01T09:00:00.000Z' } }

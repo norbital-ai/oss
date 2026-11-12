@@ -1,34 +1,41 @@
 // Kit edge cases: the generated verb catalogue owns erase, and member setup is never a counted statement.
 import { expect, it } from '@effect/vitest';
-import { Effect, Result } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import { VERBS } from '../../bolt/src/engine/callables/index.ts';
-import { decodeProjectedManifest } from '../../bolt/src/engine/manifest.ts';
+import { decode_projected_manifest } from '../../bolt/src/engine/manifest.ts';
 import { ActRefused } from '../../bolt/src/decl/errors.ts';
 import { TestWorkspace } from '../src/test/effect.ts';
+import { id_of } from '../../bolt/src/decl/id.ts';
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			customers: { description: 'A customer', label: 'name', fields: { name: { kind: 'text' } } }
+			customers: {
+				description: 'A customer',
+				record_label: 'record.name',
+				fields: { name: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {
 			customers: {
-				read: { customers: { fields: 'all' } },
+				outputs: { default: { customers: { fields: 'all' } } },
 				create: { columns: { customers: ['name'] } }
 			}
 		},
-		policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
+		policies: {
+			reader: {
+				description: 'Reads customers',
+				grants: { customers: { outputs: { default: {} } } }
+			}
+		},
 		automations: {},
 		integrations: {},
 		teams: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
 		groups: {},
-		kiosks: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -36,17 +43,20 @@ it.effect('dispatches generated verbs through the host catalogue and records typ
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
 		expect(VERBS).toContain('erase');
-		const created = yield* t.as(t.admin).act('customers.create', [{ name: 'Acme' }]);
+		const created = yield* (yield* t.as(t.admin)).act({ 'customers.create': [{ name: 'Acme' }] });
 		expect(created.kind).toBe('committed');
 		if (created.kind !== 'committed') throw new Error('the create did not commit');
 		const record = created.records.find((record) => record.model === 'customers');
 		if (record === undefined || record.model !== 'customers')
 			throw new Error('the create returned no customer');
-		const id = record.id;
+		const target = {
+			id: yield* Schema.decodeUnknownEffect(id_of('customers'))(record.id),
+			revision: record.revision
+		};
 		expect(
-			yield* Effect.flip(t.as(t.member(['reader'])).act('customers.erase', { target: id }))
+			yield* Effect.flip((yield* t.as(t.member(['reader']))).act({ 'customers.erase': { target } }))
 		).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });
-		expect(yield* t.as(t.admin).act('customers.erase', { target: id })).toMatchObject({
+		expect(yield* (yield* t.as(t.admin)).act({ 'customers.erase': { target } })).toMatchObject({
 			kind: 'committed'
 		});
 		expect(
@@ -54,7 +64,7 @@ it.effect('dispatches generated verbs through the host catalogue and records typ
 				?.rows
 		).toEqual([{ n: 0 }]);
 		const failure = yield* Effect.flip(
-			t.as(t.member(['reader'])).act('customers.create', [{ name: 'Beta' }])
+			(yield* t.as(t.member(['reader']))).act({ 'customers.create': [{ name: 'Beta' }] })
 		);
 		expect(failure).toBeInstanceOf(ActRefused);
 		expect(failure).toMatchObject({ _tag: 'ActRefused', code: 'forbidden' });

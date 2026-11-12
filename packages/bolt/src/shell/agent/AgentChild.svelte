@@ -7,44 +7,47 @@
 	streaming and running rows say it works.
 -->
 <script lang="ts">
+	import { everySecond } from '../seconds.ts';
 	import { observe } from '@norbital-ai/ui/effect';
 	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
-	import { Button, Icon, ReadonlyMarkdown, Spinner } from '@norbital-ai/ui';
-	import type { AgentRow } from '../../protocol/wire.ts';
+	import { Button, Icon, ReadonlyMarkdown, Spinner, type UiContext } from '@norbital-ai/ui';
+	import { TranscriptReadAnswer } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import Steps from './Steps.svelte';
-	import MadeFiles from './MadeFiles.svelte';
+	import Attachments from './Attachments.svelte';
 	import AgentAvatar from './AgentAvatar.svelte';
-	import { elapsedText } from '../studio/model.ts';
+	import { elapsed_text } from '../studio/model.ts';
 	import { callableWords, childStatus } from './view.ts';
 
 	let {
+		ctx,
 		bolt,
 		t,
 		id,
 		compact = false,
-		onOpen,
-		onBack,
-		onState,
+		on_open,
+		on_back,
+		on_state,
 		control
 	}: {
-		bolt: Pick<ShellBolt, 'observe' | 'fileUrl'>;
+		ctx: UiContext;
+		bolt: Pick<ShellBolt, 'observe' | 'file_url'>;
 		t: (key: string) => string;
 		id: string;
-		/** One line that opens the sub-agent (`onOpen`), instead of its whole view. */
+		/** One line that opens the sub-agent (`on_open`), instead of its whole view. */
 		compact?: boolean;
-		onOpen?: () => void;
-		onBack?: () => void;
-		onState?: (status: ReturnType<typeof childStatus> | null) => void;
+		on_open?: () => void;
+		on_back?: () => void;
+		on_state?: (status: ReturnType<typeof childStatus> | null) => void;
 		/** Stops a running sub-agent, or resumes a stopped one (its own conversation's stop and resume), calling `refused` when it did not; absent, it has neither. */
 		control?: (id: string, stop: boolean, refused: () => void) => void;
 	} = $props();
 
 	const transcript = observe(() =>
-		bolt.observe<{ rows: AgentRow[]; status?: 'idle' | 'running' | 'stopped' }>({
+		bolt.observe({
 			read: { m: 'transcript', a: [id] }
-		})
+		}, TranscriptReadAnswer)
 	);
 	const rows = $derived(transcript.current?.rows ?? []);
 	const error = $derived(transcript.error?.message ?? null);
@@ -75,8 +78,7 @@
 		(running) => {
 			if (!running) return;
 			now = Date.now();
-			const timer = setInterval(() => (now = Date.now()), 1_000);
-			return () => clearInterval(timer);
+			return everySecond((at) => (now = at));
 		}
 	);
 	/** Its checklist as its latest `goals` call set it (the child's own conversation holds the same list). */
@@ -114,7 +116,7 @@
 		stopping = stop;
 		control?.(id, stop, () => (stopping = false));
 	};
-	watch([() => reported, () => onState], ([state, notify]) => {
+	watch([() => reported, () => on_state], ([state, notify]) => {
 		notify?.(state);
 		if (state !== 'running') stopping = false;
 	});
@@ -155,7 +157,7 @@
 		<button
 			type="button"
 			class="flex min-h-9 min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-sm:min-h-11"
-			onclick={onOpen}
+			onclick={on_open}
 		>
 			{@render head()}
 		</button>
@@ -170,12 +172,12 @@
 		<header
 			class="sticky top-0 z-10 flex min-h-16 min-w-0 items-center gap-3 rounded-t-2xl border-b border-border bg-background p-4"
 		>
-			{#if onBack !== undefined}<Button
+			{#if on_back !== undefined}<Button
 					size="icon"
 					variant="ghost"
 					class="-ml-1 shrink-0 text-muted-foreground"
 					aria-label={t('Back to subagents')}
-					onclick={onBack}
+					onclick={on_back}
 					data-rail-back><Icon name="lucide:arrow-left" class="size-4" /></Button
 				>{/if}
 			<AgentAvatar {id} class="size-6" />
@@ -197,7 +199,7 @@
 			{#if error !== null}<p role="alert" class="text-destructive">{error}</p>{/if}
 			<p class="border-b border-border pb-4 text-muted-foreground" data-subagent-elapsed>
 				{#if reported === 'running' && Number.isFinite(startedAt)}
-					{t('Working for')} <span class="tabular-nums">{elapsedText(now - startedAt)}</span>
+					{t('Working for')} <span class="tabular-nums">{elapsed_text(now - startedAt)}</span>
 				{:else}{error !== null
 						? t('Failed')
 						: reported === null
@@ -234,7 +236,7 @@
 					{/each}
 				</ol>
 			{/if}
-			{#if steps.length > 0}<Steps {steps} {t} activity />{/if}
+			{#if steps.length > 0}<Steps {ctx} {steps} {t} activity />{/if}
 			{#if changes.length > 0}
 				<!-- what it changed in the workspace -->
 				<ul class="grid gap-1" data-subagent-changes>
@@ -253,9 +255,9 @@
 				</ul>
 			{/if}
 			<!-- the files it made -->
-			{#if made.length > 0}<MadeFiles
+			{#if made.length > 0}<Attachments
 					files={made}
-					fileHref={(id) => bolt.fileUrl({ id })}
+					file_href={(id) => bolt.file_url({ id })}
 					{t}
 				/>{/if}
 			<!-- its exchange with the delegating agent: a question it stopped on, the answer it got, then its own answer -->

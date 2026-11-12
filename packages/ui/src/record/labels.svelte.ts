@@ -3,16 +3,16 @@ import { Effect } from 'effect';
 import { fork } from '../effect/index.js';
 import { SvelteMap } from 'svelte/reactivity';
 import type { ModelExposure } from '../kinds/context.js';
-import { byId, firstOf } from '../read/request.js';
+import { by_id, first_of } from '../read/request.js';
 import type { ViewBolt } from '../client/contract.js';
 import { label, msg } from '../text/messages.js';
-import { labelRead } from '../relations/select.js';
+import { label_read } from '../relations/select.js';
 /**
  * A relation value's words (a filter chip, the author's scope): the record's declared label, read once per record; "…"
  * while it loads. Without a label use the id; a record the viewer cannot read says so.
  */
-export function recordLabels(
-	bolt: Pick<ViewBolt, 'query' | 't' | 'locale'>,
+export function record_labels(
+	client: () => Pick<ViewBolt, 'query' | 't' | 'locale'>,
 	catalog: () => { readonly [c: string]: ModelExposure } | undefined
 ) {
 	const known = new SvelteMap<string, string>();
@@ -22,28 +22,29 @@ export function recordLabels(
 		const hit = known.get(key);
 		if (hit !== undefined || asked.has(key)) return hit ?? '…';
 		asked.add(key);
+		const bolt = client();
 		fork(
 			bolt
 				.query(
 					catalog()?.[target]?.record_label !== undefined
-						? labelRead(catalog(), target, { where: { id: { eq: id } }, limit: 1 })
-						: byId(target, id)
+						? label_read(catalog(), target, { where: { id: { eq: id } }, limit: 1 })
+						: by_id(target, id)
 				)
 				.pipe(
-					Effect.map((answer) => firstOf(answer, target)),
+					Effect.map((answer) => first_of(answer, target)),
 					Effect.tap((row) =>
 						Effect.sync(() =>
 							known.set(
 								key,
-								recordText(catalog()?.[target], row ?? {}, { locale: bolt.locale }) ||
-									msg(bolt, 'view.unnamed', 'an unnamed {what}', {
+								recordText(catalog()?.[target], row ?? {}) ||
+									msg(bolt, 'view.unnamed', {
 										what: label(bolt, target).toLowerCase()
 									})
 							)
 						)
 					),
 					Effect.catch(() =>
-						Effect.sync(() => known.set(key, msg(bolt, 'view.unseen', 'a record you cannot see')))
+						Effect.sync(() => known.set(key, msg(bolt, 'view.unseen')))
 					)
 				)
 		);

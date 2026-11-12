@@ -30,32 +30,37 @@ query execution and lifetime. Shared text, cells and actions have their own modu
 
 ## Async reads
 
+Every view, input and editor takes the page's `ctx` as a prop (`<Table {ctx} of="projects">`); nothing reaches
+the view client through Svelte context. A component that renders one takes `ctx` and hands it on whole.
 Use `Form` and `RecordShell` for record editing; they own loading, drafts and mutation feedback.
+`RecordShell` always keeps its native header and footer outside the scrolling content, including custom
+representations and read-only records. Its `footer` and `footer_actions` decorate that existing footer;
+workspace code supplies the body instead of recreating the frame or putting the whole record in a scrollport.
 Table, Board, RecordShell and the pickers read the caller's view output of the model
 (`ModelExposure.output`: `default` when granted, else the first granted named output).
-For custom workspace reads, import `bolt` from `$bolt` and capture reactive arguments in `$derived`.
-`bolt.query(name, input)` returns a `Query<T>` whose `.current`, `.error` and `.loading` subscribe
+For custom workspace reads, use the `ctx` prop and capture reactive arguments in `$derived`.
+`ctx.query(request)` returns a `Query<T>` whose `.current`, `.error` and `.loading` subscribe
 when read in a component. The same query reads once when awaited in an event handler and composes
 as an Effect with `yield*`.
 
 ```svelte
 <script lang="ts">
-	import { bolt } from '$bolt';
-	let { selected } = $props();
-	const order = $derived(selected === null ? null : bolt.query('orders', { id: selected }));
-	const orders = $derived(bolt.query('orders', { limit: 100 }));
+	import type { Id } from '@norbital-ai/bolt';
+	import type { PageContext } from '@norbital-ai/bolt/page';
+	let { ctx, selected }: { ctx: PageContext; selected: Id<'orders'> | null } = $props();
+	const order = $derived(selected === null ? null : ctx.query({ orders: { where: { id: { eq: selected } }, limit: 1 } }));
 </script>
 
-{#if order?.loading}<p>Loading…</p>{:else if order?.current}<p>{order.current.number}</p>{/if}
+{#if order?.loading}<p>Loading…</p>{:else if order?.current?.orders.rows[0]}<p>{order.current.orders.rows[0].number}</p>{/if}
 ```
 
 Identical reads share a subscription, released after a 30-second grace when its last reactive reader
 leaves. Changed arguments create a new query; check its loading and error states before showing an
 empty result. Live reads receive relevant commits from the host. `aggregate` and `history` use the
-same contract. Render a public page's typed `pageServer.load` data during SSR and hydration; browser
+same contract. Read the public page's `ctx.query` state during SSR and hydration. browser
 queries begin after mount.
 
-Host components with ordinary Effects or Streams can use `observeOnce(() => effect)` or
+Host components with ordinary Effects or Streams can use `observe_once(() => effect)` or
 `observe(() => stream)` from `@norbital-ai/ui/effect`. These component-owned helpers return
 `QueryState<A, E>` with `current`, `error`, `loading`, native `AsyncResult` and `refetch`. Read reactive
 inputs in the source factory. A `null` source pauses; changing sources discards stale completions.
@@ -64,13 +69,13 @@ inputs in the source factory. A `null` source pauses; changing sources discards 
 Derive presentation with `$derived`; use `$state` for user inputs and drafts. Keep the native query's
 subscription ownership and avoid copying its answer into a second state machine. The shell mounts
 one runtime for `run`, `fork` and `attach`; its disposer interrupts every owned fiber. A host
-application provides its own mounted runtime with `mountEdge`.
+application provides its own mounted runtime with `mount_edge`.
 
 Keep mutations separate: event handlers use `fork(effect, onFailure)`; an element-owned resource
 uses `{@attach attach((node) => effect)}` with scoped acquisition and finalizers. `run(effect)`
 remains the explicit Promise bridge. Effects and Streams stay outside Svelte state.
 
-A representation can call `useRecordController()` at component initialization to access its enclosing native
+A representation can call `use_record_controller()` at component initialization to access its enclosing native
 controller. After an action changes the record, refresh from the latest readable row and matching record
 capabilities before calling `current.edit()`. Check `historical` first: a displayed revision stays readonly.
 The controller retains its field permissions, state locks, drafts and native child editors.
@@ -88,9 +93,9 @@ findings and nothing written ([Bolt's sync guide](../../bolt/docs/syncs.md)). A 
 ```ts
 toolbar={{
 	actions: [
-		{ icon: 'lucide:check', name: t('settle'), description: t('settle_hint'), requiresSelection: true,
-			run: (ids) => bolt.act('obligation.update', { target: ids, set: { state: 'FULFILLED' } }) },
-		{ icon: 'lucide:refresh-cw', name: t('refresh'), run: () => bolt.start('catalogue_refresh', {}) }
+		{ icon: 'lucide:check', name: ctx.t('settle'), description: ctx.t('settle_hint'), requires_selection: true,
+			run: (selected) => ctx.act({ 'obligation.update': selected.map((row) => ({ target: row, set: { state: 'FULFILLED' } })) }) },
+		{ icon: 'lucide:refresh-cw', name: ctx.t('refresh'), run: () => ctx.run('catalogue_refresh', {}) }
 	]
 }}
 ```
@@ -100,7 +105,7 @@ pending (spinner, disabled) then Done, or its typed failure is shown in the row 
 An act's committed or pending-approval answer is toasted; a start Effect's `id` and `automation`
 let the toolbar show its live run. Return the Effect directly; the toolbar owns its execution
 and teardown.
-`requiresSelection` turns selection on and disables the row until records are selected; without it the row runs
+`requires_selection` turns selection on and disables the row until records are selected; without it the row runs
 with whatever is selected (possibly none). `disabled(selected)` returns why it cannot run now.
 
 Update and delete are disabled with "Select records first" until records are selected. Delete confirms in-app,
@@ -116,21 +121,15 @@ enforces every record's grants and state restrictions and reports refusals or pe
 snippet at the right edge, before New, for task controls such as a tooltip icon button. Keep page
 operations in the actions menu unless the task needs a direct control.
 
-`Matrix` accepts the same optional `toolbar`. Omitting it preserves a matrix without toolbar
-chrome. Custom cells can queue owned-child changes in their enclosing `FormState` with
-`queueChildren`; omit `edit` and `move` when those changes must be saved together.
-Its `columnHeader({ col, label })` snippet can place a shared input in a column heading, such as
-the repayment date above an amount cell. Omitting it renders the column label.
-
 ## Form invariants
 
-`form.addValidation(rule)` registers a synchronous rule returning `SemanticIssue[]`
+`form.add_validation(rule)` registers a synchronous rule returning `SemanticIssue[]`
 (`{ field, message }`) and returns its unregister. Rules may read `$state` and the draft; their issues
-are `form.semanticErrors`, re-evaluated as values change, so fixing a value clears its issue at once.
+are `form.semantic_errors`, re-evaluated as values change, so fixing a value clears its issue at once.
 `field` is any key the rule chooses (`repayments.3.amount`): a generated `Field` of that name shows it
-like a field error, and a custom cell reads `form.semanticError(key)` to highlight itself.
-`form.canSave` is `canSubmit` plus no pending save, no `errors` and no issues; every native Save uses
-it, and `submit()`, `prepare()` and `validate()` refuse while an issue remains. `canSubmit` stays
+like a field error, and a custom cell reads `form.semantic_error(key)` to highlight itself.
+`form.can_save` is `can_submit` plus no pending save, no `errors` and no issues; every native Save uses
+it, and `submit()`, `prepare()` and `validate()` refuse while an issue remains. `can_submit` stays
 permission-only, so an invalid field is never locked.
 
 ## Text formats
@@ -166,7 +165,7 @@ Selection survives paging and clears when its model, scope, filter, sort or sear
 settles. Changing a table's page size also clears it. Clearing or changing a board's selection scope discards an earlier
 select-all response that arrives later.
 
-`downloadTextFiles([{ name, content }], 'export.zip')` downloads a text document directly, or
+`download_text_files([{ name, content }], 'export.zip')` downloads a text document directly, or
 packages a batch into one ZIP. It preserves UTF-8 bytes and disambiguates duplicate names. Reuse
 it for generated bulk exports; repeated download clicks can silently lose files to browser limits.
 

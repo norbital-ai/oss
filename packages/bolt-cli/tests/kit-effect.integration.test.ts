@@ -1,12 +1,23 @@
 // The Effect test kit: scoped acquisition and typed refusal failures, with no Promise facet.
 import { Context, Effect, Layer, Schema } from 'effect';
 import { it } from '@effect/vitest';
-import { inputSchema } from '@norbital-ai/std/kind';
+import { expectTypeOf } from 'vitest';
+import { Decimal } from '@norbital-ai/std/decimal';
+import { input_schema } from '@norbital-ai/std/kind';
+import { id_of } from '@norbital-ai/bolt';
+import { dynamic_read, uuidv7 } from '@norbital-ai/bolt/protocol';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
-import { expect, KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
+import { expect, JobResult, KitInvalid, TestWorkspace, type Kit } from '../src/test/index.ts';
 import { program } from '../src/test/guest.ts';
-import { actReply, routeFixture } from '../../bolt/tests/support/route-fixture.ts';
-import { uuidv7 } from '../../bolt/src/protocol/wire.ts';
+
+const pageOf = <A>(row: Schema.Decoder<A>) => Schema.Struct({
+	rows: Schema.Array(row),
+	next: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	total: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
+});
+const CustomerPage = Schema.Struct({
+	customers: pageOf(Schema.Struct({ id: id_of('customers'), revision: Schema.Int, name: Schema.String }))
+});
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -14,7 +25,7 @@ const manifest = {
 		// one schema for every case: each workspace below loads the same checkpoint
 		customers: {
 			description: 'A customer',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				balance: { kind: 'decimal', scale: 2, optional: true },
@@ -27,10 +38,10 @@ const manifest = {
 				party: { kind: 'json', optional: true }
 			},
 			computed: {
-				party_id: { kind: 'text', expr: { jsonText: [{ field: 'party' }, 'id'] } },
+				party_id: { kind: 'text', expr: { json_text: [{ field: 'party' }, 'id'] } },
 				email_lower: {
 					kind: 'text',
-					expr: { regexReplace: [{ field: 'email' }, '[^0-9]', ''] }
+					expr: { regex_replace: [{ field: 'email' }, '[^0-9]', ''] }
 				},
 				name_upper: { kind: 'text', expr: { upper: { field: 'name' } } },
 				email_label: { kind: 'text', expr: { concat: [{ field: 'email' }, ' contact'] } },
@@ -42,13 +53,18 @@ const manifest = {
 	relationships: {},
 	exposures: {
 		customers: {
-			read: { customers: { fields: 'all' } },
+			outputs: { default: { customers: { fields: 'all' } } },
 			create: { columns: { customers: ['name'] } }
 		}
 	},
-	policies: { reader: { description: 'Reads customers', grants: { customers: { read: true } } } },
+	policies: {
+		reader: {
+			description: 'Reads customers',
+			grants: { customers: { outputs: { default: {} } } }
+		}
+	},
 	automations: {},
-	// connections are part of the schema checkpoint: every case declares both, so every workspace loads one checkpoint
+	// Every case shares integration definitions; accounts are runtime seed rows.
 	integrations: {
 		calendar: {
 			description: 'A pushed remote catalogue',
@@ -64,14 +80,16 @@ const manifest = {
 		}
 	},
 	teams: {},
-	connections: { calendar: { integration: 'calendar' }, ledger: { integration: 'ledger' } },
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const accounts = [
+	{ id: 'calendar', integration: 'calendar', name: 'Calendar', owner: null, active: true, configuration: { calendars: ['primary', 'secondary'] } },
+	{ id: 'ledger', integration: 'ledger', name: 'Ledger', owner: null, active: true, configuration: { lag: 15 } }
+];
 
 it.live(
 	'explicit callback names activate per-verb markers without mutating a shared manifest',
@@ -88,53 +106,51 @@ it.live(
 				}
 			} satisfies EngineManifest;
 			const guest = yield* program(`export default { model: { customers: { bodies: {
-			create: function* (rows) { return rows.map((row) => ({...row,name:'created:'+row.name})); },
-			update: function* (changes) { return changes.map(({set}) => ({...set,name:'updated:'+set.name})); },
-			delete: function* (_, ctx) { return yield* ctx.refuse('Keep this fixture.'); }
+			create: function* (changes) { return changes.map(({set}) => ({...set,name:'created:'+set.name})); },
+			update: function* (changes) { return changes.map(({set}) => ({...set,name:'updated:'+set.name})); }
 		} } } };`);
 			const transforms = (function* () {
 				yield 'customers.create';
 				yield 'customers.update';
-				yield 'customers.delete';
 			})();
 			const t = Context.get(
 				yield* Layer.build(TestWorkspace.layer({ manifest: callbacks, guest, transforms })),
 				TestWorkspace
 			);
-			const caller = t.as(t.admin);
-			const created = yield* caller.act('customers.create', [{ name: 'Acme' }]);
+			const caller = yield* t.as(t.admin);
+			const created = yield* caller.act({ 'customers.create': [{ name: 'Acme' }] });
 			if (created.kind !== 'committed') throw new Error('The fixture did not commit.');
 			const record = created.records.find((row) => row.model === 'customers');
 			if (record === undefined) throw new Error('The fixture returned no customer.');
 			// the one customer this fixture holds
-			const customer = { customers: { limit: 1 } } as const;
-			expect((yield* caller.query(customer)).customers.rows[0]).toMatchObject({
+			const customer = { customers: { fields: ['name', 'revision'], limit: 1 } } as const;
+			const readCustomer = () => caller.query(customer).pipe(Effect.flatMap(Schema.decodeUnknownEffect(CustomerPage)));
+			expect((yield* readCustomer()).customers.rows[0]).toMatchObject({
 				name: 'created:Acme'
 			});
-			yield* caller.act('customers.update', [{ target: record.id, set: { name: 'Edited' } }]);
-			expect((yield* caller.query(customer)).customers.rows[0]).toMatchObject({
+			const target = { id: yield* Schema.decodeUnknownEffect(id_of('customers'))(record.id), revision: record.revision };
+			yield* caller.act({ 'customers.update': [{ target, set: { name: 'Edited' } }] });
+			expect((yield* readCustomer()).customers.rows[0]).toMatchObject({
 				name: 'updated:Edited'
 			});
-			const batch = yield* t.bodyActs(t.admin).many([
-				{
-					callable: 'customers.upsert',
-					input: [{ id: record.id, name: 'Batch' }],
-					onConflict: 'update'
-				},
-				{ callable: 'customers.create', input: [{ name: 'Other' }] }
-			]);
+			const selected = (yield* readCustomer()).customers.rows[0];
+			if (selected === undefined) throw new Error('Missing updated customer.');
+			const batch = yield* (yield* t.body_acts(t.admin))({
+				'customers.update': [{ target: selected, set: { name: 'Batch' } }],
+				'customers.create': [{ name: 'Other' }]
+			});
 			if (batch.kind !== 'committed') throw new Error('The fixture batch is held for approval.');
-			expect(batch.output).toEqual([[record.id], null]);
-			expect(
-				yield* Effect.flip(caller.act('customers.delete', [{ target: record.id }]))
-			).toMatchObject({ _tag: 'ActRefused', message: 'Keep this fixture.' });
+			expect(batch.output).toEqual({ 'customers.update': null, 'customers.create': null });
+			const retained = (yield* readCustomer()).customers.rows[0];
+			if (retained === undefined) throw new Error('Missing retained customer.');
+			expect(yield* caller.act({ 'customers.delete': [{ target: retained }] })).toMatchObject({ kind: 'committed' });
 			expect(t.manifest.exposures['customers']).toMatchObject({
 				create: { transform: true },
 				update: { transform: true },
-				delete: { check: true }
+				delete: {}
 			});
 			expect(callbacks.exposures.customers).toEqual({
-				read: { customers: { fields: 'all' } },
+				outputs: { default: { customers: { fields: 'all' } } },
 				create: { columns: { customers: ['name'] } },
 				update: { columns: { customers: ['name'] } },
 				delete: {}
@@ -151,7 +167,7 @@ it.live('a clock set back finds the crons it passed ahead of it again', () =>
 					description: 'Runs at two',
 					input: {},
 					policies: ['reader'],
-					on: { cron: '0 2 * * *' }
+					on: [{ cron: '0 2 * * *' }]
 				}
 			}
 		} satisfies EngineManifest;
@@ -164,10 +180,10 @@ it.live('a clock set back finds the crons it passed ahead of it again', () =>
 			TestWorkspace
 		);
 		t.clock.set('2026-11-02T02:00:00.000Z');
-		expect((yield* t.runDue()).failed).toHaveLength(1);
+		expect((yield* t.run_due()).failed).toHaveLength(1);
 		// a file's tests share one workspace: an earlier test's date is no reason for this one to run nothing
 		t.clock.set('2026-10-01T02:00:00.000Z');
-		expect((yield* t.runDue()).failed).toHaveLength(1);
+		expect((yield* t.run_due()).failed).toHaveLength(1);
 	}).pipe(Effect.scoped)
 );
 it.live('fixture callbacks require explicit existing write verbs', () =>
@@ -196,7 +212,7 @@ it.live(
 			const outputs = {
 				...manifest,
 				automations: {
-					return_row: {
+					customers_return_row: {
 						description: 'One recorded row',
 						input: {},
 						output: row,
@@ -205,7 +221,7 @@ it.live(
 				}
 			} satisfies EngineManifest;
 			const guest = yield* program(
-				`export default { automation: { return_row: { body: function* (_, ctx) { return (yield* ctx.query({ customers: { where: { id: { eq: '${id}' } } } })).customers.rows[0]; } } } };`
+				`export default { automation: { customers_return_row: { body: function* (_, ctx) { return (yield* ctx.query({ customers: { where: { id: { eq: '${id}' } } } })).customers.rows[0]; } } } };`
 			);
 			const context = yield* Layer.build(
 				TestWorkspace.layer({
@@ -218,20 +234,33 @@ it.live(
 			);
 			const t = Context.get(context, TestWorkspace);
 			const nativeRow = Schema.Struct({
-				id: Schema.toType(inputSchema({ kind: 'id', of: 'customers' })),
-				balance: Schema.toType(inputSchema({ kind: 'decimal', scale: 2 })),
+				id: Schema.toType(input_schema({ kind: 'ref', to: 'customers' })),
+				balance: Schema.toType(input_schema({ kind: 'decimal', scale: 2 })),
 				document: Schema.Struct({ note: Schema.String })
 			});
-			const caller = t.as(t.admin);
-			const page = Schema.Struct({ rows: Schema.Array(nativeRow), next: Schema.Null });
+			const caller = yield* t.as(t.admin);
+			const nativeAnswer = Schema.Struct({ customers: pageOf(nativeRow) });
 			const request = { customers: { limit: 1 } } as const;
-			expect(Schema.is(page)((yield* caller.query(request)).customers)).toBe(true);
-			expect(Schema.is(page)((yield* t.storedQuery(request)).customers)).toBe(true);
-			expect((yield* caller.query(request)).customers.total).toBe(1);
-			expect((yield* t.storedQuery(request)).customers.total).toBe(1);
+			const called = yield* caller.query(request).pipe(Effect.flatMap(Schema.decodeUnknownEffect(nativeAnswer)));
+			const stored = yield* t.stored_query(request).pipe(Effect.flatMap(Schema.decodeUnknownEffect(nativeAnswer)));
+			expect(called.customers.rows[0]?.balance).toBeInstanceOf(Decimal);
+			expect(stored.customers.rows[0]?.balance).toBeInstanceOf(Decimal);
+			expect(called.customers.next).toBeNull();
+			expect(stored.customers.next).toBeNull();
+			expect(called.customers.total).toBe(1);
+			expect(stored.customers.total).toBe(1);
 			// computed NULL values decode without widening required computed strings, for every exposed field
 			const selected = { customers: {} } as const;
-			expect((yield* caller.query(selected)).customers.rows[0]).toMatchObject({
+			const computed = Schema.Struct({ customers: pageOf(Schema.Struct({
+				name: Schema.String,
+				email_lower: Schema.Null,
+				name_upper: Schema.String,
+				email_label: Schema.String,
+				email_default: Schema.String,
+				email_chain: Schema.Null
+			})) });
+			const own = yield* caller.query(selected).pipe(Effect.flatMap(Schema.decodeUnknownEffect(computed)));
+			expect(own.customers.rows[0]).toMatchObject({
 				name: 'Acme',
 				email_lower: null,
 				name_upper: 'ACME',
@@ -239,32 +268,30 @@ it.live(
 				email_default: 'unknown',
 				email_chain: null
 			});
-			expect((yield* t.as(t.member(['reader'])).query(selected)).customers.rows[0]).toMatchObject({
+			const readable = yield* (yield* t.as(t.member(['reader']))).query(selected).pipe(Effect.flatMap(Schema.decodeUnknownEffect(computed)));
+			expect(readable.customers.rows[0]).toMatchObject({
 				email_lower: null,
 				name_upper: 'ACME',
 				email_default: 'unknown',
 				email_chain: null
 			});
-			expect((yield* caller.query({ sys_user: {} })).sys_user.rows[0]).toMatchObject({
+			const members = yield* caller.query({ sys_user: {} }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(
+				Schema.Struct({ sys_user: pageOf(Schema.Struct({ party_id: Schema.Null, phone_key: Schema.Null })) })
+			)));
+			expect(members.sys_user.rows[0]).toMatchObject({
 				party_id: null,
 				phone_key: null
 			});
-			const result = (yield* actReply(yield* routeFixture(context), caller.authority, {
-				callable: 'start',
-				input: { automation: 'return_row', id: uuidv7(Date.parse(t.clock.now())), input: {} },
-				issuedAt: t.clock.now()
-			})).outcome;
+			const result = yield* caller.run('customers_return_row', {}, JobResult);
 			if (result.kind !== 'committed') throw new Error(JSON.stringify(result));
-			const run = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
-				result.output
-			);
+			const run = result.output;
 			expect(
 				yield* t.db.value(Schema.String, {
 					text: 'select state from sys_run where id=$1',
 					params: [run.id]
 				})
 			).toBe('queued');
-			yield* t.runDue();
+			yield* t.run_due();
 			expect(
 				yield* t.db.rows(Schema.Struct({ state: Schema.String, output: Schema.Json }), {
 					text: 'select state,output from sys_run where id=$1',
@@ -281,6 +308,115 @@ it.live(
 				}
 			]);
 		}).pipe(Effect.scoped)
+);
+
+it.live('computed JSON array lengths retain NULL propagation and the native operand restriction', () =>
+	Effect.gen(function* () {
+		const lengths = {
+			...manifest,
+			models: {
+				customers: {
+					...manifest.models.customers,
+					fields: {
+						...manifest.models.customers.fields,
+						required_values: { kind: 'json', shape: { kind: 'int', many: true }, default: [] },
+						optional_values: { kind: 'json', shape: { kind: 'int', many: true }, optional: true }
+					},
+					computed: {
+						...manifest.models.customers.computed,
+						required_length: { kind: 'int', expr: { json_length: { field: 'required_values' } } },
+						optional_length: { kind: 'int', expr: { json_length: { field: 'optional_values' } } },
+						plus_one: { kind: 'int', expr: { plus: [{ json_length: { field: 'optional_values' } }, 1] } },
+						safe_length: { kind: 'int', expr: { coalesce: [{ json_length: { field: 'optional_values' } }, 0] } },
+						chosen_length: { kind: 'int', expr: { when: [false, { json_length: { field: 'optional_values' } }, { json_length: { field: 'required_values' } }] } }
+					}
+				}
+			}
+		} satisfies EngineManifest;
+		const t = Context.get(yield* Layer.build(TestWorkspace.layer({
+			manifest: lengths,
+			seed: { customers: [
+				{ id: '0199a000-0000-4000-8000-000000000001', name: 'Missing', required_values: [1, 2, 3], optional_values: null },
+				{ id: '0199a000-0000-4000-8000-000000000002', name: 'Present', required_values: [], optional_values: [5, 6] }
+			] }
+		})), TestWorkspace);
+		const Answer = Schema.Struct({ customers: pageOf(Schema.Struct({
+			name: Schema.String,
+			required_length: Schema.Int,
+			optional_length: Schema.NullOr(Schema.Int),
+			plus_one: Schema.NullOr(Schema.Int),
+			safe_length: Schema.Int,
+			chosen_length: Schema.Int
+		})) });
+		const answer = yield* (yield* t.as(t.admin)).query(dynamic_read({ customers: {
+			fields: ['name', 'required_length', 'optional_length', 'plus_one', 'safe_length', 'chosen_length'],
+			order_by: 'name'
+		} })).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Answer)));
+		expect(answer.customers.rows).toEqual([
+			{ name: 'Missing', required_length: 3, optional_length: null, plus_one: null, safe_length: 0, chosen_length: 3 },
+			{ name: 'Present', required_length: 0, optional_length: 2, plus_one: 3, safe_length: 2, chosen_length: 0 }
+		]);
+		for (const expr of [
+			{ json_length: { field: 'name' } },
+			{ json_length: { coalesce: [{ field: 'optional_values' }, { field: 'required_values' }] } }
+		] as const) {
+			const invalid = {
+				...lengths,
+				models: { customers: { ...lengths.models.customers, computed: {
+					...lengths.models.customers.computed,
+					invalid_length: { kind: 'int', expr }
+				} } }
+			} satisfies EngineManifest;
+			const failure = yield* Effect.flip(Layer.build(TestWorkspace.layer({ manifest: invalid })));
+			expect(failure.message).toContain('json_length reads a JSON array column');
+		}
+	}).pipe(Effect.scoped)
+);
+
+it.live('run requires a real result decoder for queued receipts and native call outputs', () =>
+	Effect.gen(function* () {
+		const automation = {
+			...manifest,
+			automations: {
+				sweep: { description: 'A queued calculation', policies: ['reader'] },
+				trig: {
+					description: 'An immediate calculation',
+					mode: 'call',
+					policies: ['reader'],
+					output: { kind: 'object', fields: {
+						amount: { kind: 'decimal', scale: 2 },
+						at: { kind: 'instant' }
+					} }
+				}
+			}
+		} satisfies EngineManifest;
+		const guest = yield* program(`export default { automation: {
+			sweep: { body: function* () {} },
+			trig: { body: function* () { return { amount: '12.50', at: '2026-09-25T10:00:00.000Z' }; } }
+		} };`);
+		const t = Context.get(yield* Layer.build(TestWorkspace.layer({ manifest: automation, guest })), TestWorkspace);
+		const caller = yield* t.as(t.admin);
+		const id = uuidv7(Date.parse(t.clock.now()));
+		const queued = yield* caller.run('sweep', {}, JobResult, { id });
+		expectTypeOf(queued).toEqualTypeOf<JobResult>();
+		if (queued.kind !== 'committed') throw new Error('The queued calculation was held.');
+		expect(queued.output).toEqual({ id, automation: 'sweep' });
+		expect(yield* t.db.value(Schema.String, { text: 'SELECT state FROM sys_run WHERE id=$1', params: [id] })).toBe('queued');
+
+		const NativeOutput = Schema.Struct({
+			amount: Schema.declare((value: unknown): value is Decimal => value instanceof Decimal),
+			at: Schema.String
+		});
+		const output = yield* caller.run('trig', {}, NativeOutput);
+		expectTypeOf(output).toEqualTypeOf<typeof NativeOutput.Type>();
+		expect(output.amount.plus('0.50').toString()).toBe('13.00');
+		expect(output.at).toBe('2026-09-25T10:00:00.000Z');
+		const wrong = yield* Effect.flip(caller.run('trig', {}, Schema.Struct({ amount: Schema.Number, at: Schema.String })));
+		expect(wrong._tag).toBe('SchemaError');
+		expect(yield* t.db.value(Schema.Int, {
+			text: "SELECT count(*)::int FROM sys_run WHERE automation='trig'", params: []
+		})).toBe(0);
+	}).pipe(Effect.scoped)
 );
 
 it.live(
@@ -304,7 +440,7 @@ it.live(
 			write: function* ({row}, ctx) { return yield* ctx.request({method:'POST',path:'/customers',body:{name:row.name}}); }
 		} } } } } };`);
 			const t = Context.get(
-				yield* Layer.build(TestWorkspace.layer({ manifest: synced, guest })),
+				yield* Layer.build(TestWorkspace.layer({ manifest: synced, guest, seed: { sys_integration: accounts } })),
 				TestWorkspace
 			);
 			const reads: { instance: string; sync: string; partition: string }[] = [];
@@ -330,7 +466,7 @@ it.live(
 			]);
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 0 });
 			expect(
-				(yield* t.as(t.admin).act('customers.create', [{ name: 'Local customer' }])).kind
+				(yield* (yield* t.as(t.admin)).act({ 'customers.create': [{ name: 'Local customer' }] })).kind
 			).toBe('committed');
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 1 });
 			expect(yield* t.syncs.deliver()).toEqual({ delivered: 0 });
@@ -344,7 +480,7 @@ it.live(
 		Effect.gen(function* () {
 			const id = '0199a000-0000-4000-8000-000000000001';
 			const acquire = (name: string) =>
-				Layer.build(TestWorkspace.layer({ manifest, seed: { customers: [{ id, name }] } })).pipe(
+				Layer.build(TestWorkspace.layer({ manifest, seed: { customers: [{ id, name }], sys_integration: accounts } })).pipe(
 					Effect.map((context) => Context.get(context, TestWorkspace))
 				);
 			const connection = (t: Kit) =>

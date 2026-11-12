@@ -1,15 +1,13 @@
 // Value types and literal grammars (§3.3.9, §3.3.10 "values"). Type-only: the runtime values are std's, and a row
-// holds exactly them (the guest prelude and `$bolt` decode the wire into them): a `Decimal` instance, and a date and an
+// holds exactly them (the guest prelude and the page client decode the wire into them): a `Decimal` instance, and a date and an
 // instant as std's branded ISO strings.
 import type { CurrencyCode as Iso4217, Decimal } from '@norbital-ai/std/decimal';
-import type { Instant, PlainDate } from '@norbital-ai/std/date';
-export type { Decimal, Instant, PlainDate };
+import type { Duration, Instant, Offset, PlainDate } from '@norbital-ai/std/date';
+export type { Decimal, Duration, Instant, Offset, PlainDate };
 export declare const brand: unique symbol;
 
 /** A `time` field's value: a validated time-of-day string. */
 export type PlainTime = string & { readonly [brand]: 'PlainTime' };
-/** A `duration` field's value: whole seconds. */
-export type Seconds = number & { readonly [brand]: 'Seconds' };
 /** A row id, branded by its model so an id of one model never passes for another's. */
 export type Id<C extends string> = string & { readonly [brand]: C };
 /** A typed reference to one record: its model and id. */
@@ -42,19 +40,11 @@ export type Msg = string;
 export type IconName = string;
 /** An IANA time zone name (`Asia/Singapore`). */
 export type IanaZone = string;
-/** A BCP 47 locale tag (`en`, `zh-CN`). */
-export type LocaleTag = string;
-/** A path under the workspace `assets/` directory (an app `banner`). */
-export type AssetPath = string;
-/** An approval request's id (`PendingApproval.requestId`, `ApprovalHeld`). */
+/** An approval request's id (`PendingApproval.request_id`, `ApprovalHeld`). */
 export type RequestId = string;
 /** A MIME type or wildcard a `file` field accepts (`image/*`, `application/pdf`). */
 export type MimePattern = `${string}/${string}`;
 
-/** A duration literal: whole seconds, minutes, hours or days (`'30s'`, `'15min'`, `'2h'`, `'7d'`). */
-export type Duration = `${bigint}${'s' | 'min' | 'h' | 'd'}`;
-/** A signed duration from now or today (`'-7d'`, `'+1h'`); `''` is none. */
-export type Offset = `${'+' | '-'}${Duration}` | '';
 /** A byte size literal in KiB or MiB (`'512KiB'`, `'10MiB'`). */
 export type Size = `${bigint}${'KiB' | 'MiB'}`;
 /** A rate literal: a count per unit or per duration (`'60/min'`, `'5/10min'`). */

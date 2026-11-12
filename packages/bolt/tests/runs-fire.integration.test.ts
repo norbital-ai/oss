@@ -2,8 +2,9 @@
 // A fired run writes its `sys_run` row only with its first effect, so a run that only reads leaves nothing behind.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
-import { Cause, Effect, Exit, Layer } from 'effect';
+import { Cause, Effect, Exit, Layer, Schema } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
+import { id_of } from '../src/decl/id.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Callables, Runs } from '../src/engine/services.ts';
@@ -13,31 +14,45 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		quotes: { description: 'A quote', label: 'title', fields: { title: { kind: 'text' } } },
+		quotes: {
+			description: 'A quote',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
 		products: {
 			description: 'An ERP product',
-			label: 'name',
-			key: ['source', 'code'],
+			record_label: 'record.name',
+			key: ['code'],
+			unique: [{ fields: ['code'], import_key: true }],
 			fields: { code: { kind: 'text' }, name: { kind: 'text' } }
 		},
-		chats: { description: 'A chat line', label: 'text', fields: { text: { kind: 'text' } } },
-		entries: { description: 'An entry', label: 'text', fields: { text: { kind: 'text' } } }
+		chats: {
+			description: 'A chat line',
+			record_label: 'record.text',
+			fields: { text: { kind: 'text' } }
+		},
+		entries: {
+			description: 'An entry',
+			record_label: 'record.text',
+			fields: { text: { kind: 'text' } }
+		}
 	},
-	relationships: {
-		'products.source': { to: 'sys_integration', where: { integration: { eq: 'erp' } } }
-	},
+	relationships: {},
 	exposures: {
-		quotes: { read: { quotes: { fields: 'all' } }, create: { columns: { quotes: ['title'] } } },
+		quotes: {
+			outputs: { default: { quotes: { fields: 'all' } } },
+			create: { columns: { quotes: ['title'] } }
+		},
 		products: {
-			read: { products: { fields: 'all' } },
+			outputs: { default: { products: { fields: 'all' } } },
 			syncs: { erp: { with: 'erp', read: true, every: '30min' } }
 		},
 		chats: {
-			read: { chats: { fields: 'all' } },
+			outputs: { default: { chats: { fields: 'all' } } },
 			syncs: { desk: { with: 'desk', read: true } }
 		},
 		entries: {
-			read: { entries: { fields: 'all' } },
+			outputs: { default: { entries: { fields: 'all' } } },
 			syncs: { cal: { with: 'cal', read: true } }
 		}
 	},
@@ -53,35 +68,40 @@ const manifest = {
 		cal: { description: 'Calendars', driver: 'calendar' }
 	},
 	policies: {
-		ops: { description: 'Ops', grants: { quotes: { read: true, create: true } } }
+		ops: { description: 'Ops', grants: { quotes: { outputs: { default: {} }, create: {} } } }
 	},
 	automations: {
-		tidy: { description: 'Files a quote', on: { cron: '*/15 * * * *' }, policies: ['ops'] },
-		nothing: { description: 'Has nothing to read', on: { cron: '*/5 * * * *' }, policies: ['ops'] },
+		tidy: { description: 'Files a quote', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },
+		nothing: {
+			description: 'Has nothing to read',
+			on: [{ cron: '*/5 * * * *' }],
+			output: { kind: 'int' },
+			policies: ['ops']
+		},
 		watch: {
 			description: 'A safety net over the quotes',
-			on: { cron: '* * * * *', rest: '1d' },
+			on: [{ cron: '* * * * *', rest: '1d' }],
 			policies: ['ops']
 		},
 		peek: {
 			description: 'Counts the quotes',
-			on: { cron: '@daily', tz: 'Asia/Singapore' },
+			on: [{ cron: '@daily', tz: 'Asia/Singapore' }],
+			output: { kind: 'int' },
 			policies: ['ops']
 		}
 	},
 	teams: {},
-	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
 const guestSource = `export default {
 	automation: {
 		tidy: { body: function* (input, ctx) {
-			yield* ctx.act('quotes.create', [{ title: ctx.run.trigger.kind === 'system' ? ctx.run.trigger.cause : 'requested' }]); } },
+			yield* ctx.act({ 'quotes.create': [{ title: ctx.run.trigger.kind === 'system' ? ctx.run.trigger.cause : 'requested' }] }); } },
 		nothing: { body: function* () { return 0; } },
 		watch: { body: function* (input, ctx) { yield* ctx.query({ quotes: {} }); } },
 		peek: { body: function* (input, ctx) {
@@ -132,6 +152,18 @@ const setup = Effect.gen(function* () {
 });
 
 layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) => {
+	it.effect('refuses a sync identity through automation start without queuing it', () =>
+		Effect.gen(function* () {
+			const { t, sql } = yield* setup;
+			const id = randomUUID();
+			expect(yield* (yield* Callables).start({
+				automation: 'products.sync.erp', runs: [{ id, input: {} }],
+				authority: (yield* t.as(t.admin)).authority,
+				bindings: { now: t.clock.now(), today: '2026-09-25', tz: 'UTC' }
+			})).toMatchObject({ kind: 'refused', code: 'not_found' });
+			expect(yield* sql('SELECT id FROM sys_run WHERE id=$1', [id])).toEqual([]);
+		})
+	);
 	it.effect("lists each automation's cron in its zone and a model sync's declared cadence", () =>
 		Effect.gen(function* () {
 			const { crons } = yield* setup;
@@ -214,7 +246,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 				expect(yield* fire('products.sync.erp', NEXT)).toMatchObject({ ran: false });
 				expect(requests).toBe(1);
 				t.clock.advance('30s');
-				yield* t.runDue();
+				yield* t.run_due();
 				expect(requests).toBe(2);
 				expect(
 					yield* sql(
@@ -237,7 +269,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 		sql: (text: string) => Effect.Effect<readonly { readonly [key: string]: unknown }[], unknown>
 	) =>
 		sql(
-			`SELECT health ->> 'state' AS state, health ->> 'failures' AS failures, health ->> 'retryAt' AS retry FROM sys_sync WHERE instance = 'erp1'`
+			`SELECT health ->> 'state' AS state, health ->> 'failures' AS failures, health ->> 'retry_at' AS retry FROM sys_sync WHERE instance = 'erp1'`
 		).pipe(Effect.orDie);
 	it.effect('a SQL sync with a rejected request rests and skips slots while the rest lasts', () =>
 		Effect.gen(function* () {
@@ -265,7 +297,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 			expect(yield* sql(`SELECT revision, status FROM sys_integration WHERE id = 'erp1'`)).toEqual([
 				integration
 			]);
-			expect(JSON.stringify(integration)).not.toContain('retryAt');
+			expect(JSON.stringify(integration)).not.toContain('retry_at');
 			const before = yield* sql(
 				`SELECT count(*)::int AS n FROM sys_run WHERE automation = 'products.sync.erp'`
 			);
@@ -292,19 +324,19 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 					JSON.stringify({
 						state: 'attention',
 						failures: 4,
-						retryAt: new Date(Date.parse(t.clock.now()) + 3_600_000).toISOString()
+						retry_at: new Date(Date.parse(t.clock.now()) + 3_600_000).toISOString()
 					})
 				]
 			});
 			expect(yield* fire('products.sync.erp', atMinutes(130))).toMatchObject({ ran: false });
 			expect(requests).toBe(0);
-			yield* callables.start({
-				automation: 'products.sync.erp',
-				runs: [{ id: randomUUID(), input: {} }],
-				authority: t.as(t.admin).authority,
+			yield* callables.sync_control({
+				model: 'products', sync: 'erp',
+				id: randomUUID(), input: {},
+				authority: (yield* t.as(t.admin)).authority,
 				bindings: { now: t.clock.now(), today: '2026-09-25', tz: 'UTC' }
 			});
-			yield* t.runDue();
+			yield* t.run_due();
 			expect(requests).toBe(1);
 			expect(yield* restOf(sql)).toEqual([{ state: 'ready', failures: null, retry: null }]);
 			expect(yield* fire('products.sync.erp', atMinutes(140))).toEqual({ ran: true });
@@ -326,15 +358,20 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 					JSON.stringify({
 						state: 'attention',
 						failures: 4,
-						retryAt: new Date(Date.parse(t.clock.now()) + 3_600_000).toISOString()
+						retry_at: new Date(Date.parse(t.clock.now()) + 3_600_000).toISOString()
 					})
 				]
 			});
-			const { sys_integration: instances } = yield* t.as(t.admin).query({ sys_integration: {} });
-			const target = instances.rows.find((row) => row.id === 'erp1')?.id;
-			if (target === undefined) return yield* Effect.die('no erp1');
-			const active = (value: boolean) =>
-				t.as(t.admin).act('sys_integration.update', [{ target, set: { active: value } }]);
+			const AccountPage = Schema.Struct({ sys_integration: Schema.Struct({ rows: Schema.Array(
+				Schema.Struct({ id: id_of('sys_integration'), revision: Schema.Int })
+			) }) });
+			const active = (value: boolean) => Effect.gen(function* () {
+				const { sys_integration: instances } = yield* (yield* t.as(t.admin)).query({ sys_integration: { fields: ['revision'] } })
+					.pipe(Effect.flatMap(Schema.decodeUnknownEffect(AccountPage)));
+				const target = instances.rows.find((row) => row.id === 'erp1');
+				if (target === undefined) return yield* Effect.die('no erp1');
+				return yield* (yield* t.as(t.admin)).act({ 'sys_integration.update': [{ target, set: { active: value } }] });
+			});
 			yield* active(false);
 			yield* active(true);
 			expect(yield* restOf(sql)).toMatchObject([
@@ -363,7 +400,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 					JSON.stringify({
 						state: 'attention',
 						failures: 4,
-						retryAt: new Date(Date.parse(t.clock.now()) + 3_600_000).toISOString()
+						retry_at: new Date(Date.parse(t.clock.now()) + 3_600_000).toISOString()
 					})
 				]
 			});
@@ -383,8 +420,8 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 			const ticks = `SELECT count(*)::int AS n FROM quotes`;
 			const [before] = yield* sql(ticks);
 			t.clock.set('2026-09-25T10:45:00.000Z');
-			yield* t.runDue();
-			yield* t.runDue();
+			yield* t.run_due();
+			yield* t.run_due();
 			const [after] = yield* sql(ticks);
 			expect(Number(after?.['n'])).toBe(Number(before?.['n']) + 1);
 		})
@@ -394,7 +431,7 @@ layer(Fixture, { excludeTestServices: true })('crons on the host clock', (it) =>
 		Effect.gen(function* () {
 			const { t } = yield* setup;
 			t.clock.set('2026-09-25T10:45:00.000Z');
-			const exit = yield* Effect.exit(t.runDue());
+			const exit = yield* Effect.exit(t.run_due());
 			expect(Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toContain(
 				'tidy at 2026-09-25T10:45:00.000Z already ran'
 			);

@@ -1,5 +1,5 @@
 // `@norbital-ai/ui/effect` (D9): the one Svelte edge. A page's Effects run on the browser runtime its mount creates
-// (`mountEdge(ManagedRuntime.make(ShellLive))` in the shell, the root layout in a host app): `run` hands `{#await}` a
+// (`mount_edge(ManagedRuntime.make(ShellLive))` in the shell, the root layout in a host app): `run` hands `{#await}` a
 // Promise, `fork` runs an event handler's effect, `observe` owns streamed state and `attach` runs a scoped
 // fiber for an element's lifetime. Every fiber runs in the mounted runtime's scope, so unmounting interrupts them all.
 import {
@@ -8,6 +8,7 @@ import {
 	Exit,
 	Option,
 	Predicate,
+	Result,
 	Stream,
 	type Fiber,
 	type ManagedRuntime,
@@ -27,7 +28,7 @@ let running = 0;
  * Binds the edge to a mount's runtime (the latest mount wins). The returned function disposes the runtime, which
  * interrupts every fiber still running on it and waits for them.
  */
-export function mountEdge<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>): () => Promise<void> {
+export function mount_edge<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>): () => Promise<void> {
 	edge = runtime;
 	return () => {
 		if (edge === runtime) edge = null;
@@ -36,12 +37,12 @@ export function mountEdge<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>): (
 }
 
 /** Fibers started through any edge and not yet ended: the mount/unmount leak check reads it. */
-export const runningFibers = (): number => running;
+export const running_fibers = (): number => running;
 
 function forked<A, E>(effect: Effect.Effect<A, E>): Fiber.Fiber<A, unknown> {
 	if (edge === null)
 		throw new Error(
-			'No ui edge is mounted: the shell mount (or the host layout) calls mountEdge first.'
+			'No ui edge is mounted: the shell mount (or the host layout) calls mount_edge first.'
 		);
 	// a defect has no handler here: it is logged, then ends the fiber
 	const runtime = edge;
@@ -80,7 +81,7 @@ export function fork<A, E>(effect: Effect.Effect<A, E>, onFailure?: (error: E) =
 }
 
 /** Component-owned query state shared by one-shot Effects and live Streams. */
-export type QueryState<A, E> = {
+type QueryState<A, E> = {
 	readonly result: AsyncResult.AsyncResult<A, E>;
 	readonly current: A | undefined;
 	readonly error: E | undefined;
@@ -93,12 +94,19 @@ export type QueryState<A, E> = {
 /** A server answer may seed the first render and hydration, never a later query scope. */
 export type QueryOptions<A> = { readonly initial?: NoInfer<A> };
 /** Fresh arrays and plain row objects let Svelte's keyed items observe every frame; native class values retain identity. */
-const fresh = <A>(value: A): A =>
-	(Array.isArray(value)
+function fresh<A>(value: A): A;
+function fresh(value: unknown): unknown {
+	return Array.isArray(value)
 		? value.map(fresh)
 		: Predicate.isObject(value) && Object.getPrototypeOf(value) === Object.prototype
 			? { ...value }
-			: value) as A;
+			: value;
+}
+/** `target` carrying `source`'s getters, live. */
+function with_getters<T extends object, S extends object>(target: T, source: S): T & S;
+function with_getters(target: object, source: object): object {
+	return Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+}
 
 /**
  * A live read in a component (call it while the component initializes): the stream `source()` names, or none for
@@ -202,7 +210,7 @@ export function observe<A, E>(
 }
 
 /** A one-shot read composes into the same state and lifetime as a live query. */
-export function observeOnce<A, E>(
+export function observe_once<A, E>(
 	source: () => Effect.Effect<A, E> | null,
 	options: QueryOptions<A> = {}
 ): QueryState<A, E> {
@@ -213,32 +221,31 @@ export function observeOnce<A, E>(
 }
 
 /** A query's component reads subscribe; its Promise and Effect edges read once outside component reactivity. */
-export function reactiveQuery<A, E>(effect: Effect.Effect<A, E>, stream: Stream.Stream<A, E>) {
-	let value = Option.none<A>();
+export function reactive_query<A, E>(
+	effect: Effect.Effect<A, E>,
+	stream: Stream.Stream<Result.Result<A, E>>,
+	initial = Option.none<A>()
+) {
+	let value = initial;
 	let failure: E | undefined;
-	let loading = true;
+	let loading = Option.isNone(initial);
 	const waiting = new Set<{ resolve(value: A): void; reject(error: E): void }>();
 	const track = createSubscriber((update) => {
 		const fiber = forked(
 			Stream.runForEach(stream, (answer) =>
 				Effect.sync(() => {
-					value = Option.some(fresh(answer));
-					failure = undefined;
+					if (Result.isSuccess(answer)) {
+						value = Option.some(fresh(answer.success));
+						failure = undefined;
+						for (const waiter of waiting) waiter.resolve(answer.success);
+					} else {
+						failure = answer.failure;
+						for (const waiter of waiting) waiter.reject(answer.failure);
+					}
 					loading = false;
-					for (const waiter of waiting) waiter.resolve(answer);
 					waiting.clear();
 					update();
 				})
-			).pipe(
-				Effect.catch((error) =>
-					Effect.sync(() => {
-						failure = error;
-						loading = false;
-						for (const waiter of waiting) waiter.reject(error);
-						waiting.clear();
-						update();
-					})
-				)
 			)
 		);
 		return () => fiber.interruptUnsafe();
@@ -271,14 +278,14 @@ export function reactiveQuery<A, E>(effect: Effect.Effect<A, E>, stream: Stream.
 			};
 		}
 	};
-	return Object.defineProperties(
+	return with_getters(
 		Effect.suspend(() => effect),
-		Object.getOwnPropertyDescriptors(state)
-	) as Effect.Effect<A, E> & typeof state;
+		state
+	);
 }
 
 /** A visible-page clock ticks at calendar boundaries in the workspace's zone; no unit is a fixed snapshot. */
-export function reactiveClock<T extends object>(
+export function reactive_clock<T extends object>(
 	snapshot: (at: Date) => T,
 	unit?: 'minute' | 'hour' | 'day',
 	zone = 'UTC',

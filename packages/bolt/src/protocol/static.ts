@@ -2,7 +2,7 @@
 // `assets/**` at `/assets/*`, then the document under the workspace's frame policy. A host adds only its own wrapping
 // (a base path, a bundle digest) and the response.
 import { Effect, FileSystem, Path, Result } from 'effect';
-import { framePolicy, type ShellManifest } from '../shell/nav.ts';
+import { frame_policy, type ShellManifest } from '../shell/nav.ts';
 import { BOLT } from './wire.ts';
 
 /** The content type of each file kind a client build and a workspace's assets carry; anything else is `application/octet-stream`. */
@@ -55,7 +55,7 @@ const under = Effect.fn('Protocol.clientPath')(function* (root: string, path: st
  * assets, else the document; `undefined` when the artifact carries no client pages. `/assets/*` is cached for good;
  * everything else, the document first, revalidates.
  */
-export const clientPage = Effect.fn('Protocol.clientPage')(function* (
+export const client_page = Effect.fn('Protocol.client_page')(function* (
 	dir: string,
 	path: string,
 	manifest: ShellManifest
@@ -87,7 +87,7 @@ export const clientPage = Effect.fn('Protocol.clientPage')(function* (
 			headers: {
 				'content-type': 'text/html; charset=utf-8',
 				'cache-control': 'no-cache',
-				'content-security-policy': framePolicy(manifest, path)
+				'content-security-policy': frame_policy(manifest, path)
 			}
 		};
 		return page;

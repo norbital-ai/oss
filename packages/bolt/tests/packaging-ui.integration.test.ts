@@ -5,17 +5,17 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
 import type { Authority } from '../src/engine/contracts.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { runList } from '../src/engine/runs/index.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { runList } from '../src/engine/runs/rows.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
-		workspace: { tz: 'UTC', locale: 'en', apps: [] },
+	decode_projected_manifest({
+		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			jobs: {
 				description: 'Jobs',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					status: { kind: 'enum', values: ['open', 'closed'], default: 'open' }
@@ -23,16 +23,15 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		exposures: { jobs: { read: { jobs: { fields: 'all' } } } },
+		exposures: { jobs: { outputs: { default: { jobs: { fields: 'all' } } } } },
 		integrations: {},
 		policies: {},
 		apps: {},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
+
 		mcp: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -97,11 +96,11 @@ describe('/runs', () => {
 						phone: null,
 						external,
 						teams: [],
-						teamPath: [],
+						team_path: [],
 						admin: false,
 						party: null
 					},
-					capabilities: { apps: [], tools: [], mcp: [] }
+					capabilities: { apps: [], syncs: [], tools: [], mcp: [] }
 				});
 				const holder = yield* runList(t.db, who('u1', ['export'], true), 10, 'export');
 				expect(holder.map((r) => [r.automation, r.error])).toEqual([

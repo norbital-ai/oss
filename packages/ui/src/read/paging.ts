@@ -1,8 +1,8 @@
 import type { Query, QueryAnswer } from '../client/contract.js';
 import { Effect } from 'effect';
-import { observeOnce } from '../effect/index.js';
+import { observe_once } from '../effect/index.js';
 import type { Page } from '../model/types.js';
-import { pageOf } from './request.js';
+import { page_of } from './request.js';
 import { mapped, type Reading } from './state.js';
 /** The rows a later page reads to stay live (every page up to it); past this a later page is read once. */
 const LIVE_PAGE_ROWS = 1_000;
@@ -15,19 +15,17 @@ const LIVE_PAGE_ROWS = 1_000;
 export function pageRead<R>(
 	of: string,
 	read: (limit: number, after?: string) => Query<QueryAnswer<R>>,
-	pageSize: number,
+	page_size: number,
 	index: number | null,
 	after: string | null | undefined
 ): Reading<Page<R>> {
 	// root `of`'s page of the read request's answer
-	const page = (answer: QueryAnswer<R>) => pageOf(answer, of);
-	if (after === null || after === undefined) return mapped(read(pageSize), page);
-	if (index !== null && index > 0 && (index + 1) * pageSize <= LIVE_PAGE_ROWS)
-		return mapped(read((index + 1) * pageSize), (answer) => {
-			const value = pageOf(answer, of);
-			return value && { ...value, rows: value.rows.slice(index * pageSize) };
+	const page = (answer: QueryAnswer<R>) => page_of(answer, of);
+	if (after === null || after === undefined) return mapped(read(page_size), page);
+	if (index !== null && index > 0 && (index + 1) * page_size <= LIVE_PAGE_ROWS)
+		return mapped(read((index + 1) * page_size), (answer) => {
+			const value = page_of(answer, of);
+			return value && { ...value, rows: value.rows.slice(index * page_size) };
 		});
-	return observeOnce(() => read(pageSize, after).pipe(Effect.map(page)));
+	return observe_once(() => read(page_size, after).pipe(Effect.map(page)));
 }
-/** Rule 7: a count is re-issued at most once every 30 s while the live page reports changes. */
-export const COUNT_EVERY_MS = 30_000;

@@ -2,19 +2,14 @@
 // sit in the same namespace as a workspace's `src/data/custom_field/<f>/` (here the registry's `rating`), so a model
 // references either as `{ kind: 'custom', of }`, the value type flows from the shape, and a renderer's view is typed by
 // the name. Each `@ts-expect-error` is a planted mistake `bolt check` must refuse.
-import { model } from '../../src/index.ts';
-import type {
-	CustomFieldName,
-	CustomFieldView,
-	Decimal,
-	FileRef,
-	Point,
-	ValueOf
-} from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
+import type { CustomFieldView, FileRef, Point, ValueOf } from '../../src/index.ts';
+import type { Decimal } from '@norbital-ai/std/decimal';
 import './registry.ts';
+import type { CustomFieldName } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // one namespace: built-ins and the workspace's
 is<
@@ -36,9 +31,9 @@ is<
 	>
 >();
 
-model('probe', {
+bind_model('probe')({
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	fields: {
 		a: { kind: 'text' },
 		mobile: { kind: 'custom', of: 'phone', optional: true },
@@ -46,21 +41,21 @@ model('probe', {
 		r: { kind: 'custom', of: 'rating', optional: true }
 	}
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error B1 a misspelt built-in
 	fields: { a: { kind: 'text' }, m: { kind: 'custom', of: 'phnoe' } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error B2 a misspelt workspace custom field
 	fields: { a: { kind: 'text' }, r: { kind: 'custom', of: 'ratng' } }
 });
-model('probe', {
+bind_model('probe')({
 	description: 'x',
-	label: 'a',
+	record_label: 'record.a',
 	// @ts-expect-error B3 a built-in's default of the wrong type
 	fields: { a: { kind: 'text' }, m: { kind: 'custom', of: 'phone', default: 65 } }
 });

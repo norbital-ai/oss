@@ -1,6 +1,6 @@
 <!--
 @component
-The kit's select: a field-like trigger and a searchable option list in a popover, filtered locally or through `onSearch`.
+The kit's select: a field-like trigger and a searchable option list in a popover, filtered locally or through `on_search`.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
@@ -18,7 +18,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	};
 	/**
 	 * The kit's only select (no native `<select>` anywhere): a trigger that reads like a field and a searchable list in
-	 * a popover. Filters locally, or hands each keystroke to `onSearch` (the caller replaces `options`, as `Picker` does).
+	 * a popover. Filters locally, or hands each keystroke to `on_search` (the caller replaces `options`, as `Picker` does).
 	 */
 	type ComboboxCommonProps<V extends string = string> = {
 		options: readonly ComboboxOption<V>[];
@@ -27,10 +27,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		placeholder?: string;
 		/** The trigger's text when `value` is not among `options` (a picker's chosen row on another page). */
 		display?: string;
-		/** Show the search box; default when there are more than 8 options or `onSearch` is given. */
+		/** Show the search box; default when there are more than 8 options or `on_search` is given. */
 		searchable?: boolean;
-		onSearch?(query: string): void;
-		onOpenChange?(open: boolean): void;
+		on_search?(query: string): void;
+		on_open_change?(open: boolean): void;
 		loading?: boolean;
 		failed?: boolean;
 		/** `ghost`: no border, fill or shadow; for a combobox in chrome or a toolbar, not a form. Same size either way. */
@@ -43,7 +43,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		invalid?: boolean;
 		class?: string;
 		'aria-label'?: string;
-		/** Rendered between the search box and the list (tabs that scope `options`, with `onSearch`). */
+		/** Rendered between the search box and the list (tabs that scope `options`, with `on_search`). */
 		header?: Snippet;
 		/** Rendered below the scrollable option list. */
 		footer?: Snippet;
@@ -64,7 +64,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		M extends boolean = false
 	> = ComboboxCommonProps<V> & { multiple?: M } & {
 		value: M extends true ? readonly V[] : V | null;
-		onChange(next: M extends true ? readonly V[] : V | null): void;
+		on_change(next: M extends true ? readonly V[] : V | null): void;
 	};
 </script>
 
@@ -79,10 +79,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		cn,
 		coarsePointer,
 		stepActive,
-		uiText,
-		useControls
+		ui_text,
+		use_controls
 	} from '../utils.js';
-	import { virtualList } from '../virtual/virtual.svelte.js';
+	import { virtual_list } from '../virtual/virtual.svelte.js';
 
 	const GHOST = `${CONTROL_SIZE} flex items-center justify-between rounded-md bg-transparent text-left font-normal outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:text-destructive`;
 
@@ -100,8 +100,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		placeholder,
 		display,
 		searchable,
-		onSearch,
-		onOpenChange,
+		on_search,
+		on_open_change,
 		loading = false,
 		failed = false,
 		variant = 'default',
@@ -120,8 +120,8 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	} = $derived(props);
 	// svelte-ignore state_referenced_locally -- the id is fixed at mount
 	const id = ownId ?? claimFieldControl();
-	const t = uiText();
-	const controls = useControls();
+	const t = ui_text();
+	const controls = use_controls();
 	const readonly = $derived(ownReadonly ?? controls.readonly);
 	const disabled = $derived(ownDisabled ?? controls.disabled);
 	let open = $state(false),
@@ -140,10 +140,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			? selectionText
 			: t('selectedCount').replace('{n}', String(selectedLabels.length))
 	);
-	const withSearch = $derived(searchable ?? (onSearch !== undefined || options.length > 8));
+	const withSearch = $derived(searchable ?? (on_search !== undefined || options.length > 8));
 	const shown = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		if (onSearch !== undefined || q === '') return options;
+		if (on_search !== undefined || q === '') return options;
 		return options.filter((o) =>
 			`${o.label} ${o.keywords ?? ''} ${o.value}`.toLowerCase().includes(q)
 		);
@@ -156,20 +156,21 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	);
 	// a group heading is its own list entry, so a long list (every time zone) windows over measured entries
 	const entries = $derived(
-		rows.flatMap((row, i): ({ head: string; i: number } | { i: number })[] =>
+		rows.flatMap((row, i): ({ head: string; i: number } | { row: ComboboxOption<V> | null; i: number })[] =>
 			row?.group !== undefined && row.group !== rows[i - 1]?.group
-				? [{ head: row.group, i }, { i }]
-				: [{ i }]
+				? [{ head: row.group, i }, { row, i }]
+				: [{ row, i }]
 		)
 	);
 	const entryOf = $derived(
 		new Map(entries.flatMap((e, k) => ('head' in e ? [] : [[e.i, k] as const])))
 	);
 	const entryKey = (k: number) => {
-		const e = entries[k]!;
-		return 'head' in e ? `head:${e.i}` : `row:${rows[e.i]?.value ?? '\u0000none'}`;
+		const e = entries[k];
+		if (e === undefined) throw new RangeError('The combobox entry is outside its list.');
+		return 'head' in e ? `head:${e.i}` : `row:${e.row?.value ?? '\u0000none'}`;
 	};
-	const win = virtualList({
+	const win = virtual_list({
 		count: () => entries.length,
 		key: entryKey,
 		estimate: 32,
@@ -183,10 +184,10 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 
 	async function toggle(next: boolean) {
 		open = next;
-		onOpenChange?.(next);
+		on_open_change?.(next);
 		if (!next) return;
 		query = '';
-		onSearch?.('');
+		on_search?.('');
 		active = Math.max(
 			0,
 			rows.findIndex(
@@ -202,7 +203,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 	}
 	function choose(row: ComboboxOption<V> | null) {
 		if (isMultiple(props)) {
-			props.onChange(
+			props.on_change(
 				row === null
 					? []
 					: props.value.includes(row.value)
@@ -210,7 +211,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 						: [...props.value, row.value]
 			);
 		} else if (isSingle(props)) {
-			props.onChange(row?.value ?? null);
+			props.on_change(row?.value ?? null);
 			void toggle(false);
 		}
 	}
@@ -231,9 +232,12 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 			e.preventDefault();
 			active = stepActive(rows.length, active, e.key === 'ArrowDown' ? 1 : -1);
 			void tick().then(() => reveal(active));
-		} else if (e.key === 'Enter' && rows[active] !== undefined) {
-			e.preventDefault();
-			choose(rows[active]!);
+		} else if (e.key === 'Enter') {
+			const row = rows[active];
+			if (row !== undefined) {
+				e.preventDefault();
+				choose(row);
+			}
 		}
 	}
 </script>
@@ -246,7 +250,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		{#if label === ''}<span class="text-muted-foreground">{t('none')}</span>{:else}{label}{/if}
 	</CopyText>
 {:else}
-	<Popover.Root {open} onOpenChange={toggle}>
+	<Popover.Root {open} on_open_change={toggle}>
 		<Popover.Trigger
 			{id}
 			{disabled}
@@ -286,11 +290,11 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 		</Popover.Trigger>
 		<Popover.Content
 			align="start"
-			sameWidth
-			minWidth={variant === 'ghost' ? 256 : 192}
+			same_width
+			min_width={variant === 'ghost' ? 256 : 192}
 			class="gap-1 p-1"
 			onkeydown={keydown}
-			onOpenAutoFocus={(e: Event) => {
+			on_open_auto_focus={(e: Event) => {
 				if (coarsePointer.current) e.preventDefault();
 			}}
 		>
@@ -303,7 +307,7 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 					oninput={(e) => {
 						query = e.currentTarget.value;
 						active = 0;
-						onSearch?.(query);
+						on_search?.(query);
 					}}
 				/>
 			{/if}
@@ -322,13 +326,6 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 					></li>{/if}
 				{#each win.slice(entries) as e, j (entryKey(win.start + j))}
 					{@const i = e.i}
-					{@const row = rows[i]!}
-					{@const selected =
-						row === null
-							? false
-							: isMultiple(props)
-								? props.value.includes(row.value)
-								: row.value === props.value}
 					{#if 'head' in e}
 						<li
 							role="presentation"
@@ -338,6 +335,13 @@ The kit's select: a field-like trigger and a searchable option list in a popover
 							{e.head}
 						</li>
 					{:else}
+						{@const row = e.row}
+						{@const selected =
+							row === null
+								? false
+								: isMultiple(props)
+									? props.value.includes(row.value)
+									: row.value === props.value}
 						<li
 							role="option"
 							aria-selected={selected}

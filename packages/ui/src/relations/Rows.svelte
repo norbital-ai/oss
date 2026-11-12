@@ -3,11 +3,14 @@
 An editable list of child rows inside a parent's form: add, edit and remove rows, reported as the relation operations of the parent's one act.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Row } from '../model/types.js';
 	import type { RowsOps } from './operations.js';
 	import type { Col } from '../table/Table.svelte';
 	/** The props of `Rows`. */
-	export type RowsProps = {
+	type RowsProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		/** The child rows as loaded (empty on create). */
 		rows: readonly Row[];
 		columns: readonly Col[];
@@ -16,7 +19,7 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 		min?: number;
 		max?: number;
 		/** Each edit: the explicit relation ops for the parent's one act, and the rows as shown. */
-		onChange: (ops: RowsOps, current: readonly Row[]) => void;
+		on_change: (ops: RowsOps, current: readonly Row[]) => void;
 	};
 </script>
 
@@ -24,12 +27,13 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 	// A child relation edited inside its parent's form and sent in the same act (AM-10) as explicit `create`, `update`
 	// and `delete` entries recorded from the viewer's own actions, never deletes by omission (model-write-contract).
 	import { rowsOps } from './operations.js';
+	import { watch } from 'runed';
 	import Table from '../table/Table.svelte';
 
-	let { rows, columns, add, min = 0, max = Infinity, onChange }: RowsProps = $props();
+	let { ctx, rows, columns, add, min = 0, max = Infinity, on_change }: RowsProps = $props();
 	let current = $state<readonly Row[]>([]);
 	let removed = $state<string[]>([]);
-	$effect.pre(() => {
+	watch.pre(() => rows, (rows) => {
 		current = rows;
 		removed = [];
 	});
@@ -41,7 +45,7 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 			...current.filter((r) => typeof r['id'] === 'string' && !kept.has(r['id'])).map((r) => r.id)
 		];
 		current = next;
-		onChange(rowsOps(rows, next, removed), next);
+		on_change(rowsOps(rows, next, removed), next);
 	}
 	const editable = $derived(
 		columns.map((c) =>
@@ -50,10 +54,10 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 	);
 </script>
 
-<Table
+<Table {ctx}
 	of={current}
 	columns={editable}
-	onChange={change}
+	on_change={change}
 	add={current.length < max ? add : undefined}
 	remove={current.length > min}
 	toolbar={{ search: false, filter: false, export: false }}

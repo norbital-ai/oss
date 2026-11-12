@@ -3,13 +3,16 @@
 Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	/** Two times of day (`HH:MM`) in one field, typed by segment; an end before the start is overnight, never refused. */
 	type TimeRange = { start: string | null; end: string | null };
-	/** The props of `TimeRangeInput`. */
-	export type TimeRangeInputProps = {
+	/** The props of `TimeOfDayRangeInput`. */
+	export type TimeOfDayRangeInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		precision?: 'hour' | 'minute';
 		value: TimeRange;
-		onChange(next: TimeRange): void;
+		on_change(next: TimeRange): void;
 		id?: string;
 		/** Shows the value as copyable text; an enclosing readonly form sets it. */
 		readonly?: boolean;
@@ -24,14 +27,14 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 	import type { Time } from '@internationalized/date';
 	import { TimeRangeField } from 'bits-ui';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
-	import { cn, uiText, useControls } from '../primitives/utils.js';
+	import { cn, ui_text, use_controls } from '../primitives/utils.js';
 	import { SEGMENT, SEGMENTS } from './classes.js';
-	import { useKinds } from './context.js';
 	import { timeValue } from './date-input.svelte';
 
 	let {
+		ctx,
 		value,
-		onChange,
+		on_change,
 		precision = 'minute',
 		id,
 		readonly,
@@ -39,11 +42,11 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 		invalid = false,
 		class: className,
 		'aria-label': ariaLabel
-	}: TimeRangeInputProps = $props();
-	const controls = useControls();
-	const t = uiText();
+	}: TimeOfDayRangeInputProps = $props();
+	const controls = use_controls();
+	const t = ui_text();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
-	const locale = useKinds().locale;
+	const locale = $derived(ctx.ui.kinds.locale);
 	const hhmm = (t: Time | undefined) =>
 		t === undefined
 			? null
@@ -63,7 +66,7 @@ Two times of day (`HH:MM`) in one field; an end before the start runs overnight.
 	<TimeRangeField.Root
 		value={{ start: timeValue(value.start), end: timeValue(value.end) }}
 		onValueChange={(r) =>
-			onChange({
+			on_change({
 				start: hhmm(r?.start as Time | undefined),
 				end: hhmm(r?.end as Time | undefined)
 			})}

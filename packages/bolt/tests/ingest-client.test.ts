@@ -1,10 +1,10 @@
-// `documentIngester`: the agent's ingest port over Norbital Convert's job routes, against a fake service speaking its
+// `document_ingester`: the agent's ingest port over Norbital Convert's job routes, against a fake service speaking its
 // wire (the file posted raw, a job, its result: a document or data; a job still running; audio's usage; a 415 for a
 // format with no parser; a 503 when it has no transcription model).
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
-import { documentIngester } from '../src/engine/convert.ts';
+import { document_ingester } from '../src/engine/convert.ts';
 
 const result = {
 	kind: 'document',
@@ -88,7 +88,7 @@ beforeAll(async () => {
 });
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-describe('documentIngester', () => {
+describe('document_ingester', () => {
 	const file = (name: string) => ({
 		sha256: 'abc',
 		name,
@@ -96,7 +96,7 @@ describe('documentIngester', () => {
 		bytes: new Uint8Array([1, 2, 3])
 	});
 	it('posts the file as its body and decodes the result, images to bytes', async () => {
-		const got = await documentIngester({ url, key: 'k' }).ingest(
+		const got = await document_ingester({ url, key: 'k' }).ingest(
 			file('tender.pdf'),
 			{},
 			new AbortController().signal
@@ -112,7 +112,7 @@ describe('documentIngester', () => {
 	});
 	it('streams a stored file to the converter', async () => {
 		seen.length = 0;
-		await documentIngester({ url, key: 'k' }).ingest(
+		await document_ingester({ url, key: 'k' }).ingest(
 			{ ...file('tender.pdf'), bytes: new Blob([new Uint8Array([4, 5])]).stream() },
 			{},
 			new AbortController().signal
@@ -122,12 +122,12 @@ describe('documentIngester', () => {
 	it('sends a file read from disk until Convert keeps it, then only its hash', async () => {
 		const page = { page: 3 };
 		seen.length = 0;
-		await documentIngester({ url, key: 'k' }).ingest(file('tender.pdf'), page, new AbortController().signal);
+		await document_ingester({ url, key: 'k' }).ingest(file('tender.pdf'), page, new AbortController().signal);
 		expect(seen[0]?.path).toBe('/v1/kept/abc');
 		expect([...(seen[1]?.body ?? [])]).toEqual([1, 2, 3]);
 		expect(seen[1]?.path).toContain('sha256=abc');
 		seen.length = 0;
-		await documentIngester({ url, key: 'k' }).ingest(
+		await document_ingester({ url, key: 'k' }).ingest(
 			{ ...file('tender.pdf'), sha256: 'def', bytes: new Blob([new Uint8Array([4, 5])]).stream() },
 			page,
 			new AbortController().signal
@@ -137,7 +137,7 @@ describe('documentIngester', () => {
 	});
 	it('polls a job still running, then fetches its result', async () => {
 		seen.length = 0;
-		const got = await documentIngester({ url, key: 'k' }).ingest(
+		const got = await document_ingester({ url, key: 'k' }).ingest(
 			file('cut.pdf'),
 			{},
 			new AbortController().signal
@@ -151,7 +151,7 @@ describe('documentIngester', () => {
 	});
 	it('answers a 415 as unsupported', async () => {
 		expect(
-			await documentIngester({ url, key: 'k' }).ingest(
+			await document_ingester({ url, key: 'k' }).ingest(
 				file('plan.dwg'),
 				{},
 				new AbortController().signal
@@ -160,7 +160,7 @@ describe('documentIngester', () => {
 	});
 	it('decodes a data ingest: its JSON as is, its images to bytes', async () => {
 		expect(
-			await documentIngester({ url, key: 'k' }).ingest(
+			await document_ingester({ url, key: 'k' }).ingest(
 				file('rates.xlsx'),
 				{},
 				new AbortController().signal
@@ -172,7 +172,7 @@ describe('documentIngester', () => {
 	});
 	it('passes the options and decodes an audio ingest with its usage', async () => {
 		seen.length = 0;
-		const got = await documentIngester({ url, key: 'k' }).ingest(
+		const got = await document_ingester({ url, key: 'k' }).ingest(
 			file('meeting.m4a'),
 			{ diarize: true, language: 'en', speakers: 2, prompt: 'Concrete pour' },
 			new AbortController().signal
@@ -188,7 +188,7 @@ describe('documentIngester', () => {
 	});
 	it('sends a password as its header, never in the URL', async () => {
 		seen.length = 0;
-		await documentIngester({ url, key: 'k' }).ingest(
+		await document_ingester({ url, key: 'k' }).ingest(
 			file('statement.pdf'),
 			{ password: 'pâss 1' },
 			new AbortController().signal
@@ -201,7 +201,7 @@ describe('documentIngester', () => {
 	});
 	it('rejects a 503 as the unavailable facility error', async () => {
 		await expect(
-			documentIngester({ url, key: 'k' }).ingest(file('mute.m4a'), {}, new AbortController().signal)
+			document_ingester({ url, key: 'k' }).ingest(file('mute.m4a'), {}, new AbortController().signal)
 		).rejects.toEqual({
 			kind: 'unavailable',
 			facility: 'convert.ingest',

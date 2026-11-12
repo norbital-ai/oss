@@ -4,7 +4,7 @@ import { Live, Links, Wake } from '../src/engine/services.ts';
 import { committed, executeCommit, type Commit } from '../src/engine/write/commit.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
+import { catalog_of } from '../src/engine/access/pred.ts';
 import { manifest as base, NOW, TODAY } from './write-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
@@ -28,7 +28,7 @@ it.effect(
 							changed.push(instance);
 						})
 				}),
-				Layer.mock(Live, { publish: () => ++published, syncChanged: () => ++published })
+				Layer.mock(Live, { publish: () => ++published })
 			);
 			const at = '2026-10-14T22:05:00.000Z';
 			expect(
@@ -51,10 +51,10 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			const orders = base.exposures['orders'];
-			if (orders === undefined) throw new Error('the fixture exposes orders');
+			if (orders === undefined || orders.update === undefined) throw new Error('the fixture exposes orders');
 			const manifest: EngineManifest = {
 				...base,
-				exposures: { ...base.exposures, orders: { ...orders, effect: { updated: true } } }
+				exposures: { ...base.exposures, orders: { ...orders, update: { ...orders.update, effect: true } } }
 			};
 			const pg = yield* TestDb.open(manifest),
 				db = PgliteDb.make(pg);
@@ -83,7 +83,7 @@ it.effect(
 				notices: [],
 				output: null
 			};
-			yield* executeCommit(db, manifest, catalogOf(manifest), {
+			yield* executeCommit(db, manifest, catalog_of(manifest), {
 				...common,
 				writes: [
 					{
@@ -100,7 +100,7 @@ it.effect(
 					}
 				]
 			});
-			const [answer] = yield* executeCommit(db, manifest, catalogOf(manifest), {
+			const [answer] = yield* executeCommit(db, manifest, catalog_of(manifest), {
 				...common,
 				key: 'mixed',
 				digest: 'mixed',
@@ -124,7 +124,8 @@ it.effect(
 				],
 				erasures: [{ mode: 'anonymise', model: 'orders', ids: [first], purge: ['note'] }]
 			});
-			expect(answer?.captured.map((row) => ({ id: row.id, cause: row.cause }))).toEqual([
+			// the queued effect run is captured too; it is checked below
+			expect(answer?.captured.filter((row) => row.model === 'orders').map((row) => ({ id: row.id, cause: row.cause }))).toEqual([
 				{ id: first, cause: 'erased' },
 				{ id: second, cause: 'direct' }
 			]);
@@ -135,7 +136,7 @@ it.effect(
 				}
 			]);
 			expect(runs[0]?.rows).toEqual([
-				{ automation: 'orders.effect.updated', cause: 'effect', ids: [second] }
+				{ automation: 'orders.effect.update', cause: 'effect', ids: [second] }
 			]);
 			const history = yield* db.read([
 				{

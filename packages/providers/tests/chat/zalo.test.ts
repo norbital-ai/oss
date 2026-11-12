@@ -3,7 +3,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { zalo } from '../../src/chat/zalo/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { botToken: '123:abc', webhookSecret: 'secret' };
@@ -35,7 +35,7 @@ describe('Zalo', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(zalo, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'acme_bot' });
-			expect((yield* h.link.webhook!(webhook(hook(), secret))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(hook(), secret))).status).toBe(200);
 			expect(h.events).toEqual([
 				{
 					kind: 'messages',
@@ -43,11 +43,11 @@ describe('Zalo', () => {
 						{
 							id: 'm1',
 							thread: 'C1',
-							sentAt: '2026-09-21T14:13:20.000Z',
+							sent_at: '2026-09-21T14:13:20.000Z',
 							from: { handle: 'U1', name: 'Lan' },
 							text: 'xin chào',
 							group: false,
-							replyTo: null,
+							reply_to: null,
 							attachments: [],
 							invocation: 'direct'
 						}
@@ -72,7 +72,7 @@ describe('Zalo', () => {
 					})
 				}
 			});
-			yield* h.link.webhook!(webhook(group, secret));
+			yield* required(h.link.webhook)(webhook(group, secret));
 			expect(h.events[0]).toMatchObject({
 				messages: [
 					{
@@ -91,11 +91,11 @@ describe('Zalo', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(zalo, settings);
-			const forged = yield* h.link.webhook!(
+			const forged = yield* required(h.link.webhook)(
 				webhook(hook(), { 'x-bot-api-secret-token': 'forged' })
 			);
 			expect(forged.status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(hook(), {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(hook(), {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -105,7 +105,7 @@ describe('Zalo', () => {
 			const h = yield* connected(zalo, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(webhook(hook(), secret))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(hook(), secret))).status).toBe(500);
 		})
 	);
 	it.live('skips its own message, a sticker and an event with no message', () =>
@@ -117,7 +117,7 @@ describe('Zalo', () => {
 				hook({ text: undefined, sticker: 'S1' }),
 				JSON.stringify({ event_name: 'message.unsupported.received' })
 			])
-				expect((yield* h.link.webhook!(webhook(body, secret))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, secret))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -125,18 +125,18 @@ describe('Zalo', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(zalo, settings);
-			expect(yield* h.link.send!({ to: 'C1', text: 'Hello' }, [])).toMatchObject({
-				providerId: 'out1'
+			expect(yield* required(h.link.send)({ to: 'C1', text: 'Hello' }, [])).toMatchObject({
+				provider_id: 'out1'
 			});
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe(`${BASE}/sendMessage`);
 			expect(JSON.parse(call?.body ?? '')).toEqual({ chat_id: 'C1', text: 'Hello' });
 			const before = api.calls.length;
-			yield* h.link.send!({ to: 'C1', text: 'a'.repeat(2001) }, []);
+			yield* required(h.link.send)({ to: 'C1', text: 'a'.repeat(2001) }, []);
 			expect(api.calls.slice(before).map((one) => JSON.parse(one.body).text.length)).toEqual([
 				2000, 1
 			]);
-			yield* h.link.typing!('C1', true);
+			yield* required(h.link.typing)('C1', true);
 			expect(api.calls.at(-1)?.url).toBe(`${BASE}/sendChatAction`);
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toEqual({
 				chat_id: 'C1',
@@ -148,7 +148,7 @@ describe('Zalo', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ ok: false, error_code: 401, description: 'Unauthorized' }));
 			const h = yield* host(chatProvider(zalo), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

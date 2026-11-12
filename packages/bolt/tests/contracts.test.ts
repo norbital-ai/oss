@@ -6,7 +6,7 @@ import { TestClock } from 'effect/testing';
 import { describe, expect } from 'vitest';
 import { discover } from '../../bolt-cli/src/compiler/discover.ts';
 import { load } from '../../bolt-cli/src/compiler/load.ts';
-import { engineManifest } from '../src/engine/manifest.ts';
+import { engine_manifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
 import { install } from '../src/decl/runtime/guest.ts';
@@ -43,22 +43,21 @@ describe('next engine contracts', () => {
 			expect(yield* Port.fromPromise(() => Promise.resolve(7), Schema.Number, 'geo')).toBe(7);
 		})
 	);
-	it.live('engineManifest projects the loaded manifest to data, bodies stripped', () =>
+	it.live('engine_manifest projects the loaded manifest to data, bodies stripped', () =>
 		Effect.gen(function* () {
 			const root = fileURLToPath(new URL('./fixtures/good', import.meta.url));
 			const { manifest, errors } = yield* load(root, (yield* discover(root)).files);
 			expect(errors).toEqual([]);
-			const m = engineManifest(manifest);
+			const m = engine_manifest(manifest);
 			expect(Object.keys(m.exposures).sort()).toEqual(['customers', 'notices', 'orders']);
 			expect(m.exposures.orders).not.toHaveProperty('bodies');
-			expect(m.exposures.orders).toHaveProperty('read');
+			expect(m.exposures.orders).toHaveProperty('outputs.default.orders');
 			expect(m.integrations.mail).toEqual({
 				description: 'The notices mailbox',
 				driver: 'email'
 			});
 			expect(m.exposures.notices?.syncs).toEqual({ messages: { with: 'mail', read: true } });
-			expect(m.envoys.desk?.policies).toEqual(['sales_rep']);
-			expect(m.connections.support).toEqual({ integration: 'mail', envoy: 'desk' });
+			expect(m).not.toHaveProperty('connections');
 			expect(m.workspace.tz).toBeTypeOf('string');
 			expect(Object.keys(m.automations)).toEqual(['nightly']);
 			expect(m.automations.nightly).toBeDefined();

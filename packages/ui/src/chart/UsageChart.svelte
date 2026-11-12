@@ -3,13 +3,16 @@
 	(a capacity, a machine's total). Hovering reads every line at that time.
 -->
 <script lang="ts" module>
-	export type UsageChartLine = Readonly<{
+	import type { UiContext } from '../client/contract.js';
+	type UsageChartLine = Readonly<{
 		label: string;
 		bound: boolean;
 		points: ReadonlyArray<Readonly<{ at: number; value: number | null }>>;
 	}>;
 
 	export type UsageChartProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		title: string;
 		unit: string;
 		lines: ReadonlyArray<UsageChartLine>;
@@ -22,7 +25,7 @@
 	};
 	const BYTES = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
 	/** A reading in its unit, for people. */
-	export function formatMetricValue(unit: string, value: number | null): string {
+	export function format_metric_value(unit: string, value: number | null, locale?: string): string {
 		if (value === null) return 'Unavailable';
 		if (unit === 'bytes' || unit === 'MiB') {
 			let scaled = unit === 'MiB' ? value * 1024 * 1024 : value,
@@ -31,25 +34,31 @@
 				scaled /= 1024;
 				step++;
 			}
-			return `${scaled.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${BYTES[step]}`;
+			return `${scaled.toLocaleString(locale, { maximumFractionDigits: 1 })} ${BYTES[step]}`;
 		}
 		if (unit === 'micro-SGD')
-			return new Intl.NumberFormat('en-SG', {
+			return new Intl.NumberFormat(locale ?? 'en-SG', {
 				style: 'currency',
 				currency: 'SGD',
 				maximumFractionDigits: value > 0 && value < 10_000 ? 6 : 2
 			}).format(value / 1_000_000);
 		if (unit === 'seconds')
 			return value >= 3600
-				? `${(value / 3600).toLocaleString(undefined, { maximumFractionDigits: 1 })} h`
-				: `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
+				? `${(value / 3600).toLocaleString(locale, { maximumFractionDigits: 1 })} h`
+				: `${value.toLocaleString(locale, { maximumFractionDigits: 1 })} s`;
 		if (unit === 'load per core') return `${Math.round(value * 100)}%`;
-		return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
+		return `${value.toLocaleString(locale, { maximumFractionDigits: 1 })} ${unit}`;
 	}
 </script>
 
 <script lang="ts">
-	let { title, unit, lines, utilization = null }: UsageChartProps = $props();
+	import { ui_text } from '../primitives/utils.js';
+
+	let { ctx, title, unit, lines, utilization = null }: UsageChartProps = $props();
+	const host = $derived(ctx.ui.kinds);
+	const t = ui_text();
+	const metric = (value: number | null) =>
+		value === null ? t('unavailable') : format_metric_value(unit, value, host.locale);
 	const W = 600,
 		H = 160;
 	// the use is the brand line; its bounds take the chart palette after it
@@ -82,17 +91,17 @@
 		hover = Math.round(((event.clientX - box.left) / box.width) * Math.max(0, length - 1));
 	}
 	const when = (millis: number) =>
-		new Date(millis).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+		new Date(millis).toLocaleString(host.locale, { dateStyle: 'short', timeStyle: 'short' });
 </script>
 
 <figure class="grid min-w-0 gap-2 rounded-md border border-border p-3 text-xs">
 	<figcaption class="flex flex-wrap items-baseline justify-between gap-2">
 		<span class="text-xs font-medium">{title}</span>
 		<span class="text-meta">
-			{#if utilization !== null}peak {Math.round(utilization * 100)}% of capacity{:else}peak {formatMetricValue(
-					unit,
-					peakValue(lines[0]?.points.map((p) => p.value) ?? [])
-				)}{/if}
+			{#if utilization !== null}{t('peakCapacity').replace(
+					'{n}',
+					String(Math.round(utilization * 100))
+				)}{:else}{t('peak')} {metric(peakValue(lines[0]?.points.map((p) => p.value) ?? []))}{/if}
 		</span>
 	</figcaption>
 	<svg
@@ -100,7 +109,7 @@
 		preserveAspectRatio="none"
 		class="h-32 w-full touch-pan-y"
 		role="img"
-		aria-label={`${title} over time`}
+		aria-label={`${title} ${t('overTime')}`}
 		onpointerdown={move}
 		onpointermove={move}
 		onpointerleave={() => (hover = null)}
@@ -129,7 +138,7 @@
 	</svg>
 	<div class="text-meta flex flex-wrap justify-between gap-x-3 gap-y-1 tabular-nums">
 		<span>{first === undefined ? '' : when(first)}</span>
-		<span>max {formatMetricValue(unit, maximum)}</span>
+		<span>{t('maximum')} {metric(maximum)}</span>
 		<span>{last === undefined ? '' : when(last)}</span>
 	</div>
 	<ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -140,10 +149,7 @@
 					style:background={COLORS[i % COLORS.length]}
 					style:opacity={line.bound ? 0.6 : 1}
 				></span>
-				{line.label}{#if hover !== null}: {formatMetricValue(
-						unit,
-						line.points[hover]?.value ?? null
-					)}{/if}
+				{line.label}{#if hover !== null}: {metric(line.points[hover]?.value ?? null)}{/if}
 			</li>
 		{/each}
 		{#if at != null}<li class="text-meta">{when(at)}</li>{/if}

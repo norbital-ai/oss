@@ -14,8 +14,8 @@ import { ChildProcess } from 'effect/process';
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
-import { TemplateManifest } from '@norbital-ai/bolt/engine';
-import { readArtifact } from '@norbital-ai/bolt/artifact';
+import { TemplateManifest } from '@norbital-ai/bolt/protocol';
+import { read_artifact } from '@norbital-ai/bolt/artifact';
 import { ReleaseJson, schemaSql } from '../compiler/artifact/index.ts';
 import { workers } from './test.ts';
 
@@ -367,10 +367,10 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 			const sql = (yield* fs.readDirectory(artifactDir)).filter((file) => file.endsWith('.sql'));
 			if (sql.length !== 1 || sql[0] !== 'schema.sql')
 				return yield* fail(`${template.slug}: the artifact holds one generated initial schema`);
-			const artifact = yield* readArtifact(artifactDir);
+			const artifact = yield* read_artifact(artifactDir);
 			if (
 				(yield* fs.readFileString(path.join(artifactDir, 'schema.sql'))) !==
-				schemaSql(artifact.manifest)
+				(yield* schemaSql(artifact.manifest))
 			)
 				return yield* fail(
 					`${template.slug}: generated schema differs from the native initial plan`

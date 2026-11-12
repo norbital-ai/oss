@@ -9,7 +9,7 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { type GuestShape } from '../src/engine/services.ts';
 import { act, type ActRequest, type WriteEngine } from '../src/engine/write/act.ts';
-import { restoreSource, seed } from '../src/engine/write/seed.ts';
+import { restore_source, seed } from '../src/engine/write/seed.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 
 const cols = ['name', 'span', 'slot'];
@@ -18,7 +18,7 @@ const manifest: EngineManifest = {
 	models: {
 		shifts: {
 			description: 'A shift',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				span: { kind: 'period', of: 'date' },
@@ -27,18 +27,18 @@ const manifest: EngineManifest = {
 		},
 		breaks: {
 			description: 'A break',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, span: { kind: 'period', of: 'date' } }
 		}
 	},
 	relationships: { 'breaks.shift': { to: 'shifts', inverse: 'breaks', owned: true } },
 	exposures: {
 		shifts: {
-			read: { shifts: { fields: 'all' } },
+			outputs: { default: { shifts: { fields: 'all' } } },
 			create: { columns: { shifts: cols, 'shifts.breaks': ['name', 'span'] } },
 			update: { columns: { shifts: cols } }
 		},
-		breaks: { read: { breaks: { fields: 'all' } } }
+		breaks: { outputs: { default: { breaks: { fields: 'all' } } } }
 	}
 };
 
@@ -51,7 +51,7 @@ const committed = (o: Outcome) => {
 	if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 	return o;
 };
-const idOf = (o: Outcome) => {
+const id_of = (o: Outcome) => {
 	const record = committed(o).records.find((r) => r.model === 'shifts');
 	if (record === undefined) throw new Error('No created shift');
 	return record.id;
@@ -118,7 +118,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 						params: []
 					})
 				).toEqual([{ span: '[2026-01-05,)' }]);
-				const id = idOf(o);
+				const id = id_of(o);
 				committed(
 					(yield* run({
 						verb: 'update',
@@ -139,7 +139,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 					verb: 'create',
 					input: [{ name: 'x', span: { from: '2026-02-01', to: '2026-01-01' } }]
 				})).outcome
-			).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'span' });
+			).toMatchObject({ kind: 'refused', code: 'invalid_input', field: 'span' });
 		}).pipe(Effect.provide(CodecFixtureLive))
 	);
 
@@ -149,7 +149,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 			yield* seed(
 				manifest,
 				db,
-				restoreSource({
+				restore_source({
 					shifts: [
 						{
 							id: '0199a000-0000-7000-8000-000000000001',
@@ -171,7 +171,7 @@ describe('codec: the update callback reads `before` in wire form (§5.8)', () =>
 		() =>
 			Effect.gen(function* () {
 				const { run } = yield* CodecFixture;
-				const id = idOf(
+				const id = id_of(
 					(yield* run({
 						verb: 'create',
 						input: [{ name: 'a', span: { from: '2026-01-01', to: '2026-01-31' } }]
@@ -208,7 +208,7 @@ describe('codec: the update callback reads `before` in wire form (§5.8)', () =>
 								exposures: {
 									...manifest.exposures,
 									shifts: {
-										read: { shifts: { fields: 'all' } },
+										outputs: { default: { shifts: { fields: 'all' } } },
 										update: { columns: { shifts: cols }, transform: true }
 									}
 								}

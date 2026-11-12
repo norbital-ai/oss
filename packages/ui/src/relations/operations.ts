@@ -1,5 +1,4 @@
-import { Equal } from 'effect';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { equal_json } from '@norbital-ai/std/json';
 import type { Row, Values } from '../model/types.js';
 export type RowsOps = {
 	create?: Values[];
@@ -23,7 +22,7 @@ export function rowsOps(
 		}
 		const set = Object.fromEntries(
 			Object.entries(r).filter(
-				([k, v]) => k !== 'id' && !Equal.equals(encodeWire(v), encodeWire(was[k] ?? null))
+				([k, v]) => k !== 'id' && !equal_json(v, was[k] ?? null)
 			)
 		);
 		if (Object.keys(set).length > 0) update.push({ target: was.id, set });

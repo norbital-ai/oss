@@ -7,13 +7,13 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
 	/** The smallest cell width an auto-fit `Grid` keeps before wrapping. */
-	export type GridMinimum = 'compact' | 'card' | 'panel';
+	type GridMinimum = 'compact' | 'card' | 'panel';
 	/** The props of `Grid`. */
-	export interface GridProps extends LayoutAttributes {
+	interface GridProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		/** Space between rows when it differs from `gap` (a definition list: wide columns, tight rows). */
-		rowGap?: LayoutGap;
+		row_gap?: LayoutGap;
 		/** Block-axis placement of every cell. */
 		align?: 'start' | 'center' | 'end' | 'stretch';
 		minimum?: GridMinimum;
@@ -30,13 +30,13 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
 	import { setContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES, ROW_GAP_CLASSES } from './layout.shared.js';
+	import { ALIGN_CLASSES, COLUMN_PARENT_CONTEXT, GAP_CLASSES, ROW_GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
 		ref = $bindable(null),
 		gap = 'md',
-		rowGap,
+		row_gap,
 		align = 'stretch',
 		minimum = 'card',
 		tracks,
@@ -45,12 +45,6 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 		...restProps
 	}: GridProps = $props();
 
-	const ALIGN_CLASSES = {
-		start: 'items-start',
-		center: 'items-center',
-		end: 'items-end',
-		stretch: 'items-stretch'
-	} as const;
 	const minimumClasses: Record<GridMinimum, string> = {
 		// a form's fields go down to half a narrow container, two to a row: a field that needs the row spans it (`Field`)
 		compact:
@@ -59,9 +53,7 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 		panel:
 			'[grid-template-columns:repeat(auto-fit,minmax(min(100%,26rem),1fr))] has-[>[data-field]]:[grid-template-columns:repeat(auto-fit,minmax(min(100%,clamp(9rem,calc(50%_-_0.5rem),26rem)),1fr))]'
 	};
-	const { style: styleProp, ...attributes } = $derived(
-		restProps as { style?: string } & Record<string, unknown>
-	);
+	const { style: styleProp, ...attributes } = $derived(restProps);
 	setContext(COLUMN_PARENT_CONTEXT, { kind: 'grid' });
 </script>
 
@@ -72,7 +64,7 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 		'grid min-h-0 min-w-0',
 		as === 'dl' && 'shrink-0',
 		GAP_CLASSES[gap],
-		rowGap && ROW_GAP_CLASSES[rowGap],
+		row_gap && ROW_GAP_CLASSES[row_gap],
 		ALIGN_CLASSES[align],
 		tracks ? null : minimumClasses[minimum],
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.

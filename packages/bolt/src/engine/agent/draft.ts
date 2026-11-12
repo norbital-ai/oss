@@ -1,6 +1,7 @@
 // The draft a structured `sys_2.infer` builds, addressed by keyed pointers: RFC 6901 JSON Pointers whose segment for an
 // item of a keyed list (`{ kind: 'list', key }`) is that item's key, not its index, so removing one item never moves
 // another's path. Pure (types only), so `jsonDiff` serves guests as well as the engine's `diff` tool.
+import { item_kind } from '@norbital-ai/std/kind';
 import type { Kind } from '@norbital-ai/std/kind';
 import type { InputKind } from '../../decl/fields.ts';
 import type { Json } from '../../decl/values.ts';
@@ -22,7 +23,7 @@ export const isList = (v: Json | undefined): v is readonly Json[] => Array.isArr
 
 /** A keyed list's key: the field of its object items that names each one. */
 export const keyOf = (k: Kind): string | undefined =>
-	k.kind === 'list' && 'key' in k && typeof k.key === 'string' ? k.key : undefined;
+	k.many === true && 'key' in k && typeof k.key === 'string' ? k.key : undefined;
 /** An item's key as a pointer segment; absent unless a non-empty text or a number. */
 export const keyText = (item: Json | undefined, key: string): string | undefined => {
 	const v = isObj(item) ? item[key] : undefined;
@@ -30,8 +31,8 @@ export const keyText = (item: Json | undefined, key: string): string | undefined
 };
 /** The kind of child `seg` of a value of kind `k` (a tagged union's arm is read from `holder`); absent when it has none. */
 export function childKind(k: Kind, seg: string, holder: Json | undefined): Kind | undefined {
+	if (k.many === true) return item_kind(k);
 	switch (k.kind) {
-		case 'list':
 		case 'record':
 			return k.of;
 		case 'object':

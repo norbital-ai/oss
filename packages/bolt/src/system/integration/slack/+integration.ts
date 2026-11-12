@@ -1,6 +1,6 @@
-import { integration } from '../../../decl/runtime/integration.ts';
+import { bind_integration } from '../../../declarations.ts';
 
-export default integration('slack', {
+export default bind_integration('slack')({
 	description: 'Slack: a bot in a workspace, its channels and direct messages.',
 	driver: 'slack'
 });

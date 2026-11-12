@@ -13,14 +13,14 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 	} from './layout.shared.js';
 
 	/** The props of `Cover`. */
-	export interface CoverProps extends LayoutAttributes {
+	interface CoverProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		pad?: LayoutPad;
-		/** `content` (default): its own height; `fill`: the space left in its parent, down to `minHeight`. */
+		/** `content` (default): its own height; `fill`: the space left in its parent, down to `min_height`. */
 		size?: LayoutSize;
 		/** A `fill` cover's floor (a CSS length; default 0). */
-		minHeight?: string;
+		min_height?: string;
 		/**
 		 * Centre the body's content in the space between `top` and `bottom` — Every Layout's Cover
 		 * principal: an empty state, a sign-in card, a splash. Without it the body is a scroll owner's
@@ -43,13 +43,14 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 		gap = 'md',
 		pad = 'none',
 		size = 'content',
-		minHeight,
+		min_height,
 		center = false,
 		top,
 		bottom,
 		class: className,
+		style: styleProp,
 		children,
-		...restProps
+		...attributes
 	}: CoverProps = $props();
 
 	/**
@@ -66,9 +67,6 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 			.filter((row) => row !== null)
 			.join(' ')
 	);
-	const { style: styleProp, ...attributes } = $derived(
-		restProps as { style?: string } & Record<string, unknown>
-	);
 </script>
 
 <svelte:element
@@ -83,7 +81,7 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 		className
 	)}
 	style={`grid-template-rows: ${rowTemplate};${styleProp ? ` ${styleProp}` : ''}`}
-	style:min-height={size === 'fill' ? minHeight : undefined}
+	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="cover"
 	{...attributes}
 >

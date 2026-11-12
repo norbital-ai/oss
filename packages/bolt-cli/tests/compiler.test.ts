@@ -13,15 +13,47 @@ import { LAYOUT_HELP } from '../../bolt/src/decl/layout.ts';
 import { buildPacks, seedRows } from '../src/compiler/artifact/seed.ts';
 import type { CheckDiagnostic } from '../src/compiler/check/index.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
-import { engineManifest } from '../../bolt/src/engine/manifest.ts';
+import { engine_manifest } from '../../bolt/src/engine/manifest.ts';
 import { load, manifestErrors } from '../src/compiler/load.ts';
-import { namesIndex, writeNames } from '../src/compiler/names.ts';
+import { namesIndex, writeNames, writeTypeSetup } from '../src/compiler/names.ts';
 import { install } from '../../bolt/src/decl/runtime/guest.ts';
 install();
 const fixture = (name: string) =>
 	fileURLToPath(new URL(`../../bolt/tests/fixtures/${name}`, import.meta.url));
 const BOLT = '../../../../src/index.ts'; // src as seen from a fixture's .norbital/
 describe('next compiler: discover', () => {
+	it.live('generates typed path bindings and removes a deleted declaration binding', () =>
+		Effect.gen(function* () {
+			const root = yield* scratchPath(`compiler-bindings-${randomUUID()}`);
+			try {
+				yield* writeTypeSetup(root, [
+					{ role: 'model', name: 'orders', path: 'src/data/model/sales/orders/+model.ts' },
+					{
+						role: 'integration_definition',
+						name: 'crm',
+						path: 'src/integration/crm/+integration.ts'
+					}
+				]);
+				expect(readFileSync(join(root, '.norbital/models/orders.ts'), 'utf8')).toContain(
+					'bind_model("orders")'
+				);
+				expect(readFileSync(join(root, '.norbital/integrations/crm.ts'), 'utf8')).toContain(
+					'bind_integration("crm")'
+				);
+				yield* writeTypeSetup(root, [
+					{ role: 'model', name: 'invoices', path: 'src/data/model/invoices/+model.ts' }
+				]);
+				expect(existsSync(join(root, '.norbital/models/orders.ts'))).toBe(false);
+				expect(existsSync(join(root, '.norbital/integrations/crm.ts'))).toBe(false);
+				expect(readFileSync(join(root, '.norbital/models/invoices.ts'), 'utf8')).toContain(
+					'bind_model("invoices")'
+				);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+
 	it.live(
 		'loads nested model folders by leaf identity, with parent models and sibling representations',
 		() =>
@@ -43,7 +75,7 @@ describe('next compiler: discover', () => {
 						write(
 							`src/data/model/${folder}/+model.ts`,
 							`export default { name: '${folder.split('/').at(-1)}', spec: {
-							description: 'Nested model', label: 'name', fields: { name: { kind: 'text' } }, read: 'all'
+							description: 'Nested model', record_label: 'record.name', fields: { name: { kind: 'text' } }, outputs: { default: { fields: 'all' } }
 						} };`
 						);
 					const representation =
@@ -67,7 +99,7 @@ describe('next compiler: discover', () => {
 					expect(loaded.errors).toEqual([]);
 					expect(manifestErrors(loaded.manifest, 'workspace', files)).toEqual([]);
 					expect(loaded.manifest.representation.leave_catalog_entry).toBe(representation);
-					expect(Object.keys(engineManifest(loaded.manifest).models).sort()).toEqual(
+					expect(Object.keys(engine_manifest(loaded.manifest).models).sort()).toEqual(
 						folders.map((folder) => folder.split('/').at(-1)).sort()
 					);
 					const index = namesIndex(files, loaded.manifest);
@@ -207,7 +239,7 @@ describe('next compiler: discover', () => {
 					expect(files).toContainEqual({ role: 'secrets', name: '', path: 'src/+secrets.ts' });
 					const loaded = yield* load(root, files);
 					expect(loaded.errors).toEqual([]);
-					expect(engineManifest(loaded.manifest).workspace.secrets).toEqual({
+					expect(engine_manifest(loaded.manifest).workspace.secrets).toEqual({
 						API_URL: { label: 'API', description: 'The base URL' },
 						API_SECRET: { label: 'Secret' }
 					});
@@ -227,32 +259,18 @@ describe('next compiler: discover', () => {
 				}
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('a tool is its +tool.ts and the run.ts beside it', () =>
+	it.live('rejects retired agent tool declarations', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-tool-${randomUUID()}`);
-			const write = (path: string, text: string) => {
-				mkdirSync(dirname(join(root, path)), { recursive: true });
-				writeFileSync(join(root, path), text);
-			};
 			try {
-				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
-				write(
-					'src/agent/tool/plans/+tool.ts',
-					"export default { description: 'Reads a plan.', input: { sheet: { kind: 'text', optional: true } } };"
-				);
-				expect((yield* discover(root)).errors.map((error) => error.code)).toEqual([
-					'discover/tool-entry'
-				]);
-				write('src/agent/tool/plans/run.ts', 'export default () => null;');
-				const { files, errors } = yield* discover(root);
-				expect(errors).toEqual([]);
-				const loaded = yield* load(root, files);
-				expect(engineManifest(loaded.manifest).agent.tools).toEqual({
-					plans: { description: 'Reads a plan.', input: { sheet: { kind: 'text', optional: true } } }
-				});
-			} finally {
-				rmSync(root, { recursive: true, force: true });
-			}
+				mkdirSync(join(root, 'src/agent/tool/plans'), { recursive: true });
+				writeFileSync(join(root, 'src/+workspace.ts'), "export default { tz: 'UTC', locale: 'en' };");
+				writeFileSync(join(root, 'src/agent/tool/plans/+tool.ts'), 'export default {};');
+				writeFileSync(join(root, 'src/agent/tool/plans/run.ts'), 'export default function* () {};');
+				expect((yield* discover(root)).errors).toContainEqual(expect.objectContaining({
+					code: 'discover/unknown-role', path: 'src/agent/tool/plans/+tool.ts'
+				}));
+			} finally { rmSync(root, { recursive: true, force: true }); }
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live('names every role from its path', () =>
@@ -261,22 +279,21 @@ describe('next compiler: discover', () => {
 			expect(errors).toEqual([]);
 			expect(files.map((f) => `${f.role} ${f.name}`).sort()).toEqual([
 				'agent ',
+				'app clock',
 				'app hr/kiosk',
 				'app sales',
 				'automation nightly',
 				'custom_field rating',
-				'envoy desk',
 				'group hr',
 				'integration_definition erp',
 				'integration_definition mail',
-				'kiosk clock',
-				'kiosk_page clock/clock',
 				'locale ms',
 				'mcp hq',
 				'messages ',
 				'model customers',
 				'model notices',
 				'model orders',
+				'page clock/clock',
 				'page hr/kiosk/clock',
 				'page sales/board',
 				'page sales/list',
@@ -284,6 +301,7 @@ describe('next compiler: discover', () => {
 				'policy sales_rep',
 				'renderer rating',
 				'representation orders',
+				'secrets ',
 				'skill triage',
 				'team ',
 				'workspace '
@@ -371,7 +389,7 @@ describe('next compiler: load', () => {
 				write('src/access_control/policy/+sales.policy.ts', 'export default { grants: {} };');
 				write(
 					'src/access_control/team/+team.ts',
-					"export default { root: { name: 'Shared label', parent: null, policies: ['sales'] }, branch: { name: 'Shared label', parent: 'root', policies: [] }, Root: ['sales'] };"
+					"export default { root: { name: 'Shared label', parent: null, policies: ['sales'] }, branch: { name: 'Shared label', parent: 'root', policies: [] }, Root: { policies: ['sales'] } };"
 				);
 				const found = yield* discover(root);
 				expect(found.files).toContainEqual({
@@ -383,7 +401,7 @@ describe('next compiler: load', () => {
 				expect(loaded.errors).toEqual([]);
 				const check = (teams: unknown) =>
 					manifestErrors({ ...loaded.manifest, team: { '': teams } }).map((error) => error.code);
-				expect(check({ role: ['unknown'] })).toContain('load/team-policy');
+				expect(check({ role: { policies: ['unknown'] } })).toContain('load/team-policy');
 				expect(check({ role: { policies: [], parent: 'missing' } })).toContain('load/team-parent');
 				expect(
 					check({ a: { policies: [], parent: 'b' }, b: { policies: [], parent: 'a' } })
@@ -395,7 +413,7 @@ describe('next compiler: load', () => {
 			}
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it.live('splits inline model refs and syncs beside integration definitions and connections', () =>
+	it.live('splits inline model refs and syncs beside integration definitions and runtime accounts', () =>
 		Effect.gen(function* () {
 			const root = yield* scratchPath(`compiler-integration-load-${randomUUID()}`);
 			const write = (path: string, text: string) => {
@@ -405,14 +423,14 @@ describe('next compiler: load', () => {
 			try {
 				write(
 					'src/+workspace.ts',
-					"export default { tz: 'UTC', locale: 'en', connections: { ledger: { integration: 'books' } } };"
+					"export default { tz: 'UTC', locale: 'en' };"
 				);
 				write(
 					'src/data/model/entries/+model.ts',
 					`export default { name: 'entries', spec: {
-					description: 'Ledger entries', label: 'code', key: ['source', 'code'],
+					description: 'Ledger entries', record_label: 'record.code', constraints: { one_code: { unique: ['source', 'code'], import_key: true } },
 					fields: { code: { kind: 'text' }, source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'books' } } } },
-					read: 'all', syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
+					outputs: { default: { fields: 'all' } }, syncs: { ledger: { with: 'books', every: '1h', read: function* () { return { rows: [] }; } } }
 				} };`
 				);
 				write(
@@ -423,7 +441,7 @@ describe('next compiler: load', () => {
 					loaded = yield* load(root, found.files);
 				expect(found.errors).toEqual([]);
 				expect([...loaded.errors, ...manifestErrors(loaded.manifest)]).toEqual([]);
-				const manifest = engineManifest(loaded.manifest);
+				const manifest = engine_manifest(loaded.manifest);
 				expect(manifest.integrations['books']).toEqual({
 					description: 'Books',
 					driver: 'sqlserver'
@@ -434,7 +452,7 @@ describe('next compiler: load', () => {
 					every: '1h',
 					read: true
 				});
-				expect(manifest.connections).toEqual({ ledger: { integration: 'books' } });
+				expect(manifest).not.toHaveProperty('connections');
 				expect(manifest.workspace).not.toHaveProperty('connections');
 				const names = namesIndex(found.files, loaded.manifest);
 				expect(names).toContain('"syncs": {');
@@ -480,7 +498,7 @@ describe('next compiler: load', () => {
 			expect(manifestErrors(manifest)).toEqual([]);
 			expect(Object.keys(manifest.model).sort()).toEqual(['customers', 'notices', 'orders']);
 			expect(manifest.model.orders).toHaveProperty(
-				['spec', 'read', 'orders.customer', 'fields'],
+				['spec', 'outputs', 'default', 'customer', 'fields'],
 				['name', 'rating']
 			);
 			expect(manifest.model.orders).not.toHaveProperty('bodies.queries');
@@ -493,7 +511,6 @@ describe('next compiler: load', () => {
 				'bodies.syncs.messages.read',
 				expect.any(Function)
 			);
-			expect(manifest.envoy.desk).toMatchObject({ name: 'Norbius', policies: ['sales_rep'] });
 			// a skill is its folder: `+skill.md` is its SKILL.md, beside its scripts
 			expect(manifest.skill.triage).toEqual({
 				text: expect.stringContaining('description: Triage a notice'),
@@ -559,13 +576,12 @@ describe('next compiler: seed packs', () => {
 		exposures: {},
 		policies: {},
 		integrations: {},
-		connections: {},
 		automations: {},
 		teams: {},
-		envoys: {},
+
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	};
 	const member = (id: string) => ({
@@ -660,7 +676,7 @@ describe('next compiler: datatypes named in a seeded JSON Schema', () => {
 				write('src/+workspace.ts', "export default { tz: 'UTC', locale: 'en' };");
 				write(
 					'src/data/model/forms/+model.ts',
-					"export default { name: 'forms', spec: { description: 'Forms', label: 'name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, read: 'all' } };"
+					"export default { name: 'forms', spec: { description: 'Forms', record_label: 'record.name', fields: { name: { kind: 'text' }, schema: { kind: 'json' } }, outputs: { default: { fields: 'all' } } } };"
 				);
 				write('seed/public/forms.json', JSON.stringify([{ id: 'f1', name: 'one', schema }]));
 				const found = yield* discover(root),
@@ -669,7 +685,7 @@ describe('next compiler: datatypes named in a seeded JSON Schema', () => {
 				const errors: CheckDiagnostic[] = [];
 				yield* buildPacks(
 					root,
-					engineManifest(loaded.manifest),
+					engine_manifest(loaded.manifest),
 					join(root, '.norbital/seed'),
 					errors
 				);

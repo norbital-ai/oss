@@ -1,36 +1,18 @@
 // The layout layer (§3.6 `./layout`): the layoutPack primitives and AppShell. Inset and scroll-port context stay internal.
-export { default as AppHeader, type AppHeaderProps } from './app-header.svelte';
-export { default as AppShell, type AppShellProps, type AppShellVariant } from './app-shell.svelte';
-export {
-	getAppIdentitySlot,
-	setAppIdentitySlot,
-	type AppIdentity,
-	type AppIdentitySlot
-} from './app-identity.svelte.js';
-export { default as Bound, type BoundProps, type BoundSize } from './bound.svelte';
-export { default as Center, type CenterMeasure, type CenterProps } from './center.svelte';
-export { default as Cluster, type ClusterProps } from './cluster.svelte';
-export { default as Column, type ColumnProps, type ColumnSpan } from './column.svelte';
-export { default as Columns, type ColumnCount, type ColumnsProps } from './columns.svelte';
-export { default as Cover, type CoverProps } from './cover.svelte';
-export { default as Frame, type FrameProps, type FrameRatio } from './frame.svelte';
-export { default as Grid, type GridMinimum, type GridProps } from './grid.svelte';
-export { default as Imposter, type ImposterPlacement, type ImposterProps } from './imposter.svelte';
-export { default as Inline, type InlineProps } from './inline.svelte';
-export { default as Scroll, type ScrollProps } from './scroll.svelte';
-export {
-	default as Split,
-	type SplitCollapse,
-	type SplitProps,
-	type SplitRatio
-} from './split.svelte';
-export { default as Stack, type StackProps } from './stack.svelte';
-export { insetReader, ownInset, provisionalInset, resetInset } from './inset.svelte.js';
-export {
-	INSET_MX_CLASS,
-	INSET_X_CLASS,
-	SCROLL_AXIS_CLASSES,
-	type LayoutGap,
-	type LayoutPad,
-	type LayoutSize
-} from './layout.shared.js';
+export { default as AppHeader } from './app-header.svelte';
+export { default as AppShell } from './app-shell.svelte';
+export { set_app_identity_slot, type AppIdentitySlot } from './app-identity.svelte.js';
+export { default as Bound } from './bound.svelte';
+export { default as Center } from './center.svelte';
+export { default as Cluster } from './cluster.svelte';
+export { default as Column } from './column.svelte';
+export { default as Columns } from './columns.svelte';
+export { default as Cover } from './cover.svelte';
+export { default as Frame } from './frame.svelte';
+export { default as Grid } from './grid.svelte';
+export { default as Imposter } from './imposter.svelte';
+export { default as Inline } from './inline.svelte';
+export { default as Scroll } from './scroll.svelte';
+export { default as Split } from './split.svelte';
+export { default as Stack } from './stack.svelte';
+export { INSET_X_CLASS, SCROLL_AXIS_CLASSES } from './layout.shared.js';

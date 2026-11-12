@@ -1,26 +1,27 @@
 <script lang="ts">
-	import { formatValue as show, format, inferKind, currencyOf } from '../kinds/kind.js';
+	import type { UiContext } from '../client/contract.js';
+	import { item_kind } from '@norbital-ai/std/kind';
+	import { format_value as show, format, inferKind, currencyOf } from '../kinds/kind.js';
 	// One stored value, read-only: by its kind through the kit's `Show` when the catalog knows the field, else by shape
 	// (files open through `/files`, where the viewer's read grant decides; a mask shows locked).
 	import Show from '../kinds/show.svelte';
 	import FileCollection from '../kinds/file-collection.svelte';
 	import StructuredData from '../kinds/structured-data.svelte';
 	import { dataEntries } from '../kinds/structured-data.js';
-	import { isJsonSchemaDocument } from '../kinds/json-schema.js';
-	import { useKinds } from '../kinds/context.js';
-	import { fieldEntry } from '../kinds/builtin/index.js';
+	import { is_json_schema_document } from '../kinds/json-schema.js';
+	import { field_entry } from '../kinds/builtin/index.js';
 	import { fill, humanize } from '../text/messages.js';
 	import type { Kind } from '../kinds/kind.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import type { Values } from '../model/types.js';
-	import { openRecord } from '../record/navigation.js';
-	import { useOptionalBolt } from '../client/context.js';
+	import { open_record } from '../record/navigation.js';
+	import { optional_bolt_of } from '../client/context.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { filesOf } from './value.js';
 	import Overflow from './Overflow.svelte';
 	import CodeEditor from '../editors/code-editor.svelte';
-	import { highlightedLine } from '../editors/highlight.js';
-	import { msg } from '../text/messages.js';
+	import { highlighted_line } from '../editors/highlight.js';
+	import { catalogText } from '../text/messages.js';
 	import { type Ref } from '../relations/select.js';
 
 	/** `ref`: a relation's target and label (`unref`), shown as a link opening that record (`?record=`); a many-relation
@@ -29,6 +30,7 @@
 	 * `name` reaches a custom field's renderer. `link={false}` (a row of a list, which opens the row's own record) shows a
 	 * relation as text, so a tap on a row never lands on the related record instead. */
 	let {
+		ctx,
 		value,
 		kind,
 		row,
@@ -37,6 +39,7 @@
 		dense = false,
 		link: linked = true
 	}: {
+		ctx: UiContext;
 		value: import('@norbital-ai/std/kind').Value | undefined;
 		kind?: Kind | undefined;
 		row?: Values;
@@ -45,15 +48,15 @@
 		dense?: boolean;
 		link?: boolean;
 	} = $props();
-	const bolt = useOptionalBolt();
+	const bolt = $derived(optional_bolt_of(ctx));
 	const text = (
 		key: string,
 		fallback: string,
 		vars: { readonly [name: string]: string | number } = {}
-	) => (bolt === undefined ? fill(fallback, vars) : msg(bolt, key, fallback, vars));
+	) => (bolt === undefined ? fill(fallback, vars) : catalogText(bolt, key, fallback, vars));
 	const files = $derived(filesOf(value ?? null));
-	const host = useKinds();
-	const field = $derived(kind === undefined ? undefined : fieldEntry(kind, host));
+	const host = $derived(ctx.ui.kinds);
+	const field = $derived(kind === undefined ? undefined : field_entry(kind, host));
 	const structured = (k: Kind) => ['json', 'object', 'list', 'record', 'union'].includes(k.kind);
 	const inspectKind = $derived(
 		kind?.kind === 'json'
@@ -91,7 +94,7 @@
 				continue;
 			}
 			if (shape.kind === 'custom') {
-				const registered = fieldEntry(shape, host);
+				const registered = field_entry(shape, host);
 				if (registered?.entry.renderer !== undefined)
 					return shape.label ?? registered.entry.label ?? humanize(shape.of);
 				if (registered !== undefined) {
@@ -105,7 +108,7 @@
 		if (Array.isArray(held)) {
 			if (held.length === 0) return 'Empty list';
 			if (depth >= 2) return `${held.length} items`;
-			const item = shape?.kind === 'list' ? shape.of : undefined;
+			const item = shape?.many === true ? item_kind(shape) : undefined;
 			return (
 				held
 					.slice(0, 2)
@@ -153,7 +156,7 @@
 			data-ref-open={id}
 			onclick={(e) => {
 				e.stopPropagation();
-				openRecord(of, id);
+				open_record(of, id);
 			}}>{text}</button
 		>{/if}
 {/snippet}
@@ -213,7 +216,7 @@
 	<!-- one highlighted line of an expression; expand shows it whole -->
 	<Overflow>
 		<code class="bg-muted rounded-sm px-1.5 py-0.5 font-mono text-xs" data-cel
-			>{#each highlightedLine(value) as token, i (i)}<span class={token.class || undefined}
+			>{#each highlighted_line(value) as token, i (i)}<span class={token.class || undefined}
 					>{token.text}</span
 				>{/each}</code
 		>
@@ -221,7 +224,7 @@
 				language="javascript"
 				wrap
 				readonly
-				minHeight="2.25rem"
+				min_height="2.25rem"
 				{value}
 				aria-label={name}
 			/>{/snippet}
@@ -247,25 +250,25 @@
 			class="max-h-[min(32rem,80vh)] w-[min(44rem,calc(100vw-2rem))] overflow-auto"
 			data-structured-inspector
 		>
-			{#if isJsonSchemaDocument(value)}
-				<StructuredData schema={value} mode="schema" {name} />
+			{#if is_json_schema_document(value)}
+				<StructuredData {ctx} schema={value} mode="schema" {name} />
 			{:else}
-				<StructuredData kind={inspectKind} {value} mode="view" {name} {row} />
+				<StructuredData {ctx} kind={inspectKind} {value} mode="view" {name} {row} />
 			{/if}
 		</Popover.Content>
 	</Popover.Root>
 {:else if kind !== undefined || typeof value === 'boolean'}
 	<!-- a boolean without a catalog kind (a local array's column) is still a check or a cross, not a glyph in text -->
-	<Show
+	<Show {ctx}
 		kind={kind ?? { kind: 'bool' }}
 		{value}
 		{...row === undefined ? {} : { row }}
 		{...name === undefined ? {} : { name }}
 	/>
 {:else if files.length > 0}
-	<FileCollection refs={files} />
+	<FileCollection {ctx} refs={files} />
 {:else if dataEntries(value) !== undefined || Array.isArray(value)}
-	<StructuredData {value} mode="view" {name} {row} />
+	<StructuredData {ctx} {value} mode="view" {name} {row} />
 {:else}
 	{show(value, bolt?.locale ?? host.locale)}
 {/if}

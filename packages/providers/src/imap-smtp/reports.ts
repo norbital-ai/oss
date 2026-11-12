@@ -64,7 +64,7 @@ function dsn(status: string): Report | null {
 	const rank = (f: Map<string, string>) => ranks[(f.get('action') ?? '').toLowerCase()] ?? 1;
 	const worst = recipients.sort((a, b) => rank(b) - rank(a))[0];
 	if (worst === undefined) return null;
-	const action = worst.get('action')!.toLowerCase(),
+	const action = worst.get('action')?.toLowerCase(),
 		st = /^[245]\.\d{1,3}\.\d{1,3}/.exec(worst.get('status') ?? '')?.[0];
 	const diagnostic = (worst.get('diagnostic-code') ?? '').replace(/^[\w-]+\s*;\s*/, '');
 	const code = codeOf(diagnostic, st);
@@ -221,9 +221,9 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 			message: {
 				id,
 				thread: null,
-				sentAt: sentAtOf(head.get('date'), receivedAt, now),
+				sent_at: sentAtOf(head.get('date'), receivedAt, now),
 				from: { address, name: null },
-				replyTo: null,
+				reply_to: null,
 				to: [],
 				cc: [],
 				subject: head.get('subject')?.slice(0, 998) ?? '',
@@ -308,9 +308,9 @@ export const readMail = Effect.fn('Mailbox.readMail')(function* (
 		message: {
 			id,
 			thread: null,
-			sentAt: sentAtOf(e.date, receivedAt, now),
+			sent_at: sentAtOf(e.date, receivedAt, now),
 			from: from.address === '' ? { ...from, address: NOBODY } : from,
-			replyTo: flat(e.replyTo)[0] ?? null,
+			reply_to: flat(e.replyTo)[0] ?? null,
 			to: flat(e.to),
 			cc: flat(e.cc),
 			subject,

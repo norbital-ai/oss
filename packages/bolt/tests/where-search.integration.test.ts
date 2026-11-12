@@ -7,28 +7,28 @@ import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { Json } from '../src/decl/values.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import {
-	respondSystem1,
+	respond_system_1,
 	TestWorkspace,
 	type WorkspaceServices
 } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			sites: {
 				description: 'A site',
-				label: 'name',
+				record_label: 'record.name',
 				fields: { name: { kind: 'text' }, address: { kind: 'text' } },
 				search: { text: ['name', 'address'] }
 			},
 			jobs: {
 				description: 'A job',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, notes: { kind: 'text', optional: true } },
 				search: {
 					text: ['title', 'notes', 'site'],
@@ -39,12 +39,12 @@ const manifest = Result.getOrThrow(
 		relationships: { 'jobs.site': { to: 'sites', inverse: 'jobs' } },
 		exposures: {
 			sites: {
-				read: { sites: { fields: 'all' } },
+				outputs: { default: { sites: { fields: 'all' } } },
 				create: { columns: { sites: ['name', 'address'] } }
 			},
 			jobs: {
-				read: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } },
 				outputs: {
+					default: { jobs: { fields: 'all' }, 'jobs.site': { fields: 'all' } },
 					dispatch: { jobs: { fields: ['title', 'site'] }, 'jobs.site': { fields: 'all' } }
 				},
 				create: { columns: { jobs: ['title', 'notes', 'site'] } }
@@ -54,17 +54,15 @@ const manifest = Result.getOrThrow(
 		policies: {
 			dispatch: {
 				description: 'Dispatch',
-				grants: { sites: { read: true }, jobs: { outputs: { dispatch: true } } }
+				grants: { sites: { outputs: { default: {} } }, jobs: { outputs: { dispatch: {} } } }
 			}
 		},
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -88,7 +86,7 @@ const embed: Ai['Service']['embed'] = (inputs) =>
 	);
 const Page = Schema.Struct({ rows: Schema.Array(Schema.Struct({ title: Schema.String })) });
 const ports = Layer.succeed(Ai, {
-	ask: respondSystem1,
+	ask: respond_system_1,
 	maxChoices: undefined,
 	models: ['default'],
 	catalog: Port.unavailable('ai.catalog'),
@@ -99,15 +97,15 @@ const workspace = () =>
 	Effect.gen(function* () {
 		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
-			route = yield* routeFixture(context),
-			a = t.as(t.admin).authority;
+			route = yield* route_fixture(context),
+			a = (yield* t.as(t.admin)).authority;
 		const act = (callable: string, input: Json) =>
-			actReply(route, a, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, a, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
 		const titles = (where: Json, who = a, output = 'default') =>
 			Effect.gen(function* () {
-				const reply = yield* qReply(route, who, {
+				const reply = yield* q_reply(route, who, {
 					reads: [{ m: 'query', a: [{ jobs: { where, output, fields: ['title'] } }] }]
 				});
 				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(
@@ -118,7 +116,7 @@ const workspace = () =>
 			});
 		const ranked = (search: string) =>
 			Effect.gen(function* () {
-				const reply = yield* qReply(route, a, {
+				const reply = yield* q_reply(route, a, {
 					reads: [{ m: 'query', a: [{ jobs: { search, fields: ['title'], limit: 10 } }] }]
 				});
 				return (yield* Schema.decodeUnknownEffect(Schema.Struct({ jobs: Page }))(
@@ -127,7 +125,7 @@ const workspace = () =>
 					.map((row) => row.title)
 					.sort();
 			});
-		return { context, act, titles, ranked, dispatcher: t.as(t.member(['dispatch'])).authority };
+		return { context, act, titles, ranked, dispatcher: (yield* t.as(t.member(['dispatch']))).authority };
 	});
 // every test reads the same rows: seeded once per file
 const seeded = Layer.effectDiscard(

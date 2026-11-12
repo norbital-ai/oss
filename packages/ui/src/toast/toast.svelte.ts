@@ -34,7 +34,8 @@ function show(tone: ToastTone, text: string, options: ToastOptions = {}): number
 		...(options.description === undefined ? {} : { description: options.description })
 	});
 	// ponytail: at most five on screen; the oldest goes first
-	if (toasts.length > 5) dismiss(toasts[0]!.id);
+	const oldest = toasts[0];
+	if (toasts.length > 5 && oldest !== undefined) dismiss(oldest.id);
 	timers.set(
 		id,
 		setTimeout(() => dismiss(id), options.duration ?? (tone === 'error' ? 6000 : 4000))

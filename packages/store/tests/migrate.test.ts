@@ -1,32 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
-import {
-	INTROSPECT,
-	IntrospectRow,
-	MIGRATIONS_TABLE,
-	build,
-	checkFile,
-	checksumOf,
-	destructiveSteps,
-	destroyNamespace,
-	executable,
-	generate,
-	lockOf,
-	migrationGuard,
-	pending,
-	plan,
-	readLock,
-	schema,
-	shapeViolation,
-	snapshotOf,
-	table,
-	unaccepted,
-	verify,
-	type FieldSpec,
-	type MigrationFile,
-	type StoreError
-} from '../src/index.ts';
+import { INTROSPECT, IntrospectRow, MIGRATIONS_TABLE, build, check_file, checksum_of, destructive_steps, destroy_namespace, executable, generate, lock_of, migration_guard, pending, plan, read_lock, read_snapshot, schema, schema_snapshot, snapshot_of, table, verify, type FieldSpec, type MigrationFile, type StoreError } from '../src/index.ts';
 import { database, script } from './support.ts';
+import { unaccepted } from '../src/schema/plan.ts';
 
 const before = schema({
 	company: table({ fields: { title: { kind: 'text', default: '"company"' } } }),
@@ -60,8 +36,9 @@ describe('editable migration files', () => {
 				const first = schema({
 					entry: table({
 						key: 'text',
+						unique: [{ fields: ['name'] }],
 						fields: {
-							name: { kind: 'text', default: 'initial', unique: true },
+							name: { kind: 'text', default: 'initial' },
 							parent: { kind: 'ref', to: 'entry', optional: true },
 							score: { kind: 'int', default: 2 }
 						},
@@ -95,7 +72,10 @@ describe('editable migration files', () => {
 					}),
 					another: table({ fields: { title: { kind: 'text' } } })
 				});
-				const update = yield* generate(first, next, { number: 2, name: 'extend' });
+				const update = yield* generate(yield* read_snapshot(initial.snapshot), next, {
+					number: 2,
+					name: 'extend'
+				});
 				expect(update.file.sql).toContain('add column "extra"');
 				expect(update.file.sql).not.toContain('alter column "extra" set default');
 				expect(update.file.sql).not.toContain('alter table "another" add column');
@@ -122,7 +102,7 @@ describe('editable migration files', () => {
 				create function owned.stale_fn() returns int language sql as 'select 1';
 				create table retained.entry (id int); insert into retained.entry values (2);`
 				);
-				for (const sql of destroyNamespace('owned')) yield* script(pg, sql.text);
+				for (const sql of destroy_namespace('owned')) yield* script(pg, sql.text);
 				expect(yield* Effect.promise(() => pg.query('select * from retained.entry'))).toMatchObject(
 					{ rows: [{ id: 2 }] }
 				);
@@ -150,7 +130,7 @@ describe('editable migration files', () => {
 					const definitions = yield* introspect(pg);
 					const runGuard = (stage: 'before' | 'after', lines = definitions) =>
 						Effect.tryPromise({
-							try: () => pg.exec(migrationGuard([], lines, stage).text),
+							try: () => pg.exec(migration_guard([], lines, stage).text),
 							catch: (cause) => cause
 						});
 					yield* runGuard('before');
@@ -204,14 +184,18 @@ describe('editable migration files', () => {
 						})
 					});
 					const pg = yield* database;
-					yield* script(pg, (yield* generate(null, old, { number: 1, name: 'initial' })).file.sql);
+					const initial = yield* generate(null, old, { number: 1, name: 'initial' });
+					yield* script(pg, initial.file.sql);
 					yield* script(
 						pg,
 						`insert into entry (id, n, store_violations, store_violations_1, "STORE_VIOLATIONS") values
 				('11111111-1111-1111-1111-111111111111', 1, 2, 3, 'O''Reilly $store$'),
 				('22222222-2222-2222-2222-222222222222', 1, 2, 3, 'O''Reilly $store$')`
 					);
-					const migration = yield* generate(old, next, { number: 2, name: 'unique' });
+					const migration = yield* generate(yield* read_snapshot(initial.snapshot), next, {
+						number: 2,
+						name: 'unique'
+					});
 					const refused = yield* Effect.promise(() =>
 						pg.exec(migration.file.sql).then(
 							() => 'ok',
@@ -234,9 +218,12 @@ describe('editable migration files', () => {
 				const pg = yield* database;
 				const fresh = yield* database;
 				const initial = yield* generate(null, before, { number: 1, name: 'initial' });
-				const rename = yield* generate(before, renamed, { number: 2, name: 'rename owners' });
+				const rename = yield* generate(yield* read_snapshot(initial.snapshot), renamed, {
+					number: 2,
+					name: 'rename owners'
+				});
 				expect(unaccepted(rename.plan)).toEqual([]);
-				expect(yield* destructiveSteps(before, renamed)).toEqual([]);
+				expect(yield* destructive_steps(before, renamed)).toEqual([]);
 				expect(rename.file.sql).toContain(
 					'rename column "owner__company" to "about__organization"'
 				);
@@ -269,7 +256,7 @@ describe('editable migration files', () => {
 					yield* introspect(pg),
 					yield* introspect(fresh)
 				);
-				expect(Object.keys((yield* readLock(lock)).files)).toEqual([
+				expect(Object.keys((yield* read_lock(lock)).files)).toEqual([
 					initial.file.name,
 					rename.file.name
 				]);
@@ -300,7 +287,10 @@ describe('editable migration files', () => {
 					});
 					const pg = yield* database;
 					const initial = yield* generate(null, old, { number: 1, name: 'initial' });
-					const migration = yield* generate(old, next, { number: 2, name: 'zip' });
+					const migration = yield* generate(yield* read_snapshot(initial.snapshot), next, {
+						number: 2,
+						name: 'zip'
+					});
 					yield* script(pg, initial.file.sql);
 					yield* script(
 						pg,
@@ -343,7 +333,7 @@ describe('editable migration files', () => {
 					const fresh = yield* database;
 					const initial = yield* generate(null, old, { number: 1, name: 'initial' });
 					const change = yield* plan(old, next);
-					const migration = yield* generate(old, next, {
+					const migration = yield* generate(yield* read_snapshot(initial.snapshot), next, {
 						number: 2,
 						name: 'audit',
 						accept: unaccepted(change).map((step) => step.id)
@@ -373,7 +363,7 @@ describe('editable migration files', () => {
 							'create index person_n on person (n);'
 						].join('\n')
 					};
-					expect(yield* checkFile(file)).toEqual(file);
+					expect(yield* check_file(file)).toEqual(file);
 					const failed = yield* Effect.exit(
 						Effect.tryPromise(() => pg.transaction((tx) => tx.exec(executable(file))))
 					);
@@ -387,7 +377,7 @@ describe('editable migration files', () => {
 						(yield* Effect.promise(() => pg.query("select to_regclass('person_n') as t"))).rows
 					).toEqual([{ t: 'person_n' }]);
 					expect(
-						yield* failure(checkFile({ ...file, sql: '-- check: writes\ndelete from person;' }))
+						yield* failure(check_file({ ...file, sql: '-- check: writes\ndelete from person;' }))
 					).toContain('check writes needs one SELECT');
 				})
 			)
@@ -396,16 +386,17 @@ describe('editable migration files', () => {
 	it.effect('refuses destructive files until each destructive block has its accept line', () =>
 		Effect.gen(function* () {
 			const next = schema({ person: before.tables.person });
-			const generated = yield* generate(before, next, { number: 1, name: 'remove' });
-			expect(yield* failure(checkFile(generated.file))).toContain(
+			const snapshot = yield* schema_snapshot(before);
+			const generated = yield* generate(snapshot, next, { number: 1, name: 'remove' });
+			expect(yield* failure(check_file(generated.file))).toContain(
 				'destructive steps need an accept line'
 			);
-			const accepted = yield* generate(before, next, {
+			const accepted = yield* generate(snapshot, next, {
 				number: 1,
 				name: 'remove',
 				accept: unaccepted(generated.plan).map((step) => step.id)
 			});
-			expect(yield* checkFile(accepted.file)).toEqual(accepted.file);
+			expect(yield* check_file(accepted.file)).toEqual(accepted.file);
 		})
 	);
 
@@ -432,16 +423,17 @@ describe('editable migration files', () => {
 		() =>
 			Effect.gen(function* () {
 				const old = schema({ 'old table': table({ fields: { 'old field': { kind: 'text' } } }) });
-				const generated = yield* generate(old, schema({}), { number: 1, name: 'remove' });
-				expect(yield* failure(checkFile(generated.file))).toContain(
+				const snapshot = yield* schema_snapshot(old);
+				const generated = yield* generate(snapshot, schema({}), { number: 1, name: 'remove' });
+				expect(yield* failure(check_file(generated.file))).toContain(
 					'destructive steps need an accept line'
 				);
-				const accepted = yield* generate(old, schema({}), {
+				const accepted = yield* generate(snapshot, schema({}), {
 					number: 1,
 					name: 'remove',
 					accept: unaccepted(generated.plan).map((step) => step.id)
 				});
-				expect(yield* checkFile(accepted.file)).toEqual(accepted.file);
+				expect(yield* check_file(accepted.file)).toEqual(accepted.file);
 			})
 	);
 
@@ -450,19 +442,19 @@ describe('editable migration files', () => {
 			const first: MigrationFile = { name: '0001_initial.sql', sql: 'select 1;' };
 			const second: MigrationFile = { name: '0002_more.sql', sql: 'select 2;' };
 			const files = [second, first];
-			const snapshot = snapshotOf(before);
-			const lock = yield* readLock(lockOf(snapshot, files));
+			const snapshot = snapshot_of(before);
+			const lock = yield* read_lock(lock_of(snapshot, files));
 			expect(
-				yield* pending(files, lock, [{ name: first.name, checksum: checksumOf(first) }], snapshot)
+				yield* pending(files, lock, [{ name: first.name, checksum: checksum_of(first) }], snapshot)
 			).toEqual([second]);
 			expect(
-				yield* failure(pending(files, lock, [{ name: second.name, checksum: checksumOf(second) }]))
+				yield* failure(pending(files, lock, [{ name: second.name, checksum: checksum_of(second) }]))
 			).toContain('not a prefix');
 			expect(
 				yield* failure(
 					pending(files, lock, [
-						{ name: first.name, checksum: checksumOf(first) },
-						{ name: first.name, checksum: checksumOf(first) }
+						{ name: first.name, checksum: checksum_of(first) },
+						{ name: first.name, checksum: checksum_of(first) }
 					])
 				)
 			).toContain('not a prefix');
@@ -481,7 +473,7 @@ describe('editable migration files', () => {
 
 	it.effect('verify checks numbering, snapshot and replay differences before issuing a lock', () =>
 		Effect.gen(function* () {
-			const snapshot = snapshotOf(before);
+			const snapshot = snapshot_of(before);
 			const file: MigrationFile = { name: '0002_gap.sql', sql: 'select 1;' };
 			expect(yield* failure(verify([file], snapshot, before, [], []))).toContain('without gaps');
 			expect(yield* failure(verify([], snapshot, renamed, [], []))).toContain('schema changed');
@@ -495,51 +487,6 @@ describe('editable migration files', () => {
 				'needs a name'
 			);
 		})
-	);
-
-	it.live('counts wrong inline JSON shapes without casting or expanding the wrong type', () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const pg = yield* database;
-				const shapes: readonly { shape: FieldSpec; valid: unknown; invalid: unknown }[] = [
-					{
-						shape: { kind: 'list', of: { kind: 'int' } },
-						valid: [1, 2],
-						invalid: { not: 'a list' }
-					},
-					{ shape: { kind: 'record', of: { kind: 'int' } }, valid: { yes: 1 }, invalid: [1] },
-					{ shape: { kind: 'int' }, valid: 1, invalid: 'not a number' },
-					{ shape: { kind: 'enum', values: ['yes'], many: true }, valid: ['yes'], invalid: ['no'] },
-					{
-						shape: { kind: 'decimal', scale: 2 },
-						valid: { $dec: '1.20' },
-						invalid: { $dec: 'bad' }
-					},
-					{
-						shape: { kind: 'object', fields: { required: { kind: 'text' } } },
-						valid: { required: 'yes' },
-						invalid: {}
-					},
-					{ shape: { kind: 'date' }, valid: '2024-02-29', invalid: '2023-02-29' },
-					{
-						shape: { kind: 'union', by: 'kind', arms: { yes: { n: { kind: 'int' } } } },
-						valid: { kind: 'yes', n: 1 },
-						invalid: { kind: 'no', n: 1 }
-					}
-				];
-				for (const { shape, valid, invalid } of shapes) {
-					const sql = `select ${shapeViolation('$1::jsonb', shape)} as invalid`;
-					const good = yield* Effect.promise(() =>
-						pg.query<{ invalid: boolean }>(sql, [JSON.stringify(valid)])
-					);
-					const bad = yield* Effect.promise(() =>
-						pg.query<{ invalid: boolean }>(sql, [JSON.stringify(invalid)])
-					);
-					expect(good.rows[0]?.invalid).toBe(false);
-					expect(bad.rows[0]?.invalid).toBe(true);
-				}
-			})
-		)
 	);
 
 	it.live('stores finite numbers and int64 columns and enforces a typed expression index', () =>

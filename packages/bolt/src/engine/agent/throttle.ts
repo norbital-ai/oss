@@ -1,3 +1,4 @@
+import { runPiece } from '../runs/rows.ts';
 // The smart throttle (P31, P40, P41, rule 60a): one service for envoys and the in-app agent decides whether admitted messages
 // start a turn now, never under whose authority. It controls two things:
 //   hold    the pending text reads partial: wait for the rest, at most 3 s, the decider's choice, once per burst.
@@ -11,10 +12,10 @@
 // per-conversation lock, under a bounded model call, and never waits for the turn it admits. Failure answers: a direct
 // conversation is answered and a group stays quiet. `delivered_turn` (set by the agent's claim, guarded by `IS NULL`) and
 // `addressed` are the one record of what the agent received, so no row is new input twice.
-import type { EnvoySpec } from '../../decl/runtime/agent.ts';
-import { Clock, Context, Effect, FiberSet, Layer, Option, Schema, Semaphore } from 'effect';
+import { Clock, Context, Effect, FiberSet, Layer, Option, RcMap, Schema, Semaphore } from 'effect';
 import { Chain } from '../write/sql.ts';
-import { enqueue, nextDue } from '../runs/queue.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
+import { enqueue, next_due } from '../runs/queue.ts';
 import {
 	filesOf,
 	msg as messagePiece,
@@ -29,27 +30,26 @@ import { triageAttachments } from './attachments.ts';
 import { Manifest, Live, Turns, Links, Wake, RunHandlers, type LiveShape } from '../services.ts';
 import { type EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { FacilityFailure } from '../../decl/errors.ts';
 import { Port } from '../port.ts';
-import { enqueueTurn, TURN_LEASE_MS, TurnHandlers } from './turns.ts';
+import { enqueueTurn, TurnHandlers } from './turns.ts';
+import { LEASE_MS, leaseUntil } from '../queue.ts';
 import {
 	ask,
 	decisionEvent,
 	decisionUsage,
 	failed,
 	type DecisionRequest
-} from '../decisions/index.ts';
-import { FileRef, messageCommit, rowsOf, type As } from './schema.ts';
+} from '../decision.ts';
+import { FileRef, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
-import { envoySpec } from '../envoys/spec.ts';
+import { personMessage } from './queue.ts';
+import { envoySpec, type EnvoySpec } from '../envoys/spec.ts';
 /** The durable run's name: queued runs and the logs carry it across releases. */
 const THROTTLE_RUN = 'agent.triage';
 /** Engine constants (rule 72's budget row), never authoring options. */
 export const HOLD_MAX_MS = 3000;
 /** A burst nothing decided by then is taken over by the host's queue: the process died, or the decision failed. */
 export const TAKEOVER_MS = 15_000;
-/** The decider's whole allowance: past it the decision is a failed one, so a hung model never holds a message. */
-const DECISION_MS = 6000;
 /** The presence of a sender still typing pushes a hold out by this, within its cap. */
 const TYPING_MS = 1000;
 const WINDOW_ROWS = 30;
@@ -82,7 +82,7 @@ const names = (text: string, name: string): boolean =>
 		'iu'
 	).test(text);
 type ThrottleConfig = {
-	engine: { manifest: EngineManifest; db: TenantDbShape; live?: Pick<LiveShape, 'publish'> };
+	engine: { manifest: EngineManifest; db: TenantDbShape; live: Pick<LiveShape, 'publish'> };
 	ai?: Ai['Service'];
 	media: { files: Files['Service']; images: Images['Service'] };
 	clock: Effect.Effect<string>;
@@ -93,9 +93,6 @@ type ThrottleConfig = {
 };
 /** `typing`: the sender sees the assistant typing while the row is held (default on). */
 type HeldMessage = { readonly chain: Chain; readonly source: string; readonly typing?: boolean };
-type Row = {
-	readonly [c: string]: Json;
-};
 const ms = (n: number) => `interval '${n} milliseconds'`;
 /** A message's person: the provider handle an envoy row arrived from, or the in-app member. */
 const WHO = (m: string) => `coalesce(${m}.sender, ${m}."as"->>'member')`;
@@ -116,9 +113,10 @@ const backstop = (chain: Chain, conversation: string, at: string) =>
 	});
 /** The hold: the run becomes the burst's one recheck at `at`, its hold spent. Answers `held`. */
 const holding = (chain: Chain, conversation: string, from: string, at: string) => {
-	chain.cte(
+	runPiece(chain,
 		'held',
-		`UPDATE sys_run SET due_at = ${at}::timestamptz, input = jsonb_build_object('conversation', ${conversation}::text, 'held', true, 'first', to_jsonb(${from}::timestamptz)) WHERE ${queued(conversation)} RETURNING due_at`
+		`UPDATE sys_run SET due_at = ${at}::timestamptz, input = jsonb_build_object('conversation', ${conversation}::text, 'held', true, 'first', to_jsonb(${from}::timestamptz)) WHERE ${queued(conversation)}`,
+		{ returning: 'due_at' }
 	);
 	return enqueue(chain, {
 		select: `SELECT '${THROTTLE_RUN}'::text AS automation,
@@ -131,35 +129,34 @@ const holding = (chain: Chain, conversation: string, from: string, at: string) =
  * never past its cap. Answers `held`.
  */
 export const heldLonger = (chain: Chain, conversation: string, at: string) =>
-	chain.cte(
+	runPiece(chain,
 		'held',
 		`UPDATE sys_run SET due_at = greatest(due_at, least(${at}::timestamptz + ${ms(TYPING_MS)}, (input->>'first')::timestamptz + ${ms(HOLD_MAX_MS)}))
-        WHERE ${queued(conversation)} AND input ? 'first' RETURNING due_at`
+        WHERE ${queued(conversation)} AND input ? 'first'`,
+		{ returning: 'due_at' }
 	);
+/** One holder per key at a time; a key's lock lives only while someone holds or waits for it. */
+export const keyedSerial = Effect.fn('SmartThrottle.keyedSerial')(function* () {
+	const locks = yield* RcMap.make({ lookup: (_key: string) => Semaphore.make(1) });
+	return {
+		serial:
+			(key: string) =>
+			<A, E, R>(work: Effect.Effect<A, E, R>) =>
+				Effect.scoped(RcMap.get(locks, key).pipe(Effect.flatMap((lock) => lock.withPermit(work)))),
+		keys: RcMap.keys(locks)
+	};
+});
 export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: ThrottleConfig) {
 	/** The decisions under way, and the turns they admitted: a turn outlives the decision that started it. */
 	const decisions = yield* FiberSet.make<void, never>(),
 		turns = yield* FiberSet.make<void, never>();
-	// One decision per conversation at a time; a decision is bounded and ends when it has admitted.
-	// ponytail: one semaphore per conversation ever held in this process; evict idle ones if that set grows large
-	const locks = new Map<string, Semaphore.Semaphore>();
-	const serial = (conversation: string) => {
-		let lock = locks.get(conversation);
-		if (lock === undefined) locks.set(conversation, (lock = Semaphore.makeUnsafe(1)));
-		return Semaphore.withPermit(lock);
-	};
+	// one decision per conversation at a time
+	const { serial } = yield* keyedSerial();
 	const logs = yield* Logs;
 	const { manifest: m, db } = cfg.engine;
 	const announce = cfg.announce;
-	/** Rows a statement wrote `RETURNING ${MSG}` reach live transcripts as written (rule 65). */
-	const published = Effect.fn('SmartThrottle.publish')(function* (rows: readonly Row[]) {
-		const written = yield* rowsOf(rows.filter((row) => row['r'] !== undefined));
-		if (written.length > 0) cfg.engine.live?.publish(messageCommit(written));
-	});
-	const Settled = Schema.Struct({
-		written: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-		due: Schema.NullOr(Schema.String)
-	});
+	const Settled = Schema.Struct({ ...CapturedResult.fields, due: Schema.NullOr(Schema.String) });
+	const Held = Schema.Struct({ ...Settled.fields, written: Schema.Array(Schema.Record(Schema.String, Schema.Json)) });
 	/**
 	 * One outcome, one statement: the filtered rows leave for the history, the admitted ones queue with the conversation's
 	 * `agent.turn` (so a process that dies here still answers them), and the throttle's run goes with the last row it covers.
@@ -181,11 +178,8 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			admit === null
 				? `$2::jsonb IS NULL`
 				: `id NOT IN (SELECT jsonb_array_elements_text($2::jsonb))`;
-		chain.cte(
-			'flush',
-			`DELETE FROM sys_run WHERE ${queued('$1')} AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'pending' AND ${covered}) RETURNING id`
-		);
-		const filtered = messagePiece(
+		runPiece(chain, 'flush', `DELETE FROM sys_run WHERE ${queued('$1')} AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'pending' AND ${covered})`);
+		messagePiece(
 			chain,
 			`UPDATE sys_message m SET state = NULL, addressed = false WHERE conversation = $1 AND state = 'pending' AND id IN (SELECT jsonb_array_elements_text($3::jsonb))`
 		);
@@ -197,20 +191,11 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		enqueueTurn(
 			chain,
 			conversation,
-			new Date(Date.parse(now) + TURN_LEASE_MS).toISOString(),
+			leaseUntil(now, LEASE_MS.turn),
 			`EXISTS (SELECT 1 FROM ${admitted})`
 		);
-		const [result] = yield* db.returning(
-			Settled,
-			chain.sql(
-				`(SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) FROM (SELECT * FROM ${filtered} UNION ALL SELECT * FROM ${admitted}) x) AS written, ${nextDue(chain)}::text AS due`
-			)
-		);
-		if (result === undefined)
-			return yield* Effect.fail(
-				BoltError.make('corrupt', 'commit', 'a throttle outcome returned no result')
-			);
-		yield* published(result.written);
+		const result = yield* nativeCommit(db.write, cfg.engine.live.publish, chain, Settled,
+			`${next_due(chain)}::text AS due`);
 		if (result.due !== null) yield* announce(result.due);
 	});
 	/** The deterministic flush: every pending row is queued and the conversation's run deleted. */
@@ -256,9 +241,11 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 				params: [conversation]
 			},
 			{
-				text: `SELECT role, coalesce(author, sender_name, sender) AS sender, coalesce(text, '') AS text, (extract(epoch FROM coalesce(sent_at, created_at)) * 1000)::float8 AS at,
+				text: `SELECT CASE WHEN role IS NULL AND direction = 'outbound' THEN 'assistant' ELSE role END AS role,
+				coalesce(author, sender_name, sender) AS sender, coalesce(text, '') AS text, (extract(epoch FROM coalesce(sent_at, created_at)) * 1000)::float8 AS at,
 				addressed IS NOT DISTINCT FROM false AS filtered
 				FROM sys_message WHERE conversation = $1 AND coalesce(state, '') NOT IN ('pending', 'scheduled') AND coalesce(role, 'user') IN ('user', 'assistant')
+				AND (role IS NOT NULL OR direction IS DISTINCT FROM 'outbound' OR (status = 'sent' AND deleted_at IS NULL))
 				AND coalesce(text, '') <> '' ORDER BY seq DESC LIMIT ${WINDOW_ROWS}`,
 				params: [conversation]
 			},
@@ -268,7 +255,8 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			},
 			{
 				// the assistant's last reply, the person whose turn it answered, and who has spoken (settled) since
-				text: `SELECT coalesce(a.text, '') AS text, (extract(epoch FROM coalesce(a.sent_at, a.created_at)) * 1000)::float8 AS at, p.who AS partner, p.name,
+				text: `SELECT coalesce(a.text, '') AS text, coalesce(a.meta->>'asked' = 'true', false) AS asked,
+				(extract(epoch FROM coalesce(a.sent_at, a.created_at)) * 1000)::float8 AS at, p.who AS partner, p.name,
 				(SELECT coalesce(jsonb_agg(${WHO('o')}), '[]'::jsonb) FROM sys_message o WHERE o.conversation = $1 AND o.seq > a.seq
 					AND coalesce(o.role, 'user') = 'user' AND o.direction IS DISTINCT FROM 'outbound' AND coalesce(o.state, '') <> 'pending' AND ${WHO('o')} IS NOT NULL) AS since
 				FROM sys_message a LEFT JOIN LATERAL (SELECT ${WHO('u')} AS who, coalesce(u.author, u.sender_name, u.sender) AS name FROM sys_message u
@@ -304,10 +292,10 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		const now = yield* cfg.clock;
 		// a stopped conversation decides nothing; with nothing pending the run has nothing left to cover
 		if (conv === undefined || conv.status === 'stopped' || pending.length === 0) {
-			yield* db.write({
-				text: `DELETE FROM sys_run WHERE ${queued('$1')} AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'pending') RETURNING id`,
-				params: [conversation]
-			});
+			const chain = new Chain();
+			chain.params.push(conversation);
+			runPiece(chain, 'flush', `DELETE FROM sys_run WHERE ${queued('$1')} AND NOT EXISTS (SELECT 1 FROM sys_message WHERE conversation = $1 AND state = 'pending')`);
+			yield* nativeCommit(db.write, cfg.engine.live.publish, chain, CapturedResult);
 			return { pending: 0 };
 		}
 		// the hold still runs: this row joins the burst, and the hold's run decides it
@@ -316,15 +304,14 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		if (hold === undefined) {
 			const chain = new Chain();
 			backstop(chain, chain.p(conversation), chain.p(now));
-			yield* db.returning(
-				Schema.Struct({ due: Schema.NullOr(Schema.String) }),
-				chain.sql(`${nextDue(chain)}::text AS due`)
-			);
+			const wake = yield* nativeCommit(db.write, cfg.engine.live.publish, chain, Settled,
+				`${next_due(chain)}::text AS due`);
+			if (wake.due !== null) yield* announce(wake.due);
 		}
 		const spent = ran || hold?.held === true;
 		const envoyKey = conv.envoy,
 			envoy = envoyKey !== null;
-		const spec = envoyKey === null ? undefined : yield* envoySpec(m, db, envoyKey);
+		const spec = envoyKey === null ? undefined : yield* envoySpec(db, envoyKey);
 		const filterable = envoy && conv.kind === 'group';
 		const throttled =
 			cfg.ai !== undefined &&
@@ -348,6 +335,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		const last = (yield* decode(
 			Schema.Struct({
 				text: Schema.String,
+				asked: Schema.Boolean,
 				at: Schema.Number,
 				partner: Schema.NullOr(Schema.String),
 				name: Schema.NullOr(Schema.String),
@@ -372,7 +360,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			last !== undefined &&
 			last.partner !== null &&
 			Date.parse(now) - last.at <=
-				(last.text.trim().endsWith('?') ? EXCHANGE_QUESTION_MS : EXCHANGE_MS)
+				(last.asked ? EXCHANGE_QUESTION_MS : EXCHANGE_MS)
 				? { ...last, partner: last.partner }
 				: undefined;
 		let unbroken = exchange?.since.every((who) => who === exchange.partner) ?? false;
@@ -444,7 +432,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 							talkingWith: exchange.name ?? 'someone',
 							assistantLastMessage: preview(exchange.text)
 						})
-			} as DecisionRequest['state'],
+			},
 			// ONE call: each message of a group's burst is judged by name against the window, and the burst as a whole for
 			// whether its text has ended
 			questions: {
@@ -486,19 +474,6 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		if (imageParts.length > 0) req = { ...req, state: [JSON.stringify(textState), ...imageParts] };
 		const decisionStarted = yield* Clock.currentTimeMillis;
 		const d = yield* (cfg.ai === undefined ? Port.unavailable('ai') : ask(cfg.ai, req)).pipe(
-			Effect.timeoutOption(DECISION_MS),
-			Effect.flatMap(
-				Option.match({
-					onSome: Effect.succeed,
-					onNone: () =>
-						Effect.fail(
-							new FacilityFailure({
-								kind: 'upstream',
-								message: 'the decider did not answer in time'
-							})
-						)
-				})
-			),
 			Effect.catch((error) =>
 				Effect.succeed(
 					error._tag === 'Unavailable'
@@ -518,7 +493,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			run: null,
 			conversation,
 			turn: null,
-			durationMs: (yield* Clock.currentTimeMillis) - decisionStarted
+			duration_ms: (yield* Clock.currentTimeMillis) - decisionStarted
 		});
 		// only a group filters: a failed decision stays quiet there, so an outage never turns the envoy into a bot that
 		// answers every message, while a named row or an unread attachment is still answered
@@ -563,13 +538,9 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			const chain = new Chain();
 			chain.params.push(conversation, now, until);
 			const recheck = holding(chain, '$1', '$2', '$3');
-			const [wake] = yield* db.returning(
-				Schema.Struct({ due: Schema.NullOr(Schema.String) }),
-				chain.sql(
-					`least((SELECT min(due_at) FROM held), (SELECT min(due_at) FROM ${recheck}))::text AS due`
-				)
-			);
-			if (wake?.due !== null && wake?.due !== undefined) yield* announce(wake.due);
+			const wake = yield* nativeCommit(db.write, cfg.engine.live.publish, chain, Settled,
+				`least((SELECT min(due_at) FROM held), (SELECT min(due_at) FROM ${recheck}))::text AS due`);
+			if (wake.due !== null) yield* announce(wake.due);
 			return event;
 		}
 		const filtered = pending.filter((_, i) => filters[i]).map((r) => r.id);
@@ -590,7 +561,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 	const run = (input: Json) =>
 		Effect.gen(function* () {
 			const { conversation, held } = yield* Schema.decodeUnknownEffect(Input)(input).pipe(
-				Effect.mapError((error) => BoltError.make('invalidInput', 'decode', error.message, error))
+				Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
 			);
 			return yield* serial(conversation)(
 				decide(conversation, held === true).pipe(
@@ -609,18 +580,9 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		const { chain, source } = row;
 		chain.cte('m', `SELECT * FROM ${source}`);
 		backstop(chain, chain.p(conversation), chain.p(yield* cfg.clock));
-		const [result] = yield* db.returning(
-			Settled,
-			chain.sql(
-				`(SELECT coalesce(jsonb_agg(to_jsonb(m)), '[]'::jsonb) FROM m) AS written, ${nextDue(chain)}::text AS due`
-			)
-		);
-		if (result === undefined)
-			return yield* Effect.fail(
-				BoltError.make('corrupt', 'commit', 'a held message returned no result')
-			);
+		const result = yield* nativeCommit(db.write, cfg.engine.live.publish, chain, Held,
+			`(SELECT coalesce(jsonb_agg(to_jsonb(m) - '__bolt_capture'), '[]'::jsonb) FROM m) AS written, ${next_due(chain)}::text AS due`);
 		if (result.due !== null) yield* announce(result.due);
-		yield* published(result.written);
 		yield* start(decisions, serial(conversation)(decide(conversation)));
 		return result.written;
 	});
@@ -643,28 +605,14 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 		}) {
 			const chain = new Chain();
 			// a person's follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled
-			chain.cte(
-				'reopened',
-				`UPDATE sys_conversation SET status = 'idle' WHERE id = ${chain.p(o.conversation)} AND status = 'stopped' RETURNING id`
-			);
-			const source = postMessage(chain, {
-				conversation: o.conversation,
-				role: 'user',
-				content: { text: o.text, ...(o.tz === undefined ? {} : { tz: o.tz }) },
-				text: o.text,
-				state: 'pending',
-				mode: o.mode,
-				as: o.as,
-				author: o.author,
-				files: o.files ?? []
-			});
+			capturePiece(chain, 'reopened', 'sys_conversation',
+				`UPDATE sys_conversation SET status = 'idle' WHERE id = ${chain.p(o.conversation)} AND status = 'stopped'`);
+			const source = postMessage(chain, personMessage(o, 'pending'));
 			const written = yield* hold(o.conversation, { chain, source });
 			const rows = yield* rowsOf(written);
 			const row = rows[0];
 			if (row === undefined)
-				return yield* Effect.fail(
-					BoltError.make('corrupt', 'commit', 'a held post returned no message')
-				);
+				return yield* BoltError.make('corrupt', 'commit', 'a held post returned no message');
 			return { id: row.id };
 		}),
 		/** Deterministic trigger: every pending row is queued with it and the run flushed (the caller drains). */

@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { type VariantProps, tv } from 'tailwind-variants';
 
-	export const alertVariants = tv({
+	export const alert_variants = tv({
 		base: '[&>svg]:text-foreground relative w-full rounded-lg border p-4 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg~*]:pl-7',
 		variants: {
 			variant: {
@@ -16,26 +16,14 @@
 				secondary: 'border-border bg-muted text-foreground [&>svg]:text-muted-foreground',
 				loading:
 					'border-info/50 text-info bg-info/10 dark:bg-info/30 [&>svg]:animate-spin [&>svg]:text-info'
-			},
-			size: {
-				sm: 'p-3 text-sm',
-				default: 'p-4',
-				lg: 'p-6 text-lg'
-			},
-			rounded: {
-				none: 'rounded-none',
-				default: 'rounded-lg',
-				full: 'rounded-xl'
 			}
 		},
 		defaultVariants: {
-			variant: 'default',
-			size: 'default',
-			rounded: 'default'
+			variant: 'default'
 		}
 	});
 
-	export type AlertVariant = VariantProps<typeof alertVariants>['variant'];
+	export type AlertVariant = VariantProps<typeof alert_variants>['variant'];
 </script>
 
 <script lang="ts">
@@ -55,6 +43,6 @@
 </script>
 
 <!-- repository-health:allow UI25 -- the alert recipe is a tailwind-variants `tv()` whose literal classes live in the module script -->
-<div bind:this={ref} class={cn(alertVariants({ variant }), className)} {...restProps} role="alert">
+<div bind:this={ref} class={cn(alert_variants({ variant }), className)} {...restProps} role="alert">
 	{@render children?.()}
 </div>

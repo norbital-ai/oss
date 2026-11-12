@@ -1,11 +1,13 @@
 // Type corpus for the runtime roles (§3.3.1, §3.3.5, §3.3.6, §3.3.8, §3.4, rules 50–63b). Each `@ts-expect-error` line
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
-import { app, automation, idOf, model, group, mcp, secrets, workspace } from '../../src/index.ts';
+import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
 import { currency } from '@norbital-ai/std/decimal';
-import type { Actor, CurrencyCode, FileRef, Id, Instant } from '../../src/index.ts';
+import type { Actor, CurrencyCode, FileRef, Id, InstanceId, Instant, Row } from '../../src/index.ts';
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';
 import type { StartInput } from '../../src/decl/runtime/facilities.ts';
+import type { MessageValues } from '../../src/decl/ctx.ts';
 import type { SyncCtx } from '../../src/decl/runtime/sync.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
@@ -13,15 +15,22 @@ import './registry.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
+// runtime instances: ctx.send and ctx.request take an instance id, never a definition name
+declare const erp_account: InstanceId<'erp'>;
+declare const whatsapp_account: InstanceId<'whatsapp'>;
+declare const mail_account: InstanceId<'support_mail'>;
+declare const either: InstanceId<'whatsapp'> | InstanceId<'support_mail'>;
+declare const billing_account: InstanceId<'billing'>;
 
+is<Eq<MessageValues<'errors.short'>, { readonly have: string | number; readonly need: string | number; readonly item: string | number }>>();
 // ── run inputs and outputs, from the literal ──
 is<Eq<RunInput<typeof rt.follow_up.spec>, { readonly ids: readonly Id<'orders'>[] }>>(); // declared input
 is<Eq<RunInput<typeof rt.render.spec>, { readonly order: Id<'orders'> }>>(); // declared input
 is<Eq<RunInput<typeof rt.nightly.spec>, {}>>(); // cron: nothing
 is<Eq<RunOutput<typeof rt.nightly.spec>, number>>();
 is<Eq<RunOutput<typeof rt.render.spec>, FileRef>>();
-is<Eq<StartInput<'products.sync.ledger'>, { readonly [key: string]: never }>>(); // a remote sync read takes no input
-const mixed = automation('follow_up', {
+is<Eq<StartInput<'products.sync.ledger'>, never>>(); // sync control is separate from automation starts
+const mixed = automation({
 	...rt.follow_up.spec,
 	description: 'x',
 	policies: ['sales_rep'],
@@ -32,22 +41,9 @@ const mixed = automation('follow_up', {
 	],
 	run: function* ({ ids = [] }, ctx) {
 		is<Eq<typeof ctx.actor.kind, 'system'>>();
-		yield* ctx.act(
-			'orders.update',
-			ids.map((id) => ({ target: id, set: { note: 'swept' } }))
-		);
+		const orders = (yield* ctx.query({ orders: { where: { id: { in: ids } } } })).orders.rows;
+		yield* ctx.act({ 'orders.update': orders.map((target) => ({ target, set: { note: 'swept' } })) });
 		const id = ids[0];
-		if (id !== undefined) {
-			yield* ctx.act('orders.update', [{ target: id, set: { note: 'observed' } }], {
-				observed: { [id]: 1 }
-			});
-			yield* ctx.act(
-				'orders.update',
-				[{ target: id, set: { note: 'invalid' } }],
-				// @ts-expect-error an observed revision is numeric
-				{ observed: { [id]: '1' } }
-			);
-		}
 		if (id !== undefined) yield* ctx.schedule('render', { order: id });
 		yield* ctx.schedule('nightly', {});
 		yield* ctx.ai.sys_2.infer({ prompt: 'x', tools: ['browser'] });
@@ -128,8 +124,8 @@ const mixed = automation('follow_up', {
 			mime: 'text/plain',
 			for: 'sites.photos'
 		});
-		yield* ctx.files.image(ref, { jpeg: { maxEdge: 1024 } });
-		yield* ctx.send('support', { to: ['a@b.co'], subject: 'x', text: String(n) });
+		yield* ctx.files.image(ref, { jpeg: { max_edge: 1024 } });
+		yield* ctx.send(mail_account, { to: ['a@b.co'], subject: 'x', text: String(n) });
 		void (ctx.now satisfies Instant);
 	}
 });
@@ -137,128 +133,128 @@ declare const ref0: FileRef;
 
 rt.render.body; // inline in the fixture
 
-// ── automation('nightly', { ...rt.nightly.spec, ) ──
-automation('nightly', {
+// ── automation({ ...rt.nightly.spec, ) ──
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A1 a cron with six fields
-	on: { cron: '0 0 2 * * *' }
+	on: [{ cron: '0 0 2 * * *' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A2 a cron with four fields
-	on: { cron: '0 2 * *' }
+	on: [{ cron: '0 2 * *' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A3 a trigger on an unknown model
-	on: { created: 'ordres' }
+	on: [{ created: 'ordres' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A4 `fields` only on `updated`
-	on: { created: 'orders', fields: ['status'] }
+	on: [{ created: 'orders', fields: ['status'] }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A5 a delay that is not a Duration
-	on: { created: 'orders', delay: '3 days' }
+	on: [{ created: 'orders', delay: '3 days' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A6 a trigger where on a field orders lacks
-	on: { updated: 'orders', where: { stauts: { eq: 'draft' } } }
+	on: [{ updated: 'orders', where: { stauts: { eq: 'draft' } } }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A7 `fields` names an unknown field
-	on: { updated: 'orders', fields: ['stauts'] }
+	on: [{ updated: 'orders', fields: ['stauts'] }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	// @ts-expect-error A8 runAs is gone: a run holds its declared policies
 	runAs: 'trigger',
-	on: { cron: '@daily' }
+	on: [{ cron: '@daily' }]
 });
 // @ts-expect-error A8b policies are required
-automation('nightly', {
+automation({
 	description: 'x',
-	on: { cron: '@daily' },
+	on: [{ cron: '@daily' }],
 	run: function* () {
-		return 0;
+		return;
 	}
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	// @ts-expect-error A8c policies are non-empty
 	policies: [],
-	on: { cron: '@daily' }
+	on: [{ cron: '@daily' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	// @ts-expect-error A9 an unknown policy
 	policies: ['sales_rap'],
-	on: { cron: '@daily' }
+	on: [{ cron: '@daily' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A10 retry attempts outside 2–8
 	retry: { attempts: 9 }
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A11 concurrency above 16
 	concurrency: { max: 17 }
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A12 an unknown webhook scheme
-	on: { webhook: '/in', verify: { scheme: 'github', secret: 'HOOK_SECRET' } }
+	on: [{ webhook: '/in', verify: { scheme: 'github', secret: 'HOOK_SECRET' } }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A13 a webhook secret that is not a declared secret name
-	on: { webhook: '/in', verify: { scheme: 'standard', secret: 'hook-secret' } }
+	on: [{ webhook: '/in', verify: { scheme: 'standard', secret: 'hook-secret' } }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A14 a ledger is never a trigger target (X-18)
-	on: { created: 'sys_run' }
+	on: [{ created: 'sys_run' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A15 a misspelt trigger arm
-	on: { create: 'orders' }
+	on: [{ create: 'orders' }]
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
@@ -266,23 +262,23 @@ automation('nightly', {
 	on: [{ cron: '@daily' }, { updated: 'orders', where: { due: { like: '2026%' } } }]
 });
 // @ts-expect-error A17 an unknown key (runAs misspelt)
-automation('nightly', { ...rt.nightly.spec, description: 'x', run_as: ['sales_rep'] });
-automation('nightly', {
+automation({ ...rt.nightly.spec, description: 'x', run_as: ['sales_rep'] });
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A18 an unknown input kind
 	input: { n: { kind: 'integer' } }
 });
-automation('nightly', {
+automation({
 	...rt.nightly.spec,
 	description: 'x',
 	policies: ['sales_rep'],
 	// @ts-expect-error A19 a webhook path without its leading slash
-	on: { webhook: 'in', verify: { scheme: 'bearer', secret: 'HOOK_SECRET' } }
+	on: [{ webhook: 'in', verify: { scheme: 'bearer', secret: 'HOOK_SECRET' } }]
 });
 
-automation('body', {
+automation({
 	description: 'x',
 	policies: ['sales_rep'],
 	input: { n: { kind: 'int' } },
@@ -293,7 +289,7 @@ automation('body', {
 	}
 });
 
-automation('trig', {
+automation({
 	description: 'x',
 	policies: ['sales_rep'],
 	run: function* (_, ctx) {
@@ -313,12 +309,11 @@ automation('trig', {
 		// @ts-expect-error B5 an input for an automation that declares none
 		yield* ctx.schedule('nightly', { force: true });
 		// @ts-expect-error B6 an email message through a chat connection
-		yield* ctx.send('whatsapp', { to: ['a@b.co'], subject: 'x' });
-		const either = Math.random() > 0.5 ? ('whatsapp' as const) : ('support' as const);
+		yield* ctx.send(whatsapp_account, { to: ['a@b.co'], subject: 'x' });
 		// @ts-expect-error B7 a union-typed connection (§3.3.9)
 		yield* ctx.send(either, { to: '+65', text: 'x' });
 		// @ts-expect-error B8 an unknown connection
-		yield* ctx.request('billing', { method: 'GET', path: 'x', output: { kind: 'text' } });
+		yield* ctx.request(billing_account, { method: 'GET', path: 'x', output: { kind: 'text' } });
 		// @ts-expect-error B9 a file owner that is not a file field
 		yield* ctx.convert.document({ markdown: '' }, { to: 'pdf', name: 'x.pdf', for: 'orders.note' });
 		// a declared target with its own options: a docx takes a styling reference, a pdf its paper
@@ -340,10 +335,20 @@ automation('trig', {
 		);
 		// @ts-expect-error B9d the source is Markdown or HTML, nothing else
 		yield* ctx.convert.document({ text: '' }, { to: 'pdf', name: 'x.pdf', for: 'render' });
-		// @ts-expect-error B10 an automation ctx has no refuse (§3.4: a run fails by throwing)
-		ctx.refuse('no');
+		// @ts-expect-error B10 refusal row indices are numeric
+		ctx.refuse('no', { row: 'first' });
+		// a message's placeholders are its refusal's values, exactly
+		ctx.refuse('errors.short', { row: 0, values: { have: 1, need: 2, item: 'bolts' } });
+		// @ts-expect-error B10a a placeholder without its value
+		ctx.refuse('errors.short', { values: { have: 1, need: 2 } });
+		// @ts-expect-error B10b a value the message does not name
+		ctx.refuse('errors.short', { values: { have: 1, need: 2, item: 'bolts', site: 'x' } });
+		// @ts-expect-error B10c a message with placeholders needs its values
+		ctx.refuse('errors.short');
+		// @ts-expect-error B10d a message without placeholders takes no values
+		ctx.refuse('errors.refused', { values: { item: 'bolts' } });
 		// @ts-expect-error B11 an http output of an unknown kind
-		yield* ctx.request('erp', { method: 'POST', path: 'x', output: { kind: 'txt' } });
+		yield* ctx.request(erp_account, { method: 'POST', path: 'x', output: { kind: 'txt' } });
 		// @ts-expect-error B12 a notice with a non-string team ID
 		yield* ctx.notify({ to: [{ team: 42 }], title: 'x' });
 		// @ts-expect-error B13 an AI model class that does not exist
@@ -357,7 +362,7 @@ automation('trig', {
 // @ts-expect-error MC1 a literal URL where a secret name belongs
 mcp({ description: 'x', url: 'https://mcp.example.com' });
 // @ts-expect-error MC2 oauth credentials must be secret names
-mcp({ description: 'x', url: 'MCP_URL', auth: { oauth: { clientId: 'abc' } } });
+mcp({ description: 'x', url: 'MCP_URL', auth: { oauth: { client_id: 'abc' } } });
 // @ts-expect-error MC3 an unknown key
 mcp({ description: 'x', url: 'MCP_URL', transport: 'sse' });
 const skill: SkillFrontmatter = { description: 'Quote a customer' };
@@ -367,17 +372,17 @@ void skill;
 void skill2;
 
 // ── file syncs: parsed records, context, findings, related rows and document exports ──
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
 			with: 'file',
 			parser: ['csv'],
 			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-			context: { notice: { kind: 'id', of: 'notices' } },
+			context: { notice: { kind: 'ref', to: 'notices' } },
 			read: function* ({ records, context }, ctx) {
 				is<Eq<typeof context.notice, Id<'notices'>>>();
-				const notices = yield* ctx.db.query({
+				const notices = yield* ctx.query({
 					notices: {
 						where: { id: { eq: context.notice } },
 						limit: 1
@@ -401,7 +406,7 @@ model('notice_notes', {
 			write: function* ({ context }, ctx) {
 				const bytes = yield* ctx.files.get(ref0);
 				is<Eq<typeof bytes, Uint8Array>>();
-				const image = yield* ctx.files.image(ref0, { jpeg: { maxEdge: 512 } });
+				const image = yield* ctx.files.image(ref0, { jpeg: { max_edge: 512 } });
 				is<Eq<typeof image, FileRef>>();
 				void ctx.files.image(ref0);
 				// @ts-expect-error file exports cannot store arbitrary files
@@ -418,7 +423,7 @@ model('notice_notes', {
 declare const remoteSync: SyncCtx<'kingdee'>;
 // @ts-expect-error a remote sync writer has no file facilities
 void remoteSync.files;
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -428,19 +433,25 @@ model('notice_notes', {
 					type: 'text/plain',
 					extensions: ['.note'],
 					parse: function* (file, ctx) {
-						return [{ $at: 1, code: file.name, note: yield* ctx.files.text(file) }];
+						return [
+							{
+								$at: 1,
+								code: file.name,
+								note: new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(file))
+							}
+						];
 					}
 				}
 			],
 			schema: { code: { kind: 'text' }, note: { kind: 'text' } },
-			context: { notice: { kind: 'id', of: 'notices' } },
+			context: { notice: { kind: 'ref', to: 'notices' } },
 			write: function* () {
 				return { document: { markdown: '# Notes' }, name: 'notes' };
 			}
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -450,7 +461,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -460,7 +471,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -472,7 +483,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -484,7 +495,7 @@ model('notice_notes', {
 		}
 	}
 });
-model('notice_notes', {
+bind_model('notice_notes')({
 	...m.notice_notes.spec,
 	syncs: {
 		sheet: {
@@ -505,7 +516,7 @@ model('notice_notes', {
 secrets({ erpUrl: { label: 'x' } });
 // @ts-expect-error WS2 a secret takes no default
 secrets({ ERP_URL: { label: 'x', default: 'https://x' } });
-// @ts-expect-error WS3 the default model class must be one the workspace declares
+// @ts-expect-error WS3 workspace AI model classes and defaults are host configuration
 workspace({ tz: 'UTC', locale: 'en', ai: { models: ['fast'], default: 'strong' } });
 // @ts-expect-error WS4 an unknown app in the launcher order
 workspace({ tz: 'UTC', locale: 'en', apps: ['crm'] });
@@ -517,14 +528,14 @@ void fromLiteral;
 void fromStd;
 // @ts-expect-error WS6 currency codes are upper case or std's branded code
 workspace({ tz: 'UTC', locale: 'en', currency: 'sgd' });
-app('sales', {
+app({
 	title: 'Sales',
 	description: 'Orders',
 	icon: 'lucide:store',
 	banner: 'assets/sales.png',
 	pages: { overview: { title: 'Overview' }, orders: { title: 'Orders', section: 'Work' } }
 });
-app('portal', {
+app({
 	title: 'Portal',
 	description: 'x',
 	icon: 'lucide:life-buoy',
@@ -532,8 +543,8 @@ app('portal', {
 	pages: { tickets: { title: 'Tickets', portal: true } }
 });
 // @ts-expect-error AP1 a page with no page file in the app's folder
-app('sales', { title: 'x', description: 'x', icon: 'x', pages: { dashboard: { title: 'x' } } });
-app('portal', {
+app({ title: 'x', description: 'x', icon: 'x', pages: { dashboard: { title: 'x' } } });
+app({
 	title: 'x',
 	description: 'x',
 	icon: 'x',
@@ -541,26 +552,48 @@ app('portal', {
 	audience: { public: ['applicant'] },
 	pages: {}
 });
-// @ts-expect-error AP3 an app with no folder
+// @ts-expect-error AP3 the path names the app
 app('crm', { title: 'x', description: 'x', icon: 'x', pages: {} });
 // @ts-expect-error AP4 there is no thumbnail option (P4)
-app('sales', { title: 'x', description: 'x', icon: 'x', thumbnail: 'x.svg', pages: {} });
-group('ops', { label: 'Operations', icon: 'lucide:folder', defaultChild: 'sales' });
-// @ts-expect-error GR1 defaultChild must be a child folder
-group('ops', { label: 'x', icon: 'x', defaultChild: 'finance' });
+app({ title: 'x', description: 'x', icon: 'x', thumbnail: 'x.svg', pages: {} });
+group({ title: 'Operations', icon: 'lucide:folder', default_child: 'sales' });
+// @ts-expect-error GR1 default_child must be a child folder
+group({ title: 'x', icon: 'x', default_child: 'finance' });
 
 // ── automation bodies can schedule, notify and request (§3.4); write callbacks and policy checks stay without I/O (g1) ──
 
-automation('order_lines_chase', {
+automation({
 	...rt.order_lines_chase.spec,
 	run: function* (_, ctx) {
 		yield* ctx.schedule('nightly', {});
 		yield* ctx.notify({ to: [{ policy: 'sales_rep' }], title: 'x' });
-		yield* ctx.request('erp', { method: 'GET', path: 'x', output: { kind: 'json' } });
+		yield* ctx.request(erp_account, { method: 'GET', path: 'x', output: { kind: 'json' } });
 	}
 });
 
-// ── record ids: `idOf` decodes into one model's branded id ──
-is<Eq<ReturnType<typeof idOf<'orders'>>['Type'], Id<'orders'>>>();
+// ── record ids: `id_of` decodes into one model's branded id ──
+is<Eq<ReturnType<typeof id_of<'orders'>>['Type'], Id<'orders'>>>();
 // @ts-expect-error a model the workspace does not declare
-idOf('no_such_model');
+id_of('no_such_model');
+
+// Selection inputs cross as ids and load complete admitted rows before a call body runs.
+const selected_call = automation({
+	description: 'Count selected orders', mode: 'call', policies: ['sales_rep'],
+	input: { orders: { kind: 'rows', of: 'orders' } }, output: { kind: 'int' },
+	run: function* ({ orders }) {
+		is<Eq<typeof orders, readonly Row<'orders'>[]>>();
+		return orders.length;
+	}
+});
+is<Eq<RunInput<typeof selected_call.spec>, { readonly orders: readonly Row<'orders'>[] }>>();
+// A loaded row is the write target as it is: it carries the revision the engine checks.
+automation({
+	description: 'Note selected orders', policies: ['sales_rep'],
+	input: { orders: { kind: 'rows', of: 'orders' } },
+	run: function* ({ orders }, ctx) {
+		yield* ctx.act({ 'orders.update': orders.map((order) => ({ target: order, set: { note: 'checked' } })) });
+	}
+});
+// @ts-expect-error rows inputs select readable models
+// prettier-ignore
+automation({ description: 'x', mode: 'call', policies: ['sales_rep'], input: { rows: { kind: 'rows', of: 'missing_model' } }, run: function* () {} });

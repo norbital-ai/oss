@@ -1,14 +1,15 @@
+import { required } from './kit.ts';
 // Embeddings and P39 on an OpenAI-compatible endpoint, as both hosts' copies did them: batches of the model's size, a
 // file in the multimodal shape, vectors in input order, a rate limit retried after `retry-after`, the provider's charge
 // metered; a model that does not take images refused unless its listing did not answer and the host tolerates that.
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
-import { Crypto, Effect, Fiber, Layer, PlatformError, Stream } from 'effect';
+import { Crypto, Effect, Fiber, Layer, PlatformError, Stream, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { HttpClient, HttpClientResponse } from 'effect/http';
 import { ProviderUnavailable } from '../src/errors.ts';
-import { aiModalityRefusals, openAiEmbeddings } from '../src/openrouter/embeddings.ts';
-import { openRouterChat } from '../src/openrouter/chat.ts';
+import { ai_modality_refusals, open_ai_embeddings } from '../src/openrouter/embeddings.ts';
+import { open_router_chat } from '../src/openrouter/chat.ts';
 
 type Seen = { url: string; body: unknown; authorization: string | undefined };
 /** An HttpClient answering each request with `answer(seen)`; every request is recorded. */
@@ -44,13 +45,13 @@ it.effect(
 	() =>
 		Effect.gen(function* () {
 			const http = fake(() => json({ choices: [{ message: { content: 'ok' } }] }));
-			const chat = openRouterChat(
+			const chat = open_router_chat(
 				{
 					endpoint: 'https://openrouter.ai/api/v1',
 					models: { default: 'deepseek/fixture' },
 					body: { provider: { data_collection: 'deny', zdr: true, sort: 'latency' } }
 				},
-				{ httpClient: http.client }
+				{ http_client: http.client }
 			);
 			yield* Stream.runDrain(
 				chat({ model: 'default', messages: [{ role: 'user', content: 'hi' }] })
@@ -70,7 +71,7 @@ it.effect(
 		})
 );
 
-describe('openAiEmbeddings', () => {
+describe('open_ai_embeddings', () => {
 	it.effect(
 		'batches by the model, sends a file as a content part, answers in input order and meters the charge',
 		() =>
@@ -78,7 +79,7 @@ describe('openAiEmbeddings', () => {
 				const metered: [number, string][] = [];
 				const reads: [string, number][] = [];
 				const http = fake((s) => {
-					const input = (s.body as { input: unknown[] }).input;
+					const input = Schema.decodeUnknownSync(Schema.Struct({ input: Schema.Array(Schema.Unknown) }))(s.body).input;
 					// out of order: the vectors follow `index`
 					return json({
 						id: `call-${input.length}`,
@@ -86,14 +87,14 @@ describe('openAiEmbeddings', () => {
 						usage: { cost: 0.5 }
 					});
 				});
-				const embed = openAiEmbeddings({
-					baseUrl: 'https://ai.example/v1/',
+				const embed = open_ai_embeddings({
+					base_url: 'https://ai.example/v1/',
 					files: (key, max) =>
 						Effect.sync(() => {
 							reads.push([key, max]);
 							return new Uint8Array([1, 2]);
 						}),
-					apiKey: 'k',
+					api_key: 'k',
 					model: (name) => (name === 'scene' ? { id: 'vendor/embed', batch: 2 } : undefined),
 					meter: (cost, id) =>
 						Effect.sync(() => {
@@ -119,7 +120,7 @@ describe('openAiEmbeddings', () => {
 					authorization: 'Bearer k',
 					body: { model: 'vendor/embed', input: ['a', 'b'], dimensions: 8 }
 				});
-				expect(http.seen[1]!.body).toEqual({
+				expect(required(http.seen[1]).body).toEqual({
 					model: 'vendor/embed',
 					dimensions: 8,
 					input: [
@@ -144,8 +145,8 @@ describe('openAiEmbeddings', () => {
 					? json({ error: 'slow down' }, 429, { 'retry-after': '2' })
 					: json({ data: [{ embedding: [1] }] })
 			);
-			const embed = openAiEmbeddings({
-				baseUrl: 'https://ai.example/v1',
+			const embed = open_ai_embeddings({
+				base_url: 'https://ai.example/v1',
 				model: () => ({ id: 'm', batch: 8 })
 			});
 			const fiber = yield* Effect.forkChild(embed(['a'], 'default').pipe(http.provide));
@@ -172,8 +173,8 @@ describe('openAiEmbeddings', () => {
 			const http = fake(() => json({ data: [{ embedding: [1] }], usage: { cost: 0.5 } }));
 			const ids: string[] = [];
 			let failing = false;
-			const embed = openAiEmbeddings({
-				baseUrl: 'https://ai.example/v1',
+			const embed = open_ai_embeddings({
+				base_url: 'https://ai.example/v1',
 				model: () => ({ id: 'm', batch: 8 }),
 				meter: (_cost, id) =>
 					Effect.gen(function* () {
@@ -216,8 +217,8 @@ describe('openAiEmbeddings', () => {
 				})
 			);
 			const metered: string[] = [];
-			const embed = openAiEmbeddings({
-				baseUrl: 'https://ai.example/v1',
+			const embed = open_ai_embeddings({
+				base_url: 'https://ai.example/v1',
 				model: () => ({ id: 'm', batch: 8 }),
 				meter: (_cost, key) =>
 					Effect.sync(() => {
@@ -238,8 +239,8 @@ describe('openAiEmbeddings', () => {
 	);
 });
 
-describe('aiModalityRefusals (P39)', () => {
-	const endpoint = { baseUrl: 'https://ai.example/v1', apiKey: 'k' };
+describe('ai_modality_refusals (P39)', () => {
+	const endpoint = { base_url: 'https://ai.example/v1', api_key: 'k' };
 	const checks = [
 		{
 			system: 'sys_2' as const,
@@ -268,7 +269,7 @@ describe('aiModalityRefusals (P39)', () => {
 			Effect.gen(function* () {
 				const ok = fake(listing(['text', 'image']));
 				expect(
-					yield* aiModalityRefusals(checks, { tolerateUnread: false }).pipe(ok.provide)
+					yield* ai_modality_refusals(checks, { tolerate_unread: false }).pipe(ok.provide)
 				).toEqual([]);
 				expect(ok.seen.map((s) => s.url)).toEqual([
 					'https://ai.example/v1/models',
@@ -276,7 +277,7 @@ describe('aiModalityRefusals (P39)', () => {
 				]);
 				const textOnly = fake(listing(['text']));
 				expect(
-					yield* aiModalityRefusals(checks, { tolerateUnread: false }).pipe(textOnly.provide)
+					yield* ai_modality_refusals(checks, { tolerate_unread: false }).pipe(textOnly.provide)
 				).toEqual([
 					"sys_2 model 'vendor/chat' takes text: it must take image (P39)",
 					"embed model 'vendor/embed' takes text: it must take image (P39)"
@@ -288,10 +289,10 @@ describe('aiModalityRefusals (P39)', () => {
 		Effect.gen(function* () {
 			const down = () => fake(() => json({ error: 'down' }, 503));
 			expect(
-				yield* aiModalityRefusals(checks, { tolerateUnread: true }).pipe(down().provide)
+				yield* ai_modality_refusals(checks, { tolerate_unread: true }).pipe(down().provide)
 			).toEqual([]);
 			expect(
-				yield* aiModalityRefusals(checks, { tolerateUnread: false }).pipe(down().provide)
+				yield* ai_modality_refusals(checks, { tolerate_unread: false }).pipe(down().provide)
 			).toEqual([
 				"sys_2 model 'vendor/chat' has no published input modalities: it must take image (P39)",
 				"embed model 'vendor/embed' has no published input modalities: it must take image (P39)"

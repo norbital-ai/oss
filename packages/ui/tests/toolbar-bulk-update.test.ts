@@ -1,10 +1,14 @@
+import { committed, single_act } from './act-envelope.ts';
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it, vi } from '@effect/vitest';
 import { Deferred, Effect } from 'effect';
 import type { Json } from '@norbital-ai/std/wire';
+import type { Value } from '@norbital-ai/std/kind';
+import { Decimal } from '@norbital-ai/std/decimal';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Outcome } from '../../bolt/build/protocol/schema.js';
+import type { Links } from '../src/model/BulkRelation.svelte';
 import {
 	editableFields,
 	editableRelations,
@@ -17,6 +21,7 @@ import { element } from './elements.ts';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: Table } = await import('../src/table/Table.svelte');
+const { default: BulkRelation } = await import('../src/model/BulkRelation.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
@@ -36,6 +41,7 @@ afterEach(async () => {
 
 const catalog: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text', default: 'Never replace untouched names' },
@@ -50,7 +56,7 @@ const catalog: NonNullable<KindsHost['catalog']> = {
 		update: {
 			columns: ['name', 'enabled', 'count', 'amount', 'note', 'locked', 'secret', 'state']
 		},
-		readonlyFields: { locked: 'syncOwned' },
+		readonly_fields: { locked: 'sync_owned' },
 		delete: true
 	}
 };
@@ -61,12 +67,14 @@ async function show(
 	of = 'jobs',
 	cat: NonNullable<KindsHost['catalog']> = catalog
 ) {
+	// every field the read output promises; the host answers only those requested
+	const values: Readonly<Record<string, Value>> = of === 'orders'
+		? { status: 'draft', about: null }
+		: { enabled: true, count: 8, amount: Decimal.of('1.000'), note: null, locked: 'L', secret: 'S', state: 'open' };
 	const { bolt } = await viewFixture({
+		catalog: cat,
 		read: () => ({
-			rows: [
-				{ id: 'job-a', name: 'A' },
-				{ id: 'job-b', name: 'B' }
-			],
+			rows: ['job-a', 'job-b'].map((id, index) => ({ id, revision: index + 1, name: index === 0 ? 'A' : 'B', ...values })),
 			next: null,
 			total: 2
 		}),
@@ -122,7 +130,10 @@ it.live(
 			const gate = yield* Deferred.make<Outcome>();
 			const calls: { callable: string; input: Json }[] = [];
 			const target = yield* browser(() =>
-				show((callable, input) => {
+				show((body) => {
+					assert.ok('acts' in body, 'model edits use the native action map');
+					assert.deepEqual(Object.keys(body.acts), ['jobs.update']);
+					const { callable, input } = single_act(body);
 					calls.push({ callable, input });
 					return Deferred.await(gate);
 				})
@@ -156,13 +167,13 @@ it.live(
 			assert.deepEqual(calls, [
 				{
 					callable: 'jobs.update',
-					input: ['job-a', 'job-b'].map((target) => ({
-						target,
+					input: ['job-a', 'job-b'].map((id, index) => ({
+						target: { id, revision: index + 1 },
 						set: { enabled: false, count: 0, amount: { $dec: '9007199254740993.125' }, note: null }
 					}))
 				}
 			]);
-			yield* Deferred.succeed(gate, { kind: 'committed', output: null, records: [] });
+			yield* Deferred.succeed(gate, { kind: 'committed', output: { 'jobs.update': null }, records: [] });
 			yield* browser(settle);
 			assert.equal(target.querySelector('[data-selected-count]'), null);
 			assert.equal(document.querySelector('[data-bulk-update]'), null);
@@ -175,7 +186,8 @@ it.live(
 		Effect.gen(function* () {
 			const calls: Json[] = [];
 			const target = yield* browser(() =>
-				show((_callable, input) => {
+				show((body) => {
+					const { input } = single_act(body);
 					calls.push(input);
 					return { kind: 'refused', code: 'locked', message: 'This record is locked.' };
 				})
@@ -220,7 +232,7 @@ it.live(
 			for (const toolbar of [false, { actions: false }, { select: false }] satisfies Toolbar[]) {
 				assert.equal(selectionEnabled(toolbar, catalog['jobs']), false);
 				const target = yield* browser(() =>
-					show(() => ({ kind: 'committed', output: null, records: [] }), toolbar)
+					show(committed, toolbar)
 				);
 				assert.equal(target.querySelector('tbody input[type=checkbox]'), null);
 			}
@@ -228,9 +240,10 @@ it.live(
 				selectionEnabled(
 					{},
 					{
+						record_label: 'record.locked',
 						label: ['locked'],
 						fields: { locked: { kind: 'text' }, secret: { kind: 'text', hidden: true } },
-						readonlyFields: { locked: 'syncOwned' },
+						readonly_fields: { locked: 'sync_owned' },
 						update: { columns: ['locked', 'secret'] }
 					}
 				),
@@ -241,6 +254,7 @@ it.live(
 
 const orders: NonNullable<KindsHost['catalog']> = {
 	orders: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -267,12 +281,13 @@ const orders: NonNullable<KindsHost['catalog']> = {
 		}
 	},
 	lines: {
+		record_label: 'record.sku',
 		label: ['sku'],
 		fields: { sku: { kind: 'text' } },
 		relations: { order: { targets: ['orders'], optional: true } }
 	},
-	jobs: { label: ['name'], fields: { name: { kind: 'text' } } },
-	people: { label: ['name'], fields: { name: { kind: 'text' } } }
+	jobs: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
+	people: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 };
 
 it('bulk edit offers a state by the states its edges reach, a polymorphic relation by every target, and many-relations by update.with', () => {
@@ -282,7 +297,7 @@ it('bulk edit offers a state by the states its edges reach, a polymorphic relati
 		[
 			['name', { kind: 'text' }],
 			['status', { kind: 'enum', values: ['sent', 'paid', 'void'] }],
-			['about', { kind: 'id', of: 'jobs', optional: true }]
+			['about', { kind: 'ref', to: 'jobs', optional: true }]
 		]
 	);
 	assert.deepEqual(fields.find((field) => field.name === 'about')?.relation?.targets, [
@@ -297,7 +312,11 @@ it('bulk edit offers a state by the states its edges reach, a polymorphic relati
 	assert.equal(
 		selectionEnabled(
 			{},
-			{ label: [], fields: {}, update: { columns: [], with: orders['orders']?.update?.with } }
+			{
+				label: [],
+				fields: {},
+				update: { columns: [], with: orders['orders']?.update?.with }
+			}
 		),
 		true
 	);
@@ -315,9 +334,10 @@ it.live(
 			const calls: { callable: string; input: Json }[] = [];
 			const target = yield* browser(() =>
 				show(
-					(callable, input) => {
+					(body) => {
+						const { callable, input } = single_act(body);
 						calls.push({ callable, input });
-						return { kind: 'committed', output: null, records: [] };
+						return committed(body);
 					},
 					undefined,
 					'orders',
@@ -352,11 +372,72 @@ it.live(
 			assert.deepEqual(calls, [
 				{
 					callable: 'orders.update',
-					input: ['job-a', 'job-b'].map((target) => ({
-						target,
+					input: ['job-a', 'job-b'].map((id, index) => ({
+						target: { id, revision: index + 1 },
 						set: { lines: { create: [{ sku: 'X-1' }] } }
 					}))
 				}
 			]);
 		})
+);
+
+it.live('an existing-child read failure keeps bulk commands unchanged and a retry retains the actual revision', () =>
+	Effect.gen(function* () {
+		let unavailable = true;
+		const changes: Links[] = [];
+		const { bolt } = yield* browser(() => viewFixture({
+			catalog: orders,
+			read: () => ({ rows: [{ id: 'free', revision: 11, sku: 'X-1' }], next: null, total: 1 }),
+			get: () => unavailable
+				? new Response(JSON.stringify({ error: { code: 'upstream', message: 'Child details unavailable' } }), {
+					status: 503,
+					headers: { 'content-type': 'application/json' }
+				})
+				: { id: 'free', revision: 11 }
+		}));
+		const target = yield* browser(async () => {
+			const target = document.body.appendChild(document.createElement('div'));
+			const app = mount(Harness, {
+				target,
+				props: {
+					bolt,
+					catalog: orders,
+					part: 'bulk-relation',
+					view: BulkRelation,
+					props: {
+						name: 'lines',
+						child: { model: 'lines', parent: 'order', link: true },
+						parent_id: 'order-1',
+						value: { create: [], link: [], unlink: [], delete: [] },
+						on_change: (next: Links) => changes.push(next),
+						id: 'bulk-lines',
+						errors: new Map<string, string>()
+					}
+				}
+			});
+			mounted.push(async () => { await unmount(app); target.remove(); });
+			await settle();
+			return target;
+		});
+		const chooseExisting = async () => {
+			element<HTMLButtonElement>(target, '[data-bulk-relation-op="link"] [role=combobox]').click();
+			await settle();
+			await vi.waitFor(() => {
+				flushSync();
+				element(document, '[role=listbox] [data-value="free"] button');
+			});
+			element<HTMLButtonElement>(document, '[role=listbox] [data-value="free"] button').click();
+			await settle();
+		};
+		yield* browser(chooseExisting);
+		yield* browser(() => vi.waitFor(() => {
+			flushSync();
+			assert.equal(toasts.at(-1)?.tone, 'error');
+			assert.equal(toasts.at(-1)?.text, 'Child details unavailable');
+		}));
+		assert.deepEqual(changes, []);
+		unavailable = false;
+		yield* browser(chooseExisting);
+		assert.deepEqual(changes, [{ create: [], link: [{ id: 'free', revision: 11 }], unlink: [], delete: [] }]);
+	})
 );

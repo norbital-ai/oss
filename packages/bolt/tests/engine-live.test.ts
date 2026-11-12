@@ -2,14 +2,14 @@ import { expect, it } from '@effect/vitest';
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from 'effect';
 import { Live } from '../src/engine/services.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
-import { bareHost } from './effect-engine.ts';
+import { bare_host } from './effect-engine.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
 import { manifest } from './engine-fixture.ts';
 
 const database = TestDb.layer(manifest);
-const host = Layer.unwrap(Effect.map(TenantDb, (db) => bareHost(db))).pipe(
+const host = Layer.unwrap(Effect.map(TenantDb, (db) => bare_host(db))).pipe(
 	Layer.provideMerge(database)
 );
 it.effect('builds the native graph and ends connection streams when its generation closes', () =>
@@ -22,7 +22,7 @@ it.effect('builds the native graph and ends connection streams when its generati
 		);
 		const live = Context.get(context, Live),
 			hello = yield* Deferred.make<void>();
-		const authority = compileAuthority(
+		const authority = yield* compile_authority(
 			manifest,
 			{ actor: { kind: 'visitor', app: '', visitor: 'test' }, policies: [], admin: false },
 			'test'

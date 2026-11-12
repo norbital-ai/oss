@@ -5,10 +5,10 @@ import { expect, layer } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Layer, Schema } from 'effect';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import { LIMITS, type Authority, type ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import type { Json } from '../src/decl/values.ts';
-import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 import { ACME, guest, manifest, seed } from './engine-fixture.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -36,10 +36,10 @@ const act = (
 	input: Json,
 	options: { key?: string; retry?: boolean } = {}
 ) =>
-	actReply(
+	act_reply(
 		route,
 		authority,
-		{ callable, input, issuedAt: t.clock.now() },
+		{ acts: { [callable]: input }, issued_at: t.clock.now() },
 		{
 			...(options.key === undefined ? {} : { 'Idempotency-Key': options.key }),
 			...(options.retry ? { 'Idempotency-Retry': '1' } : {})
@@ -49,7 +49,7 @@ const Row = Schema.Record(Schema.String, Schema.Json);
 const Page = Schema.Struct({ rows: Schema.Array(Row), next: Schema.NullOr(Schema.String) });
 /** One root's page through `/q`: the read request `{ [model]: layer }`, answered per root. */
 const read = (route: FixtureRoute, authority: Authority, model: string, layer: Json = {}) =>
-	qReply(route, authority, { reads: [{ m: 'query', a: [{ [model]: layer }] }] }).pipe(
+	q_reply(route, authority, { reads: [{ m: 'query', a: [{ [model]: layer }] }] }).pipe(
 		Effect.flatMap((reply) =>
 			Schema.decodeUnknownEffect(Schema.Record(Schema.String, Page))(reply.answers[0])
 		),
@@ -88,15 +88,18 @@ const writes = <A, E, R>(t: Kit, n: number, run: Effect.Effect<A, E, R>) =>
 	});
 
 const count = (route: FixtureRoute, t: Kit) =>
-	read(route, t.as(t.admin).authority, 'orders').pipe(Effect.map((page) => page.rows.length));
+	t.as(t.admin).pipe(
+		Effect.flatMap((admin) => read(route, admin.authority, 'orders')),
+		Effect.map((page) => page.rows.length)
+	);
 
 layer(workspace, { excludeTestServices: true })('engine', (it) => {
 	// engine: create → read → update → delete through the full pipeline
 	it.effect('each act is one native batch; seq, roll-up, transform and state rules hold', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-			const rep = t.as(t.member(['rep']));
+			const route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
+			const rep = yield* t.as(t.member(['rep']));
 			const created = yield* writes(
 				t,
 				1,
@@ -123,7 +126,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 
 			const lines = (yield* read(route, rep.authority, 'lines', {
 				where: { order: { eq: id } },
-				orderBy: [{ label: 'asc' }],
+				order_by: [{ label: 'asc' }],
 				limit: 10
 			})).rows;
 			expect(lines.map((l) => l['label'])).toEqual(['a', 'b']);
@@ -132,10 +135,10 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 				1,
 				act(route, t, rep.authority, 'orders.update', [
 					{
-						target: id,
+						target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
 						set: {
 							note: 'n',
-							lines: { update: [{ target: String(present(lines[0])['id']), set: { amount: '1' } }] }
+							lines: { update: [{ target: present(lines[0]), set: { amount: '1' } }] }
 						}
 					}
 				]).pipe(Effect.map(ok))
@@ -151,18 +154,31 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 				1,
 				act(route, t, rep.authority, 'orders.update', [
 					{
-						target: id,
+						target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
 						set: { status: 'submitted' }
 					}
+				]).pipe(Effect.map(ok))
+			);
+			// a submitted order is locked against deletion; the administrator's move back to draft releases it
+			const admin = (yield* t.as(t.admin)).authority;
+			const current = () => get(route, admin, 'orders', id);
+			expect(
+				yield* act(route, t, rep.authority, 'orders.delete', [{ target: present(yield* current()) }])
+			).toMatchObject({ kind: 'refused', code: 'locked' });
+			yield* writes(
+				t,
+				1,
+				act(route, t, admin, 'orders.update', [
+					{ target: present(yield* current()), set: { status: 'draft' } }
 				]).pipe(Effect.map(ok))
 			);
 			yield* writes(
 				t,
 				1,
-				act(route, t, rep.authority, 'orders.delete', [{ target: id }]).pipe(Effect.map(ok))
+				act(route, t, rep.authority, 'orders.delete', [{ target: present(yield* current()) }]).pipe(Effect.map(ok))
 			);
 			expect(yield* get(route, rep.authority, 'orders', id)).toBeNull();
-			expect((yield* read(route, t.as(t.admin).authority, 'lines')).rows).toEqual([]);
+			expect((yield* read(route, (yield* t.as(t.admin)).authority, 'lines')).rows).toEqual([]);
 		}).pipe(Effect.scoped)
 	);
 
@@ -172,13 +188,13 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
-				const route = yield* routeFixture(
+				const route = yield* route_fixture(
 					yield* Effect.context<TestWorkspace | WorkspaceServices>()
 				);
 				const a = t.member(['rep']),
 					b = t.member(['rep', 'auditor']);
 				const mine = idOf(
-					yield* act(route, t, t.as(a).authority, 'orders.create', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'orders.create', [
 						{
 							title: 'a-order',
 							region: 'north',
@@ -188,7 +204,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 					])
 				);
 				const theirs = idOf(
-					yield* act(route, t, t.as(b).authority, 'orders.create', [
+					yield* act(route, t, (yield* t.as(b)).authority, 'orders.create', [
 						{
 							title: 'b-order',
 							region: 'north',
@@ -199,38 +215,38 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 				);
 
 				expect(
-					(yield* read(route, t.as(a).authority, 'orders')).rows.map((r) => r['title'])
+					(yield* read(route, (yield* t.as(a)).authority, 'orders')).rows.map((r) => r['title'])
 				).toEqual(['a-order']);
-				expect(yield* get(route, t.as(a).authority, 'orders', theirs)).toBeNull();
+				expect(yield* get(route, (yield* t.as(a)).authority, 'orders', theirs)).toBeNull();
 				// rep's `default` output: its own rows, every field; the auditor's `audit` output: every row, never `note`
-				const own = (yield* read(route, t.as(b).authority, 'orders', {
-					orderBy: [{ title: 'asc' }]
+				const own = (yield* read(route, (yield* t.as(b)).authority, 'orders', {
+					order_by: [{ title: 'asc' }]
 				})).rows;
 				expect(own.map((r) => [r['title'], r['note']])).toEqual([['b-order', 'visible']]);
-				const audited = (yield* read(route, t.as(b).authority, 'orders', {
+				const audited = (yield* read(route, (yield* t.as(b)).authority, 'orders', {
 					output: 'audit',
-					orderBy: [{ title: 'asc' }]
+					order_by: [{ title: 'asc' }]
 				})).rows;
 				expect(audited.map((r) => r['title'])).toEqual(['a-order', 'b-order']);
 				expect(audited.every((r) => !('note' in r))).toBe(true);
 				// an aggregate names its output too: the auditor counts every row
-				const counted = yield* qReply(route, t.as(b).authority, {
+				const counted = yield* q_reply(route, (yield* t.as(b)).authority, {
 					reads: [{ m: 'aggregate', a: ['orders', { count: true, output: 'audit' }] }]
 				});
 				expect(counted.answers[0]).toMatchObject({ count: 2 });
 
 				expect(
-					yield* act(route, t, t.as(a).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'orders.update', [
 						{
-							target: theirs,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', theirs)),
 							set: { note: 'x' }
 						}
 					])
-				).toMatchObject({ kind: 'refused', code: 'notFound' });
+				).toMatchObject({ kind: 'refused', code: 'not_found' });
 				expect(
-					yield* act(route, t, t.as(a).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'orders.update', [
 						{
-							target: mine,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', mine)),
 							set: { region: 'south' }
 						}
 					])
@@ -241,7 +257,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 					field: 'region'
 				});
 				expect(
-					yield* act(route, t, t.as(a).authority, 'orders.create', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'orders.create', [
 						{
 							title: 'c',
 							region: 'south',
@@ -256,9 +272,9 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 					field: 'region'
 				});
 				expect(
-					yield* act(route, t, t.as(t.member(['auditor'])).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(t.member(['auditor']))).authority, 'orders.update', [
 						{
-							target: mine,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', mine)),
 							set: { note: 'x' }
 						}
 					])
@@ -271,13 +287,13 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
-				const route = yield* routeFixture(
+				const route = yield* route_fixture(
 					yield* Effect.context<TestWorkspace | WorkspaceServices>()
 				);
 				const a = t.member(['rep']),
 					b = t.member(['rep']);
 				const id = idOf(
-					yield* act(route, t, t.as(a).authority, 'orders.create', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'orders.create', [
 						{
 							title: 'o',
 							region: 'north',
@@ -286,39 +302,39 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 						}
 					])
 				);
-				const [line] = (yield* read(route, t.as(a).authority, 'lines')).rows;
-				expect((yield* read(route, t.as(b).authority, 'lines')).rows).toEqual([]);
+				const [line] = (yield* read(route, (yield* t.as(a)).authority, 'lines')).rows;
+				expect((yield* read(route, (yield* t.as(b)).authority, 'lines')).rows).toEqual([]);
 				expect(
-					yield* act(route, t, t.as(b).authority, 'lines.update', [
+					yield* act(route, t, (yield* t.as(b)).authority, 'lines.update', [
 						{
-							target: String(present(line)['id']),
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'lines', String(present(line)['id']))),
 							set: { amount: '6' }
 						}
 					])
-				).toMatchObject({ code: 'notFound' });
+				).toMatchObject({ code: 'not_found' });
 				ok(
-					yield* act(route, t, t.as(a).authority, 'lines.update', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'lines.update', [
 						{
-							target: String(present(line)['id']),
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'lines', String(present(line)['id']))),
 							set: { amount: '7' }
 						}
 					])
 				);
-				expect(yield* get(route, t.as(a).authority, 'orders', id)).toMatchObject({
+				expect(yield* get(route, (yield* t.as(a)).authority, 'orders', id)).toMatchObject({
 					total: { $dec: '7' }
 				});
 				ok(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
 						{
-							target: id,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
 							set: { region: 'south' }
 						}
 					])
 				);
 				expect(
-					yield* act(route, t, t.as(a).authority, 'lines.update', [
+					yield* act(route, t, (yield* t.as(a)).authority, 'lines.update', [
 						{
-							target: String(present(line)['id']),
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'lines', String(present(line)['id']))),
 							set: { amount: '8' }
 						}
 					])
@@ -330,14 +346,14 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 	it.effect('refuses past the row cap before it materializes the rows', () =>
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace;
-			const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
+			const route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
 			const before = yield* count(route, t);
-			const rows = Array.from({ length: 4_001 }, (_, n) => ({
+			const rows = Array.from({ length: LIMITS.act.rows + 1 }, (_, n) => ({
 				title: `bulk-${n}`,
 				region: 'north',
 				customer: ACME
 			}));
-			expect(yield* act(route, t, t.as(t.admin).authority, 'orders.create', rows)).toMatchObject({
+			expect(yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.create', rows)).toMatchObject({
 				kind: 'refused',
 				code: 'overflow'
 			});
@@ -351,11 +367,11 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
-				const route = yield* routeFixture(
+				const route = yield* route_fixture(
 					yield* Effect.context<TestWorkspace | WorkspaceServices>()
 				);
 				const id = idOf(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.create', [
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.create', [
 						{
 							title: 'lock-check',
 							region: 'north',
@@ -364,45 +380,55 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 					])
 				);
 				expect(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
 						{
-							target: id,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
 							set: { stage: 'lost' }
 						}
 					])
-				).toMatchObject({ kind: 'refused', code: 'invalidInput', field: 'stage' });
+				).toMatchObject({ kind: 'refused', code: 'invalid_input', field: 'stage' });
 				ok(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
 						{
-							target: id,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
 							set: { stage: 'won' }
 						}
 					])
 				);
+				expect(
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
+						{ target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)), set: { title: 'locked after winning' } }
+					])
+				).toMatchObject({ kind: 'refused', code: 'locked', field: 'title' });
 				ok(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
+						{ target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)), set: { note: 'still editable' } }
+					])
+				);
+				ok(
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
 						{
-							target: id,
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
 							set: { archived: true }
 						}
 					])
 				);
 				expect(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
 						{
-							target: id,
-							set: { title: 'changed' }
+							target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)),
+							set: { note: 'locked after archiving' }
 						}
 					])
 				).toMatchObject({ kind: 'refused', code: 'locked' });
 				// restating the locked row changes nothing: no write, no refusal (an unchanged re-import)
 				ok(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.update', [
-						{ target: id, set: { stage: 'won', archived: true } }
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.update', [
+						{ target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)), set: { stage: 'won', archived: true } }
 					])
 				);
 				expect(
-					yield* act(route, t, t.as(t.admin).authority, 'orders.delete', [{ target: id }])
+					yield* act(route, t, (yield* t.as(t.admin)).authority, 'orders.delete', [{ target: present(yield* get(route, (yield* t.as(t.admin)).authority, 'orders', id)) }])
 				).toMatchObject({ kind: 'refused', code: 'locked' });
 			}).pipe(Effect.scoped)
 	);

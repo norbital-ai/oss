@@ -1,5 +1,45 @@
 import { expect, it } from '@effect/vitest';
+import { Effect } from 'effect';
+import { canonical, type HistoryTableMetadata, type SchemaSpec } from '@norbital-ai/store';
 import { compatibleHistoryValue } from '../src/engine/query/history-schema.ts';
+import { history_schema_objects } from '../src/engine/schema/history.ts';
+
+it.effect('retains archived descriptors and JSON predicates when fixing the effective money currency', () => Effect.gen(function* () {
+	const definition: HistoryTableMetadata = {
+		audit: true,
+		fields: {
+			price: { kind: 'money' },
+			foreign_price: { kind: 'money', currency: 'SGD' },
+			retired: ['unparsed', { expression: 'legacy syntax' }]
+		},
+		unique: [{ fields: ['price'], where: { price: { gt: 0 } } }],
+		archived: { values: [null, true, 1, 'literal'] }
+	};
+	const original = canonical(definition);
+	const registration = (yield* history_schema_objects({ entry: definition }, 'USD'))
+		.find((object) => object.id === 'history:schema:entry');
+	if (registration === undefined) throw new Error('History registration missing');
+	expect(registration.create.join('\n')).toContain(canonical({
+		...definition,
+		fields: { ...definition.fields, price: { kind: 'money', currency: 'USD' } }
+	}));
+	expect(canonical(definition)).toBe(original);
+}));
+
+it.effect('refuses non-JSON current table metadata before registering a history definition', () => Effect.gen(function* () {
+	const current: SchemaSpec = {
+		tables: {
+			entry: {
+				audit: true,
+				fields: { name: { kind: 'text' } },
+				unique: [{ fields: ['name'], where: { name: () => true } }]
+			}
+		},
+		tz: 'UTC',
+		currency: null
+	};
+	expect(yield* Effect.flip(history_schema_objects(current.tables))).toMatchObject({ code: 'migration_invalid', phase: 'decode' });
+}));
 
 it('refuses destructive shape, precision, currency and reference changes', () => {
 	expect(

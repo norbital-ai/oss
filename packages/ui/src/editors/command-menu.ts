@@ -48,7 +48,8 @@ export function findTrigger(
 	triggers: readonly CommandTrigger[]
 ): Found | null {
 	for (let i = caret - 1; i >= 0 && caret - i <= LIMIT + 1; i -= 1) {
-		const c = text[i]!;
+		const c = text[i];
+		if (c === undefined) continue;
 		if (c === '\n' || c === '\r') return null;
 		const trigger = triggers.find((t) => t.char === c);
 		if (trigger === undefined) continue;

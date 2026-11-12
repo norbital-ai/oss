@@ -1,13 +1,13 @@
 // Who asked for an approval request (R3): the requesting member, read with their request.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('requestor', {
+export default bind_system_model('requestor')({
 	description: 'The member who requested an approval.',
-	label: 'user_id',
+	record_label: 'record.user_id',
 	fields: {
 		user_id: { kind: 'text' },
 		approval_request_id: { kind: 'ref', to: 'approval_request' }
 	},
 	table: { primary: 'text' },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 });

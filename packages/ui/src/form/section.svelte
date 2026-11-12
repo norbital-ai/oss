@@ -9,7 +9,7 @@ or a custom datatype's editor: a field that spans its row): content that is a si
 under its own label. A large field alone keeps the section, and does not repeat the section's title as its own heading.
 A closed section is its heading alone. Open, `size` says how it takes height in a bounded column (a record body, a
 `Stack` in a sheet): `content` (the default) is always its whole content, and the column scrolls when they do not
-fit; `fill` (a table, a long list) shares the height left, scrolling inside itself, never below `minHeight` (default
+fit; `fill` (a table, a long list) shares the height left, scrolling inside itself, never below `min_height` (default
 its content or 16rem, whichever is less). Nothing scrolls sideways.
 @example
 <Section name="basis" title="Evidence basis" icon="lucide:list-checks" size="fill"><Table of="evidence" /></Section>
@@ -33,7 +33,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		/** Default true for a titled section. */
 		collapsible?: boolean;
 		/** Open until the viewer chooses otherwise. Default true: a secondary section passes `false`. */
-		defaultOpen?: boolean;
+		default_open?: boolean;
 		/** Shown beside the title while collapsed ("3 files", "Not set"). */
 		summary?: string | Snippet;
 		/** A mark on the title row — a state badge, never a control. */
@@ -43,7 +43,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		/** `content` (default): its whole content; `fill`: shares the column's height left and scrolls inside itself. */
 		size?: 'content' | 'fill';
 		/** A `fill` section's floor (a CSS length; default its content or 16rem, whichever is less). */
-		minHeight?: string;
+		min_height?: string;
 		class?: string;
 		children: Snippet;
 	};
@@ -58,7 +58,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		icon?: string;
 		hint?: string;
 		fields: readonly string[];
-		defaultOpen?: boolean;
+		default_open?: boolean;
 		summary?: string | ((row: { readonly [field: string]: unknown }) => string);
 	};
 	/** `names` grouped by `sections` in each section's order; names no section lists follow in one untitled group. */
@@ -112,9 +112,9 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	import Icon from '@iconify/svelte';
 	import { flushSync, setContext } from 'svelte';
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
-	import { cn, useControls } from '../primitives/utils.js';
-	import { useModelKey } from '../model/context.js';
-	import { useForm } from './form-state.svelte.js';
+	import { cn, use_controls } from '../primitives/utils.js';
+	import { use_model_key } from '../model/context.js';
+	import { use_form } from './form-state.svelte.js';
 
 	let {
 		title,
@@ -123,18 +123,18 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		name,
 		first = false,
 		collapsible = true,
-		defaultOpen = true,
+		default_open = true,
 		summary,
 		trailing,
 		actions,
 		size = 'content',
-		minHeight,
+		min_height,
 		class: className,
 		children
 	}: SectionProps = $props();
 	const id = $props.id();
-	const form = useForm();
-	const controls = useControls();
+	const form = use_form();
+	const controls = use_controls();
 	const editing = $derived(
 		form !== undefined && !controls.readonly && (form.mode === 'edit' || form.mode === 'create')
 	);
@@ -159,7 +159,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 	const titled = $derived(title !== undefined && !lone);
 	const canCollapse = $derived(titled && collapsible);
 	// svelte-ignore state_referenced_locally -- the key is fixed for the section's life
-	const key = `norbital.section:${useModelKey() ?? ''}:${name ?? title ?? ''}`;
+	const key = `norbital.section:${use_model_key() ?? ''}:${name ?? title ?? ''}`;
 	function stored(): boolean | null {
 		return Result.getOrElse(
 			Result.try({
@@ -173,11 +173,11 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		);
 	}
 
-	// svelte-ignore state_referenced_locally -- defaultOpen is the starting state only
-	let open = $state(stored() ?? defaultOpen);
+	// svelte-ignore state_referenced_locally -- default_open is the starting state only
+	let open = $state(stored() ?? default_open);
 	const invalid = $derived(
 		form !== undefined &&
-			[...form.errors.keys()].some((k) => fields.has(k) || fields.has(k.split('.')[0]!))
+			[...form.errors.keys()].some((k) => fields.has(k) || fields.has(k.split('.')[0] ?? k))
 	);
 	const shown = $derived(!canCollapse || open || invalid);
 	let body = $state<HTMLElement | null>(null);
@@ -186,7 +186,7 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 		contentHeight = $state(0);
 	const fill = $derived(size === 'fill' && shown);
 	const floor = $derived(
-		minHeight ?? `min(${headingHeight + contentHeight + (titled ? 16 : 0)}px, 16rem)`
+		min_height ?? `min(${headingHeight + contentHeight + (titled ? 16 : 0)}px, 16rem)`
 	);
 	/** The body still showing while it shrinks closed: `aria-expanded` follows the click, `hidden` the motion's end. */
 	let closing = $state(false);
@@ -320,9 +320,9 @@ its content or 16rem, whichever is less). Nothing scrolls sideways.
 				<Tooltip
 					side="bottom"
 					align="start"
-					sideOffset={6}
-					contentClass="max-w-96 border bg-popover text-popover-foreground"
-					arrowClasses="text-popover"
+					side_offset={6}
+					content_class="max-w-96 border bg-popover text-popover-foreground"
+					arrow_classes="text-popover"
 				>
 					{#snippet trigger({ props })}
 						<button

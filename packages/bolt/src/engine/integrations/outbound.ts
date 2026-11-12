@@ -1,7 +1,9 @@
 // Outbound conversation messages: queued once, delivered in order, and reported through the sync inbox.
-import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
+import { sql } from '../db/sql.ts';
+import { Clock, Effect, Layer, Predicate, Result, Schema } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { CapturedResult, nativeCommit } from '../db/captured.ts';
 import { Files } from '../ports.ts';
 import {
 	Activation,
@@ -14,10 +16,11 @@ import {
 	type OutboundFile
 } from '../services.ts';
 import { Port } from '../port.ts';
-import { iso, backoffMs } from '../runs/time.ts';
-import { enqueue } from '../runs/queue.ts';
+import { iso } from '../runs/time.ts';
+import { ClaimToken, claim_matches, claimedBy, claimSql, leaseExpiry, renewClaims, retryDelay } from '../queue.ts';
+import { enqueueDrain } from '../runs/queue.ts';
 import type { EngineManifest } from '../manifest.ts';
-import type { Sql, Outcome } from '../contracts.ts';
+import type { Sql } from '../contracts.ts';
 import type { Json } from '../../decl/values.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import { LIMITS } from '../contracts.ts';
@@ -27,6 +30,7 @@ import { Chain } from '../write/sql.ts';
 import { msg } from '../conversations/store.ts';
 import {
 	RANK,
+	OutboundReference,
 	SendRefused,
 	sendRefusal,
 	TERMINAL,
@@ -49,9 +53,7 @@ export const QUEUED = (c: Chain, now: string) =>
 	`jsonb_build_array(jsonb_build_object('kind', 'queued', 'at', ${c.p(now)}::text, 'provider', 'bolt'))`;
 /** A statement's delivery run, queued when its `rows` piece inserted any. */
 export const deliverRun = (c: Chain, rows: string, now: string) =>
-	enqueue(c, [{ automation: DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }], {
-		when: `EXISTS (SELECT 1 FROM ${rows})`
-	});
+	enqueueDrain(c, DELIVER, c.p(now), `EXISTS (SELECT 1 FROM ${rows})`);
 type Obj = {
 	readonly [key: string]: Json;
 };
@@ -78,6 +80,10 @@ const AttachmentRef = Schema.Record(Schema.String, Schema.Json)
 		)
 	);
 const Attachments = Schema.optionalKey(Schema.Array(AttachmentRef));
+const Common = {
+	reply_to: Schema.optionalKey(Schema.NonEmptyString),
+	about: Schema.optionalKey(Schema.Struct({ model: Schema.NonEmptyString, id: Schema.NonEmptyString }))
+};
 const ChatInput = Schema.Record(Schema.String, Schema.Json)
 	.check(
 		Schema.makeFilter((value) =>
@@ -92,6 +98,7 @@ const ChatInput = Schema.Record(Schema.String, Schema.Json)
 	.pipe(
 		Schema.decodeTo(
 			Schema.Struct({
+				...Common,
 				to: Schema.NonEmptyString,
 				text: Schema.String,
 				attachments: Attachments,
@@ -101,6 +108,7 @@ const ChatInput = Schema.Record(Schema.String, Schema.Json)
 		)
 	);
 const MailInput = Schema.Struct({
+	...Common,
 	to: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
 	subject: Schema.String,
 	text: Schema.optionalKey(Schema.String),
@@ -110,14 +118,13 @@ const MailInput = Schema.Struct({
 	bcc: Schema.optionalKey(Schema.Array(Schema.String)),
 	thread: Schema.optionalKey(Schema.String),
 	id: Schema.optionalKey(Schema.String),
-	inReplyTo: Schema.optionalKey(Schema.String),
 	references: Schema.optionalKey(Schema.Array(Schema.String))
 }).check(
 	Schema.makeFilter((value) =>
 		value.text !== undefined || value.html !== undefined ? undefined : 'an email needs text or html'
 	)
 );
-export const sendInputSchema = (kind: ConversationKind): Schema.Codec<Obj> =>
+export const send_input_schema = (kind: ConversationKind): Schema.Codec<Obj> =>
 	kind === 'email' ? MailInput : ChatInput;
 /** A timeline entry as stored: `raw` bounded to 4 KB. */
 const entry = (e: DeliveryEntry): string => {
@@ -126,7 +133,7 @@ const entry = (e: DeliveryEntry): string => {
 		raw === undefined || raw.length <= 4096 ? e : { ...e, raw: raw.slice(0, 4096) }
 	);
 };
-/** The status after kind `k` in SQL, `statusAfter`'s rule (status.ts): terminal wins, `auto_replied` never moves it, else the higher rank. */
+/** The status after kind `k` in SQL, `status_after`'s rule (status.ts): terminal wins, `auto_replied` never moves it, else the higher rank. */
 const AFTER = (
 	col: string,
 	k: string,
@@ -137,14 +144,44 @@ const AFTER = (
 	WHEN (${r}::jsonb ->> ${k})::int > coalesce((${r}::jsonb ->> ${col})::int, 0) THEN ${k} ELSE ${col} END`;
 const TERMINALS = JSON.stringify([...TERMINAL]),
 	RANKS = JSON.stringify(RANK);
+
+function report_delivery(m: EngineManifest, c: Chain, changed: string, event: DeliveryEntry, extra: Obj = {}): void {
+	reportRowsPiece(m, c,
+		() => `SELECT r.integration::text AS instance, r.id::text AS message,
+		${c.p(`report:${event.kind}:${event.at}${event.reply === undefined ? '' : `:${event.reply}`}`)} || ':' || r.id AS delivery,
+		${c.p({ ...event, ...extra })}::jsonb || jsonb_build_object('message', r.id) AS body
+		FROM ${changed} r WHERE r.before IS DISTINCT FROM r.status OR ${c.p(event.kind)} IN ('replied', 'auto_replied')`,
+		event.at
+	);
+}
+
+/** A delivery report and its sync hints share the caller's captured statement, including inbound reply admission. */
+export function delivery_piece(m: EngineManifest, c: Chain, where: string, event: DeliveryEntry, extra: Obj = {}): string {
+	const same = [{ kind: event.kind, at: event.at,
+		...(event.code === undefined ? {} : { code: event.code }),
+		...(event.reply === undefined ? {} : { reply: event.reply }) }];
+	const current = c.cte('delivery_before',
+		`SELECT id, status FROM sys_message WHERE ${where} AND direction = 'outbound'
+		AND NOT coalesce(delivery, '[]'::jsonb) @> ${c.p(same)}::jsonb ORDER BY seq DESC LIMIT 1 FOR UPDATE`);
+	const kind = c.p(event.kind);
+	const changed = msg(c,
+		`UPDATE sys_message s SET delivery = coalesce(s.delivery, '[]'::jsonb) || jsonb_build_array(${c.p(entry(event))}::jsonb),
+		status = ${AFTER('s.status', `${kind}::text`, c.p(TERMINALS), c.p(RANKS))},
+		sent_at = CASE WHEN ${kind} IN ('sent', 'delivered', 'read', 'opened', 'replied') THEN coalesce(s.sent_at, ${c.p(event.at)}::timestamptz) ELSE s.sent_at END,
+		error = CASE WHEN ${kind} IN ('bounced', 'failed', 'complained', 'deferred') THEN coalesce(${c.p(event.reason ?? null)}, s.error) ELSE s.error END,
+		presume_at = CASE WHEN ${kind} IN ('sent', 'deferred', 'auto_replied') THEN s.presume_at END
+		FROM ${current} WHERE s.id = ${current}.id`,
+		`s.id, s.integration, ${current}.status AS before, s.status`
+	);
+	report_delivery(m, c, changed, event, extra);
+	return changed;
+}
 const MAX_ATTEMPTS = 8;
-const LEASE = `interval '10 minutes'`;
 /** How long a row waits for a link that is down before it asks again; the link's connect (`resume`) comes first. */
 const PARKED_MS = 86_400_000;
 /** A sync's queued sends wait until its id map and acknowledgement commit, so their reports have a destination. */
 const RELEASED = (row: string) =>
 	`(${row}.meta ->> 'sync_write' IS NULL OR EXISTS (SELECT 1 FROM sys_outbox o WHERE o.key = ${row}.meta ->> 'sync_write' AND o.status = 'acked'))`;
-const sql = (text: string, ...params: Json[]) => ({ text, params });
 type OutboundConfig = {
 	engine: { manifest: EngineManifest; db: TenantDbShape; live: Live['Service'] };
 	send: Links['Service']['send'];
@@ -155,40 +192,20 @@ type OutboundConfig = {
 function makeOutbound(cfg: OutboundConfig) {
 	const { manifest: m, db } = cfg.engine,
 		epoch = cfg.epoch;
-	const backoff = (now: string, attempts: number) =>
-		new Date(Date.parse(now) + Math.min(backoffMs('1s', attempts), 300000)).toISOString();
-	const mutateMessage = (statement: Sql, returning = '1 AS changed', event?: DeliveryEntry) => {
+	const mutateMessage = (
+		statement: Sql,
+		returning: string | ((before: string) => string) = '1 AS changed',
+		event?: DeliveryEntry
+	) => {
 		const c = new Chain();
 		c.params.push(...statement.params);
 		const changed = msg(c, statement.text, returning);
 		if (event !== undefined)
-			reportRowsPiece(
-				m,
-				c,
-				() => `SELECT r.integration::text AS instance, r.id::text AS message,
-			${c.p(`report:${event.kind}:${event.at}`)} || ':' || r.id AS delivery,
-			${c.p(event)}::jsonb || jsonb_build_object('message', r.id) AS body FROM ${changed} r WHERE r.before IS DISTINCT FROM r.status OR ${c.p(event.kind)} IN ('replied', 'auto_replied')`,
-				event.at
-			);
-		return db
-			.returning(
-				Schema.Struct({
-					messages: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-					guarded: Schema.Number
-				}),
-				c.sql(
-					`coalesce((SELECT jsonb_agg(to_jsonb(r)) FROM ${changed} r), '[]'::jsonb) AS messages`
-				)
-			)
-			.pipe(
-				Effect.flatMap((rows) =>
-					rows[0] === undefined
-						? Effect.fail(
-								BoltError.make('internal', 'commit', 'A message mutation returned no summary')
-							)
-						: Effect.succeed(rows[0].messages)
-				)
-			);
+			report_delivery(m, c, changed, event);
+		return nativeCommit(db.write, cfg.engine.live.publish, c,
+			Schema.Struct({ ...CapturedResult.fields, messages: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }),
+			`coalesce((SELECT jsonb_agg(to_jsonb(r) - '__bolt_capture') FROM ${changed} r), '[]'::jsonb) AS messages`
+		).pipe(Effect.map((result) => result.messages));
 	};
 	const attachmentsOf = Effect.fn('Outbound.attachmentsOf')(function* (refs: readonly Json[]) {
 		const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(AttachmentRef))(refs).pipe(
@@ -235,6 +252,14 @@ function makeOutbound(cfg: OutboundConfig) {
 		return out;
 	});
 	const message = Effect.fn('Outbound.message')(function* (r: Obj) {
+		let token = yield* Schema.decodeUnknownEffect(ClaimToken)(r).pipe(
+			Effect.mapError((error) => BoltError.make('internal', 'decode', error.message, error))
+		);
+		const owned = (statement: Sql, settled = false): Sql => {
+			const c = new Chain();
+			c.params.push(...statement.params);
+			return { text: `${statement.text} AND ${settled ? claim_matches(c, token) : claimedBy(c, token)}`, params: c.params };
+		};
 		const instance = String(r['integration']),
 			inst = Predicate.isObject(r['inst']) ? r['inst'] : {},
 			now = iso(yield* Clock.currentTimeMillis);
@@ -245,12 +270,14 @@ function makeOutbound(cfg: OutboundConfig) {
 			r['message']
 		).pipe(
 			Effect.mapError(() =>
-				BoltError.make('badAnswer', 'deliver', 'the outbound row has no message')
+				BoltError.make('bad_answer', 'deliver', 'the outbound row has no message')
 			)
 		);
 		const [refs] = yield* db.read([
 			sql(
-				`SELECT provider_id FROM sys_message WHERE conversation = $1 AND provider_id IS NOT NULL AND id <> $2 ORDER BY seq DESC LIMIT 50`,
+				`SELECT provider_id FROM sys_message WHERE conversation = $1 AND provider_id IS NOT NULL AND id <> $2
+				AND (direction = 'inbound' OR status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))
+				AND deleted_at IS NULL ORDER BY seq DESC LIMIT 50`,
 				r['conversation'] ?? null,
 				r['id'] ?? null
 			)
@@ -259,11 +286,13 @@ function makeOutbound(cfg: OutboundConfig) {
 		const thread = String(r['conv_thread']),
 			to = email ? {} : { to: thread },
 			idempotent = inst['idempotent'] === true;
+		const reply_to = body['reply_to'] ?? (email ? references.at(-1) : undefined);
 		const wire: Obj = {
 			...body,
 			id: String(r['id']),
 			...to,
-			...(references.length === 0 ? {} : { inReplyTo: references.at(-1) ?? '', references })
+			...(reply_to === undefined ? {} : { reply_to }),
+			...(email && references.length > 0 ? { references } : {})
 		};
 		// a lease that ran out left no answer, so this row's send may have gone, as one that timed out may have
 		let handed = r['was'] === 'sending';
@@ -278,44 +307,60 @@ function makeOutbound(cfg: OutboundConfig) {
 							? attachments
 							: [];
 						const files = yield* attachmentsOf(attachmentRefs);
+						const c = new Chain();
+						const [renewed] = yield* db.returning(ClaimToken, {
+							text: renewClaims('outbound', c, [token], iso(yield* Clock.currentTimeMillis)),
+							params: c.params
+						});
+						if (renewed === undefined) return null;
+						token = renewed;
 						handed = true;
 						return yield* cfg.send(instance, wire, files);
 					}).pipe(Port.call('link', LIMITS.callMs.http), Effect.result);
-		const attempts = Number(r['attempts']);
+		const attempts = token.attempts;
 		if (got._tag === 'Success') {
 			const receipt = got.success;
+			if (receipt === null) return 'lost';
 			const presume =
-				'presumeAfterMs' in receipt &&
-				typeof receipt.presumeAfterMs === 'number' &&
-				receipt.presumeAfterMs > 0
-					? new Date(Date.parse(now) + receipt.presumeAfterMs).toISOString()
+				'presume_after_ms' in receipt &&
+				typeof receipt.presume_after_ms === 'number' &&
+				receipt.presume_after_ms > 0
+					? new Date(Date.parse(now) + receipt.presume_after_ms).toISOString()
 					: null;
-			yield* mutateMessage(
-				sql(
-					`UPDATE sys_message SET status = 'sent', provider_id = $2, sent_at = $3::timestamptz, error = NULL, presume_at = $4::timestamptz,
-				delivery = delivery || jsonb_build_array($5::jsonb) WHERE id = $1`,
+			const changed = yield* mutateMessage(
+				owned(sql(
+					`UPDATE sys_message SET status = ${AFTER('status', "'sent'", '$6', '$7')}, provider_id = $2, sent_at = $3::timestamptz,
+				error = CASE WHEN status IN ('sending', 'sent') THEN NULL ELSE error END,
+				presume_at = CASE WHEN status IN ('sending', 'sent', 'deferred') THEN coalesce(presume_at, $4::timestamptz) END,
+				delivery = coalesce(delivery, '[]'::jsonb) || jsonb_build_array($5::jsonb)
+				WHERE id = $1 AND (provider_id IS NULL OR provider_id = $2)`,
 					r['id'] ?? null,
-					receipt.providerId,
+					receipt.provider_id,
 					now,
 					presume,
-					entry({ kind: 'sent', at: now, provider: 'bolt' })
-				),
+					entry({ kind: 'sent', at: now, provider: 'bolt' }),
+					TERMINALS,
+					RANKS
+				), true),
 				'id, integration, NULL::text AS before, status',
 				{ kind: 'sent', at: now, provider: 'bolt' }
 			);
+			if (changed.length === 0) return 'lost';
 			yield* cfg.announce(now);
 			return 'sent';
 		}
 		const cause = got.failure,
 			refusal = sendRefusal(cause);
-		// a link that is down spends no attempt: the row waits for its connect
+		// A known unavailable connection is no provider handoff: keep the row until pairing/reconnection.
 		if (cause instanceof Unavailable && cause.facility === LINK_DOWN) {
 			yield* mutateMessage(
-				sql(
-					`UPDATE sys_message SET status = 'queued', attempts = attempts - 1, next_attempt_at = $2::timestamptz WHERE id = $1`,
+				owned(sql(
+					`UPDATE sys_message SET status = 'queued', attempts = attempts - 1, claimed_at = NULL,
+					error = coalesce(error, $3), next_attempt_at = $2::timestamptz WHERE id = $1`,
 					r['id'] ?? null,
-					iso(Date.parse(now) + PARKED_MS)
-				),
+					iso(Date.parse(now) + PARKED_MS),
+					cause.reason
+				)),
 				'id, integration, NULL::text AS before, status'
 			);
 			return 'retry';
@@ -332,8 +377,8 @@ function makeOutbound(cfg: OutboundConfig) {
 					: cause instanceof BoltError
 						? cause.code
 						: 'upstream';
-		// a timeout may have reached the customer: only a provider that dedupes on `id` is asked to send it again
-		const unsure = kind === 'timeout' && handed;
+		// A lost or malformed answer after handoff may have sent; only an explicit refusal proves otherwise.
+		const unsure = handed && refusal === null && !(cause instanceof Unavailable) && kind !== 'invalid';
 		const final =
 			fenced ||
 			refusal?.permanent === true ||
@@ -358,72 +403,77 @@ function makeOutbound(cfg: OutboundConfig) {
 								? {}
 								: { code: refusal.code })
 					};
-		yield* mutateMessage(
-			sql(
+		const changed = yield* mutateMessage(
+			owned(sql(
 				`UPDATE sys_message SET status = $2, error = $3, next_attempt_at = $4::timestamptz, delivery = delivery || coalesce($5::jsonb, '[]'::jsonb) WHERE id = $1`,
 				r['id'] ?? null,
 				status,
 				error.slice(0, 2000),
-				backoff(now, attempts),
+				iso(Date.parse(now) + retryDelay(attempts, 1_000, 300_000)),
 				e === null ? null : `[${entry(e)}]`
-			),
+			)),
 			'id, integration, NULL::text AS before, status',
 			// The first retry and a final failure reach the sync's next read, atomically with the message status.
 			e !== null && (status === 'failed' || attempts === 1) ? e : undefined
 		);
+		if (changed.length === 0) return 'lost';
 		if (e !== null && (status === 'failed' || attempts === 1)) yield* cfg.announce(now);
 		return status === 'queued' ? 'retry' : status;
 	});
 	const deliver = Effect.fn('Outbound.deliver')(function* () {
 		let sent = 0,
-			failed = 0;
+			failed = 0,
+			exhausted = true;
 		const cleanup = new Chain();
-		const skipped = msg(
+		msg(
 			cleanup,
 			`UPDATE sys_message SET status = 'skipped', error = 'queued in another environment epoch'
             WHERE direction = 'outbound' AND status IN ('queued', 'sending') AND coalesce(epoch, '') <> ${cleanup.p(epoch)}`,
 			'1 AS changed'
 		);
-		const personal = msg(
+		msg(
 			cleanup,
 			`UPDATE sys_message SET status = 'failed', error = 'a personal account never sends'
             WHERE direction = 'outbound' AND status IN ('queued', 'sending') AND integration IN (SELECT id FROM sys_integration WHERE owner IS NOT NULL)`,
 			'1 AS changed'
 		);
-		const refused = msg(
+		msg(
 			cleanup,
 			`UPDATE sys_message s SET status = 'skipped', error = 'the sync write was refused'
 			WHERE s.direction = 'outbound' AND s.status = 'queued' AND EXISTS
 			(SELECT 1 FROM sys_outbox o WHERE o.key = s.meta ->> 'sync_write' AND o.status IN ('failed', 'skipped'))`,
 			'1 AS changed'
 		);
-		yield* db.write(
-			cleanup.sql(
-				`(SELECT count(*) FROM ${skipped}) + (SELECT count(*) FROM ${personal}) + (SELECT count(*) FROM ${refused}) AS n`
-			)
-		);
+		yield* nativeCommit(db.write, cfg.engine.live.publish, cleanup, CapturedResult);
 		for (let round = 0; round < 1000; round++) {
 			const now = iso(yield* Clock.currentTimeMillis);
+			// Unpaired rows keep their queued state and budget; prior sends still need uncertainty recovery.
 			const claimed = yield* mutateMessage(
-				sql(
-					`UPDATE sys_message s SET status = 'sending', attempts = s.attempts + 1, claimed_at = $1::timestamptz
-				WHERE s.direction = 'outbound' AND s.integration IS NOT NULL AND s.message IS NOT NULL AND s.conversation IS NOT NULL
-					AND ((s.status = 'queued' AND s.next_attempt_at <= $1::timestamptz) OR (s.status = 'sending' AND s.claimed_at <= $1::timestamptz - ${LEASE}))
-					AND EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = s.integration AND i.active)
-					AND ${RELEASED('s')}
-					AND NOT EXISTS (SELECT 1 FROM sys_message p WHERE p.integration = s.integration AND p.direction = 'outbound' AND p.status IN ('queued', 'sending') AND p.seq < s.seq
-						AND p.conversation = s.conversation)`,
-					now
-				),
-				`s.id, s.integration, s.conversation, s.message, s.attempts, old.status AS was,
-					(SELECT thread FROM sys_conversation c WHERE c.id = s.conversation) AS conv_thread,
-					(SELECT jsonb_build_object('integration', i.integration, 'configuration', i.configuration, 'idempotent', i.status -> 'idempotentSends') FROM sys_integration i WHERE i.id = s.integration) AS inst`
+				{
+					text: claimSql('outbound', {
+						at: '$1',
+						where: `q.direction = 'outbound' AND q.integration IS NOT NULL AND q.message IS NOT NULL AND q.conversation IS NOT NULL
+							AND EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = q.integration AND i.active
+								AND (q.status = 'sending' OR i.status ->> 'state' = 'connected'))
+							AND ${RELEASED('q')}
+							AND NOT EXISTS (SELECT 1 FROM sys_message p WHERE p.integration = q.integration AND p.direction = 'outbound' AND p.status IN ('queued', 'sending') AND p.seq < q.seq AND p.conversation = q.conversation)`,
+						order: 'q.seq',
+						limit: 1000
+					}),
+					params: [now]
+				},
+				(before) => `q.id, q.integration, q.conversation, q.message, q.attempts, q.claimed_at::text AS claimed_at, ${before}.status AS was,
+					(SELECT thread FROM sys_conversation c WHERE c.id = q.conversation) AS conv_thread,
+					(SELECT jsonb_build_object('integration', i.integration, 'configuration', i.configuration, 'idempotent', i.status -> 'idempotent_sends') FROM sys_integration i WHERE i.id = q.integration) AS inst`
 			);
-			if (claimed.length === 0) break;
+			if (claimed.length === 0) {
+				exhausted = false;
+				break;
+			}
 			for (const r of claimed) {
 				const x = yield* message(r);
 				if (x === 'sent') sent++;
-				else if (x !== 'retry') failed++;
+				else if (x !== 'retry' && x !== 'lost') failed++;
 			}
 		}
 		// a quiet window passed with no delivered, bounced or failed report: delivered, presumed
@@ -447,34 +497,21 @@ function makeOutbound(cfg: OutboundConfig) {
 		// comes back at boot and reaches this, so a send that never answered gets its wake without one queued before each send
 		const [next] = yield* db.read([
 			sql(
-				`SELECT least(min(next_attempt_at) FILTER (WHERE status = 'queued' AND next_attempt_at > $1::timestamptz), min(claimed_at + ${LEASE}) FILTER (WHERE status = 'sending'),
+				`SELECT least(min(next_attempt_at) FILTER (WHERE status = 'queued' AND next_attempt_at > $1::timestamptz), min(${leaseExpiry('outbound', '')}) FILTER (WHERE status = 'sending'),
 				min(presume_at) FILTER (WHERE status IN ('sent', 'deferred')))::text AS due
 			FROM sys_message s WHERE direction = 'outbound' AND (status IN ('queued', 'sending') OR presume_at IS NOT NULL) AND ${RELEASED('s')}`,
 				now
 			)
 		]);
-		const due = next?.rows[0]?.['due'];
+		const due = exhausted ? now : next?.rows[0]?.['due'];
 		if (
 			typeof due === 'string' &&
-			Date.parse(due) > Date.parse(iso(yield* Clock.currentTimeMillis))
+			(exhausted || Date.parse(due) > Date.parse(iso(yield* Clock.currentTimeMillis)))
 		) {
 			const at = new Date(due).toISOString();
 			const c = new Chain();
-			enqueue(
-				c,
-				[
-					{
-						automation: DELIVER,
-						input: {},
-						dueAt: at,
-						key: `${DELIVER}@${at}`,
-						cause: 'schedule',
-						depth: 0
-					}
-				],
-				{ conflict: 'keep' }
-			);
-			yield* db.write(c.sql('NULL AS outcome'));
+			enqueueDrain(c, DELIVER, c.p(at));
+			yield* nativeCommit(db.write, cfg.engine.live.publish, c, CapturedResult);
 			yield* cfg.announce(at);
 		}
 		return { sent, failed };
@@ -482,53 +519,50 @@ function makeOutbound(cfg: OutboundConfig) {
 	const record = Effect.fn('Outbound.record')(function* (
 		where: string,
 		params: readonly Json[],
-		e: DeliveryEntry,
-		extra: Obj = {}
+		e: DeliveryEntry
 	) {
-		const n = params.length,
-			$ = (i: number) => `$${n + i}`;
-		const same = JSON.stringify([
-			{ kind: e.kind, at: e.at, ...(e.code === undefined ? {} : { code: e.code }) }
-		]);
-		const res = yield* mutateMessage(
-			sql(
-				`WITH cur AS (SELECT id, status FROM sys_message WHERE ${where} AND direction = 'outbound' AND NOT delivery @> ${$(2)}::jsonb
-				ORDER BY seq DESC LIMIT 1 FOR UPDATE)
-			UPDATE sys_message s SET delivery = s.delivery || jsonb_build_array(${$(1)}::jsonb), status = ${AFTER('s.status', `${$(3)}::text`, $(4), $(5))},
-				error = CASE WHEN ${$(3)} IN ('bounced', 'failed', 'complained', 'deferred') THEN coalesce(${$(6)}, s.error) ELSE s.error END,
-				presume_at = CASE WHEN ${$(3)} IN ('sent', 'deferred', 'auto_replied') THEN s.presume_at END
-			FROM cur WHERE s.id = cur.id`,
-				...params,
-				entry(e),
-				same,
-				e.kind,
-				TERMINALS,
-				RANKS,
-				e.reason ?? null
-			),
-			's.id, s.integration, cur.status AS before, s.status',
-			{ ...e, ...extra }
+		const c = new Chain();
+		c.params.push(...params);
+		const changed = delivery_piece(m, c, where, e);
+		const result = yield* nativeCommit(db.write, cfg.engine.live.publish, c,
+			Schema.Struct({ ...CapturedResult.fields, n: Schema.Number }),
+			`(SELECT count(*) FROM ${changed})::int AS n`
 		);
-		if (res.length > 0) yield* cfg.announce(e.at);
-		return null;
+		if (result.n > 0) yield* cfg.announce(e.at);
 	});
 
 	return {
 		deliver,
+		reference: Effect.fn('Outbound.reference')(function* (instance: string, input: OutboundReference) {
+			const reference = yield* Schema.decodeUnknownEffect(OutboundReference, { onExcessProperty: 'error' })(input).pipe(
+				Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
+			);
+			const changed = yield* mutateMessage(sql(
+				`UPDATE sys_message SET provider_id = $3 WHERE id = $2 AND integration = $1
+				AND direction = 'outbound' AND status = 'sending' AND deleted_at IS NULL
+				AND coalesce(epoch, '') = ${EPOCH}
+				AND (provider_id IS NULL OR provider_id = $3)
+				AND EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = $1 AND i.owner IS NULL AND i.active)`,
+				instance, reference.message, reference.provider_id
+			));
+			if (changed.length === 0)
+				return yield* Effect.fail(BoltError.make('conflict', 'commit', 'The outbound reference does not match an active send.'));
+		}),
 		resume: Effect.fn('Outbound.resume')(function* (instance: string) {
 			const now = iso(yield* Clock.currentTimeMillis),
 				c = new Chain();
-			const due = c.cte(
-				'resumed',
+			const due = msg(
+				c,
 				`UPDATE sys_message SET next_attempt_at = ${c.p(now)}::timestamptz WHERE integration = ${c.p(instance)}
-				AND direction = 'outbound' AND status = 'queued' AND next_attempt_at > ${c.p(now)}::timestamptz RETURNING id`
+				AND direction = 'outbound' AND status = 'queued'`,
+				'id'
 			);
 			deliverRun(c, due, now);
-			const [row] = yield* db.returning(
-				Schema.Struct({ n: Schema.Number }),
-				c.sql(`(SELECT count(*) FROM ${due})::int AS n`)
+			const row = yield* nativeCommit(db.write, cfg.engine.live.publish, c,
+				Schema.Struct({ ...CapturedResult.fields, n: Schema.Number }),
+				`(SELECT count(*) FROM ${due})::int AS n`
 			);
-			if ((row?.n ?? 0) > 0) yield* cfg.announce(now);
+			if (row.n > 0) yield* cfg.announce(now);
 		}),
 		activate: Effect.fn('Outbound.activate')(function* () {
 			const current = yield* db.value(Schema.String, sql(`SELECT ${EPOCH} AS epoch`));
@@ -543,41 +577,16 @@ function makeOutbound(cfg: OutboundConfig) {
 		/** A provider's report on a message an instance sent, by the id its `send` answered (§5.9). */
 		delivered: (
 			instance: string,
-			providerId: string,
+			provider_id: string,
 			report: DeliveryReport
-		): Effect.Effect<Option.Option<Outcome>, EngineError> =>
+		): Effect.Effect<void, EngineError> =>
 			record(
 				'integration = $1 AND provider_id = $2',
-				[instance, providerId],
+				[instance, provider_id],
 				report.reason === undefined && (report.kind === 'bounced' || report.kind === 'failed')
 					? { ...report, reason: report.code ?? report.kind }
 					: report
-			).pipe(Effect.map(Option.fromNullishOr)),
-		/**
-		 * A reply matched to its sending row by the outbound message's provider id or `thread` (an email's references, a
-		 * chat's quoted message; rule 61); an automatic answer (RFC 3834) is `auto_replied`: recorded, never a reply.
-		 */
-		replied: (
-			instance: string,
-			refs: readonly string[],
-			reply: {
-				row: string;
-				at: string;
-				auto: boolean;
-				message: Json;
-			}
-		): Effect.Effect<Option.Option<Outcome>, EngineError> =>
-			record(
-				`integration = $1 AND (provider_id IN (SELECT jsonb_array_elements_text($2::jsonb)) OR thread IN (SELECT jsonb_array_elements_text($2::jsonb)))`,
-				[instance, JSON.stringify(refs)],
-				{
-					kind: reply.auto ? 'auto_replied' : 'replied',
-					at: reply.at,
-					provider: 'bolt',
-					reply: reply.row
-				},
-				{ reply: reply.message }
-			).pipe(Effect.map(Option.fromNullishOr)),
+			),
 		/** The platform run the outbound pieces queue (rule 48): `runs.platform`. */
 		handlers: { [DELIVER]: (_input: Json) => deliver() }
 	};

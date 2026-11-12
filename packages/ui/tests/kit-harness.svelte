@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
+	import { mount_edge } from '../src/effect/index.js';
 	// Mounts a Sheet with a page input outside it, a Drawer and a LogView.
 	import { Tabs } from '../src/primitives/tabs/index.js';
 	import Drawer from '../src/primitives/sheet/drawer.svelte';
@@ -9,7 +9,7 @@
 	import LogView from '../src/logs/LogView.svelte';
 	import type { LogLine } from '../src/logs/logs.js';
 	import type { LogViewProps } from '../src/logs/LogView.svelte';
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 
 	let {
 		part,
@@ -25,7 +25,7 @@
 		drawerOpen?: boolean;
 		path?: string;
 		rows?: readonly LogLine[];
-		loadOlder?: LogViewProps['loadOlder'];
+		loadOlder?: LogViewProps['load_older'];
 		hasOlder?: boolean;
 	} = $props();
 </script>
@@ -49,5 +49,5 @@
 		<span data-text>text</span>
 	</Drawer>
 {:else}
-	<div style="height: 200px"><LogView {rows} {loadOlder} {hasOlder} class="h-full" /></div>
+	<div style="height: 200px"><LogView {rows} load_older={loadOlder} has_older={hasOlder} class="h-full" /></div>
 {/if}

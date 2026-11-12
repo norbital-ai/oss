@@ -5,7 +5,7 @@
 // good one. Workspace diagnostics use the TypeScript language service; deeper audits run on request. Declarations are
 // evaluated on a worker thread stripped to a guest's globals (rule 2), with a frozen clock and seeded `Math.random`, twice,
 // and both manifest hashes must match; the guest program obeys rule 6's walls.
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep } from 'node:path';
@@ -14,15 +14,15 @@ import { Effect, FileSystem, Option, Result, Schema } from 'effect';
 import { Worker } from 'node:worker_threads';
 import { build, type Rolldown } from 'vite';
 import {
-	decodeProjectedManifest,
-	projectManifest,
+	decode_projected_manifest,
+	project_manifest,
 	type EngineManifest,
 	plan,
-	decodeSeed,
+	decode_seed,
 	type SeedPack
 } from '@norbital-ai/bolt/engine';
-import { FieldsSchema, PRELUDE } from '@norbital-ai/bolt/tooling';
-import { moduleScript, type ImportDeclaration } from '@norbital-ai/bolt/guest-hooks';
+import { PRELUDE, type CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import { module_script, type ImportDeclaration } from '@norbital-ai/bolt/node';
 import type { GuestProgram } from '@norbital-ai/bolt/engine';
 import type { EvaluateInput } from './evaluate-worker.ts';
 import { discover, type Discovered } from '../discover.ts';
@@ -30,8 +30,7 @@ import { BOLT, EXT } from '../bolt.ts';
 import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
 import { seedPack } from '../seed.ts';
-import { prepareMigrations } from '../migrations.ts';
-import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import { prepare_migrations } from '../migrations.ts';
 export type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 
 export type Stage =
@@ -42,7 +41,7 @@ export type CheckResult = {
 	errors: CheckDiagnostic[];
 	manifest?: EngineManifest;
 	guest?: GuestProgram;
-	/** The write callbacks the models declare, per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`. */
+	/** The model transforms, per verb: `'<model>.create'`, `'<model>.update'`. */
 	transforms: string[];
 	seed?: SeedPack;
 };
@@ -93,7 +92,7 @@ const front = Effect.fn('bolt.front')(function* (
 	stage('discover');
 	const { files, errors: layout } = yield* discover(root);
 	errors.push(...layout);
-	yield* writeTypeSetup(root);
+	yield* writeTypeSetup(root, files);
 
 	stage('bundle');
 	const code = files.filter((f) => f.path.endsWith('.ts'));
@@ -178,7 +177,12 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	if (evaluated === undefined) return out;
 	const { files, code, guest, manifest, bodies } = evaluated;
 	out.guest = guest;
-	const decoded = decodeProjectedManifest(projectManifest(manifest));
+	const projection = Result.try(() => project_manifest(manifest));
+	if (Result.isFailure(projection)) {
+		errors.push({ code: 'manifest/invalid', path: 'src', message: String(projection.failure) });
+		return out;
+	}
+	const decoded = decode_projected_manifest(projection.success);
 	if (Result.isFailure(decoded)) {
 		errors.push({
 			code: 'manifest/invalid',
@@ -190,20 +194,6 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 	const m = decoded.success;
 	out.manifest = m;
 	out.transforms = [...bodies.transforms];
-	// Shell boot hydrates these inputs too: even a build without authoring diagnostics must refuse invalid metadata.
-	if (!diagnostics)
-		for (const [name, automation] of Object.entries(m.automations)) {
-			const input = Schema.decodeUnknownResult(FieldsSchema)(automation.input ?? {});
-			if (Result.isFailure(input))
-				errors.push({
-					code: 'automation/input',
-					path:
-						files.find((file) => file.role === 'automation' && file.name === name)?.path ??
-						`src/automation/+${name}.automation.ts`,
-					message: `input: ${input.failure.message}`
-				});
-		}
-
 	if (diagnostics) {
 		stage('seed');
 		const { publicSeed } = yield* Effect.tryPromise({
@@ -219,7 +209,7 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 			Object.entries(yield* seedPack(root, errors, 'test')).filter(([c]) => !c.startsWith('sys_'))
 		);
 		const decodedTest = Result.try({
-			try: () => decodeSeed(m, test),
+			try: () => decode_seed(m, test),
 			catch: (cause) => new EvalError({ cause })
 		});
 		if (Result.isFailure(decodedTest))
@@ -240,7 +230,7 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		errors.push({ code: `schema/${e.code}`, path: 'src/data', message: e.message });
 	} else {
 		const migrations = yield* Effect.result(
-			prepareMigrations(root, m, options.migrations ?? 'verify', {
+			prepare_migrations(root, m, options.migrations ?? 'verify', {
 				...(options.squash === undefined ? {} : { squash: options.squash })
 			})
 		);
@@ -265,35 +255,28 @@ const workspace = Effect.fn('bolt.workspace')(function* (
 		errors.push(...checkRules(m, bodies, where));
 	}
 	if (errors.length === 0) {
-		const runtime = yield* bundle(
-			root,
-			code,
-			errors,
-			true,
-			bodies.models
-		);
+		const runtime = yield* bundle(root, code, errors, true, bodies.models);
 		if (runtime !== undefined) out.guest = runtime;
 	}
 	return out;
 });
 
 /** Every authoring diagnostic, runtime bundle validation included. */
-export const check = (dir: string, options: CompilerOptions = {}) =>
-	workspace(dir, options, true);
+export const check = (dir: string, options: CompilerOptions = {}) => workspace(dir, options, true);
 /** Compiles the artifact inputs and migrations without running the authoring diagnostics. */
 export const compile = (dir: string, options: CompilerOptions = {}) =>
 	workspace(dir, options, false);
 
 /**
- * A policy's guest part: each write grant's `check` (`policy.<p>.grants.<model>.<op>.check`), a ctx-bearing generator
+ * A policy's guest part: each write grant's `verdict` (`policy.<p>.grants.<model>.<op>.verdict`), a ctx-bearing generator
  * called with its batch and a `PolicyCtx` (invocation kind `policy`), answering the data of the `Verdict` it returns.
  */
-const CHECKS = `import { attached as __attached } from ${JSON.stringify(join(BOLT, 'decl', `body${EXT}`))};
-const __checks = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.check === 'function' ? [[op, { check: __attached(g[op].check, 1) }]] : []))])) });`;
+const VERDICTS = `import { attached_verdict as __attached_verdict } from ${JSON.stringify(join(BOLT, 'decl', `body${EXT}`))};
+const __verdicts = (p) => ({ grants: Object.fromEntries(Object.entries(p?.grants ?? {}).map(([model, g]) => [model, Object.fromEntries(['create', 'update', 'delete'].flatMap((op) => typeof g?.[op]?.verdict === 'function' ? [[op, { verdict: __attached_verdict(g[op].verdict, 1) }]] : []))])) });`;
 /**
  * The callback paths selected by the runner (the Guest ABI), retaining every role module's original initialization order:
  * a model's bodies under `model.<model>.bodies`, a policy's write checks, an automation's `body`, a custom
- * field's `check`, an integration's `bodies.test` and a page server's loader.
+ * field's `check`, and an integration's `bodies.test`.
  */
 function runtimeEntry(
 	root: string,
@@ -312,7 +295,7 @@ function runtimeEntry(
 				if (callbackModels.has(file.name)) value = `{ bodies: ${binding}.bodies }`;
 				break;
 			case 'policy':
-				value = `__checks(${binding})`;
+				value = `__verdicts(${binding})`;
 				break;
 			case 'automation':
 				value = `{ body: ${binding}.body }`;
@@ -322,10 +305,6 @@ function runtimeEntry(
 				break;
 			case 'integration_definition':
 				value = `{ bodies: ${binding}.bodies }`;
-				break;
-			case 'page_server':
-			case 'kiosk_page_server':
-				value = `{ data: ${binding}.data, load: ${binding}.load }`;
 				break;
 		}
 		const path = JSON.stringify(join(root, file.path));
@@ -337,7 +316,7 @@ function runtimeEntry(
 	});
 	return [
 		...imports,
-		...(groups.has('policy') ? [CHECKS] : []),
+		...(groups.has('policy') ? [VERDICTS] : []),
 		`export default { ${[...groups].map(([group, entries]) => `${group}: { ${entries.join(', ')} }`).join(', ')} };`
 	].join('\n');
 }
@@ -351,20 +330,10 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 	models: readonly string[] = []
 ) {
 	const byRole = Map.groupBy(code, (f) => f.role);
-	const servers = code.filter((f) => f.role === 'page_server' || f.role === 'kiosk_page_server');
+
 	const entry = runtime
 		? runtimeEntry(root, code, models)
 		: [
-				...(servers.length > 0
-					? [
-							`export { pageServerMetadata as __pageServerMetadata } from ${JSON.stringify(join(BOLT, 'decl', 'runtime', `page${EXT}`))};`,
-							...servers.map(
-								(f, i) =>
-									`import p${i} from ${JSON.stringify(join(root, dirname(f.path), `${f.name.slice(f.name.lastIndexOf('/') + 1)}.page.data.ts`))};`
-							),
-							`export const __pageDataCodecs = { ${[...Map.groupBy(servers, (f) => f.role)].map(([role, files]) => `${role}: { ${files.map((f) => `${JSON.stringify(f.name)}: p${servers.indexOf(f)}`).join(', ')} }`).join(', ')} };`
-						]
-					: []),
 				...code.map((f, i) => `import r${i} from ${JSON.stringify(join(root, f.path))};`),
 				`export default { ${[...byRole].map(([role, fs]) => `${role}: { ${fs.map((f) => `${JSON.stringify(f.name)}: r${code.indexOf(f)}`).join(', ')} }`).join(', ')} };`
 			].join('\n');
@@ -376,7 +345,15 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 				configFile: false,
 				logLevel: 'silent',
 				root,
-				resolve: { alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }] },
+				resolve: {
+					alias: [
+						{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX },
+						{
+							find: /^@norbital-ai\/bolt\/declarations$/,
+							replacement: join(BOLT, `declarations${EXT}`)
+						}
+					]
+				},
 				plugins: [
 					{
 						name: 'bolt:guest',
@@ -419,7 +396,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 							if (!id.startsWith(BYTES_ID)) return null;
 							// Vite owns this Promise hook; the enclosing bundle Effect supplies cancellation and captures failures.
 							return readFile(id.slice(BYTES_ID.length), { signal }).then((bytes) => {
-								const sha = sha256Hex(bytes);
+								const sha = sha256_hex(bytes);
 								assets[sha] = bytes;
 								// ponytail: every invocation copies the bytes in at module evaluation; lazy access when an asset is large
 								return `export default globalThis[Symbol.for('norbital.bolt.asset')](${JSON.stringify(sha)});`;
@@ -485,7 +462,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		});
 	return {
 		source,
-		...(sourceMap === undefined ? {} : { sourceMap }),
+		...(sourceMap === undefined ? {} : { source_map: sourceMap }),
 		...(Object.keys(assets).length > 0 ? { assets } : {})
 	};
 });
@@ -494,8 +471,8 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 const FREEZE = `{ const T = ${FROZEN}, D = Date;
 	globalThis.Date = class extends D { constructor(...a) { if (a.length === 0) super(T); else super(...a); } static now() { return T; } };
 	let s = 0x2545f491; Math.random = () => { s = s + 0x6d2b79f5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }`;
-// Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`splitModel`
-// reads them) and a policy's write checks `check: true`; which write callbacks and automation bodies exist is
+// Declarations are data (functions drop out of JSON). A model's bodies become `true` markers in its literal (`split_model`
+// reads them) and a policy's verdicts `verdict: true`; which write callbacks and automation bodies exist is
 // read beside them. A ctx-bearing body must be a generator.
 const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transforms: [], automations: [], models: [] };
 	const generator = (body) => {
@@ -510,20 +487,16 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 		const b = m?.bodies ?? {};
 		if (hasBody(b)) bodies.models.push(n);
 		if (Object.hasOwn(m?.spec ?? {}, 'queries')) throw new Error('model ' + JSON.stringify(n) + ' cannot declare queries: read layers, then transform them in src/lib');
-		for (const body of [b.create, b.update, b.delete, b.notify, ...Object.values(b.effect ?? {})]) generator(body);
+		for (const body of [b.create, b.update, ...Object.values(b.effect ?? {})]) generator(body);
 		for (const s of Object.values(b.syncs ?? {})) { generator(s?.read); generator(s?.write); for (const p of Object.values(s?.parse ?? {})) generator(p); }
-		for (const verb of ['create', 'update', 'delete']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
+		for (const verb of ['create', 'update']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
 		mark(m?.spec);
 		d.model[n] = { name: m?.name, spec: m?.spec };
 	}
 	for (const [n, a] of Object.entries(d.automation ?? {})) { generator(a?.body); if (typeof a?.body === 'function') bodies.automations.push(n); }
 	for (const i of Object.values(d.integration_definition ?? {})) { generator(i?.bodies?.test); if (typeof i?.spec?.test === 'function') i.spec.test = true; }
 	for (const f of Object.values(d.custom_field ?? {})) if (typeof f?.check === 'function' && f.spec) f.spec.check = true; // the write path calls the guest's validate
-	for (const p of Object.values(d.policy ?? {})) for (const g of Object.values(p?.grants ?? {})) for (const op of ['create', 'update', 'delete']) if (typeof g?.[op]?.check === 'function') { generator(g[op].check); g[op].check = true; }
-	for (const role of ['page_server', 'kiosk_page_server']) for (const [name, definition] of Object.entries(d[role] ?? {})) {
-		generator(definition?.load);
-		d[role][name] = globalThis.__ns.__pageServerMetadata(definition, globalThis.__ns.__pageDataCodecs[role]?.[name]);
-	}
+	for (const p of Object.values(d.policy ?? {})) for (const g of Object.values(p?.grants ?? {})) for (const op of ['create', 'update', 'delete']) if (typeof g?.[op]?.verdict === 'function') { generator(g[op].verdict); g[op].verdict = true; }
 	return JSON.stringify({ roles: d, bodies }); })()`;
 
 /** The worker's one answer: the declarations' JSON, the module's CPU and its reference workload's, or why evaluating it failed. */
@@ -614,7 +587,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 	timing: boolean
 ) {
 	const runs = yield* Effect.try({
-		try: () => moduleScript(program.source, missing),
+		try: () => module_script(program.source, missing),
 		catch: (cause) =>
 			new EvalError({ cause: cause instanceof Error ? cause : new Error(String(cause)) })
 	}).pipe(
@@ -650,7 +623,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 		return yield* Effect.fail(
 			new EvalError({ cause: new Error('missing deterministic evaluation') })
 		);
-	if (sha256Hex(a.json) !== sha256Hex(b.json))
+	if (sha256_hex(a.json) !== sha256_hex(b.json))
 		errors.push({
 			code: 'load/nondeterministic',
 			path: 'src',

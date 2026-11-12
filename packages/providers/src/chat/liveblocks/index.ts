@@ -55,7 +55,7 @@ export const liveblocks: ChatPlatform = {
 		const parse = (comment: CommentData): Incoming => ({
 			id: comment.id,
 			thread: `${comment.roomId}:${comment.threadId}`,
-			sentAt: comment.createdAt.toISOString(),
+			sent_at: comment.createdAt.toISOString(),
 			from: { handle: comment.userId, name: null },
 			group: true,
 			...(comment.editedAt === undefined ? {} : { version: comment.editedAt.toISOString() }),
@@ -92,7 +92,7 @@ export const liveblocks: ChatPlatform = {
 							{
 								id: event.data.commentId,
 								thread: `${event.data.roomId}:${event.data.threadId}`,
-								sentAt: event.data.deletedAt,
+								sent_at: event.data.deletedAt,
 								from: { handle: '', name: null },
 								text: '',
 								deleted: true

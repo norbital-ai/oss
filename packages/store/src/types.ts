@@ -5,6 +5,7 @@
 // table's columns, refs and inverses are computed once per schema and then read by indexed access. Positions that take
 // a literal (`where`, `select`, `with`) are plain object types over a known table, so an unknown key is an excess
 // property, and TS checks a fresh literal against the instantiated type, not a constraint over every table.
+import type { InitialStampFields } from '@norbital-ai/std/kind';
 import type { Decimal, Duration, Instant, PlainDate } from './values.ts';
 import type {
 	DatePeriod,
@@ -15,7 +16,6 @@ import type {
 	PlainTime,
 	Point,
 	RecordRef,
-	Seconds,
 	Shape,
 	Vector
 } from './values.ts';
@@ -45,7 +45,7 @@ type KeyKind<S extends AnySchema, T> =
 			? { kind: 'int' }
 			: Spec<S, T> extends { key: 'text' }
 				? { kind: 'text' }
-				: { kind: 'id'; of: T };
+				: { kind: 'ref'; to: T };
 type RefBase<S extends AnySchema, K> = K extends { to: infer To }
 	? IsUnion<Targets<To>> extends true
 		? {
@@ -53,9 +53,11 @@ type RefBase<S extends AnySchema, K> = K extends { to: infer To }
 			}[Targets<To>]
 		: ValueOf<KeyKind<S, Targets<To>>>
 	: never;
-type FieldValue<S extends AnySchema, K> = K extends { kind: 'ref' }
-	? RefBase<S, K> | (K extends { optional: true } ? null : never)
-	: ValueOf<K>;
+type FieldValue<S extends AnySchema, K> = K extends { kind: 'ref'; many: true }
+	? readonly RefBase<S, K>[] | (K extends { optional: true } ? null : never)
+	: K extends { kind: 'ref' }
+		? RefBase<S, K> | (K extends { optional: true } ? null : never)
+		: ValueOf<K>;
 
 // ── values ──
 export type Simplify<T> = { [K in keyof T]: T[K] } & {};
@@ -78,8 +80,7 @@ export type ValueOfFields<F> = Simplify<
 >;
 /** Each kind's value, by name: an interface, so each member is computed only when one kind is read (constant depth). */
 interface Values<K> {
-	text: K extends { many: true } ? readonly string[] : string;
-	currency: string;
+	text: string;
 	int: number;
 	count: number;
 	number: number;
@@ -90,23 +91,16 @@ interface Values<K> {
 	date: PlainDate;
 	instant: Instant;
 	time: PlainTime;
-	duration: Seconds;
 	period: K extends { of: 'date' } ? DatePeriod : InstantPeriod;
-	enum: K extends { values: readonly (infer V)[] }
-		? K extends { many: true }
-			? readonly V[]
-			: V
-		: string;
+	enum: K extends { values: readonly (infer V)[] } ? V : string;
 	state: K extends { states: infer S } ? keyof S & string : string;
 	seq: K extends { pattern: string } ? string : number;
-	id: K extends { of: infer T extends string } ? Id<T> : string;
 	ref: K extends { to: infer To }
 		? IsUnion<Targets<To>> extends true
 			? RecordRef<Targets<To>>
 			: Id<Targets<To>>
 		: string;
 	json: K extends { shape: infer S } ? ValueOf<S> : Json;
-	list: K extends { of: infer O } ? readonly ValueOf<O>[] : readonly Json[];
 	object: K extends { fields: infer F }
 		? ValueOfFields<F> &
 				(K extends { rest: infer R }
@@ -122,14 +116,15 @@ interface Values<K> {
 	record: K extends { of: infer O }
 		? { readonly [key: string]: ValueOf<O> }
 		: { readonly [key: string]: Json };
-	file: K extends { multiple: true } ? readonly FileRef[] : FileRef;
+	file: FileRef;
 	point: Point;
 	vector: Vector;
-	custom: K extends { many: true } ? readonly Json[] : Json;
+	custom: Json;
 }
 type Base<K> = K extends { kind: infer N extends keyof Values<K> } ? Values<K>[N] : Json;
 /** The TypeScript value of a kind; `optional: true` admits null. */
-export type ValueOf<K> = K extends { optional: true } ? Base<K> | null : Base<K>;
+type ManyValue<K> = K extends { many: true } ? readonly Base<K>[] : Base<K>;
+export type ValueOf<K> = K extends { optional: true } ? ManyValue<K> | null : ManyValue<K>;
 /** What a write may send for a value: its own type, or the literal a decoder takes for it (ISO text, decimal text). */
 export type Loose<V> = V extends Decimal
 	? Decimal | number | `${number}`
@@ -163,12 +158,16 @@ type KeyColumns<T extends string, Sp> = Sp extends { key: readonly string[] }
 		? { id: { kind: 'int' } }
 		: Sp extends { key: 'text' }
 			? { id: { kind: 'text' } }
-			: { id: { kind: 'id'; of: T } };
+			: { id: { kind: 'ref'; to: T } };
 type ComputedColumns<Sp> = Sp extends { computed: infer C }
 	? { [P in keyof C]: C[P] extends { kind: infer K } ? { kind: K; optional: true } : never }
 	: {};
 type OwnColumns<Sp> = Sp extends { fields: infer F }
-	? { [P in keyof F as F[P] extends { kind: 'ref' } ? never : P]: F[P] }
+	? {
+			[
+				P in keyof F as F[P] extends { kind: 'ref' } ? (F[P] extends { many: true } ? P : never) : P
+			]: F[P];
+		}
 	: {};
 type StoredColumns<Sp> = {
 	[
@@ -178,7 +177,15 @@ type StoredColumns<Sp> = {
 	]: OwnColumns<Sp>[P];
 };
 type RefsOf<Sp> = Sp extends { fields: infer F }
-	? { [P in keyof F as F[P] extends { kind: 'ref' } ? P : never]: F[P] }
+	? {
+			[
+				P in keyof F as F[P] extends { kind: 'ref' }
+					? F[P] extends { many: true }
+						? never
+						: P
+					: never
+			]: F[P];
+		}
 	: {};
 /** `[inverse name, child table, child's ref field]` for every ref of any table pointing at `T` with an inverse. */
 type Inverses<S extends AnySchema, T> = {
@@ -249,7 +256,7 @@ type PolyArm<S extends AnySchema, X extends string> =
 /** A many-relation's arm: its select, relations, filter, order and page (every list is bounded). */
 type ManyArm<S extends AnySchema, X> = OneArm<S, X> & {
 	readonly where?: Where<S, X>;
-	readonly orderBy?: OrderBy<S, X>;
+	readonly order_by?: OrderBy<S, X>;
 } & (
 		| { readonly limit: number; readonly all?: never }
 		| { readonly all: true; readonly limit?: never }
@@ -351,14 +358,14 @@ export type RollupQuery<S extends AnySchema, T, By extends readonly Sortable<S, 
 	/** Combine independent writers by sum, or one shared reading by max, before summarizing time. */
 	readonly combine?: 'sum' | 'max';
 } & (
-	| { readonly stepMillis?: number; readonly latestPer?: never; readonly carry?: never }
+	| { readonly step_millis?: number; readonly latest_per?: never; readonly carry?: never }
 	| {
-			readonly latestPer: readonly Sortable<S, T>[];
-			readonly stepMillis?: never;
+			readonly latest_per: readonly Sortable<S, T>[];
+			readonly step_millis?: never;
 			readonly carry?: {
 				readonly from: Instant;
 				readonly until: Instant;
-				readonly stepMillis: number;
+				readonly step_millis: number;
 			};
 	  }
 );
@@ -381,7 +388,7 @@ export type RollupResult<S extends AnySchema, T, Q> = Q extends {
 			S,
 			T,
 			By,
-			Q extends { readonly stepMillis: number } | { readonly carry: object } ? number : null
+			Q extends { readonly step_millis: number } | { readonly carry: object } ? number : null
 		>
 	: never;
 
@@ -405,11 +412,11 @@ type NewValue<S extends AnySchema, K, InitialOnly extends boolean> = InitialOnly
 type NewRow<S extends AnySchema, T, InitialOnly extends boolean> = Simplify<
 	{
 		readonly [
-			P in Writable<S, T> & keyof Kinds<S, T> as Omittable<Kinds<S, T>[P]> extends true ? never : P
+			P in Writable<S, T> & keyof Kinds<S, T> as P extends InitialStampFields<Kinds<S, T>> ? never : Omittable<Kinds<S, T>[P]> extends true ? never : P
 		]: Loose<NewValue<S, Kinds<S, T>[P], InitialOnly>>;
 	} & {
 		readonly [
-			P in Writable<S, T> & keyof Kinds<S, T> as Omittable<Kinds<S, T>[P]> extends true ? P : never
+			P in Writable<S, T> & keyof Kinds<S, T> as P extends InitialStampFields<Kinds<S, T>> ? P : Omittable<Kinds<S, T>[P]> extends true ? P : never
 		]?: Loose<NewValue<S, Kinds<S, T>[P], InitialOnly>>;
 	} & (Spec<S, T> extends { key: readonly string[] }
 			? {}
@@ -428,15 +435,15 @@ export type Partial_<V> = V extends readonly unknown[]
 		? { readonly [K in keyof V]?: Partial_<V[K]> }
 		: V;
 /** An atomic change of an inline value: an object merged at its paths, a list's items appended or removed. */
-export type Change<K> = K extends { kind: 'json'; shape: infer Sh }
-	? Change<Sh>
-	: K extends { kind: 'json' }
-		? { readonly $patch: { readonly [key: string]: Json } }
-		: K extends { kind: 'object' | 'record' }
-			? { readonly $patch: Loose<Partial_<NonNullable<ValueOf<K>>>> }
-			: K extends { kind: 'list'; of: infer O }
-				? | { readonly $append: readonly Loose<ValueOf<O>>[] }
-					| { readonly $remove: readonly Loose<ValueOf<O>>[] }
+export type Change<K> = K extends { many: true }
+	? | { readonly $append: readonly Loose<Base<K>>[] }
+		| { readonly $remove: readonly Loose<Base<K>>[] }
+	: K extends { kind: 'json'; shape: infer Sh }
+		? Change<Sh>
+		: K extends { kind: 'json' }
+			? { readonly $patch: { readonly [key: string]: Json } }
+			: K extends { kind: 'object' | 'record' }
+				? { readonly $patch: Loose<Partial_<NonNullable<ValueOf<K>>>> }
 				: never;
 /** What an `update` sets: any writable field, an inline value whole or changed in place. */
 export type Patch<S extends AnySchema, T> = Simplify<{
@@ -505,7 +512,7 @@ export interface Plain extends Operands {
 	readonly operand: never;
 }
 type OperandOf<X extends Operands, K> = (X & { readonly kind: K })['operand'];
-type NumKind = { kind: 'int' | 'decimal' | 'money' | 'sum' | 'count' | 'number' | 'duration' };
+type NumKind = { kind: 'int' | 'decimal' | 'money' | 'sum' | 'count' | 'number' };
 type Ordered = NumKind | { kind: 'date' | 'instant' | 'time' | 'text' | 'seq' };
 /** A literal a predicate compares with: a kind's value, or what decodes to one. */
 export type Literal<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
@@ -514,20 +521,17 @@ export type Literal<K> = K extends { kind: 'decimal' | 'money' | 'sum' }
 		? PlainDate | `${number}-${number}-${number}`
 		: K extends { kind: 'instant' }
 			? Instant | `${number}-${number}-${number}T${string}`
-			: K extends { kind: 'duration' }
-				? Seconds | number
-				: K extends { kind: 'enum'; values: readonly (infer V)[] }
-					? V
-					: K extends { kind: 'text'; many: true }
-						? string
-						: Base<K>;
+			: K extends { kind: 'enum'; values: readonly (infer V)[] }
+				? V
+				: K extends { kind: 'text'; many: true }
+					? string
+					: Base<K>;
 type Val<K, X extends Operands> = Literal<K> | OperandOf<X, K>;
 type ScalarOps<K, X extends Operands> = {
 	readonly eq?: Val<K, X>;
 	readonly ne?: Val<K, X>;
 	readonly in?: readonly Literal<K>[];
-	readonly nin?: readonly Literal<K>[];
-	readonly isNull?: boolean;
+	readonly is_null?: boolean;
 } & (K extends Ordered
 	? {
 			readonly lt?: Val<K, X>;
@@ -549,57 +553,72 @@ type PeriodArg<K> = K extends { of: 'date' }
  */
 export type ShapeWhere<K, X extends Operands = Plain> = K extends { kind: 'json'; shape: infer Sh }
 	? ShapeWhere<Sh, X>
+	: ShapeNode<K, X> & (K extends { kind: 'object'; fields: infer F } ? Omit<ShapeLogic<K, X>, keyof F>
+		: K extends { kind: 'record' } ? {} : ShapeLogic<K, X>);
+type ShapeLogic<K, X extends Operands> = {
+	readonly and?: readonly ShapeWhere<K, X>[];
+	readonly or?: readonly ShapeWhere<K, X>[];
+	readonly not?: ShapeWhere<K, X>;
+};
+type ShapeNode<K, X extends Operands> = K extends { many: true }
+	? {
+			readonly some?: ShapeWhere<Omit<K, 'many'>, X>;
+			readonly every?: ShapeWhere<Omit<K, 'many'>, X>;
+			readonly none?: ShapeWhere<Omit<K, 'many'>, X>;
+			readonly contains?: Json;
+			readonly eq?: readonly Json[];
+			readonly ne?: readonly Json[];
+			readonly is_null?: boolean;
+		}
 	: K extends { kind: 'object'; fields: infer F }
-		? { readonly [P in keyof F]?: ShapeWhere<F[P], X> } & {
-				readonly contains?: Json;
-				readonly isNull?: boolean;
-			}
-		: K extends { kind: 'list'; of: infer O }
-			? {
-					readonly some?: ShapeWhere<O, X>;
-					readonly every?: ShapeWhere<O, X>;
-					readonly none?: ShapeWhere<O, X>;
-					readonly isEmpty?: boolean;
+			? { readonly [P in keyof F]?: ShapeWhere<F[P], X> } & {
 					readonly contains?: Json;
+					readonly is_null?: boolean;
 				}
 			: K extends { kind: 'record' | 'union' | 'json' | 'custom' }
-				? { readonly contains?: Json; readonly isNull?: boolean; readonly isEmpty?: boolean }
+				? { readonly contains?: Json; readonly is_null?: boolean; readonly eq?: readonly Json[]; readonly ne?: readonly Json[] }
 				: ScalarKindOps<K, X>;
 /** Operators without an inline-shape branch, so shape traversal only recurses into an actual child kind. */
 type ScalarKindOps<K, X extends Operands> = K extends { kind: 'text' | 'enum'; many: true }
 	? {
 			readonly has?: Literal<K>;
-			readonly hasAny?: readonly Literal<K>[];
-			readonly hasAll?: readonly Literal<K>[];
-			readonly isEmpty?: boolean;
+			readonly eq?: readonly Literal<K>[];
+			readonly ne?: readonly Literal<K>[];
+			readonly is_null?: boolean;
 		}
 	: K extends { kind: 'period' }
 		? {
 				readonly contains?: Literal<{ kind: K extends { of: 'date' } ? 'date' : 'instant' }>;
 				readonly overlaps?: PeriodArg<K>;
-				readonly within?: PeriodArg<K>;
+				readonly contained_by?: PeriodArg<K>;
 				/** The period's first day (start instant) falls in this span: "joined in January". */
-				readonly startsWithin?: PeriodArg<K>;
+				readonly starts_within?: PeriodArg<K>;
 				/** The period's last day (end instant) falls in this span; an open-ended period never does. */
-				readonly endsWithin?: PeriodArg<K>;
-				readonly isNull?: boolean;
+				readonly ends_within?: PeriodArg<K>;
+				readonly is_null?: boolean;
 			}
 		: K extends { kind: 'point' }
 			? {
 					readonly near?: readonly [Point, number];
 					readonly within?: Shape;
-					readonly isNull?: boolean;
+					readonly is_null?: boolean;
 				}
 			: K extends { kind: 'file' | 'vector' }
-				? { readonly isNull?: boolean }
+				? { readonly is_null?: boolean }
 				: ScalarOps<K, X>;
 /** The operators of one column, chosen by its kind. */
 export type Ops<K, X extends Operands = Plain> = K extends {
-	kind: 'json' | 'list' | 'object' | 'record' | 'union' | 'custom';
+	many: true;
 }
-	? ShapeWhere<K, X>
-	: ScalarKindOps<K, X>;
-type RefOps<K, X extends Operands> = Pick<ScalarOps<K, X>, 'eq' | 'ne' | 'in' | 'nin' | 'isNull'>;
+	? K extends { kind: 'text' | 'enum' }
+		? ScalarKindOps<K, X>
+		: ShapeWhere<K, X>
+	: K extends {
+				kind: 'json' | 'object' | 'record' | 'union' | 'custom';
+		  }
+		? ShapeWhere<K, X>
+		: ScalarKindOps<K, X>;
+type RefOps<K, X extends Operands> = Pick<ScalarOps<K, X>, 'eq' | 'ne' | 'in' | 'is_null'>;
 type RefWhere<S extends AnySchema, T, R, X extends Operands> =
 	IsUnion<OneTarget<S, T, R>> extends true
 		? {
@@ -639,7 +658,7 @@ export type Where<S extends AnySchema, T, X extends Operands = Plain> = {
 		(Columns<S, T>[P] extends { kind: 'text' }
 			? { readonly folded?: string; readonly digits?: string }
 			: Columns<S, T>[P] extends { kind: 'instant' }
-				? { readonly olderThan?: Duration }
+				? { readonly older_than?: Duration }
 				: {});
 } & {
 	readonly [R in RefName<S, T>]?: RefWhere<S, T, R, X>;
@@ -653,8 +672,7 @@ export type Where<S extends AnySchema, T, X extends Operands = Plain> = {
 
 // ── order ──
 type Unsortable =
-	| { kind: 'json' | 'file' | 'custom' | 'vector' | 'point' | 'period' | 'list' | 'object' }
-	| { many: true };
+	{ kind: 'json' | 'file' | 'custom' | 'vector' | 'point' | 'period' | 'object' } | { many: true };
 export type Sortable<S extends AnySchema, T> = {
 	[P in ColumnName<S, T>]: Columns<S, T>[P] extends Unsortable ? never : P;
 }[ColumnName<S, T>];

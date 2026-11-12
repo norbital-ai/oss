@@ -1,55 +1,68 @@
 // The view popover's state for a `Table` or `Board` (rule 16b): filter rows and sort keys, read strictly from the URL
-// (or `initialFilter`) once, kept in the URL, and lowered to the `where`/`orderBy` a read sends. A relative condition
+// (or `initial_filter`) once, kept in the URL, and lowered to the `where`/`order_by` a read sends. A relative condition
 // ("this month") stays relative in the rows and the URL; the read gets its literal at the page's day clock, so it rolls
 // over at midnight in the workspace zone. The condition catalogue (`filter.options`) is the same one a description is
 // offered; the builder renders it, never an operator table of its own.
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { untrack } from 'svelte';
-import { useKinds, type ModelExposure } from '../kinds/context.js';
-import type { Json, ViewBolt } from '../client/contract.js';
-import {
-	clauses,
-	complete,
-	fromWhere,
-	localFilterFields,
-	orderKeys,
-	orderOf,
-	orderText,
-	parseOrder,
-	readViewUrl,
-	rowsWhere,
-	sortable,
-	toWhere,
-	writeViewUrl,
-	type FilterClock,
-	type Node,
-	type Offer,
-	type SortKey,
-	type Where
-} from './filter.js';
+import { watch } from 'runed';
+import type { Json, UiContext, ViewBolt } from '../client/contract.js';
+import { optional_bolt_of } from '../client/context.js';
+import { clauses, fromWhere, rowsWhere, toWhere } from './where.js';
+import { complete, type FilterClock, type Node } from './node.js';
+import { localFilterFields } from './local.js';
+import { orderKeys, orderOf, orderText, parseOrder, sortable, type SortKey } from './order.js';
+import type { Catalog, Offer } from './catalog.js';
+import type { Where } from '@norbital-ai/std/kind';
 import { msg } from '../text/messages.js';
+import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 
-type Catalog = { readonly [model: string]: ModelExposure };
+// ── URL state (`?<key>.where=`, `?<key>.order=`, rule 16b) ──
+type ViewUrl = { where: Json | undefined; order: string | undefined; badJson: boolean };
+
+export function readViewUrl(params: URLSearchParams, key: string): ViewUrl {
+	const raw = params.get(`${key}.where`),
+		order = params.get(`${key}.order`) ?? undefined;
+	if (raw === null) return { where: undefined, order, badJson: false };
+	const result = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json))(raw);
+	return result._tag === 'Success'
+		? { where: result.success, order, badJson: false }
+		: { where: undefined, order, badJson: true };
+}
+
+/** `where` is written once the viewer has touched the rows (an empty `{}` records a cleared `initial_filter`). */
+function writeViewUrl(
+	params: URLSearchParams,
+	key: string,
+	s: { where: Where | null; touched: boolean; order: readonly SortKey[] }
+): URLSearchParams {
+	const out = new URLSearchParams(params);
+	if (s.touched) out.set(`${key}.where`, JSON.stringify(s.where ?? {}));
+	else out.delete(`${key}.where`);
+	if (s.order.length > 0) out.set(`${key}.order`, orderText(s.order));
+	else out.delete(`${key}.order`);
+	return out;
+}
+
 export type ViewState = ReturnType<typeof viewState>;
 
 export function viewState(
-	bolt: ViewBolt | undefined,
+	ctx: () => UiContext,
 	o: {
 		key: () => string;
 		model: () => string;
 		catalog: () => Catalog;
-		initialFilter: () => Json | undefined;
+		initial_filter: () => Json | undefined;
 		/** Controlled row views own their URL state and never apply this viewer's transforms. */
 		enabled?: () => boolean;
 	}
 ) {
-	const params = () =>
-		typeof location === 'undefined' ? new URLSearchParams() : new URL(location.href).searchParams;
+	const bolt = optional_bolt_of(ctx());
 	const words: Pick<ViewBolt, 't'> = bolt ?? { t: (key) => key };
 	const DROPPED = () =>
-		msg(words, 'view.dropped', 'A filter or sort no longer applies and was removed');
+		msg(words, 'view.dropped');
 	const day = $derived(o.enabled?.() === false ? undefined : bolt?.clock('day'));
-	const zone = useKinds().zone ?? 'UTC';
+	const zone = ctx().ui.kinds.zone ?? 'UTC';
 	const clock = (): FilterClock => {
 		if (day === undefined) throw new Error('A filtered view needs the shell clock.');
 		return { today: day.today, now: day.now, zone };
@@ -60,9 +73,9 @@ export function viewState(
 	 * clause instead of letting an unchecked predicate reach the read. */
 	function decode(
 		c: string,
-		q: { where?: Json; orderBy?: Json }
+		q: { where?: Json; order_by?: Json }
 	): {
-		readonly orderBy?: Json;
+		readonly order_by?: Json;
 		readonly dropped: readonly { path: string; message: string }[];
 	} | null {
 		if (bolt?.decode === undefined || c.startsWith('$')) return null;
@@ -84,11 +97,11 @@ export function viewState(
 		if (o.enabled?.() === false) return { rows: [], order: [], touched: false, notice: null };
 		const c = o.model(),
 			cat = o.catalog(),
-			url = readViewUrl(params(), o.key());
+			url = readViewUrl(currentSearchParams(), o.key());
 		const fromUrl = url.where !== undefined;
 		let dropped = url.badJson ? 1 : 0;
 		const rows: Node[] = [];
-		for (const clause of clauses(url.where ?? o.initialFilter() ?? null)) {
+		for (const clause of clauses(url.where ?? o.initial_filter() ?? null)) {
 			const n = fromWhere(cat, c, clause);
 			const w = n === null ? null : rowsWhere(cat, c, n, clock());
 			const d = w === null ? null : decode(c, { where: w });
@@ -96,10 +109,10 @@ export function viewState(
 			else if (fromUrl) dropped++;
 		}
 		let text = url.order ?? '';
-		const d = text === '' ? null : decode(c, { orderBy: orderOf(parseOrder(text, null).keys) });
+		const d = text === '' ? null : decode(c, { order_by: orderOf(parseOrder(text, null).keys) });
 		if (d !== null) {
 			dropped += d.dropped.length;
-			text = orderText(orderKeys(d.orderBy));
+			text = orderText(orderKeys(d.order_by));
 		}
 		const order = parseOrder(
 			text,
@@ -177,24 +190,21 @@ export function viewState(
 			if (d !== null && d.dropped.length > 0) dropped++;
 			else parts.push(w);
 		}
+		const first = parts[0];
 		return {
-			where: parts.length === 0 ? undefined : parts.length === 1 ? parts[0]! : { and: parts },
+			where: first === undefined ? undefined : parts.length === 1 ? first : { and: parts },
 			dropped
 		};
 	});
-	$effect(() => {
-		if (o.enabled?.() === false) return;
-		const next = writeViewUrl(params(), o.key(), {
+	watch(() => {
+		if (o.enabled?.() === false) return null;
+		return writeViewUrl(currentSearchParams(), o.key(), {
 			where: rowsWhere(o.catalog(), o.model(), rows),
 			touched,
 			order
 		});
-		if (typeof location !== 'undefined')
-			history.replaceState(
-				history.state,
-				'',
-				`${location.pathname}${next.size > 0 ? `?${next}` : ''}${location.hash}`
-			);
+	}, (next) => {
+		if (next !== null) replaceSearchParams(next);
 	});
 
 	return {
@@ -241,7 +251,7 @@ export function viewState(
 					notice =
 						why !== undefined && why.message !== ''
 							? why.message
-							: msg(words, 'view.describeFailed', 'Could not build a filter from that description');
+							: msg(words, 'view.describeFailed');
 					return false;
 				};
 				if (bolt?.describe === undefined || text.trim() === '') return Effect.succeed(false);
@@ -252,10 +262,10 @@ export function viewState(
 							fromWhere(o.catalog(), o.model(), clause)
 						);
 						const keys =
-							result.orderBy === undefined
+							result.order_by === undefined
 								? null
 								: parseOrder(
-										orderText(orderKeys(result.orderBy)),
+										orderText(orderKeys(result.order_by)),
 										sortable(o.catalog()[o.model()], !o.model().startsWith('$'), o.catalog())
 									);
 						if (parts.some((part) => part === null) || (keys !== null && keys.dropped > 0))

@@ -3,10 +3,12 @@
 // public careers page with a Turnstile token, composed by the native workspace host.
 import { describe, expect, it, layer } from '@effect/vitest';
 import { Context, Effect, FiberSet, Layer, Result, Schema } from 'effect';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { shellApi } from '../src/shell/runtime.ts';
+import { Validator } from '@cfworker/json-schema';
+import type { Json } from '../src/decl/values.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { shell_api } from '../src/shell/runtime.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { founderBootstrap } from '../src/engine/identity/session.ts';
+import { founder_bootstrap } from '../src/engine/identity/session.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import type { StudioOp, StudioPort, StudioState } from '../src/shell/studio/model.ts';
 import type { StudioInspectInput } from '../src/shell/studio/inspection.ts';
@@ -17,7 +19,7 @@ import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const OPEN = '0199a000-0000-4000-8000-00000000000a';
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: {
 			tz: 'UTC',
 			locale: 'en',
@@ -27,12 +29,12 @@ const manifest = Result.getOrThrow(
 		models: {
 			openings: {
 				description: 'Roles',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, status: { kind: 'enum', values: ['open', 'closed'] } }
 			},
 			applications: {
 				description: 'Applications',
-				label: 'name',
+				record_label: 'record.name',
 				fields: { name: { kind: 'text' } }
 			}
 		},
@@ -40,11 +42,13 @@ const manifest = Result.getOrThrow(
 		exposures: {
 			// what a visitor or kiosk reads of a role: its title
 			openings: {
-				read: { openings: { fields: 'all' } },
-				outputs: { public: { openings: { fields: ['title'] } } }
+				outputs: {
+					default: { openings: { fields: 'all' } },
+					public: { openings: { fields: ['title'] } }
+				}
 			},
 			applications: {
-				read: { applications: { fields: 'all' } },
+				outputs: { default: { applications: { fields: 'all' } } },
 				create: { columns: { applications: ['opening', 'name'] } }
 			}
 		},
@@ -53,29 +57,29 @@ const manifest = Result.getOrThrow(
 			applicant: {
 				description: 'Apply',
 				grants: {
-					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
-					applications: { create: { check: true } }
+					openings: { outputs: { public: { scopes: { openings: { status: { eq: 'open' } } } } } },
+					applications: { create: { verdict: true } }
 				}
 			},
 			lobby: {
 				description: 'Lobby kiosk',
 				grants: {
-					openings: { outputs: { public: { openings: { where: { status: { eq: 'open' } } } } } },
+					openings: { outputs: { public: { scopes: { openings: { status: { eq: 'open' } } } } } },
 					applications: {
-						create: { columns: { applications: ['opening', 'name'] }, check: true }
+						create: { columns: { applications: ['opening', 'name'] }, verdict: true }
 					}
 				}
 			},
 			rep: {
 				description: 'Rep',
-				capabilities: { apps: ['sales'], kiosks: ['desk'] },
-				grants: { openings: { read: true } }
+				capabilities: { apps: ['sales', 'desk'] },
+				grants: { openings: { outputs: { default: {} } } }
 			},
 			proposer: {
 				description: 'Propose an application',
 				grants: {
-					openings: { read: true },
-					applications: { create: { check: true } }
+					openings: { outputs: { default: {} } },
+					applications: { create: { verdict: true } }
 				}
 			}
 		},
@@ -87,22 +91,21 @@ const manifest = Result.getOrThrow(
 				icon: 'i',
 				audience: { public: ['applicant'], challenge: 'turnstile' },
 				pages: { apply: { title: 'Apply' } }
-			}
-		},
-		kiosks: {
+			},
 			lobby: {
 				title: 'Lobby',
 				description: 'd',
 				icon: 'i',
-				auth: 'none',
-				policies: ['lobby'],
+				shell: 'kiosk',
+				audience: { public: ['lobby'] },
 				pages: { welcome: { title: 'Welcome' } }
 			},
 			desk: {
 				title: 'Desk',
 				description: 'd',
 				icon: 'i',
-				auth: 'members',
+				shell: 'kiosk',
+				audience: 'members',
 				policies: ['lobby'],
 				pages: { home: { title: 'Home' } }
 			},
@@ -110,17 +113,16 @@ const manifest = Result.getOrThrow(
 				title: 'Vault',
 				description: 'd',
 				icon: 'i',
-				auth: 'members',
+				shell: 'kiosk',
+				audience: 'members',
 				policies: ['lobby'],
 				pages: { home: { title: 'Home' } }
 			}
 		},
-		teams: { Sales: ['rep'], Finance: [], Proposer: ['proposer'] },
+		teams: { Sales: { policies: ['rep'] }, Finance: { policies: [] }, Proposer: { policies: ['proposer'] } },
 		automations: {},
-		connections: { mail: { integration: 'email' } },
-		envoys: {},
 		mcp: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
 );
@@ -135,9 +137,9 @@ const sources = [
 	'src/access_control/policy/+rep.policy.ts',
 	'src/app/sales/+app.ts',
 	'src/app/careers/+app.ts',
-	'src/kiosk/lobby/+kiosk.ts',
-	'src/kiosk/desk/+kiosk.ts',
-	'src/kiosk/vault/+kiosk.ts'
+	'src/app/lobby/+app.ts',
+	'src/app/desk/+app.ts',
+	'src/app/vault/+app.ts'
 ];
 const studioState: StudioState = {
 	commit: 'c2',
@@ -176,24 +178,15 @@ const studio: StudioPort = {
 		send({ kind: 'log', line: { at: 't', level: 'info', message: 'build started' } });
 		return () => {};
 	},
-	usage: async () => ({
-		charts: [
-			{
-				title: 'Memory held',
-				unit: 'MiB',
-				points: [
-					{ at: 0, value: null },
-					{ at: 1, value: 512 }
-				]
-			}
-		]
-	}),
 	inspect: async (_auth, input) => {
 		inspectionScopes.push(input);
 		return {
-			canInspect: true,
-			asOf: '2026-10-26T08:00:00.000Z',
-			usage: [],
+			can_inspect: true,
+			as_of: '2026-10-26T08:00:00.000Z',
+			usage: [{
+				title: 'Memory held', unit: 'MiB', utilization: null,
+				lines: [{ label: 'Memory', bound: false, points: [{ at: 0, value: null }, { at: 1, value: 512 }] }]
+			}],
 			members: [],
 			studio: null,
 			logs: [],
@@ -310,7 +303,7 @@ const api = (j: Jar) =>
 				}
 			);
 		};
-		return shellApi(fetch, { base: ORIGIN });
+		return shell_api(fetch, { base: ORIGIN });
 	});
 const boot = (j: Jar, app?: string, kiosk?: string) =>
 	Effect.gen(function* () {
@@ -333,25 +326,25 @@ const workspace = Layer.effectContext(
 				manifest,
 				// applicant and lobby apply to open roles only (one read over the batch); a proposer's application waits for review
 				guest: yield* program(`function* toOpen(rows, ctx) {
-					const { openings } = yield* ctx.db.query({ openings: { where: { id: { in: rows.map((r) => r.opening) } }, fields: ['status'] } });
+					const { openings } = yield* ctx.query({ openings: { where: { id: { in: rows.map((r) => r.after.opening) } }, fields: ['status'] } });
 					const open = new Set(openings.rows.filter((o) => o.status === 'open').map((o) => o.id));
-					const row = rows.findIndex((r) => !open.has(r.opening));
-					return row >= 0 ? ctx.deny('That role is closed.', { row, field: 'opening' }) : ctx.allow();
+					const row = rows.findIndex((r) => !open.has(r.after.opening));
+					return row >= 0 ? yield* ctx.refuse('That role is closed.', { row, field: 'opening' }) : ctx.allow();
 				}
 				export default { policy: {
-					applicant: { grants: { applications: { create: { check: toOpen } } } },
-					lobby: { grants: { applications: { create: { check: toOpen } } } },
+					applicant: { grants: { applications: { create: { verdict: toOpen } } } },
+					lobby: { grants: { applications: { create: { verdict: toOpen } } } },
 					proposer: { grants: { applications: {
-						create: { check: function* (rows, ctx) {
-							return ctx.approve((flow) => rows.some((r) => r.name === 'Sales proposal')
-								? flow.step('Sales review', {teams:['Sales']})
-								: flow.step('Finance review', {teams:['Finance']}));
+						create: { verdict: function* (rows, ctx) {
+							return ctx.approve({ steps: [rows.some((r) => r.after.name === 'Sales proposal')
+								? { name: 'Sales review', teams: ['Sales'] }
+								: { name: 'Finance review', teams: ['Finance'] }] });
 						} }
 					} } }
 				} };`),
 				seed: { openings: [{ id: OPEN, title: 'Engineer', status: 'open' }] },
 				host: {
-					publicUrl: ORIGIN,
+					public_url: ORIGIN,
 					workspace: () => ({ name: 'Acme', handle: 'acme' }),
 					studio,
 					ai: false,
@@ -367,7 +360,7 @@ const workspace = Layer.effectContext(
 				}
 			})
 		);
-		yield* founderBootstrap(Context.get(context, HostIdentity), 'boss@acme.example');
+		yield* founder_bootstrap(Context.get(context, HostIdentity), 'boss@acme.example');
 		return context;
 	})
 );
@@ -404,16 +397,16 @@ layer(workspace)('shell routes', (it) => {
 						admin: true,
 						name: 'Boss',
 						surfaces: { inbox: true, runs: true, settings: true, agent: true, studio: true },
-						studioBundle: '/__host/studio.js',
+						studio_bundle: '/__host/studio.js',
 						visitor: null
 					});
 					expect(b.nav.map((n) => n.name)).toEqual(['sales', 'careers']);
-					expect(b.aiUnconfigured).toBe(true); // the host binds no AI: the agent panel says so
+					expect(b.ai_unconfigured).toBe(true); // the host binds no AI: the agent panel says so
 					// ui's forms read the caller's exposure from the boot
 					expect(b.catalog['applications']).toEqual({
 						label: ['name'],
 						record_label: 'record.name',
-						labelPaths: ['name'],
+						label_paths: ['name'],
 						search: ['$label'],
 						description: 'Applications',
 						fields: { name: { kind: 'text' } },
@@ -439,14 +432,11 @@ layer(workspace)('shell routes', (it) => {
 				Effect.gen(function* () {
 					const r = yield* call(admin, 'GET', '/__bolt/openapi.json');
 					expect(r.status).toBe(200);
-					const alternative = Schema.Struct({
-						properties: Schema.Struct({ callable: Schema.Struct({ const: Schema.String }) })
-					});
 					const post = Schema.Struct({
 						requestBody: Schema.Struct({
 							content: Schema.Struct({
 								'application/json': Schema.Struct({
-									schema: Schema.Struct({ oneOf: Schema.Array(alternative) })
+									schema: Schema.Struct({ oneOf: Schema.Array(Schema.Json) })
 								})
 							})
 						})
@@ -460,11 +450,22 @@ layer(workspace)('shell routes', (it) => {
 					expect(doc.openapi).toBe('3.1.0');
 					const actPath = doc.paths['/__bolt/act'];
 					if (actPath === undefined) throw new Error('OpenAPI has no act path');
-					const callables = actPath.post.requestBody.content['application/json'].schema.oneOf.map(
-						(o) => o.properties.callable.const
-					);
+					const alternatives = actPath.post.requestBody.content['application/json'].schema.oneOf;
+					const write = alternatives.find((alternative) => Schema.is(Schema.Struct({
+						properties: Schema.Struct({ acts: Schema.Json })
+					}))(alternative));
+					const writes = yield* Schema.decodeUnknownEffect(Schema.Struct({
+						properties: Schema.Struct({ acts: Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Json) }) })
+					}))(write);
+					const callables = Object.keys(writes.properties.acts.properties);
 					expect(callables).toContain('applications.create');
 					expect(callables).not.toContain('openings.create'); // openings declares no create
+					const schema = yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(write);
+					const validator = new Validator(schema, '2020-12', false);
+					const t = yield* TestWorkspace;
+					expect(validator.validate({ acts: { 'applications.create': [{ opening: OPEN, name: 'Ada' }] }, issued_at: t.clock.now() }).valid).toBe(true);
+					expect(validator.validate({ callable: 'applications.create', input: [{ opening: OPEN, name: 'Ada' }], issued_at: t.clock.now() }).valid).toBe(false);
+					expect(validator.validate({ acts: { 'applications.create': [{ opening: OPEN, name: 42 }] }, issued_at: t.clock.now() }).valid).toBe(false);
 					expect((yield* call(jar(), 'GET', '/__bolt/openapi.json')).status).toBe(401);
 				})
 		);
@@ -587,7 +588,14 @@ layer(workspace)('shell routes', (it) => {
 					expect([stale.status, stale.body?.error?.code]).toEqual([409, 'conflict']);
 					// a staff member opens Studio too; the host's metering is an administrator's
 					expect((yield* call(rep, 'GET', '/__bolt/shell/studio')).status).toBe(200);
-					expect((yield* call(rep, 'GET', '/__bolt/shell/studio/usage')).status).toBe(403);
+					expect((yield* call(rep, 'GET', '/__bolt/shell/studio/inspect?range=24h&view=telemetry')).status).toBe(403);
+					const inspected = yield* call(admin, 'GET', '/__bolt/shell/studio/inspect?range=24h&view=telemetry');
+					expect(inspected.status).toBe(200);
+					expect(inspected.body?.value).toMatchObject({
+						usage: [{ title: 'Memory held', lines: [{ label: 'Memory', points: [{ at: 0, value: null }, { at: 1, value: 512 }] }] }]
+					});
+					expect(inspectionScopes).toEqual([{ range: '24h', view: 'telemetry' }]);
+					expect((yield* call(admin, 'GET', '/__bolt/shell/studio/inspect?range=forever')).status).toBe(422);
 				})
 		);
 
@@ -596,9 +604,9 @@ layer(workspace)('shell routes', (it) => {
 			() =>
 				Effect.gen(function* () {
 					const logo = 'data:image/png;base64,iVBORw0KGgo=';
-					expect(
-						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo })).status
-					).toBe(200);
+					expect((yield* call(admin, 'POST', '/__bolt/shell/organization', { logo })).status).toBe(
+						200
+					);
 					expect(
 						(yield* call(admin, 'POST', '/__bolt/shell/organization', { logo: null })).status
 					).toBe(200);
@@ -659,7 +667,7 @@ layer(workspace)('shell routes', (it) => {
 					expect(j.has('__Secure-bolt-visitor')).toBe(true);
 					expect(b).toMatchObject({
 						actor: { kind: 'visitor', app: 'careers' },
-						visitor: { app: 'careers', siteKey: 'dev' },
+						visitor: { app: 'careers', site_key: 'dev' },
 						surfaces: { inbox: false, agent: false }
 					});
 					// the views read the output the visitor holds: its fields
@@ -765,9 +773,8 @@ layer(workspace)('shell routes', (it) => {
 							'POST',
 							'/__bolt/act',
 							{
-								callable: 'applications.create',
-								input: [{ opening: OPEN, name: 'Ada' }],
-								issuedAt: t.clock.now()
+								acts: { 'applications.create': [{ opening: OPEN, name: 'Ada' }] },
+								issued_at: t.clock.now()
 							},
 							{
 								...V,
@@ -786,9 +793,8 @@ layer(workspace)('shell routes', (it) => {
 							'POST',
 							'/__bolt/act',
 							{
-								callable: 'openings.update',
-								input: [{ target: OPEN, set: {} }],
-								issuedAt: t.clock.now()
+								acts: { 'openings.update': [{ target: { id: OPEN, revision: 1 }, set: {} }] },
+								issued_at: t.clock.now()
 							},
 							{ ...V, 'Idempotency-Key': crypto.randomUUID(), 'Bolt-Challenge': 'dev-pass' }
 						)).status
@@ -807,14 +813,14 @@ layer(workspace)('shell routes', (it) => {
 				{ reads: [{ m: 'query', a: [{ [model]: output === undefined ? {} : { output } }] }] },
 				headers
 			);
-		const act = (j: Jar, callable: string, input: unknown, headers: Record<string, string> = {}) =>
+		const act = (j: Jar, acts: Readonly<Record<string, Json>>, headers: Record<string, string> = {}) =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
 				return yield* call(
 					j,
 					'POST',
 					'/__bolt/act',
-					{ callable, input, issuedAt: t.clock.now() },
+					{ acts, issued_at: t.clock.now() },
 					{ 'Idempotency-Key': crypto.randomUUID(), ...headers }
 				);
 			});
@@ -831,7 +837,7 @@ layer(workspace)('shell routes', (it) => {
 					expect(b).toMatchObject({
 						actor: { kind: 'visitor', app: 'lobby' },
 						admin: false,
-						visitor: { app: 'lobby', siteKey: 'dev' }
+						visitor: { app: 'lobby', site_key: 'dev' }
 					});
 					expect(b.catalog['openings']?.fields).toEqual({ title: { kind: 'text' } });
 					expect(b.kiosks.map((k) => k.name)).toContain('lobby');
@@ -877,10 +883,10 @@ layer(workspace)('shell routes', (it) => {
 					expect((yield* read(j, 'openings', K('lobby'))).status).toBe(403);
 					// the kiosk creates through its own grant, and nothing beyond it
 					expect(
-						(yield* act(j, 'applications.create', [{ opening: OPEN, name: 'Kay' }], K('lobby')))
+						(yield* act(j, { 'applications.create': [{ opening: OPEN, name: 'Kay' }] }, K('lobby')))
 							.body?.['outcome']
 					).toMatchObject({ kind: 'committed' });
-					expect((yield* act(j, 'openings.create', [{ title: 'Nope' }], K('lobby'))).status).toBe(
+					expect((yield* act(j, { 'openings.create': [{ title: 'Nope' }] }, K('lobby'))).status).toBe(
 						403
 					);
 					// a member's broader grants are replaced inside, not joined — and no admin bypass applies
@@ -938,7 +944,7 @@ layer(workspace)('shell routes', (it) => {
 });
 
 it.effect(
-	'shellApi.act states the contract the shell booted against in Bolt-Contract (L-BOLT-171)',
+	'shell_api.act states the contract the shell booted against in Bolt-Contract (L-BOLT-171)',
 	() =>
 		Effect.gen(function* () {
 			const stated: (string | null)[] = [];
@@ -964,15 +970,17 @@ it.effect(
 							visitor: null,
 							catalog: {},
 							automations: {},
+							read_catalog: {},
+							operation_outputs: { automations: {} },
 							contract: 'booted'
 						} satisfies ShellBoot
 					});
 				if (path === PATHS.act) stated.push(request.headers.get(HEADERS.contract));
 				return Response.json({ outcome: { kind: 'committed', output: null, records: [] }, v: 0 });
 			};
-			const api = shellApi(fetch, { base: ORIGIN });
+			const api = shell_api(fetch, { base: ORIGIN });
 			yield* api.boot();
-			expect(yield* api.markAllNoticesRead()).toMatchObject({ kind: 'committed' });
+			expect(yield* api.mark_all_notices_read()).toMatchObject({ kind: 'committed' });
 			expect(stated).toEqual(['booted']);
 		})
 );

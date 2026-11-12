@@ -5,7 +5,7 @@
 import { Effect, Predicate, Schedule, Schema, Semaphore } from 'effect';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { LinkDef, ProviderDef, ProviderText } from '../abi.ts';
-import { answerFailure, PairingInvalid, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, notConnected, PairingInvalid, ProviderUnavailable } from '../errors.ts';
 import { inbound, type ChatMessage } from '../inbound.ts';
 import { hostCall, storedCredential } from '../util.ts';
 
@@ -19,11 +19,11 @@ export type IncomingFile = {
 	readonly fetch?: () => Promise<Uint8Array>;
 };
 /** One message in a platform's delivery, parsed by its adapter. `id` is the platform's and deduplicates. */
-export type Incoming = Pick<ChatMessage, 'id' | 'thread' | 'sentAt' | 'from' | 'text'> &
+export type Incoming = Pick<ChatMessage, 'id' | 'thread' | 'sent_at' | 'from' | 'text'> &
 	Partial<
 		Pick<
 			ChatMessage,
-			'group' | 'mentioned' | 'repliedTo' | 'replyTo' | 'title' | 'version' | 'deleted'
+			'group' | 'mentioned' | 'replied_to' | 'reply_to' | 'title' | 'version' | 'deleted'
 		>
 	> & { readonly files?: readonly IncomingFile[] };
 /**
@@ -51,7 +51,8 @@ export const recent = <V>(limit = 1000) => {
 		set(key: string, value: V) {
 			held.delete(key);
 			held.set(key, value);
-			if (held.size > limit) held.delete(held.keys().next().value as string);
+			const oldest = held.keys().next().value;
+			if (held.size > limit && oldest !== undefined) held.delete(oldest);
 		}
 	};
 };
@@ -59,11 +60,11 @@ export const recent = <V>(limit = 1000) => {
 /** The platform's refusal of a call: its status decides whether a send retries. */
 export class PlatformError extends Error {
 	readonly status: number;
-	readonly retryAfterMs: number | undefined;
-	constructor(message: string, status: number, retryAfterMs?: number) {
+	readonly retry_after_ms: number | undefined;
+	constructor(message: string, status: number, retry_after_ms?: number) {
 		super(message);
 		this.status = status;
-		this.retryAfterMs = retryAfterMs;
+		this.retry_after_ms = retry_after_ms;
 	}
 }
 /** A delivery that fails its signature. */
@@ -96,9 +97,7 @@ export type ChatConnection = {
 	 * The platform's own change log: what changed since `cursor`, deletes included, and the cursor to keep. `null` asks for
 	 * a starting cursor. A platform with one needs no `history`.
 	 */
-	changes?(
-		cursor: string | null
-	): Promise<{
+	changes?(cursor: string | null): Promise<{
 		readonly messages: readonly Incoming[];
 		readonly cursor: string;
 		/** The platform no longer holds `cursor`: catching up restarted, and what happened between is lost. */
@@ -133,14 +132,11 @@ export type ChatPlatform = {
 	readonly icon?: string;
 	readonly fields: readonly ChatField[];
 	/** Connects with the settings a person entered: a call the platform answers proves them. */
-	connect(
-		settings: Readonly<Record<string, string>>,
-		host: ChatHost
-	): Promise<ChatConnection>;
+	connect(settings: Readonly<Record<string, string>>, host: ChatHost): Promise<ChatConnection>;
 };
 /** What a connection gets from its host. `receive` is for a platform that pushes over a socket or a long poll: it stores
  * before it resolves, and a rejection means the platform's message must not be acknowledged. */
-export type ChatHost = Pick<DriverOpen, 'fetch' | 'webhookUrl'> & {
+export type ChatHost = Pick<DriverOpen, 'fetch' | 'webhook_url'> & {
 	receive(messages: readonly Incoming[]): Promise<void>;
 };
 
@@ -153,7 +149,7 @@ const Message = Schema.Struct({
 const failure = (name: string, error: unknown) => {
 	const message = `${name}: ${error instanceof Error ? error.message : 'failed'}`;
 	return error instanceof PlatformError
-		? answerFailure(message, error.status, undefined, error.retryAfterMs)
+		? answerFailure(message, error.status, undefined, error.retry_after_ms)
 		: new ProviderUnavailable({ message });
 };
 
@@ -192,15 +188,15 @@ const stored = async (message: Incoming, fetched = true) => {
 			...(kept ? { bin: bins.length - 1 } : {})
 		});
 	}
-	const { files: _files, group, mentioned, repliedTo, replyTo, ...rest } = message;
+	const { files: _files, group, mentioned, replied_to, reply_to, ...rest } = message;
 	return {
 		bins,
 		wire: inbound({
 			...rest,
 			group: group ?? false,
 			mentioned: mentioned ?? false,
-			repliedTo: repliedTo ?? false,
-			replyTo: replyTo ?? null,
+			replied_to: replied_to ?? false,
+			reply_to: reply_to ?? null,
 			attachments
 		})
 	};
@@ -214,7 +210,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 	name: platform.name,
 	label: platform.via,
 	description: platform.description,
-	...(platform.idempotent === undefined ? {} : { idempotentSends: true }),
+	...(platform.idempotent === undefined ? {} : { idempotent_sends: true }),
 	...(platform.icon === undefined ? {} : { icon: platform.icon }),
 	setup: {
 		kind: 'form',
@@ -255,7 +251,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 			call('connect', async () => {
 				const made = await platform.connect(settings, {
 					fetch: ctx.fetch,
-					webhookUrl: ctx.webhookUrl,
+					webhook_url: ctx.webhook_url,
 					receive: store
 				});
 				const level = made.changes ? 'changes' : made.history ? 'history' : 'webhook';
@@ -267,7 +263,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 			});
 		const need = Effect.suspend(() =>
 			live === null
-				? Effect.fail(new ProviderUnavailable({ message: `${name} is not connected` }))
+				? Effect.fail(notConnected(name))
 				: Effect.succeed(live)
 		);
 		const settings = yield* storedCredential(ctx, Settings);
@@ -280,7 +276,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 			);
 		else yield* report({ state: 'unpaired' });
 		const close = (connection: ChatConnection | null) =>
-			Effect.promise(async () => connection?.close?.()).pipe(Effect.ignore);
+			Effect.tryPromise(async () => connection?.close?.()).pipe(Effect.ignore);
 		// the cursor moves only once what it covers is stored, so a failure repeats the same catch-up
 		const held = yield* hostCall(`read ${name} cursor`, () => ctx.credentials.load());
 		const kept = held.get('cursor');
@@ -289,8 +285,9 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 		const catchUp = gate.withPermits(1)(
 			Effect.gen(function* () {
 				const connection = live;
-				if (connection?.changes === undefined) return;
-				const answer = yield* call('changes', () => connection.changes!(cursor));
+				const changes = connection?.changes;
+				if (connection === null || changes === undefined) return;
+				const answer = yield* call('changes', () => changes.call(connection, cursor));
 				yield* hostCall(`store ${name} changes`, () => store(answer.messages));
 				if (answer.cursor !== cursor) {
 					yield* hostCall(`keep ${name} cursor`, () =>
@@ -386,7 +383,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 				const sent = yield* call('send', () =>
 					connection.send(m.to, m.text, m.id ?? `${m.to}:${m.text}`, files)
 				);
-				return { providerId: sent.id };
+				return { provider_id: sent.id };
 			}),
 			reconcile:
 				platform.consistency === 'webhook'
@@ -408,9 +405,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 							),
 			typing: (to, on) =>
 				need.pipe(
-					Effect.flatMap((connection) =>
-						call('typing', async () => connection.typing?.(to, on))
-					),
+					Effect.flatMap((connection) => call('typing', async () => connection.typing?.(to, on))),
 					Effect.asVoid
 				),
 			test: (input) =>

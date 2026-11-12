@@ -4,9 +4,20 @@ import { Effect, Layer } from 'effect';
 import type { BrowserPort, Downloaded, EngineActor } from '../src/engine/contracts.ts';
 import { Browser } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
-import { BROWSER_RUN_PROFILE, browserProfile, browserTools } from '../src/engine/agent/browser.ts';
+import { BROWSER_RUN_PROFILE, browser_profile, browserTools } from '../src/engine/agent/browser.ts';
 import type { HostTool } from '../src/engine/agent/tools.ts';
 
+const page = (url = 'about:blank') => ({ url, title: null, text: '' });
+const browser_fixture: Browser['Service'] = {
+	navigate: () => Effect.succeed(page()),
+	close: () => Effect.void,
+	scoped: () => Effect.die('unused scoped'),
+	snapshot: () => Effect.succeed(page()),
+	act: () => Effect.succeed(page()),
+	evaluate: () => Effect.succeed(null),
+	screenshot: () => Effect.succeed(new Uint8Array()),
+	download: () => Effect.die('unused download')
+};
 const call = (
 	tool: HostTool | undefined,
 	input: Parameters<HostTool['call']>[0],
@@ -22,7 +33,7 @@ const call = (
 						actor,
 						conversation: 'r1',
 						turn: 'r1',
-						callId: 'c1',
+						call_id: 'c1',
 						attach: (file) => attached.push(file.bytes)
 					},
 					signal
@@ -36,16 +47,26 @@ const member: EngineActor = {
 	phone: null,
 	external: false,
 	teams: [],
-	teamPath: [],
+	team_path: [],
 	admin: false,
 	party: null
 };
 
 describe('built-in browser tools', () => {
 	it('keeps one browser identity per person and one tab per conversation', () => {
-		expect(browserProfile(member, 'c1')).toBe('person:m1\u0000c1');
-		expect(browserProfile(run, 'r1')).toBe(`${BROWSER_RUN_PROFILE}r1`);
-		expect(browserProfile({ kind: 'visitor', app: 'a', visitor: 'v' }, 'c1')).toBeUndefined();
+		expect(browser_profile(member, 'c1')).toBe('person:m1\u0000c1');
+		expect(browser_profile(run, 'r1')).toBe(`${BROWSER_RUN_PROFILE}r1`);
+		expect(browser_profile({ kind: 'visitor', app: 'a', visitor: 'v' }, 'c1')).toBeUndefined();
+	});
+	it('isolates a channel browser by envoy, durable account and sender', () => {
+		const envoy: EngineActor = { kind: 'envoy', envoy: 'reports', instance: 'desk', sender: 'reader', member: null };
+		const profile = browser_profile(envoy, 'c1');
+		expect(profile).toBeDefined();
+		expect(profile).toBe(browser_profile(envoy, 'c1'));
+		expect(profile).not.toBe(browser_profile({ ...envoy, instance: 'another-desk' }, 'c1'));
+		expect(profile).not.toBe(browser_profile({ ...envoy, sender: 'another-reader' }, 'c1'));
+		expect(profile).not.toBe(browser_profile(envoy, 'c2'));
+		expect(profile).not.toBe(browser_profile(member, 'c1'));
 	});
 	it.effect('offers one browser tool for a whole visit', () =>
 		Effect.gen(function* () {
@@ -57,15 +78,16 @@ describe('built-in browser tools', () => {
 			const seen: unknown[] = [],
 				attached: Uint8Array[] = [],
 				browser = Layer.succeed(Browser, {
-					navigate: () => Effect.succeed({}),
+				...browser_fixture,
+					navigate: () => Effect.succeed(page()),
 					scoped: () => Effect.die('unused scoped'),
 					openWorkspace: (profile, target, caller) =>
 						Effect.sync(() => {
 							seen.push({ profile, target, caller });
-							return { url: 'https://live.test/app/x', page: 'ok' };
+							return { ...page('https://live.test/app/x'), page: 'ok' };
 						}),
-					snapshot: () => Effect.succeed(null),
-					act: () => Effect.succeed(null),
+					snapshot: () => Effect.succeed(page()),
+					act: () => Effect.succeed(page()),
 					evaluate: () => Effect.succeed(null),
 					screenshot: () => Effect.succeed(new Uint8Array([1])),
 					download: () => Effect.die('unused download')
@@ -77,7 +99,7 @@ describe('built-in browser tools', () => {
 				member,
 				attached
 			);
-			expect(answer).toEqual({ url: 'https://live.test/app/x', page: 'ok' });
+			expect(answer).toEqual({ ...page('https://live.test/app/x'), page: 'ok' });
 			expect(seen).toEqual([
 				{
 					profile: 'person:m1\u0000r1',
@@ -92,9 +114,10 @@ describe('built-in browser tools', () => {
 		Effect.gen(function* () {
 			let closed = 0;
 			const port: BrowserPort = {
-				navigate: async () => ({ url: 'https://a.test/' }),
-				snapshot: async () => null,
-				act: async () => null,
+				open: async () => {},
+				navigate: async () => page('https://a.test/'),
+				snapshot: async () => page(),
+				act: async () => page(),
 				evaluate: async () => null,
 				screenshot: async () => new Uint8Array(),
 				download: async () => {
@@ -119,10 +142,11 @@ describe('built-in browser tools', () => {
 		Effect.gen(function* () {
 			let closed = 0;
 			const browser = Layer.succeed(Browser, {
-				navigate: () => Effect.succeed({}),
+				...browser_fixture,
+				navigate: () => Effect.succeed(page()),
 				scoped: () => Effect.die('unused scoped'),
-				snapshot: () => Effect.succeed(null),
-				act: () => Effect.succeed(null),
+				snapshot: () => Effect.succeed(page()),
+				act: () => Effect.succeed(page()),
 				evaluate: () => Effect.succeed(null),
 				screenshot: () => Effect.succeed(new Uint8Array()),
 				close: () =>
@@ -148,11 +172,12 @@ describe('built-in browser tools', () => {
 		Effect.gen(function* () {
 			const opened: string[] = [];
 			const browser = Layer.succeed(Browser, {
+				...browser_fixture,
 				navigate: (profile) =>
-					Effect.sync(() => (opened.push(profile), { url: 'https://law.example' })),
+					Effect.sync(() => (opened.push(profile), page('https://law.example'))),
 				scoped: () => Effect.die('unused scoped'),
-				snapshot: () => Effect.succeed(null),
-				act: () => Effect.succeed(null),
+				snapshot: () => Effect.succeed(page()),
+				act: () => Effect.succeed(page()),
 				evaluate: () => Effect.succeed(null),
 				screenshot: () => Effect.succeed(new Uint8Array()),
 				download: () => Effect.die('unused download')
@@ -166,17 +191,18 @@ describe('built-in browser tools', () => {
 					{ url: 'https://law.example' },
 					{ kind: 'visitor', app: 'a', visitor: 'v' }
 				)
-			).toEqual({ error: 'only a person or an automation run can browse' });
+			).toEqual({ error: 'only a member, envoy or automation run can browse' });
 		})
 	);
 	it.effect("keep a download as the person's file, and answer that a run keeps none", () =>
 		Effect.gen(function* () {
 			const none = () => Effect.succeed(null);
 			const browser = Layer.succeed(Browser, {
-				navigate: none,
+				...browser_fixture,
+				navigate: () => Effect.succeed(page()),
 				scoped: () => Effect.die('unused scoped'),
-				snapshot: none,
-				act: none,
+				snapshot: () => Effect.succeed(page()),
+				act: () => Effect.succeed(page()),
 				evaluate: none,
 				screenshot: () => Effect.succeed(new Uint8Array()),
 				download: (_profile, url) =>
@@ -199,7 +225,7 @@ describe('built-in browser tools', () => {
 								actor: run,
 								conversation: 'c1',
 								turn: 't1',
-								callId: 'c1',
+								call_id: 'c1',
 								attach: () => {},
 								keep: (file) => kept.push(file)
 							},

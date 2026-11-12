@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { FetchHttpClient } from 'effect/http';
-import { photonGeocoder, regionOf } from '../src/kinds/context.ts';
+import { photon_geocoder, regionOf } from '../src/kinds/context.ts';
 
 const feature = (country: string, street: string, city: string) => ({
 	geometry: { coordinates: [103.88, 1.3] },
@@ -32,7 +32,7 @@ it.live('places in the workspace region come first, then the rest', () =>
 		};
 		const region = regionOf('en-SG');
 		assert.ok(region);
-		const hits = yield* photonGeocoder
+		const hits = yield* photon_geocoder
 			.search('40 wilkinson road', { region })
 			.pipe(Effect.provideService(FetchHttpClient.Fetch, fetch));
 		assert.ok(asked.some((u) => u.includes('40 wilkinson road, Singapore')));
@@ -51,7 +51,7 @@ it.live('without a region, the search is the plain worldwide one', () =>
 			new Response(JSON.stringify({ features: [] }))
 		);
 		const region = regionOf('en');
-		yield* photonGeocoder
+		yield* photon_geocoder
 			.search('40 wilkinson road', region === undefined ? {} : { region })
 			.pipe(Effect.provideService(FetchHttpClient.Fetch, fetch));
 		assert.equal(asked.length, 1);

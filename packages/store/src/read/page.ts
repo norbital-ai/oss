@@ -5,15 +5,15 @@ import type { Json } from '../values.ts';
 import type { ReadIR, SelectIR } from '../ir.ts';
 import { StoreError } from '../errors.ts';
 import { STORE_LIMITS } from '../limits.ts';
-import { encodeCursor, OVER, TOTAL, type Compiled } from './sql.ts';
+import { encode_cursor, OVER, TOTAL, type Compiled } from './sql.ts';
 
 type Wire = { readonly [k: string]: Json };
-const tooLarge = (message: string) => Effect.fail(StoreError.of('tooLarge', 'deliver', message));
+const too_large = (message: string) => Effect.fail(StoreError.of('too_large', 'deliver', message));
 const cursorKeys = (v: Json | undefined): readonly (string | null)[] =>
 	EffectArray.isArray<typeof v>(v) ? v.map((x) => (typeof x === 'string' ? x : null)) : [];
 
 /** A many-relation arm asked for `all` holds at most `STORE_LIMITS.page.relationArm` rows, at any depth. */
-export const armsFit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, StoreError> => {
+const arms_fit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, StoreError> => {
 	if (ir.kind !== 'read' && ir.kind !== 'get') return Effect.void;
 	const over = (sel: SelectIR, rs: readonly Wire[]): string | undefined => {
 		for (const [rel, r] of Object.entries(sel.relations))
@@ -48,13 +48,13 @@ export const armsFit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, 
 	const rel = over(ir.select, rows);
 	return rel === undefined
 		? Effect.void
-		: tooLarge(
+		: too_large(
 				`relation '${rel}' holds more than ${STORE_LIMITS.page.relationArm} rows; state a limit (rule 9)`
 			);
 };
 
 /** A counted read's rows without its last `{"$total": n}` row, and that total (`{}` when the read counts nothing). */
-export const totalOf = <R extends Json>(
+export const total_of = <R extends Json>(
 	rows: readonly R[]
 ): { readonly rows: readonly R[]; readonly total?: number } => {
 	const last = rows.at(-1);
@@ -69,37 +69,37 @@ export const answer = Effect.fnUntraced(function* (
 	rows: readonly Json[],
 	allBytes: number = STORE_LIMITS.page.allBytes
 ) {
-	const counted = totalOf(rows);
+	const counted = total_of(rows);
 	const total = counted.total === undefined ? {} : { total: counted.total };
 	const answered = counted.rows.filter((v) => Predicate.isObject(v));
 	// the database stopped at the read's byte budget (`budgeted`): the marker is no row
 	const over = answered.at(-1)?.[OVER] === true;
 	const js = over ? answered.slice(0, -1) : answered;
 	const of = ` of ${ir.model}`;
-	yield* armsFit(ir, js);
+	yield* arms_fit(ir, js);
 	if (c.kind === 'one' || c.kind === 'agg') {
 		const one: Json = js[0] ?? null;
 		return one;
 	}
 	if (c.limit === 'all' || c.limit === null) {
 		if (js.length > STORE_LIMITS.page.all)
-			return yield* tooLarge(
+			return yield* too_large(
 				`the read${of} matches more than ${STORE_LIMITS.page.all} rows; page it (rule 9)`
 			);
 		if (over)
-			return yield* tooLarge(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`);
+			return yield* too_large(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`);
 		const all: Json = { rows: [...js], next: null, ...total };
 		return all;
 	}
 	// a page ends early at its byte budget, its cursor after the last row that fits
 	if (over && js.length === 0)
-		return yield* tooLarge(
+		return yield* too_large(
 			`a row${of} is larger than ${STORE_LIMITS.pageBytes} bytes; select fewer fields (rule 9)`
 		);
 	const more = over || js.length > c.limit;
 	const page = js.slice(0, c.limit);
 	const last = page.at(-1);
-	const next = more && last !== undefined ? encodeCursor(c.hash, cursorKeys(last['$k'])) : null;
+	const next = more && last !== undefined ? encode_cursor(c.hash, cursorKeys(last['$k'])) : null;
 	const paged: Json = {
 		rows: page.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => k !== '$k'))),
 		next,

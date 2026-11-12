@@ -5,17 +5,18 @@
 -->
 <script lang="ts">
 	import { Option, Schema } from 'effect';
-	import { Badge, CodeEditor, Icon, StructuredData } from '@norbital-ai/ui';
+	import { Badge, CodeEditor, Icon, StructuredData, type UiContext } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import DiffView from './DiffView.svelte';
 	import ReadTable from './ReadTable.svelte';
 	import { readChips, readsOf, stepArgs, type StepView } from './view.ts';
 
 	let {
+		ctx,
 		tool,
 		view,
 		t
-	}: { tool: NonNullable<AgentRow['tool']>; view: StepView; t: (key: string) => string } = $props();
+	}: { ctx: UiContext; tool: NonNullable<AgentRow['tool']>; view: StepView; t: (key: string) => string } = $props();
 
 	type Obj = Readonly<Record<string, unknown>>;
 	const object = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -43,7 +44,7 @@
 			{language}
 			readonly
 			wrap
-			minHeight="0"
+			min_height="0"
 			class="text-micro"
 			aria-label={t('Code')}
 		/>
@@ -51,7 +52,7 @@
 {/snippet}
 {#snippet data_(value: unknown, name: string)}
 	<div class="max-h-56 overflow-auto rounded-md border" data-step-pane="data">
-		<StructuredData value={json(value)} {name} frame={false} />
+		<StructuredData {ctx} value={json(value)} {name} frame={false} />
 	</div>
 {/snippet}
 {#snippet address(url: string)}
@@ -85,7 +86,7 @@
 				</div>
 			{/if}
 		{/each}
-		<div class="max-h-72 overflow-auto rounded-md"><ReadTable value={rows} {t} /></div>
+		<div class="max-h-72 overflow-auto rounded-md"><ReadTable {ctx} value={rows} {t} /></div>
 	</div>
 {:else if tool.name === 'act'}
 	{@const rows = list(input['input'])}
@@ -94,14 +95,14 @@
 		{#if outcome !== ''}
 			<div class="flex items-center gap-1.5">
 				<Badge variant={outcome === 'committed' || outcome === 'started' ? 'default' : 'outline'}
-					>{t(outcome === 'pendingApproval' ? 'Waiting for approval' : outcome)}</Badge
+					>{t(outcome === 'pending_approval' ? 'Waiting for approval' : outcome)}</Badge
 				>
 				<span class="font-mono text-micro text-muted-foreground">{text(input['callable'])}</span>
 			</div>
 		{/if}
 		{#if rows.length > 0}
 			<div class="max-h-56 overflow-auto rounded-md">
-				<ReadTable value={{ [text(input['callable'])]: rows }} {t} />
+				<ReadTable {ctx} value={{ [text(input['callable'])]: rows }} {t} />
 			</div>
 		{:else if input['input'] !== undefined}
 			{@render data_(input['input'], t('Input'))}

@@ -26,7 +26,7 @@ export interface NonceStore<E = never> {
 
 /** Why a signed operation was refused: no or malformed signature, outside the window, a bad MAC, or a replayed nonce. */
 export class OpRefused extends Schema.TaggedError<OpRefused>()('OpRefused', {
-	reason: Schema.Literals(['unsigned', 'stale', 'badSignature', 'replayed'])
+	reason: Schema.Literals(['unsigned', 'stale', 'bad_signature', 'replayed'])
 }) {}
 
 const NONCE = /^[\w-]{16,128}$/;
@@ -47,7 +47,7 @@ const macOf = (
 		.digest();
 
 /** The headers one operation carries to `host` (the `Host` the verifier sees in the request URL). */
-export function signOp(
+export function sign_op(
 	key: OpKey,
 	host: string,
 	op: string,
@@ -65,7 +65,7 @@ export function signOp(
 }
 
 /** The operation name of an authentic, fresh, first-seen request; else `OpRefused` (the nonce is claimed last). */
-export const verifyOp = <E>(
+export const verify_op = <E>(
 	key: OpKey,
 	request: Request,
 	body: string | Uint8Array,
@@ -86,7 +86,7 @@ export const verifyOp = <E>(
 		const want = macOf(key, new URL(request.url).host, op, ts, nonce, body),
 			got = Buffer.from(mac, 'base64url');
 		if (got.length !== want.length || !timingSafeEqual(got, want))
-			return yield* new OpRefused({ reason: 'badSignature' });
+			return yield* new OpRefused({ reason: 'bad_signature' });
 		if (!(yield* nonces.claim(nonce, now))) return yield* new OpRefused({ reason: 'replayed' });
 		return op;
 	});

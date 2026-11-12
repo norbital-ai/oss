@@ -1,7 +1,7 @@
 // engine/files/parse.ts, pure: a file sync's built-in parsers (spec §3.3) and which parser an upload is read with.
 import { describe, expect, it } from '@effect/vitest';
-import { csvOf } from '@norbital-ai/std/csv';
-import type { InputFields } from '../src/decl/fields.ts';
+import { csv_of } from '@norbital-ai/std/csv';
+import type { Fields } from '@norbital-ai/std/kind';
 import {
 	acceptOf,
 	parseBuiltin,
@@ -11,20 +11,21 @@ import {
 } from '../src/engine/files/parse.ts';
 import { xlsxOf } from '../src/engine/files/xlsx.ts';
 
-const columns: InputFields = {
-	person: { kind: 'text', label: 'Employee' },
-	day: { kind: 'date', label: 'Date' },
+const columns: Fields = {
+	person: { kind: 'text' },
+	day: { kind: 'date' },
 	start: { kind: 'time', optional: true },
 	at: { kind: 'instant', optional: true },
 	hours: { kind: 'int', optional: true },
 	paid: { kind: 'bool', optional: true }
 };
+const captions = { person: 'Employee', day: 'Date' };
 const text = (s: string) => new TextEncoder().encode(s);
 const parse = (parser: 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics', bytes: Uint8Array, tz = 'UTC') =>
-	parseBuiltin(parser, bytes, columns, { required: ['person', 'day'], tz });
+	parseBuiltin(parser, bytes, columns, { required: ['person', 'day'], captions, tz });
 
 describe('built-in parsers', () => {
-	it('xlsx: headers by name or label, any case; Excel serials as dates, times and instants; $at is the sheet row', () => {
+	it('xlsx: headers by name or catalogue caption, any case; Excel serials as dates, times and instants; $at is the sheet row', () => {
 		const book = xlsxOf([
 			['EMPLOYEE', 'date', 'Start', 'at', 'hours', 'Paid', 'ignored'],
 			['ann', 46023, 0.375, 46023.5, '8', 'yes', 'x'],
@@ -48,7 +49,7 @@ describe('built-in parsers', () => {
 		});
 	});
 
-	it('a sheet without a required column is refused at the header row, by its label', () => {
+	it('a sheet without a required column is refused at the header row, by its caption', () => {
 		expect(parse('xlsx', xlsxOf([['Employee', 'hours']]))).toEqual({
 			records: [],
 			findings: [
@@ -58,7 +59,7 @@ describe('built-in parsers', () => {
 	});
 
 	it('csv: the delimiter and the encoding are detected', () => {
-		const semicolons = csvOf(
+		const semicolons = csv_of(
 			[
 				['Employee', 'Date', 'hours'],
 				['Zoë', '2026-01-02', '6']
@@ -80,7 +81,7 @@ describe('built-in parsers', () => {
 		]);
 	});
 
-	it('json: an array of records or { records }, keys by name or label; a non-record is refused at its place', () => {
+	it('json: an array of records or { records }, keys by name or caption; a non-record is refused at its place', () => {
 		expect(
 			parse('json', text(JSON.stringify([{ Employee: 'ann', day: '2026-01-01', x: 1 }])))
 		).toEqual({
@@ -119,7 +120,7 @@ describe('built-in parsers', () => {
 			'END:VEVENT',
 			'END:VCALENDAR'
 		].join('\r\n');
-		const cal: InputFields = {
+		const cal: Fields = {
 			uid: { kind: 'text' },
 			summary: { kind: 'text', optional: true },
 			dtstart: { kind: 'text' },
@@ -136,6 +137,28 @@ describe('built-in parsers', () => {
 				},
 				{ uid: '3', dtstart: '2026-01-07T09:00:00.000Z', $at: 16 }
 			],
+			findings: []
+		});
+	});
+
+	it('raw field names win caption collisions and remain the fallback without a catalogue caption', () => {
+		const fields: Fields = {
+			employee: { kind: 'text' },
+			person: { kind: 'text' },
+			work_day: { kind: 'date' }
+		};
+		expect(parseBuiltin('csv', text('employee,work_day\nann,2026-01-02\n'), fields, {
+			required: ['employee', 'work_day'], tz: 'UTC',
+			captions: { employee: 'Personne', person: 'employee' }
+		})).toEqual({
+			records: [{ employee: 'ann', work_day: '2026-01-02', $at: 2 }],
+			findings: []
+		});
+		expect(parseBuiltin('csv', text('Personne,person,work_day\nann,bob,2026-01-02\n'), fields, {
+			required: ['employee', 'person', 'work_day'], tz: 'UTC',
+			captions: { employee: 'Personne', person: 'employee' }
+		})).toEqual({
+			records: [{ employee: 'ann', person: 'bob', work_day: '2026-01-02', $at: 2 }],
 			findings: []
 		});
 	});

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { it } from '@effect/vitest';
+import { Schema } from 'effect';
 import { unexportedSpecifiers } from '../lib/package-archive.ts';
-import type { Manifest } from '../lib/package-release.ts';
+import { Manifest } from '../lib/package-release.ts';
 it('flags a specifier naming an entry its package does not export (L-BOLT-1002)', () => {
 	const manifests = new Map<string, Pick<Manifest, 'exports'>>([
 		['@norbital-ai/bolt-server', { exports: { '.': { default: './build/index.js' } } }],
@@ -26,7 +28,7 @@ it('flags a specifier naming an entry its package does not export (L-BOLT-1002)'
 });
 it('ignores service IDs and other data while retaining literal module import checks', () => {
 	const manifests = new Map<string, Pick<Manifest, 'exports'>>([
-		['@norbital-ai/bolt', { exports: { '.': {}, './test': {} } }]
+		['@norbital-ai/bolt', { exports: { '.': {}, './declarations': {} } }]
 	]);
 	const sources: Array<[string, string]> = [
 		[
@@ -37,7 +39,7 @@ it('ignores service IDs and other data while retaining literal module import che
 			const text = '@norbital-ai/bolt/plain-data';
 			object.resolve('@norbital-ai/bolt/data-resolution');
 			// import '@norbital-ai/bolt/comment';
-			import '@norbital-ai/bolt/test';
+			import '@norbital-ai/bolt/declarations';
 		`
 		],
 		[
@@ -79,5 +81,32 @@ it('ignores service IDs and other data while retaining literal module import che
 		'imports.ts: @norbital-ai/bolt/local-resolve',
 		'imports.ts: @norbital-ai/bolt/destructured-resolve',
 		'component.svelte: @norbital-ai/bolt/svelte-script'
+	]);
+});
+
+it('keeps declarations and the CLI test kit on their current entries and refuses retired Bolt entries', () => {
+	const decode = Schema.decodeUnknownSync(Schema.fromJsonString(Manifest));
+	const manifests = new Map<string, Pick<Manifest, 'exports'>>([
+		['@norbital-ai/bolt', decode(readFileSync(new URL('../../packages/bolt/package.json', import.meta.url), 'utf8'))],
+		['@norbital-ai/bolt-cli', decode(readFileSync(new URL('../../packages/bolt-cli/package.json', import.meta.url), 'utf8'))]
+	]);
+	const sources: Array<[string, string]> = [
+		['current.ts', `
+			import { bind_model } from '@norbital-ai/bolt/declarations';
+			import { TestWorkspace } from '@norbital-ai/bolt-cli/test';
+			import { read_artifact } from '@norbital-ai/bolt/artifact';
+		`],
+		['retired.ts', `
+			import '@norbital-ai/bolt/test';
+			import '@norbital-ai/bolt/cell';
+			import '@norbital-ai/bolt/protocol/cursor';
+			import '@norbital-ai/bolt/isolate-globals';
+		`]
+	];
+	assert.deepEqual(unexportedSpecifiers(sources, manifests), [
+		'retired.ts: @norbital-ai/bolt/test',
+		'retired.ts: @norbital-ai/bolt/cell',
+		'retired.ts: @norbital-ai/bolt/protocol/cursor',
+		'retired.ts: @norbital-ai/bolt/isolate-globals'
 	]);
 });

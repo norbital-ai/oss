@@ -13,14 +13,14 @@ export const AUDIT_CATEGORIES = [
 export const AUDIT_STATUSES = [
 	'prepared',
 	'committed',
-	'pendingApproval',
+	'pending_approval',
 	'refused',
 	'conflict',
 	'failed',
 	'unknown'
 ] as const;
 /** The existing native actor families, projected without credentials or session data. */
-export const AUDIT_ACTOR_KINDS = ['member', 'envoy', 'visitor', 'apiKey', 'system'] as const;
+export const AUDIT_ACTOR_KINDS = ['member', 'envoy', 'visitor', 'api_key', 'system'] as const;
 
 /** A stable actor identity and its optional display label at the time of the event. */
 export const AuditActor = Schema.Struct({
@@ -31,16 +31,15 @@ export const AuditActor = Schema.Struct({
 export type AuditActor = typeof AuditActor.Type;
 
 /** A historical model identity; removed or renamed models remain searchable. */
-export const AuditSubject = Schema.Struct({
+const AuditSubject = Schema.Struct({
 	model: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	revision: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
 });
-export type AuditSubject = typeof AuditSubject.Type;
 
 const metadata = {
 	id: Schema.NonEmptyString,
-	operationId: Schema.NonEmptyString,
+	operation_id: Schema.NonEmptyString,
 	at: Schema.String,
 	category: Schema.Literals(AUDIT_CATEGORIES),
 	action: Schema.NonEmptyString,
@@ -58,8 +57,8 @@ export const AuditEvent = Schema.Struct({ ...metadata, payload: Schema.Json });
 export type AuditEvent = typeof AuditEvent.Type;
 
 const stored = {
-	recordedAt: Schema.String,
-	payloadBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+	recorded_at: Schema.String,
+	payload_bytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 };
 /** One list row, without its potentially large payload. */
 export const AuditSummary = Schema.Struct({ ...metadata, ...stored });
@@ -86,8 +85,8 @@ export const AuditQuery = Schema.Struct({
 	since: Schema.optionalKey(Schema.String),
 	until: Schema.optionalKey(Schema.String),
 	text: Schema.optionalKey(Schema.String),
-	actorKind: Schema.optionalKey(Schema.Literals(AUDIT_ACTOR_KINDS)),
-	actorId: Schema.optionalKey(Schema.String),
+	actor_kind: Schema.optionalKey(Schema.Literals(AUDIT_ACTOR_KINDS)),
+	actor_id: Schema.optionalKey(Schema.String),
 	category: Schema.optionalKey(Schema.Literals(AUDIT_CATEGORIES)),
 	action: Schema.optionalKey(Schema.String),
 	status: Schema.optionalKey(Schema.Literals(AUDIT_STATUSES)),
@@ -130,6 +129,6 @@ export interface AuditPort {
 	query(query: AuditQuery, signal: AbortSignal): Promise<AuditPage>;
 	/** One full event from this facility's environment, or null when that id is absent. */
 	detail(id: string, signal: AbortSignal): Promise<AuditRecord | null>;
-	/** Prepared operations without `${operationId}:terminal`; this facility is not exposed to page or tenant code. */
+	/** Prepared operations without `${operation_id}:terminal`; this facility is not exposed to page or tenant code. */
 	pending(query: AuditPendingQuery, signal: AbortSignal): Promise<AuditPendingPage>;
 }

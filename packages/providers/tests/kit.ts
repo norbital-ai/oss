@@ -1,20 +1,49 @@
-// A host for one link, as bolt's `integrationLinks` would be: a fake fetch that records every call and answers from a
+// A host for one link, as bolt's `integration_links` would be: a fake fetch that records every call and answers from a
 // route table, the instance's credentials (each write recorded and applied), emitted events, reported statuses and pairings.
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect } from 'node:net';
 import { Effect, FiberSet, Semaphore } from 'effect';
-import { loopbackTcpPort } from '@norbital-ai/bolt/node';
 import { FirstSyncs, ProviderRuntime, type ProviderDef, type LinkDef } from '../src/abi.ts';
-import {
-	oauthClientOf,
-	type DriverEvent,
-	type DriverOpen,
-	type Json,
-	type LinkStatus,
-	type OAuthClient,
-	type Pairing
-} from '@norbital-ai/bolt/engine';
+import type { DriverEvent, DriverOpen, Json, LinkStatus } from '@norbital-ai/bolt/engine';
+
+type OAuthClient = NonNullable<Awaited<ReturnType<DriverOpen['oauth_client']>>>;
+type Pairing = NonNullable<Parameters<DriverOpen['pairing']>[0]>;
+
+/** Cleartext TCP to this machine's fake servers only, as the host's port would carry it; no TLS. */
+export const loopback_tcp: DriverOpen['tcp'] = {
+	connect: (endpoint, signal) =>
+		endpoint.tls || !['127.0.0.1', 'localhost'].includes(endpoint.host)
+			? Promise.reject(new Error('The test port reaches this machine in cleartext only.'))
+			: new Promise((resolve, reject) => {
+					const socket = connect({ host: '127.0.0.1', port: endpoint.port, signal });
+					socket.once('error', reject).once('connect', () => {
+						socket.off('error', reject);
+						const readable = new ReadableStream<Uint8Array>({
+							start: (out) => {
+								socket.on('data', (chunk: Buffer) => out.enqueue(chunk));
+								socket.once('end', () => out.close());
+								socket.once('error', (error) => out.error(error));
+							},
+							cancel: () => void socket.destroy()
+						});
+						// both sides by hand: Duplex.toWeb would also open an unread readable whose backpressure pauses the socket
+						const writable = new WritableStream<Uint8Array>({
+							write: (chunk) =>
+								new Promise<void>((done, failed) =>
+									socket.write(chunk, (error) => (error ? failed(error) : done()))
+								),
+							close: () => new Promise<void>((done) => socket.end(done))
+						});
+						resolve({
+							readable,
+							writable,
+							close: async () => void socket.destroy(),
+							start_tls: () => Promise.reject(new Error('The test port has no TLS.'))
+						});
+					});
+				})
+};
 
 /** `form`: a multipart body as sent; `body` is then empty. */
 export type Call = {
@@ -60,10 +89,10 @@ export const HOOK = 'https://ws.example/acme/hooks/integration/desk';
 /** The host's one OAuth callback; a state the kit mints names the instance, as bolt's links manager's does. */
 export const REDIRECT = 'https://ws.example/acme/hooks/oauth/callback';
 export type HostOptions = {
-	webhookUrl?: string;
-	redirectUrl?: string;
+	webhook_url?: string;
+	redirect_url?: string;
 	personal?: boolean;
-	importStart?: DriverOpen['importStart'];
+	import_start?: DriverOpen['import_start'];
 	definition?: DriverOpen['definition'];
 	syncs?: DriverOpen['syncs'];
 	configuration?: Json;
@@ -104,28 +133,34 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 	const firstSyncs = yield* Semaphore.make(2);
 	let status: LinkStatus | undefined,
 		pairing: Pairing | null = null;
-	const definition = o.definition ?? { description: 'Desk', driver: provider.driver };
+	const definition: DriverOpen['definition'] = o.definition ?? {
+		description: 'Desk',
+		driver: provider.driver
+	};
 	const link = yield* provider
 		.open({
 			instance: 'desk',
 			definition,
 			syncs: o.syncs ?? [],
 			personal: o.personal === true,
-			...(o.importStart === undefined ? {} : { importStart: o.importStart }),
+			...(o.import_start === undefined ? {} : { import_start: o.import_start }),
 			configuration: o.configuration ?? {},
-			webhookUrl: o.webhookUrl ?? HOOK,
-			redirectUrl: o.redirectUrl ?? REDIRECT,
+			webhook_url: o.webhook_url ?? HOOK,
+			redirect_url: o.redirect_url ?? REDIRECT,
 			state: async () => `${randomUUID()}.desk`,
 			signal: controller.signal,
 			fetch: f,
-			tcp: loopbackTcpPort,
-			oauthClient: async (vendor) =>
-				oauthClientOf(
-					definition,
-					o.secrets,
-					o.google === undefined ? {} : { google: o.google },
-					vendor
-				),
+			tcp: loopback_tcp,
+			// the definition's own client when both its secrets are set, else the host's
+			oauth_client: async (vendor) => {
+				const id = definition.oauth === undefined ? undefined : o.secrets?.[definition.oauth.client],
+					secret = definition.oauth === undefined ? undefined : o.secrets?.[definition.oauth.secret];
+				return id !== undefined && id !== '' && secret !== undefined && secret !== ''
+					? { id, secret }
+					: vendor === undefined
+						? undefined
+						: o.google;
+			},
 			credentials: {
 				load: () => Promise.resolve(new Map(values)),
 				write: async (changes) => {
@@ -174,12 +209,16 @@ export const hookServer = Effect.acquireRelease(
 		const route: { to?: (request: Request) => Promise<Response> } = {};
 		const server = createServer(async (req, res) => {
 			const chunks: Buffer[] = [];
-			for await (const chunk of req as AsyncIterable<Buffer>) chunks.push(chunk);
+			for await (const value of req) {
+				const chunk: unknown = value;
+				if (!Buffer.isBuffer(chunk)) throw new Error('The webhook body chunk is not a Buffer.');
+				chunks.push(chunk);
+			}
 			const answer = await route.to?.(
 				new Request('http://hook.test/', {
 					method: 'POST',
-					headers: Object.entries(req.headers).flatMap(([name, value]) =>
-						typeof value === 'string' ? [[name, value] as [string, string]] : []
+					headers: Object.entries(req.headers).flatMap(([name, value]): [string, string][] =>
+						typeof value === 'string' ? [[name, value]] : []
 					),
 					body: Buffer.concat(chunks)
 				})
@@ -187,13 +226,21 @@ export const hookServer = Effect.acquireRelease(
 			res.writeHead(answer?.status ?? 500).end();
 		});
 		await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
-		const { port } = server.address() as AddressInfo;
+		const address = server.address();
+		if (address === null || typeof address === 'string')
+			throw new Error('The webhook server has no TCP address.');
+		const { port } = address;
 		return { server, route, url: `http://127.0.0.1:${port}/` };
 	}),
 	({ server }) => Effect.promise(() => new Promise((closed) => server.close(closed)))
 );
 export const json = (v: unknown, status = 200) => Response.json(v, { status });
 export const signal = () => AbortSignal.timeout(5_000);
+/** A fixture must actually provide the value or capability an assertion uses. */
+export const required = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('A required fixture value is missing.');
+	return value;
+};
 /** Turns the event loop until `ok` holds, reading no clock; a mechanism that never gets there fails by the test's timeout. */
 export const until = (ok: () => boolean) =>
 	Effect.gen(function* () {

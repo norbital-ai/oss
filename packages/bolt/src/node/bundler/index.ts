@@ -31,7 +31,7 @@ export const BUNDLER = {
 	replyBytes: 16 * MiB,
 	bundleMs: 30_000
 } as const;
-export type BundlerOptions = {
+type BundlerOptions = {
 	/** A serving CPU slot for `tenant`, held while its bundle builds; calling the answer frees it. */
 	readonly slot?: ((tenant: string) => Promise<() => void>) | undefined;
 	/** The process's own CPU since the last reading, billed to the one tenant it serves. */
@@ -39,7 +39,7 @@ export type BundlerOptions = {
 	readonly recycleBytes?: number | undefined;
 	readonly cacheBytes?: number | undefined;
 };
-export type BundlerCounts = {
+type BundlerCounts = {
 	/** Processes started. */
 	readonly started: number;
 	/** Bundles the process built: a cache hit builds none. */
@@ -47,7 +47,7 @@ export type BundlerCounts = {
 	/** The live process's pid. */
 	readonly pid: number | undefined;
 };
-export type NodeBundler = {
+type NodeBundler = {
 	readonly port: (tenant: string) => BundlerPort;
 	readonly counts: () => BundlerCounts;
 };
@@ -73,7 +73,7 @@ const quote = (path: string) => JSON.stringify(path);
  * The process's script, rolldown's version, and what it may read: this package (its code), rolldown and the
  * dependencies beside it, and the folder where Node finds rolldown from the script (its links). Then how to start it.
  */
-const layout = () => {
+const layout = Effect.fnUntraced(function* () {
 	const script = realpathSync(
 		fileURLToPath(
 			new URL(`./process${import.meta.url.endsWith('.ts') ? '.ts' : '.js'}`, import.meta.url)
@@ -82,9 +82,10 @@ const layout = () => {
 	const rolldown = realpathSync(
 		dirname(createRequire(import.meta.url).resolve('rolldown/package.json'))
 	);
-	const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(Package))(
+	// an installed rolldown without a readable manifest is a broken install: a defect, not a tenant failure
+	const manifest = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Package))(
 		readFileSync(join(rolldown, 'package.json'), 'utf8')
-	);
+	).pipe(Effect.orDie);
 	const beside = dirname(rolldown);
 	const dependencies = Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies })
 		.map((name) => join(beside, name))
@@ -150,47 +151,46 @@ const layout = () => {
 					}
 				: { file: node, args: argv.slice(1) };
 	return { version: `rolldown@${manifest.version}`, command };
-};
+});
 
 type Usage = { readonly cpu: bigint; readonly rss: number };
 /** Linux: the process and its descendants (bwrap runs node as its child), from /proc; 100 ticks a second, 4 KiB pages. */
-const procUsage = async (pid: number): Promise<Usage> => {
-	const text = await readFile(`/proc/${pid}/stat`, 'utf8');
-	const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
-	let cpu = BigInt(Number(fields[11]) + Number(fields[12])) * 10_000_000n,
-		rss = Number(fields[21]) * 4096;
-	for (const task of await readdir(`/proc/${pid}/task`))
-		for (const child of (
-			await readFile(`/proc/${pid}/task/${task}/children`, 'utf8').catch(() => '')
-		)
-			.split(' ')
-			.filter((x) => x !== '')) {
-			const used = await procUsage(Number(child));
-			cpu += used.cpu;
-			rss += used.rss;
+const procUsage = (pid: number): Effect.Effect<Usage, unknown> =>
+	Effect.gen(function* () {
+		const text = yield* Effect.tryPromise(() => readFile(`/proc/${pid}/stat`, 'utf8'));
+		const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
+		let cpu = BigInt(Number(fields[11]) + Number(fields[12])) * 10_000_000n,
+			rss = Number(fields[21]) * 4096;
+		for (const task of yield* Effect.tryPromise(() => readdir(`/proc/${pid}/task`))) {
+			const children = yield* Effect.tryPromise(() =>
+				readFile(`/proc/${pid}/task/${task}/children`, 'utf8')
+			).pipe(Effect.orElseSucceed(() => ''));
+			for (const child of children.split(' ').filter((x) => x !== '')) {
+				const used = yield* procUsage(Number(child));
+				cpu += used.cpu;
+				rss += used.rss;
+			}
 		}
-	return { cpu, rss };
-};
+		return { cpu, rss };
+	});
 /** Elsewhere (macOS): `ps`, whose CPU time is `[hh:]mm:ss.ss`. */
 const psUsage = (pid: number) =>
-	new Promise<Usage>((resolve, reject) =>
+	Effect.callback<Usage, Error>((resume) => {
 		execFile('ps', ['-o', 'rss=,time=', '-p', String(pid)], (error, out) => {
 			const [rss = '', time = ''] = out.trim().split(/\s+/);
-			if (error !== null || time === '') return reject(error ?? new Error('no such process'));
+			if (error !== null || time === '')
+				return resume(Effect.fail(error ?? new Error('no such process')));
 			const seconds = time.split(':').reduce((sum, part) => sum * 60 + Number(part), 0);
-			resolve({ cpu: BigInt(Math.round(seconds * 1e9)), rss: Number(rss) * 1024 });
-		})
-	);
+			resume(Effect.succeed({ cpu: BigInt(Math.round(seconds * 1e9)), rss: Number(rss) * 1024 }));
+		});
+	});
 /** The process's CPU and memory read from outside it; none once it is gone. */
-const usage = (pid: number | undefined) =>
-	Effect.promise(() =>
-		pid === undefined
-			? Promise.resolve(undefined)
-			: (process.platform === 'linux' ? procUsage(pid) : psUsage(pid)).then(
-					(used): Usage | undefined => used,
-					() => undefined
-				)
-	);
+const usage = (pid: number | undefined): Effect.Effect<Usage | undefined> =>
+	pid === undefined
+		? Effect.succeed(undefined)
+		: (process.platform === 'linux' ? procUsage(pid) : psUsage(pid)).pipe(
+				Effect.orElseSucceed(() => undefined)
+			);
 
 const Reply = Schema.Union([
 	Schema.Struct({ id: Schema.Number, code: Schema.String, map: Schema.String }),
@@ -227,7 +227,7 @@ export const bundler = Effect.fn('node.bundler')(function* (options: BundlerOpti
 		yield* Effect.logWarning(
 			'the file-run bundler runs without OS confinement: install bubblewrap (/usr/bin/bwrap)'
 		);
-	const { version, command } = layout();
+	const { version, command } = yield* layout();
 	const gate = yield* Semaphore.make(1);
 	const run = yield* FiberSet.makeRuntimePromise();
 	const cache = new Map<string, { readonly bundled: Bundled; readonly bytes: number }>();

@@ -1,16 +1,16 @@
-// `decisionsSystem1` (P35, P37) against a fake fetch standing in for OpenRouter's Decisions API: the port's request goes
+// `decisions_system_1` (P35, P37) against a fake fetch standing in for OpenRouter's Decisions API: the port's request goes
 // out as `{ model, state, questions }` field for field (a text-only state), the answers come back as given with a
-// score's `level` added and `usage.cost` as `costUsd`; a context refusal is `tooLarge`; a slow, failing or malformed
+// score's `level` added and `usage.cost` as `cost_usd`; a context refusal is `too_large`; a slow, failing or malformed
 // answer rejects (the client never falls back).
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema, Stream } from 'effect';
 import {
 	DecisionRequestSchema,
-	decisionsSystem1,
-	structuredSystem1,
+	decisions_system_1,
+	structured_system_1,
 	decisionEvent,
 	type System1Request
-} from '../src/engine/decisions/index.ts';
+} from '../src/engine/decision.ts';
 
 type Mode = 'ok' | 'slow' | 'down' | 'context' | 'malformed';
 const answerBody = (mode: Mode) => ({
@@ -97,12 +97,12 @@ const request: System1Request = {
 	}
 };
 const ask = (transport: typeof fetch) =>
-	decisionsSystem1(
+	decisions_system_1(
 		{
 			url: 'https://decisions.test/api/alpha/decisions',
 			model: 'vendor/model',
-			apiKey: 'k',
-			timeoutMillis: 150
+			api_key: 'k',
+			timeout_ms: 150
 		},
 		{ fetch: transport }
 	).ask(request);
@@ -113,8 +113,8 @@ describe('the Decisions API sys_1 client', () => {
 			const { seen, transport } = fake('ok');
 			const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } };
 			const input = { ...request, state: ['message m0: attached image', image] };
-			const result = yield* decisionsSystem1(
-				{ url: 'https://decisions.test', model: 'jev', apiKey: 'k' },
+			const result = yield* decisions_system_1(
+				{ url: 'https://decisions.test', model: 'jev', api_key: 'k' },
 				{ fetch: transport }
 			).ask(input);
 			const body = Schema.decodeUnknownSync(
@@ -143,8 +143,8 @@ describe('the Decisions API sys_1 client', () => {
 	it.live('rejects remote and oversized image inputs before sending a provider request', () =>
 		Effect.gen(function* () {
 			const { seen, transport } = fake('ok');
-			const adapter = decisionsSystem1(
-				{ url: 'https://decisions.test', model: 'jev', apiKey: 'k' },
+			const adapter = decisions_system_1(
+				{ url: 'https://decisions.test', model: 'jev', api_key: 'k' },
 				{ fetch: transport }
 			);
 			for (const url of [
@@ -170,8 +170,8 @@ describe('the Decisions API sys_1 client', () => {
 					usage: { input_tokens: 1, output_tokens: 0 }
 				});
 			};
-			const adapter = decisionsSystem1(
-				{ format: 'openai', url: 'https://openai.test/v1/decisions', model: 'luna', apiKey: 'k' },
+			const adapter = decisions_system_1(
+				{ format: 'openai', url: 'https://openai.test/v1/decisions', model: 'luna', api_key: 'k' },
 				{ fetch: transport }
 			);
 			yield* adapter.ask({
@@ -215,7 +215,7 @@ describe('the Decisions API sys_1 client', () => {
 						},
 						sorted: { type: 'noul', noul: 0.7 }
 					},
-					costUsd: 0.00004,
+					cost_usd: 0.00004,
 					provider: 'typesafe',
 					model: 'vendor/model',
 					tokens: { input: 120, output: 0 }
@@ -232,9 +232,9 @@ describe('the Decisions API sys_1 client', () => {
 						body: { model: 'vendor/model', questions: request.questions, state: request.state }
 					}
 				]);
-				const headers = seen[0]!.headers;
-				const [, traceId, spanId] = headers.traceparent!.split('-');
-				expect(headers.b3!.split('-').slice(0, 3)).toEqual([traceId, spanId, '1']);
+				const headers = seen[0]?.headers;
+				const [, traceId, spanId] = headers?.traceparent?.split('-') ?? [];
+				expect(headers?.b3?.split('-').slice(0, 3)).toEqual([traceId, spanId, '1']);
 			})
 	);
 
@@ -242,8 +242,8 @@ describe('the Decisions API sys_1 client', () => {
 		Effect.gen(function* () {
 			const { provider: _, ...rest } = answerBody('ok');
 			const transport: typeof fetch = async () => Response.json(rest);
-			const r = yield* decisionsSystem1(
-				{ url: 'https://decisions.test/api/alpha/decisions', model: 'vendor/model', apiKey: 'k' },
+			const r = yield* decisions_system_1(
+				{ url: 'https://decisions.test/api/alpha/decisions', model: 'vendor/model', api_key: 'k' },
 				{ fetch: transport }
 			).ask(request);
 			expect(r.provider).toBe('vendor/model');
@@ -271,8 +271,8 @@ describe('the Decisions API sys_1 client', () => {
 					}
 				};
 				const { seen, transport } = fake('ok');
-				const result = yield* decisionsSystem1(
-					{ url: 'https://decisions.test/', model: 'jev', apiKey: 'k' },
+				const result = yield* decisions_system_1(
+					{ url: 'https://decisions.test/', model: 'jev', api_key: 'k' },
 					{ fetch: transport }
 				).ask(structured);
 				expect(seen).toHaveLength(1);
@@ -301,7 +301,7 @@ describe('the Decisions API sys_1 client', () => {
 					}
 				};
 				let calls = 0;
-				const adapter = structuredSystem1((request) => {
+				const adapter = structured_system_1((request) => {
 					calls++;
 					expect(request.messages).toEqual([{ role: 'user', content: JSON.stringify(structured) }]);
 					expect(request.output).toMatchObject({ type: 'object' });
@@ -313,7 +313,7 @@ describe('the Decisions API sys_1 client', () => {
 								urgency: { probabilities: { 0: 0.1, 1: 0.9 } },
 								refund: { noul: 0.8 }
 							},
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage: { input: 30, output: 10 }
 						}
@@ -407,12 +407,12 @@ describe('the Decisions API sys_1 client', () => {
 					usage: { input_tokens: 80, output_tokens: 0 }
 				});
 			};
-			const adapter = decisionsSystem1(
+			const adapter = decisions_system_1(
 				{
 					format: 'openai',
 					url: 'https://openai.test/v1/decisions',
 					model: 'decision-model',
-					apiKey: 'k'
+					api_key: 'k'
 				},
 				{ fetch: transport }
 			);
@@ -470,10 +470,10 @@ describe('the Decisions API sys_1 client', () => {
 		})
 	);
 
-	it.live('a context-limit refusal is tooLarge', () =>
+	it.live('a context-limit refusal is too_large', () =>
 		Effect.gen(function* () {
 			expect(yield* Effect.flip(ask(fake('context').transport))).toMatchObject({
-				kind: 'tooLarge'
+				kind: 'too_large'
 			});
 		})
 	);

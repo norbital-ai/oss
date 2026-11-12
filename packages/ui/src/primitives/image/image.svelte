@@ -1,7 +1,7 @@
 <!--
 @component
 A native image with an animated pending mosaic and a short dissolve when ready. An absent `src`/`srcset` stays pending
-without requesting a placeholder. `class` reserves the outer span's size; `imageClass` controls the image's fit.
+without requesting a placeholder. `class` reserves the outer span's size; `image_class` controls the image's fit.
 Native dimensions, responsive sources and loading attributes pass through; provide `alt=""` for decorative images.
 -->
 <script lang="ts" module>
@@ -10,7 +10,7 @@ Native dimensions, responsive sources and loading attributes pass through; provi
 	/** Native image attributes with required alternative text and separate container/image styling. */
 	export type ImageProps = Omit<HTMLImgAttributes, 'alt'> & {
 		alt: string;
-		imageClass?: HTMLImgAttributes['class'];
+		image_class?: HTMLImgAttributes['class'];
 	};
 
 	const blend = (from: number, to: number, amount: number) => from + (to - from) * amount;
@@ -48,7 +48,7 @@ Native dimensions, responsive sources and loading attributes pass through; provi
 		loading = 'lazy',
 		decoding = 'async',
 		class: className,
-		imageClass,
+		image_class,
 		onload,
 		onerror,
 		...attributes
@@ -194,7 +194,7 @@ Native dimensions, responsive sources and loading attributes pass through; provi
 			{alt}
 			{loading}
 			{decoding}
-			class={cn('block h-auto max-w-full', imageClass)}
+			class={cn('block h-auto max-w-full', image_class)}
 			onload={(event) => {
 				if (event.currentTarget === image) settled = { source, state: 'loaded' };
 				onload?.(event);

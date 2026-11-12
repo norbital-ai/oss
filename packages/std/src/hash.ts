@@ -17,9 +17,7 @@ const blocks = (data: Uint8Array, block: (bytes: Uint8Array, offset: number) => 
 	view.setUint32(tail.length - 4, (n * 8) >>> 0);
 	for (let i = 0; i < tail.length; i += 64) block(tail, i);
 };
-const word = (b: Uint8Array, i: number) =>
-	(b[i]! << 24) | (b[i + 1]! << 16) | (b[i + 2]! << 8) | b[i + 3]!;
-const bigEndian = (h: Uint32Array): Uint8Array => {
+const bigEndian = (h: readonly number[]): Uint8Array => {
 	const out = new Uint8Array(h.length * 4),
 		view = new DataView(out.buffer);
 	h.forEach((v, i) => view.setUint32(i * 4, v));
@@ -27,7 +25,7 @@ const bigEndian = (h: Uint32Array): Uint8Array => {
 };
 const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n));
 
-const K256 = new Uint32Array([
+const K256 = [
 	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
 	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
 	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -36,35 +34,29 @@ const K256 = new Uint32Array([
 	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
 	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-]);
+];
 
 const scalar = (data: Uint8Array | string): Uint8Array => {
-	const h = new Uint32Array([
+	const h: [number, number, number, number, number, number, number, number] = [
 			0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-		]),
-		w = new Uint32Array(64);
+		],
+		w = new DataView(new ArrayBuffer(64 * 4));
 	blocks(bytesOf(data), (b, o) => {
-		for (let t = 0; t < 16; t++) w[t] = word(b, o + t * 4);
+		const block = new DataView(b.buffer, b.byteOffset + o, 64);
+		for (let t = 0; t < 16; t++) w.setUint32(t * 4, block.getUint32(t * 4));
 		for (let t = 16; t < 64; t++) {
-			const x = w[t - 15]!,
-				y = w[t - 2]!;
-			w[t] =
-				w[t - 16]! +
+			const x = w.getUint32((t - 15) * 4),
+				y = w.getUint32((t - 2) * 4);
+			w.setUint32(t * 4,
+				w.getUint32((t - 16) * 4) +
 				(rotr(x, 7) ^ rotr(x, 18) ^ (x >>> 3)) +
-				w[t - 7]! +
-				(rotr(y, 17) ^ rotr(y, 19) ^ (y >>> 10));
+				w.getUint32((t - 7) * 4) +
+				(rotr(y, 17) ^ rotr(y, 19) ^ (y >>> 10)));
 		}
-		let a = h[0]!,
-			bb = h[1]!,
-			c = h[2]!,
-			d = h[3]!,
-			e = h[4]!,
-			f = h[5]!,
-			g = h[6]!,
-			hh = h[7]!;
-		for (let t = 0; t < 64; t++) {
+		let [a, bb, c, d, e, f, g, hh] = h;
+		for (const [t, k] of K256.entries()) {
 			const t1 =
-				(hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K256[t]! + w[t]!) |
+				(hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + k + w.getUint32(t * 4)) |
 				0;
 			const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c))) | 0;
 			hh = g;
@@ -76,14 +68,14 @@ const scalar = (data: Uint8Array | string): Uint8Array => {
 			bb = a;
 			a = (t1 + t2) | 0;
 		}
-		h[0] = h[0]! + a;
-		h[1] = h[1]! + bb;
-		h[2] = h[2]! + c;
-		h[3] = h[3]! + d;
-		h[4] = h[4]! + e;
-		h[5] = h[5]! + f;
-		h[6] = h[6]! + g;
-		h[7] = h[7]! + hh;
+		h[0] = (h[0] + a) >>> 0;
+		h[1] = (h[1] + bb) >>> 0;
+		h[2] = (h[2] + c) >>> 0;
+		h[3] = (h[3] + d) >>> 0;
+		h[4] = (h[4] + e) >>> 0;
+		h[5] = (h[5] + f) >>> 0;
+		h[6] = (h[6] + g) >>> 0;
+		h[7] = (h[7] + hh) >>> 0;
 	});
 	return bigEndian(h);
 };
@@ -95,12 +87,12 @@ export const sha256 = (data: Uint8Array | string): Uint8Array =>
 		: new Uint8Array(native.createHash('sha256').update(data).digest());
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
-export const toHex = (bytes: Uint8Array): string => {
+export const to_hex = (bytes: Uint8Array): string => {
 	let out = '';
 	for (const b of bytes) out += HEX[b];
 	return out;
 };
-export const sha256Hex = (input: string | Uint8Array): string => toHex(sha256(input));
+export const sha256_hex = (input: string | Uint8Array): string => to_hex(sha256(input));
 /** Canonical JSON: keys sorted, absent members dropped, so equal values hash equal whatever their key order. */
 export const canonical = (v: unknown): string =>
 	JSON.stringify(v, (_k, x: unknown) => {

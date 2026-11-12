@@ -1,10 +1,10 @@
 // A read row's `$approval` (the host attaches it to every record an open approval request holds) and its one-line text.
 import type { RowApproval, ViewBolt } from '../client/contract.js';
-import { msg } from '../text/messages.js';
+import { msg, catalogText } from '../text/messages.js';
 import { Option, Schema } from 'effect';
 
 const RowApprovalSchema: Schema.Codec<RowApproval> = Schema.Struct({
-	requestId: Schema.String,
+	request_id: Schema.String,
 	state: Schema.Literals(['Pending', 'ChangesRequested']),
 	step: Schema.Number,
 	steps: Schema.Array(
@@ -14,7 +14,7 @@ const RowApprovalSchema: Schema.Codec<RowApproval> = Schema.Struct({
 			users: Schema.Array(Schema.String)
 		})
 	),
-	requestedBy: Schema.String
+	requested_by: Schema.String
 });
 // `$approval` is a host-attached system member no model declares: it arrives untyped on the row and decodes here once.
 const decodeApproval = Schema.decodeUnknownOption(Schema.Struct({ $approval: RowApprovalSchema }));
@@ -25,33 +25,33 @@ export const approvalOf = (row: unknown): RowApproval | null =>
 
 /** Who the request waits on: the current step's name, or the requester while changes are requested. */
 const waiting = (a: RowApproval): string =>
-	a.state === 'Pending' ? (a.steps[a.step]?.name ?? '') : a.requestedBy;
+	a.state === 'Pending' ? (a.steps[a.step]?.name ?? '') : a.requested_by;
 
 /** "Requested by Ada · Pending step 1/2 · waiting on Controller review" (or "Changes requested · waiting on Ada"). */
 export function approvalText(bolt: Pick<ViewBolt, 't'>, a: RowApproval): string {
 	const status =
 		a.state === 'Pending'
-			? msg(bolt, 'approval.pendingStep', 'Pending step {k}/{n}', {
+			? msg(bolt, 'approval.pendingStep', {
 					k: a.step + 1,
 					n: a.steps.length
 				})
-			: msg(bolt, 'approval.status.ChangesRequested', 'Changes requested');
+			: msg(bolt, 'approval.status.ChangesRequested');
 	return [
-		msg(bolt, 'approval.requestedBy', 'Requested by {who}', { who: a.requestedBy }),
+		msg(bolt, 'approval.requested_by', { who: a.requested_by }),
 		status,
-		msg(bolt, 'approval.waitingOn', 'waiting on {who}', { who: waiting(a) })
+		msg(bolt, 'approval.waitingOn', { who: waiting(a) })
 	].join(' · ');
 }
 
 /** The lock's reason as the record shows it: who may change the record now. */
 export const lockText = (bolt: Pick<ViewBolt, 't'>, a: RowApproval | null): string =>
 	a === null
-		? msg(bolt, 'approval.locked', 'Under approval: only its approvers or requester may change it')
+		? msg(bolt, 'approval.locked')
 		: a.state === 'Pending'
-			? msg(bolt, 'approval.lockedStep', 'Under approval: only {step} approvers may change it', {
+			? msg(bolt, 'approval.lockedStep', {
 					step: waiting(a)
 				})
-			: msg(bolt, 'approval.lockedBy', 'Under approval: {who} may change it', { who: waiting(a) });
+			: msg(bolt, 'approval.lockedBy', { who: waiting(a) });
 
 /** A record the viewer may edit while its request asks for changes: saving it resubmits the request. */
 export const resubmits = (row: unknown): boolean => approvalOf(row)?.state === 'ChangesRequested';
@@ -66,5 +66,5 @@ export function approvalStatus(bolt: Pick<ViewBolt, 't'>, status: string): strin
 		Superseded: 'Superseded',
 		Withdrawn: 'Withdrawn'
 	};
-	return msg(bolt, `approval.status.${status}`, words[status] ?? status);
+	return catalogText(bolt, `approval.status.${status}`, words[status] ?? status);
 }

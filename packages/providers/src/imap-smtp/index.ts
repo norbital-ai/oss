@@ -14,6 +14,7 @@ import type { ProviderDef, ProviderText } from '../abi.ts';
 
 type ProviderSetup = ProviderDef['setup'];
 import {
+	notConnected,
 	OAuthRefused,
 	PairingInvalid,
 	ProviderRefused,
@@ -132,7 +133,9 @@ const F = {
 	},
 	clientId: { name: 'clientId', label: t('Client ID', '客户端 ID') },
 	clientSecret: { name: 'clientSecret', label: t('Client secret', '客户端密钥'), secret: true }
-} satisfies { [k: string]: ProviderSetup['fields'] extends readonly (infer F)[] | undefined ? F : never };
+} satisfies {
+	[k: string]: ProviderSetup['fields'] extends readonly (infer F)[] | undefined ? F : never;
+};
 const COMMON = [F.fromName, F.folder, F.tracking, F.quietHours];
 const WATCHED = t(
 	"Mail arriving in the watched folder enters this integration; replies are sent through SMTP as this address. Bounce and delay reports landing there update each message's delivery status (spam complaints are not reported over IMAP).",
@@ -192,7 +195,7 @@ const PASSWORD: ProviderSetup = {
 	]
 };
 
-const MICROSOFT: ProviderSetup = {
+const MICROSOFT = {
 	kind: 'form',
 	steps: [
 		{
@@ -201,7 +204,7 @@ const MICROSOFT: ProviderSetup = {
 				'在 Microsoft Entra 管理中心打开“应用注册”→“新注册”（仅此组织目录中的帐户）。添加 Web 平台重定向 URI，须完全一致：'
 			),
 			href: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade',
-			copy: 'redirectUrl'
+			copy: 'redirect_url'
 		},
 		{
 			text: t(
@@ -230,7 +233,7 @@ const MICROSOFT: ProviderSetup = {
 		F.clientSecret,
 		...COMMON
 	]
-};
+} as const satisfies ProviderSetup;
 
 /** One click: the host's Google client signs in, and the sign-in names the mailbox. */
 const GOOGLE: ProviderSetup = { kind: 'oauth', steps: [] };
@@ -248,14 +251,14 @@ const syncSetup = (method: Method): ProviderSetup => {
 	const steps = {
 		password: [],
 		microsoft: [
-			setup.steps[0]!,
+			MICROSOFT.steps[0],
 			{
 				text: t(
 					'Grant delegated IMAP.AccessAsUser.All and offline_access permissions for this mailbox.',
 					'为此邮箱授予委托的 IMAP.AccessAsUser.All 和 offline_access 权限。'
 				)
 			},
-			setup.steps[2]!,
+			MICROSOFT.steps[2],
 			{
 				text: t(
 					'Connect and sign in as the mailbox in the window that opens.',
@@ -351,6 +354,7 @@ const mailboxOf = Effect.fn('Mailbox.input')(function* (
 		return yield* Effect.fail(
 			new PairingInvalid({ message: 'The delivery window is a number of hours (up to 720)' })
 		);
+	const authServer = get('authServer');
 	const common = {
 		address,
 		fromName: get('fromName'),
@@ -358,7 +362,7 @@ const mailboxOf = Effect.fn('Mailbox.input')(function* (
 		tracking: !personal && get('tracking') === 'on',
 		quietHours: quiet,
 		pixelKey,
-		...(get('authServer') === null ? {} : { authServer: get('authServer')!.toLowerCase() })
+		...(authServer === null ? {} : { authServer: authServer.toLowerCase() })
 	};
 	if (method === 'password')
 		return {
@@ -421,7 +425,7 @@ const provider = (method: Method, options: MailboxOptions): ProviderDef => {
 		_tag: 'ProviderDef',
 		driver: 'email',
 		personal: true,
-		importStart: { kind: 'timestamp', precision: 'second' },
+		import_start: { kind: 'timestamp', precision: 'second' },
 		id: metadata.id,
 		name: metadata.name,
 		icon: metadata.icon,
@@ -466,7 +470,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 				mailbox.method === 'microsoft'
 					? { id: mailbox.oauth.clientId, secret: mailbox.oauth.clientSecret }
 					: mailbox.method === 'google'
-						? yield* Effect.promise(() => ctx.oauthClient('google'))
+						? yield* hostCall('read Google OAuth client', () => ctx.oauth_client('google'))
 						: undefined;
 			return yield* client === undefined
 				? Effect.fail(
@@ -578,7 +582,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 				})
 			)
 		);
-	const after = ctx.importStart?.kind === 'since' ? ctx.importStart.at : undefined;
+	const after = ctx.import_start?.kind === 'since' ? ctx.import_start.at : undefined;
 	// INTERNALDATE is the source checkpoint; Date headers and ingestion time cannot admit old history.
 	const beforeImport = (receivedAt: string | undefined) =>
 		after !== undefined && (receivedAt === undefined || Date.parse(receivedAt) < Date.parse(after));
@@ -589,7 +593,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 		at: string | undefined
 	) => {
 		if (read.from === mailbox.address && !personal) return null;
-		const message = { ...read.message, ...(at === undefined ? {} : { sourceAt: at }) };
+		const message = { ...read.message, ...(at === undefined ? {} : { source_at: at }) };
 		return personal
 			? { ...message, direction: read.from === mailbox.address ? 'outbound' : 'inbound' }
 			: message;
@@ -614,9 +618,9 @@ const open = Effect.fn('Mailbox.open')(function* (
 			);
 			if (read.kind === 'report') {
 				const at = new Date(yield* Clock.currentTimeMillis).toISOString();
-				for (const providerId of read.ids)
+				for (const provider_id of read.ids)
 					yield* hostCall('store mail report', () =>
-						ctx.emit({ kind: 'delivery', providerId, report: { ...read.report, at, provider: id } })
+						ctx.emit({ kind: 'delivery', provider_id, report: { ...read.report, at, provider: id } })
 					);
 				return;
 			}
@@ -775,7 +779,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 							grant(appOf(pairing.draft, personal), yield* clientOf(pairing.draft), {
 								grant_type: 'authorization_code',
 								code: query.get('code') ?? '',
-								redirect_uri: ctx.redirectUrl,
+								redirect_uri: ctx.redirect_url,
 								code_verifier: pairing.verifier
 							})
 						);
@@ -811,14 +815,14 @@ const open = Effect.fn('Mailbox.open')(function* (
 						input,
 						known,
 						personal,
-						yield* Effect.promise(() => ctx.state())
+						yield* hostCall('read pairing state', () => ctx.state())
 					);
 					if (draft.method === 'password') {
 						yield* verify(draft, null);
 						yield* adopt(draft, null);
 						return;
 					}
-					const pairing = attempt(yield* Effect.promise(() => ctx.state())),
+					const pairing = attempt(yield* hostCall('read pairing state', () => ctx.state())),
 						client = yield* clientOf(draft);
 					pending = {
 						state: pairing.state,
@@ -828,7 +832,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 						url: authorizeUrl(
 							appOf(draft, personal),
 							client.id,
-							ctx.redirectUrl,
+							ctx.redirect_url,
 							pairing.state,
 							pairing.challenge,
 							draft.address === '' ? undefined : draft.address
@@ -862,7 +866,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 		close: FiberHandle.clear(supervisor),
 		reconcile: (thread: string, since: string) =>
 			reconciling === null
-				? Effect.fail(new ProviderUnavailable({ message: 'the mailbox is not connected' }))
+				? Effect.fail(notConnected('the mailbox'))
 				: reconciling(thread, since),
 		send: (message: Json, files: readonly OutboundAttachment[] = []) =>
 			Effect.gen(function* () {
@@ -882,12 +886,16 @@ const open = Effect.fn('Mailbox.open')(function* (
 				const mid = midOf(mailbox, wire.id),
 					html =
 						wire.html !== undefined && mailbox.tracking
-							? `${wire.html}<img src="${ctx.webhookUrl}/open/${wire.id}.${macOf(mailbox, wire.id)}.gif" width="1" height="1" alt="" style="display:none">`
+							? `${wire.html}<img src="${ctx.webhook_url}/open/${wire.id}.${macOf(mailbox, wire.id)}.gif" width="1" height="1" alt="" style="display:none">`
 							: wire.html;
 				yield* Effect.gen(function* () {
+					const auth = yield* login(mailbox);
+					yield* hostCall('store outbound mail reference', () =>
+						ctx.emit({ kind: 'outbound_ref', message: wire.id, provider_id: mid })
+					);
 					yield* submit(
 						mailbox,
-						yield* login(mailbox),
+						auth,
 						net,
 						{ ...wire, ...(html === undefined ? {} : { html }) },
 						mid,
@@ -905,7 +913,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 								})
 					)
 				);
-				return { providerId: mid, presumeAfterMs: mailbox.quietHours * 3600000 };
+				return { provider_id: mid, presume_after_ms: mailbox.quietHours * 3600000 };
 			}),
 		test: (_input: Json) =>
 			Effect.scoped(
@@ -918,7 +926,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 							})
 						);
 					const mailbox = yield* need(),
-						local = yield* Effect.promise(() => ctx.state()),
+						local = yield* hostCall('read pairing state', () => ctx.state()),
 						mid = midOf(mailbox, local),
 						auth = yield* login(mailbox);
 					yield* submit(
@@ -964,7 +972,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 		webhook: (request: Request) =>
 			Effect.gen(function* () {
 				const url = new URL(request.url),
-					base = new URL(ctx.webhookUrl).pathname,
+					base = new URL(ctx.webhook_url).pathname,
 					rest = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : '';
 				if (request.method === 'GET' && url.pathname.endsWith(OAUTH_CALLBACK))
 					return yield* callback(url.searchParams);
@@ -984,7 +992,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 						yield* hostCall('store open report', () =>
 							ctx.emit({
 								kind: 'delivery',
-								providerId: midOf(mailbox, local),
+								provider_id: midOf(mailbox, local),
 								report: { kind: 'opened', at, provider: id, approximate: true }
 							})
 						).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);

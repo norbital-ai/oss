@@ -1,7 +1,7 @@
 // engine/integrations/links.ts on PGlite (§4.5): the host half every host shares — one link per instance from the
 // provider the operator paired it through, credentials sealed per instance under the opener's epoch, resume from the
 // instance rows, per-instance webhooks under the workspace's public path, durable status only on durable transitions,
-// a second opener fencing the first for good, credential writes retried until they land, concurrent request links, and
+// a second opener fencing the first for good, bounded credential-write retries, concurrent request links, and
 // the instance verbs (`/__bolt/integrations/<instance>/…`) authorized as "may update this row".
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import {
@@ -23,11 +23,11 @@ import {
 } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import { Drivers } from '../src/engine/ports.ts';
-import { loopbackTcpPort } from '../src/node/tcp.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { loopback_tcp_port } from '../src/node/tcp.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from '@effect/vitest';
+import { describe, expect, it, vi } from '@effect/vitest';
 import type { DriverName, IntegrationSpec } from '../src/decl/runtime/integration.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
@@ -35,36 +35,56 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Unavailable } from '../src/decl/errors.ts';
 import { DbError, Fenced } from '../src/engine/errors.ts';
 import { LINK_DOWN } from '../src/engine/integrations/abi.ts';
-import { Conversations } from '../src/engine/services.ts';
+import { Conversations, Outbound } from '../src/engine/services.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import { credentials, type Credentials } from '../src/engine/integrations/credentials.ts';
 import {
-	oauthClientOf,
+	oauth_client_of,
 	type DriverOpen,
 	type Link,
 	type Provider
 } from '../src/engine/integrations/driver.ts';
 import {
-	decodeStatus,
+	decode_status,
 	type InstanceStatus,
 	type LinkStatus
 } from '../src/protocol/instance-status.ts';
 import {
-	integrationLinks,
+	integration_links,
 	type LinkManager,
 	type LinksHost
 } from '../src/engine/integrations/links.ts';
 import { Secrets } from '../src/engine/secrets.ts';
-import { IntegrationManager, integrationRoutes } from '../src/protocol/integrations.ts';
+import { IntegrationManager, integration_routes } from '../src/protocol/integrations.ts';
 import { SessionAuthority } from '../src/protocol/http.ts';
-import {
-	layer,
-	TestWorkspace,
-	type Kit,
-	type TestOptions,
-	type WorkspaceServices
-} from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, type Kit, type TestOptions, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { turn, until as untilTurned } from './support/turns.ts';
+import { seed_accounts, type RuntimeAccount } from './support/accounts.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
+
+const ACCOUNTS = [
+	{ id: 'a', integration: 'whatsapp' },
+	{ id: 'a1', integration: 'whatsapp' },
+	{ id: 'b1', integration: 'whatsapp' },
+	{ id: 'a2', integration: 'whatsapp' },
+	{ id: 'a4', integration: 'whatsapp' },
+	{ id: 'b4', integration: 'whatsapp' },
+	{ id: 'a7', integration: 'whatsapp' },
+	{ id: 'a8', integration: 'whatsapp' },
+	{ id: 'a10', integration: 'whatsapp' },
+	{ id: 'a11', integration: 'whatsapp' },
+	{ id: 'a24', integration: 'whatsapp' },
+	{ id: 'r1', integration: 'whatsapp' },
+	{ id: 'r2', integration: 'whatsapp' },
+	{ id: 'r3', integration: 'whatsapp' },
+	{ id: 's1', integration: 'whatsapp' },
+	{ id: 's2', integration: 'whatsapp' },
+	{ id: 's3', integration: 'whatsapp' },
+	{ id: 'mail', integration: 'email' },
+	{ id: 'tg', integration: 'telegram' },
+	{ id: 'erp9', integration: 'erp' },
+	{ id: 'cal2', integration: 'cal' },
+] satisfies readonly RuntimeAccount[];
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -105,51 +125,28 @@ const manifest = {
 		erp: {
 			description: 'The ERP',
 			driver: 'http',
-			credential: { apiKey: { kind: 'text', label: 'API key' } },
+			credential: { api_key: { kind: 'text' } },
 			http: {
-				baseUrl: 'https://erp.example/api',
-				auth: { header: { name: 'x-api-key', value: 'apiKey' } }
+				base_url: 'https://erp.example/api',
+				auth: { header: { name: 'x-api-key', value: 'api_key' } }
 			}
 		},
 		cal
 	},
-	// one slot per case: the cases share one workspace, and none reads another's instance
-	connections: {
-		a: { integration: 'whatsapp' },
-		a1: { integration: 'whatsapp' },
-		b1: { integration: 'whatsapp' },
-		a2: { integration: 'whatsapp' },
-		a4: { integration: 'whatsapp' },
-		b4: { integration: 'whatsapp' },
-		a7: { integration: 'whatsapp' },
-		a8: { integration: 'whatsapp' },
-		a10: { integration: 'whatsapp' },
-		a24: { integration: 'whatsapp' },
-		r1: { integration: 'whatsapp' },
-		r2: { integration: 'whatsapp' },
-		r3: { integration: 'whatsapp' },
-		s1: { integration: 'whatsapp' },
-		s2: { integration: 'whatsapp' },
-		s3: { integration: 'whatsapp' },
-		mail: { integration: 'email' },
-		tg: { integration: 'telegram' },
-		erp9: { integration: 'erp' },
-		cal2: { integration: 'cal' }
-	},
+
 	policies: {
 		self: {
 			description: 'Manages their own accounts',
 			grants: {
-				sys_integration: { read: true, update: { check: true } }
+				sys_integration: { outputs: { default: {} }, update: { verdict: true } }
 			}
 		}
 	},
 	teams: {},
 	automations: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -161,7 +158,7 @@ const ok = (o: Outcome) => {
 const chat = (id: string) => ({
 	id,
 	thread: '6591234567@s.whatsapp.net',
-	sentAt: '2026-10-14T10:00:00.000Z',
+	sent_at: '2026-10-14T10:00:00.000Z',
 	from: { handle: '6591234567@s.whatsapp.net', name: 'Ben' },
 	text: 'hi',
 	attachments: []
@@ -177,7 +174,7 @@ const fake = (
 	id: string,
 	opened: DriverOpen[] = [],
 	driver: DriverName = 'whatsapp',
-	over: Partial<Provider> = {}
+	over: { open?: Provider['open']; import_start?: NonNullable<Provider['import_start']>; idempotent_sends?: boolean } = {}
 ): Provider => ({
 	driver,
 	personal: true,
@@ -197,7 +194,7 @@ const fake = (
 		return {
 			async send(message) {
 				return {
-					providerId: `${id}:${ctx.instance}:${String(Predicate.isObject(message) ? message['text'] : undefined)}`
+					provider_id: `${id}:${ctx.instance}:${String(Predicate.isObject(message) ? message['text'] : undefined)}`
 				};
 			},
 			async pair(input) {
@@ -229,10 +226,10 @@ const key = randomBytes(32);
 /** `self` changes only the accounts they own: one check over the batch, the stored owner against the actor. */
 const OWNED = `function* own(changes, ctx) {
 	const row = changes.findIndex((c) => c.before.owner !== ctx.actor.id);
-	return row >= 0 ? ctx.deny('Only your own accounts change.', { row }) : ctx.allow();
+	return row < 0 ? ctx.allow() : yield* ctx.refuse('Only your own accounts change.', { row });
 }
 export default { policy: {
-	self: { grants: { sys_integration: { update: { check: own } } } }
+	self: { grants: { sys_integration: { update: { verdict: own } } } }
 } };`;
 const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports']) =>
 	Effect.gen(function* () {
@@ -240,8 +237,8 @@ const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports'
 			TestWorkspace.layer({
 				manifest: m,
 				guest: yield* program(OWNED),
-				host: { publicUrl: PUBLIC },
-				secretsKey: Redacted.make(key),
+				host: { public_url: PUBLIC },
+				secrets_key: Redacted.make(key),
 				...(ports === undefined ? {} : { ports })
 			})
 		);
@@ -249,15 +246,15 @@ const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports'
 			store = yield* credentials(t.db, Context.get(context, Secrets)).pipe(
 				Effect.provide(NodeCrypto.layer)
 			),
-			route = yield* routeFixture(context);
-		const host = (providers: readonly Provider[], over: Partial<LinksHost> = {}) =>
-			integrationLinks({
+			route = yield* route_fixture(context);
+		const host = (providers: readonly Provider[], over: { enter?: LinksHost['enter']; credentials?: Credentials } = {}) =>
+			integration_links({
 				providers,
 				enter: (effect) => effect.pipe(Effect.provide(context)),
 				admit: (effect) => effect.pipe(Effect.provide(context)),
 				credentials: store,
-				publicUrl: PUBLIC,
-				tcp: loopbackTcpPort,
+				public_url: PUBLIC,
+				tcp: loopback_tcp_port,
 				log: () => {},
 				...over
 			}).pipe(Effect.provide(NodeCrypto.layer));
@@ -278,8 +275,9 @@ const open = (m: EngineManifest = manifest, ports?: TestOptions<Drivers>['ports'
 						return row;
 					})
 				);
+		yield* seed_accounts(t.db, ACCOUNTS);
 		const act = (authority: Authority, callable: string, input: Json) =>
-			actReply(route, authority, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, authority, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
 		return { t, context, store, route, host, sealed, row, act };
@@ -321,17 +319,17 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							provider: 'twilio',
 							account: 'k1',
 							stored: true,
-							about: { webhookUrl: 'https://apex.example/acme/hooks/integration/a1' }
+							about: { webhook_url: 'https://apex.example/acme/hooks/integration/a1' }
 						});
 						expect(present(present(yield* links.state('a1')).providers).map((p) => p.id)).toEqual([
 							'twilio',
 							'baileys'
 						]);
 						expect(yield* links.port.send('a1', { text: 'x' }, [])).toEqual({
-							providerId: 'twilio:a1:x'
+							provider_id: 'twilio:a1:x'
 						});
 						expect(yield* links.port.send('b1', { text: 'y' }, [])).toEqual({
-							providerId: 'baileys:b1:y'
+							provider_id: 'baileys:b1:y'
 						});
 						expect(yield* links.port.send('tg', { text: 'z' }, []).pipe(Effect.flip)).toMatchObject(
 							{
@@ -388,7 +386,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							JSON.stringify({
 								state: 'attention',
 								failures: 3,
-								retryAt: '2999-01-01T00:00:00.000Z'
+								retry_at: '2999-01-01T00:00:00.000Z'
 							})
 						]
 					});
@@ -429,7 +427,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						const resumedWith: DriverOpen[] = [];
 						const links = yield* host([fake('baileys4', resumedWith), fake('twilio4')]);
 						yield* links.resume;
-						expect(resumedWith.map((c) => [c.instance, c.personal, c.webhookUrl])).toEqual([
+						expect(resumedWith.map((c) => [c.instance, c.personal, c.webhook_url])).toEqual([
 							['b4', false, 'https://apex.example/acme/hooks/integration/b4']
 						]);
 						expect((yield* links.webhook('b4', post(chat('W1')))).status).toBe(200);
@@ -452,7 +450,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 		const message = (id: string, thread: string, at: string) => ({
 			id,
 			thread,
-			sentAt: at,
+			sent_at: at,
 			from: { handle: thread, name: 'Ben' },
 			text: 'missed',
 			attachments: []
@@ -561,7 +559,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						expect(
 							yield* run(() => ({ kind: 'invalid', message: 'the bot left that channel' }))
 						).toBe(3);
-						expect(yield* run(() => ({ kind: 'rateLimited', message: 'slow down' }))).toBe(1);
+						expect(yield* run(() => ({ kind: 'rate_limited', message: 'slow down' }))).toBe(1);
 					})
 				)
 		);
@@ -664,6 +662,88 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 	});
 
 	describe('a send and the link it goes through', () => {
+		it.effect('first pairing and a restored host wake due and future messages in account FIFO order', () =>
+			Effect.scoped(Effect.gen(function* () {
+				const fixture = yield* open(manifest, calDrivers), { t, context, host } = fixture;
+				yield* Effect.gen(function* () {
+					const conversations = Context.get(context, Conversations), outbound = Context.get(context, Outbound);
+					const resumes: { instance: string; state: string | null }[] = [];
+					const resume = outbound.resume;
+					const observe = vi.spyOn(outbound, 'resume').mockImplementation((instance) => Effect.gen(function* () {
+						resumes.push({ instance, state: yield* t.db.value(Schema.NullOr(Schema.String), {
+							text: "SELECT status->>'state' FROM sys_integration WHERE id=$1", params: [instance]
+						}) });
+						return yield* resume(instance);
+					}));
+					yield* Effect.addFinalizer(() => Effect.sync(() => observe.mockRestore()));
+					const sent: { instance: string; id: string; to: string; text: string }[] = [];
+					const opened: DriverOpen[] = [], before_live: boolean[] = [];
+					const run = yield* FiberSet.makeRuntimePromise();
+					const base = fake('queued', opened);
+					const provider: Provider = { ...base, open: async (ctx) => {
+						const link = await base.open(ctx);
+						if ((await ctx.credentials.load()).has('credential')) {
+							const waiting = await run(current().port.send(ctx.instance, {
+								id: 'readiness-probe', to: 'queue@s.whatsapp.net', text: 'not published yet'
+							}, []).pipe(Effect.result));
+							before_live.push(Result.isFailure(waiting) && waiting.failure instanceof Unavailable && waiting.failure.facility === LINK_DOWN);
+						}
+						return { ...link, send: async (message) => {
+							const value = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String, to: Schema.String, text: Schema.String }))(message);
+							sent.push({ instance: ctx.instance, ...value });
+							return { provider_id: `accepted:${value.id}` };
+						} };
+					} };
+					const first = yield* host([provider]);
+					calLinks = first;
+					const queue = (instance: string, text: string) => conversations.send(instance, { to: 'queue@s.whatsapp.net', text }, {});
+					const first_id = yield* queue('a', 'First'), future_id = yield* queue('a', 'Second');
+					const other_id = yield* queue('b1', 'Other account');
+					yield* t.db.write({ text: "UPDATE sys_integration SET active=false WHERE id='a2'", params: [] });
+					const paused_id = yield* queue('a2', 'Paused account');
+					const future = new Date(Date.parse(t.clock.now()) + 10 * 86_400_000).toISOString();
+					yield* t.db.write({ text: 'UPDATE sys_message SET next_attempt_at=$2::timestamptz WHERE id=$1', params: [future_id, future] });
+					const rows = () => t.db.rows(Schema.Struct({
+						id: Schema.String, integration: Schema.String, status: Schema.String, attempts: Schema.Int,
+						sent_at: Schema.NullOr(Schema.String), claimed_at: Schema.NullOr(Schema.String)
+					}), { text: "SELECT id,integration,status,attempts,sent_at::text,claimed_at::text FROM sys_message WHERE direction='outbound' ORDER BY seq", params: [] });
+					expect(yield* rows()).toEqual([
+						{ id: first_id, integration: 'a', status: 'queued', attempts: 0, sent_at: null, claimed_at: null },
+						{ id: future_id, integration: 'a', status: 'queued', attempts: 0, sent_at: null, claimed_at: null },
+						{ id: other_id, integration: 'b1', status: 'queued', attempts: 0, sent_at: null, claimed_at: null },
+						{ id: paused_id, integration: 'a2', status: 'queued', attempts: 0, sent_at: null, claimed_at: null }
+					]);
+					expect(sent).toEqual([]);
+					expect(opened).toEqual([]);
+					yield* first.pair('a', { key: 'paired' });
+					expect(resumes).toEqual([{ instance: 'a', state: 'connected' }]);
+					expect((yield* t.run_due()).failed).toEqual([]);
+					expect(sent.map(({ instance, id, text }) => ({ instance, id, text }))).toEqual([
+						{ instance: 'a', id: first_id, text: 'First' }, { instance: 'a', id: future_id, text: 'Second' }
+					]);
+					const first_rows = yield* rows();
+					expect(first_rows.slice(0, 2)).toMatchObject([{ status: 'sent', attempts: 1, sent_at: expect.any(String) }, { status: 'sent', attempts: 1, sent_at: expect.any(String) }]);
+					expect(first_rows.slice(2)).toMatchObject([{ id: other_id, status: 'queued', attempts: 0, sent_at: null }, { id: paused_id, status: 'queued', attempts: 0, sent_at: null }]);
+					yield* driverCall(() => present(opened[0]).status({ state: 'reconnecting' }));
+					const restored_id = yield* queue('a', 'After restart');
+					expect((yield* rows()).find(({ id }) => id === restored_id)).toMatchObject({ status: 'queued', attempts: 0, sent_at: null, claimed_at: null });
+					yield* first.close;
+					const restored = yield* host([provider]);
+					calLinks = restored;
+					yield* restored.resume;
+					expect(before_live).toEqual([true]);
+					expect(resumes).toEqual([{ instance: 'a', state: 'connected' }, { instance: 'a', state: 'connected' }]);
+					expect((yield* t.run_due()).failed).toEqual([]);
+					expect(sent.map(({ id }) => id)).toEqual([first_id, future_id, restored_id]);
+					expect((yield* rows()).find(({ id }) => id === restored_id)).toMatchObject({ status: 'sent', attempts: 1, sent_at: expect.any(String) });
+					yield* restored.pair('b1', { key: 'other' });
+					expect((yield* t.run_due()).failed).toEqual([]);
+					expect(sent.map(({ id }) => id)).toEqual([first_id, future_id, restored_id, other_id]);
+					expect((yield* rows()).find(({ id }) => id === paused_id)).toMatchObject({ status: 'queued', attempts: 0, sent_at: null });
+					yield* restored.close;
+				}).pipe(Effect.provide(context));
+			})).pipe(Effect.ensuring(Effect.sync(() => { calLinks = undefined; })))
+		);
 		it.effect(
 			'a paired link that is not connected is down: it calls no provider, and its connect delivers what waited',
 			() =>
@@ -683,7 +763,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 										...link,
 										send: async () => {
 											sends++;
-											return { providerId: `sent:${sends}` };
+											return { provider_id: `sent:${sends}` };
 										}
 									};
 								}
@@ -702,7 +782,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							.pipe(Effect.provide(context));
 						expect(sends).toBe(0);
 						yield* driverCall(() => provider.status({ state: 'connected', account: 'k' }));
-						yield* t.runDue();
+						yield* t.run_due();
 						yield* until(() => sends === 1);
 						yield* links.close;
 					})
@@ -714,25 +794,25 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 					)
 				)
 		);
-		it.effect('an instance with no credentials has nothing to wait for: it is not down', () =>
+		it.effect('a valid account with no credentials waits for initial pairing without calling a provider', () =>
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { host } = yield* Fixture;
 					const links = yield* host([fake('s2')]);
 					const failure = yield* links.port.send('s2', { text: 'x' }, []).pipe(Effect.flip);
-					expect(failure instanceof Unavailable && failure.facility === LINK_DOWN).toBe(false);
+					expect(failure).toMatchObject({ _tag: 'Unavailable', facility: LINK_DOWN });
 					yield* links.close;
 				})
 			)
 		);
 		it.effect(
-			"a link's own movements read no database; a provider's idempotence lands on the row",
+			"a reconnect checks durable queued work once; a provider's idempotence lands on the row",
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
 						const { t, host, row } = yield* Fixture;
 						let ctx: DriverOpen | undefined;
-						const base = fake('s3', [], 'whatsapp', { idempotentSends: true });
+						const base = fake('s3', [], 'whatsapp', { idempotent_sends: true });
 						const links = yield* host([
 							{
 								...base,
@@ -743,13 +823,13 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							}
 						]);
 						yield* links.pair('s3', { key: 'k' });
-						expect((yield* row('s3'))['status']).toMatchObject({ idempotentSends: true });
+						expect((yield* row('s3'))['status']).toMatchObject({ idempotent_sends: true });
 						const provider = present(ctx);
 						t.count.reset();
 						yield* driverCall(() => provider.status({ state: 'reconnecting' }));
 						yield* driverCall(() => provider.status({ state: 'connected', account: 'k' }));
 						provider.pairing(null);
-						expect(t.count).toMatchObject({ reads: 0, writes: 0 });
+						expect(t.count).toMatchObject({ reads: 0, writes: 1 });
 						// a watcher hears it from what the link holds, too
 						const heard = yield* Queue.unbounded<InstanceStatus>();
 						yield* links.watch('s3').pipe(
@@ -880,7 +960,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						expect(firstOpened).toHaveLength(1); // no reconnect
 						expect(yield* sealed('a8')).toEqual({ provider: 'p8', credential: { key: 'k1' } });
 						expect(yield* second.port.send('a8', { text: 'y' }, [])).toEqual({
-							providerId: 'p8:a8:y'
+							provider_id: 'p8:a8:y'
 						});
 						yield* first.close;
 						yield* second.close;
@@ -921,7 +1001,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							}
 						};
 						const links = yield* host([http]);
-						yield* links.pair('erp9', { apiKey: 'k' });
+						yield* links.pair('erp9', { api_key: 'k' });
 						const calls = yield* Effect.all(
 							[links.port.request('erp9', 'first'), links.port.request('erp9', 'second')],
 							{ concurrency: 'unbounded', mode: 'result' }
@@ -935,7 +1015,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						const won = successful.success;
 						expect(yield* sealed('erp9')).toEqual({
 							provider: 'http',
-							credential: { apiKey: 'k' },
+							credential: { api_key: 'k' },
 							token: won
 						});
 						// the losing call replaced nothing: the instance still answers
@@ -975,11 +1055,40 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 				})
 			)
 		);
+		// audit bug 36: a store that keeps failing ends the write after a bounded number of attempts
+		it.effect('gives up a credential write the store keeps refusing after five attempts', () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { store, host } = yield* Fixture;
+					let attempts = 0,
+						failing = false;
+					const down: Credentials = {
+						...store,
+						write: (i, e, c, rotate) =>
+							Effect.suspend(() => {
+								if (!failing) return store.write(i, e, c, rotate);
+								attempts++;
+								return Effect.fail(BoltError.make('unavailable', 'commit', 'the credential store is down'));
+							})
+					};
+					const opened: DriverOpen[] = [];
+					const links = yield* host([fake('p', opened)], { credentials: down });
+					yield* links.pair('a11', { key: 'k1' });
+					failing = true;
+					const written = yield* Effect.exit(
+						driverCall(() => present(opened[0]).credentials.write(new Map([['state', { cursor: 8 }]])))
+					);
+					expect(written._tag).toBe('Failure');
+					expect(attempts).toBe(5);
+					yield* links.close;
+				})
+			)
+		);
 	});
 
 	describe('the instance verbs', () => {
 		const member = (t: Kit, policies: readonly string[], over = {}) =>
-			t.as(t.member(policies, over)).authority;
+			t.as(t.member(policies, over)).pipe(Effect.map((member) => member.authority));
 		/** The verb routes over one manager; `as` names the session's authority for the next request. */
 		const verbs = (
 			workspace: Context.Context<TestWorkspace | WorkspaceServices>,
@@ -987,7 +1096,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 		) => {
 			let who: Authority | null = null;
 			const handle = (request: Request) =>
-				integrationRoutes(HttpServerRequest.fromWeb(request)).pipe(
+				integration_routes(HttpServerRequest.fromWeb(request)).pipe(
 					Effect.provideService(IntegrationManager, Option.some(links)),
 					Effect.provideService(SessionAuthority, {
 						of: () => Effect.sync(() => Option.fromNullishOr(who))
@@ -1029,7 +1138,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						const alice = t.member(['self'], { email: 'alice13@ws.example' });
 						const phone = present(
 							ok(
-								yield* act(t.as(t.admin).authority, 'sys_integration.create', [
+								yield* act((yield* t.as(t.admin)).authority, 'sys_integration.create', [
 									{
 										integration: 'whatsapp',
 										name: 'Alice’s phone',
@@ -1040,26 +1149,26 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						).id;
 						expect(present(yield* call(as(null), phone)).status).toBe(401);
 						expect(
-							present(yield* call(as(member(t, ['self'])), phone, 'pair', { key: 'x' })).status
+							present(yield* call(as(yield* member(t, ['self'])), phone, 'pair', { key: 'x' })).status
 						).toBe(403);
 						expect(
-							present(yield* call(as(member(t, ['self'], { external: true })), phone)).status
+							present(yield* call(as(yield* member(t, ['self'], { external: true })), phone)).status
 						).toBe(403);
-						expect(present(yield* call(as(t.as(alice).authority), 'a')).status).toBe(403); // a workspace instance is not hers
+						expect(present(yield* call(as((yield* t.as(alice)).authority), 'a')).status).toBe(403); // a workspace instance is not hers
 						expect(yield* sealed(phone)).toEqual({});
 						expect(
 							present(
-								yield* call(as(t.as(alice).authority), phone, 'pair', {
+								yield* call(as((yield* t.as(alice)).authority), phone, 'pair', {
 									key: 'mine'
 								})
 							).status
 						).toBe(200);
-						expect(present(yield* call(as(t.as(t.admin).authority), phone)).status).toBe(200);
+						expect(present(yield* call(as((yield* t.as(t.admin)).authority), phone)).status).toBe(200);
 						// a personal account sends no test message
 						expect(
-							yield* json(present(yield* call(as(t.as(alice).authority), phone, 'test', {})))
+							yield* json(present(yield* call(as((yield* t.as(alice)).authority), phone, 'test', {})))
 						).toEqual({
-							error: { code: 'invalidInput', message: 'A personal account sends no test message.' }
+							error: { code: 'invalid_input', message: 'A personal account sends no test message.' }
 						});
 						yield* links.close;
 					})
@@ -1084,7 +1193,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							test: {},
 							setup: {
 								kind: 'form',
-								steps: [{ text: 'Register this redirect URI', copy: 'redirectUrl' }],
+								steps: [{ text: 'Register this redirect URI', copy: 'redirect_url' }],
 								fields: [
 									{
 										name: 'tracking',
@@ -1101,7 +1210,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 								const report = (s: LinkStatus) => ctx.status(s);
 								return {
 									async send() {
-										return { providerId: '<x@acme.example>' };
+										return { provider_id: '<x@acme.example>' };
 									},
 									async pair() {
 										state = await ctx.state();
@@ -1127,7 +1236,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						};
 						const links = yield* host([mailbox]);
 						const REDIRECT = 'https://apex.example/acme/hooks/oauth/callback';
-						expect(present(yield* links.state('mail')).about).toEqual({ redirectUrl: REDIRECT });
+						expect(present(yield* links.state('mail')).about).toEqual({ redirect_url: REDIRECT });
 						// before any sign-in started, a callback reaches no link
 						expect(
 							(yield* links.callback(new Request(`${REDIRECT}?code=c&state=x.mail`))).status
@@ -1135,7 +1244,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						yield* links.pair('mail', {});
 						expect(state).toMatch(/^[\w-]{36}\.mail$/);
 						const wire = present(
-							decodeStatus(
+							decode_status(
 								Schema.decodeUnknownSync(Schema.Json)(
 									JSON.parse(JSON.stringify(yield* links.state('mail')))
 								)
@@ -1147,7 +1256,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							label: 'Sign in with Microsoft'
 						});
 						expect(present(present(present(wire.providers)[0]).setup.steps[0]).copy).toBe(
-							'redirectUrl'
+							'redirect_url'
 						);
 						expect(
 							present(present(present(present(wire.providers)[0]).setup.fields)[0]).options
@@ -1186,17 +1295,17 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						const opened: DriverOpen[] = [];
 						const links = yield* host([
 							fake('pi', opened, 'whatsapp', {
-								importStart: { kind: 'timestamp', precision: 'second' }
+								import_start: { kind: 'timestamp', precision: 'second' }
 							})
 						]);
-						const admin = t.as(t.admin).authority;
+						const admin = (yield* t.as(t.admin)).authority;
 						yield* links.pair(
 							'a24',
-							{ key: 'k', importStart: { kind: 'since', date: '2026-10-21', zone: 'Asia/Seoul' } },
+							{ key: 'k', import_start: { kind: 'since', date: '2026-10-21', zone: 'Asia/Seoul' } },
 							admin
 						);
 						const first = present(opened[0]);
-						expect(first.importStart).toEqual({
+						expect(first.import_start).toEqual({
 							kind: 'since',
 							at: '2026-10-20T15:00:00.000Z',
 							zone: 'Asia/Seoul',
@@ -1205,10 +1314,10 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						yield* driverCall(() => first.credentials.write(new Map([['state', { uid: 42 }]])));
 						const stored = yield* sealed('a24');
 						const before = Date.now();
-						yield* links.importStart('a24', { kind: 'now', zone: 'Asia/Seoul' }, admin);
+						yield* links.import_start('a24', { kind: 'now', zone: 'Asia/Seoul' }, admin);
 						const after = Date.now();
 						expect(opened).toHaveLength(2);
-						const applied = present(opened[1]).importStart;
+						const applied = present(opened[1]).import_start;
 						if (applied?.kind !== 'since') throw new Error('Expected frozen timestamp start');
 						expect(Date.parse(applied.at)).toBeGreaterThanOrEqual(Math.floor(before / 1000) * 1000);
 						expect(Date.parse(applied.at)).toBeLessThanOrEqual(Math.floor(after / 1000) * 1000);
@@ -1220,21 +1329,21 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							yield* driverCall(() =>
 								first.emit({ kind: 'messages', messages: [chat('stale-opening')] })
 							).pipe(Effect.flip)
-						).toMatchObject({ code: 'sourceChanged' });
+						).toMatchObject({ code: 'source_changed' });
 						expect(yield* links.state('a24')).toMatchObject({
 							state: 'connected',
 							account: 'k',
-							importStart: applied
+							import_start: applied
 						});
 						yield* links.close;
 						const resumed: DriverOpen[] = [];
 						const next = yield* host([
 							fake('pi', resumed, 'whatsapp', {
-								importStart: { kind: 'timestamp', precision: 'second' }
+								import_start: { kind: 'timestamp', precision: 'second' }
 							})
 						]);
 						yield* next.resume;
-						expect(present(resumed[0]).importStart).toEqual(applied);
+						expect(present(resumed[0]).import_start).toEqual(applied);
 						expect(yield* sealed('a24')).toEqual(stored);
 						yield* next.close;
 					})
@@ -1278,9 +1387,9 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						links = calLinks = yield* host([google]);
 						yield* links.pair('cal2', {});
 						ok(
-							yield* act(t.as(t.admin).authority, 'sys_integration.update', [
+							yield* act((yield* t.as(t.admin)).authority, 'sys_integration.update', [
 								{
-									target: 'cal2',
+									target: { id: 'cal2' },
 									set: { active: false }
 								}
 							])
@@ -1296,9 +1405,9 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						yield* links.resume;
 						expect(opened).toEqual(['cal2']);
 						ok(
-							yield* act(t.as(t.admin).authority, 'sys_integration.update', [
+							yield* act((yield* t.as(t.admin)).authority, 'sys_integration.update', [
 								{
-									target: 'cal2',
+									target: { id: 'cal2' },
 									set: { active: true }
 								}
 							])
@@ -1313,7 +1422,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 						});
 						const other = present(
 							ok(
-								yield* act(t.as(t.admin).authority, 'sys_integration.create', [
+								yield* act((yield* t.as(t.admin)).authority, 'sys_integration.create', [
 									{
 										integration: 'cal',
 										name: 'Other calendar'
@@ -1322,7 +1431,7 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 							).records[0]
 						).id;
 						yield* links.pair(other, {});
-						ok(yield* act(t.as(t.admin).authority, 'sys_integration.delete', [{ target: other }]));
+						ok(yield* act((yield* t.as(t.admin)).authority, 'sys_integration.delete', [{ target: { id: other } }]));
 						yield* until(() => closed.length === 2);
 						expect(closed).toEqual(['cal2', other]);
 						expect(yield* links.state('cal2')).toMatchObject({ state: 'connected' });
@@ -1336,11 +1445,11 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 it('the OAuth client a link grants with: the definition’s own when both secrets are set, else the host’s', () => {
 	const host = { google: { id: 'host-id', secret: 'host-secret' } };
 	const declared = { oauth: { client: 'ID', secret: 'SECRET' } };
-	expect(oauthClientOf({}, {}, host, 'google')).toEqual(host.google);
-	expect(oauthClientOf(declared, { ID: 'own', SECRET: 'shh' }, host, 'google')).toEqual({
+	expect(oauth_client_of({}, {}, host, 'google')).toEqual(host.google);
+	expect(oauth_client_of(declared, { ID: 'own', SECRET: 'shh' }, host, 'google')).toEqual({
 		id: 'own',
 		secret: 'shh'
 	});
-	expect(oauthClientOf(declared, { ID: 'own' }, host, 'google')).toEqual(host.google);
-	expect(oauthClientOf(declared, { ID: 'own', SECRET: '' }, undefined, 'google')).toBeUndefined();
+	expect(oauth_client_of(declared, { ID: 'own' }, host, 'google')).toEqual(host.google);
+	expect(oauth_client_of(declared, { ID: 'own', SECRET: '' }, undefined, 'google')).toBeUndefined();
 });

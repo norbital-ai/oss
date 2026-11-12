@@ -1,3 +1,5 @@
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // End to end through the engine entry and the test kit (§4.2–§4.4, P22, rules 57–61, §3.8): inbound messages reach the
 // engine's conversations by instance, its envoys run the agent's real turn loop over a scripted model, a model sync
 // sends through `integrations.deliver`, and notification callbacks reach the approvers' inbox and conversation links.
@@ -8,28 +10,34 @@ import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Conversations } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { TestWorkspace, respondSystem1 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { TestWorkspace, respond_system_1 } from '../../bolt-cli/src/test/index.ts'; // hook:decisions
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
 	return value;
 };
 
+const runtime_accounts = [
+	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'sales_tg', integration: 'telegram', status: { state: 'connected' } },
+	{ id: 'customer_mail', integration: 'customer_notices', status: { state: 'connected' } },
+] as const;
+
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
 	models: {
 		jobs: {
 			description: 'A job',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 		},
 		sent_emails: {
 			description: 'A customer notice',
-			label: 'subject',
+			record_label: 'record.subject',
 			fields: {
 				to: { kind: 'text' },
 				subject: { kind: 'text' },
@@ -39,31 +47,37 @@ const manifest = {
 				failed_reason: { kind: 'text', optional: true }
 			}
 		},
-		orders: { description: 'An order', label: 'title', fields: { title: { kind: 'text' } } },
-		tickets: { description: 'A ticket', label: 'title', fields: { title: { kind: 'text' } } }
+		orders: {
+			description: 'An order',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
+		tickets: {
+			description: 'A ticket',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		}
 	},
 	relationships: {},
 	exposures: {
 		jobs: {
-			read: { jobs: { fields: 'all' } },
+			outputs: { default: { jobs: { fields: 'all' } } },
 			create: { columns: { jobs: ['title', 'status'] } },
 			update: { columns: { jobs: ['status'] } }
 		},
 		sent_emails: {
-			read: { sent_emails: { fields: 'all' } },
+			outputs: { default: { sent_emails: { fields: 'all' } } },
 			create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
 			update: { columns: { sent_emails: ['sent_at', 'delivered_at', 'failed_reason'] } },
 			syncs: { mail: { with: 'customer_notices', read: true, write: true } }
 		},
 		orders: {
-			read: { orders: { fields: 'all' } },
-			create: { columns: { orders: ['title'] } },
-			notify: true
+			outputs: { default: { orders: { fields: 'all' } } },
+			create: { columns: { orders: ['title'] }, effect: true }
 		},
 		tickets: {
-			read: { tickets: { fields: 'all' } },
-			create: { columns: { tickets: ['title'] } },
-			notify: true
+			outputs: { default: { tickets: { fields: 'all' } } },
+			create: { columns: { tickets: ['title'] }, effect: true }
 		}
 	},
 	integrations: {
@@ -73,17 +87,23 @@ const manifest = {
 		}
 	},
 	policies: {
-		desk: { description: 'What the envoys may do', grants: { jobs: { read: true } } },
-		contractor: { description: 'Contractors', grants: { jobs: { read: true } } },
+		desk: {
+			description: 'What the envoys may do',
+			grants: { jobs: { outputs: { default: {} } } }
+		},
+		contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: {} } } } },
 		staff: {
 			description: 'Staff',
-			grants: { sent_emails: { read: true, create: true }, tickets: { read: true, create: true } }
+			grants: {
+				sent_emails: { outputs: { default: {} }, create: {} },
+				tickets: { outputs: { default: {} }, create: {} }
+			}
 		},
 		sales: {
 			description: 'Sales',
-			grants: { orders: { read: true, create: { check: true } } }
+			grants: { orders: { outputs: { default: {} }, create: { verdict: true } } }
 		},
-		finance: { description: 'Finance', grants: { orders: { read: true } } }
+		finance: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } }
 	},
 	teams: {
 		't-con': { name: 'Contractors', policies: ['contractor'] },
@@ -91,37 +111,40 @@ const manifest = {
 		't-sales': { name: 'Sales', policies: ['sales'] }
 	},
 	automations: {},
-	connections: {
-		field_wa: { integration: 'whatsapp', envoy: 'field_ops' },
-		sales_tg: { integration: 'telegram', envoy: 'sales_desk' },
-		customer_mail: { integration: 'customer_notices' }
-	},
-	envoys: {
-		field_ops: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			groupMessages: 'mention_or_reply',
-			delegation: 'disabled',
-			task: 'Keep jobs up to date.'
-		},
-		sales_desk: {
-			audience: 'public',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'disabled',
-			task: 'Answer about jobs.'
-		}
-	},
+	
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const salesDeskEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const runtimeEnvoys = [
+	{
+		id: fieldOpsEnvoy,
+		accounts: ['field_wa'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Keep jobs up to date.'
+	},
+	{
+		id: salesDeskEnvoy,
+		accounts: ['sales_tg'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		task: 'Answer about jobs.'
+	}
+] as const;
 
 const guest = program(`export default {
 	model: {
@@ -139,18 +162,18 @@ const guest = program(`export default {
 				return {rows:[...rows.values()]};
 			}
 		} } } },
-		orders: { bodies: { notify: function* (event) {
-			return event.kind==='approval'&&event.move==='request'?[{title:'Awaiting your decision',to:['approvers']}]:[];
-		} } },
-		tickets: { bodies: { notify: function* (event) {
-			if(event.kind!=='write'||event.action!=='create')return [];
-			return [
-				{title:'New ticket',description:'A ticket was opened.',to:[{team:'t-con'},...(event.actor.kind==='member'?[{user:event.actor.id}]:[])],via:['customer_mail']},
+		orders: { bodies: { effect: { create: function* (_changes, ctx) {
+			if(ctx.event.kind==='approval'&&ctx.event.move==='request') yield* ctx.notify([{title:'Awaiting your decision',to:['approvers']}]);
+		} } } },
+		tickets: { bodies: { effect: { create: function* (_changes, ctx) {
+			if(ctx.event.kind!=='write')return;
+			yield* ctx.notify([
+				{title:'New ticket',description:'A ticket was opened.',to:[{team:'t-con'},...(ctx.actor.kind==='member'?[{user:ctx.actor.id}]:[])],via:['customer_mail']},
 				{title:'New ticket',to:[{team:'t-con'}],via:['field_wa']}
-			];
-		} } }
+			]);
+		} } } }
 	},
-	policy: { sales: { grants: { orders: { create: { check: function*(_rows,ctx){return ctx.approve((flow)=>flow.step('Finance',{teams:['t-fin']}));} } } } } }
+	policy: { sales: { grants: { orders: { create: { verdict: function*(_rows,ctx){return ctx.approve({ steps: [{ name: 'Finance', teams: ['t-fin'] }] });} } } } } }
 };`);
 
 /** "close <id>" asks for `act jobs.update`; a tool result is answered with the result; anything else is echoed. */
@@ -159,7 +182,7 @@ const text = (c: Json) =>
 const scriptedAi = () => {
 	const ai = { requests: 0 };
 	const layer = Layer.succeed(Ai, {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Port.unavailable('ai.catalog'),
@@ -178,7 +201,7 @@ const scriptedAi = () => {
 					if (last.role === 'tool')
 						return {
 							content: `result: ${JSON.stringify(last.content)}`,
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage
 						};
@@ -186,20 +209,20 @@ const scriptedAi = () => {
 					if (close !== null)
 						return {
 							content: '',
-							toolCalls: [
+							tool_calls: [
 								{
 									id: `c${ai.requests}`,
 									name: 'act',
 									input: {
 										callable: 'jobs.update',
-										input: [{ target: present(close[1]), set: { status: 'done' } }]
+input: [{ target: present(close[1]), set: { status: 'done' } }]
 									}
 								}
 							],
 							finish: 'tool',
 							usage
 						};
-					return { content: `echo: ${text(last.content)}`, toolCalls: [], finish: 'stop', usage };
+					return { content: `echo: ${text(last.content)}`, tool_calls: [], finish: 'stop', usage };
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});
@@ -222,16 +245,19 @@ const setup = Effect.runSync(
 		Effect.gen(function* () {
 			const ai = scriptedAi();
 			const context = yield* Layer.build(
-				TestWorkspace.layer({
-					manifest,
-					guest: yield* guest,
-					ports: ai.layer,
-					host: { envoys: { workspace: 'Acme Field' } }
-				})
+				with_envoys(
+					with_accounts(TestWorkspace.layer({
+						manifest,
+						guest: yield* guest,
+						ports: ai.layer,
+						host: { envoys: { workspace: 'Acme Field' } }
+					}), runtime_accounts),
+					runtimeEnvoys
+				)
 			);
 			const t = Context.get(context, TestWorkspace),
 				conversations = Context.get(context, Conversations),
-				route = yield* routeFixture(context);
+				route = yield* route_fixture(context);
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
 			('${ADA}', 'ada@ws.example', 'Ada', true, NULL, '+65 9123 4567'),
@@ -258,20 +284,19 @@ describe('connections through the engine entry (rule 61)', () => {
 				Effect.gen(function* () {
 					const { t, route, sent, ok } = yield* setup;
 					ok(
-						(yield* actReply(route, t.as(t.member(['staff'], { id: ADA })).authority, {
-							callable: 'tickets.create',
-							input: [{ title: 'Leak' }],
-							issuedAt: t.clock.now()
+						(yield* act_reply(route, (yield* t.as(t.member(['staff'], { id: ADA }))).authority, {
+							acts: { 'tickets.create': [{ title: 'Leak' }] },
+							issued_at: t.clock.now()
 						})).outcome
 					);
 					const [callbacks] = yield* t.db.read([
 						{
-							text: "SELECT count(*)::int AS n FROM sys_run WHERE automation = 'bolt.notify' AND state = 'queued'",
+							text: "SELECT count(*)::int AS n FROM sys_run WHERE automation = 'tickets.effect.create' AND state = 'queued'",
 							params: []
 						}
 					]);
 					expect(callbacks?.rows).toEqual([{ n: 1 }]);
-					yield* t.runDue();
+					yield* t.run_due();
 					const [queued] = yield* t.db.read([
 						{
 							text: `SELECT n.recipient->>'channel' AS channel, (SELECT count(*)::int FROM sys_run r WHERE r.automation = 'notifications.deliver') AS runs
@@ -294,7 +319,14 @@ describe('connections through the engine entry (rule 61)', () => {
 						{ member: CAL, title: 'New ticket' },
 						{ member: CAL, title: 'New ticket' }
 					]);
-					yield* t.runDue();
+					yield* t.run_due();
+					const [admitted] = yield* t.db.read([
+						{
+							text: "SELECT state,output FROM sys_run WHERE automation='notifications.deliver'",
+							params: []
+						}
+					]);
+					expect(present(admitted).rows).toEqual([{ state: 'succeeded', output: { queued: 3, skipped: 0 } }]);
 					expect(
 						sent('customer_mail')
 							.map((s) => s.message)
@@ -306,7 +338,7 @@ describe('connections through the engine entry (rule 61)', () => {
 					expect(sent('field_wa').map((s) => s.message)).toMatchObject([
 						{ to: '6598765432@s.whatsapp.net', text: 'New ticket' }
 					]);
-					yield* t.runDue(); // a re-run of the same notices sends nothing twice
+					yield* t.run_due(); // a re-run of the same notices sends nothing twice
 					expect(sent('customer_mail')).toHaveLength(2);
 				})
 			)
@@ -328,20 +360,19 @@ describe('connections through the engine entry (rule 61)', () => {
 						text: "UPDATE sys_user SET team = 't-sales' WHERE id = $1",
 						params: [author.id]
 					});
-					const proposal = (yield* actReply(route, yield* t.signIn('sales@ws.example'), {
-						callable: 'orders.create',
-						input: [{ title: 'desk' }],
-						issuedAt: t.clock.now()
+					const proposal = (yield* act_reply(route, yield* t.sign_in('sales@ws.example'), {
+						acts: { 'orders.create': [{ title: 'desk' }] },
+						issued_at: t.clock.now()
 					})).outcome;
 					expect(proposal).toMatchObject({
-						kind: 'pendingApproval',
+						kind: 'pending_approval',
 						records: [{ model: 'orders' }]
 					});
 					expect(
 						(yield* t.db.read([{ text: 'SELECT count(*)::int AS n FROM orders', params: [] }]))[0]
 							?.rows
 					).toEqual([{ n: 1 }]);
-					yield* t.runDue();
+					yield* t.run_due();
 					const [rows] = yield* t.db.read([
 						{
 							text: `SELECT member, title, link->>'model' AS c, read_at FROM sys_notification WHERE link->>'model' = 'orders' ORDER BY member`,

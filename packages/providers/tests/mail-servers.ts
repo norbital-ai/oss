@@ -1,11 +1,14 @@
 // Local fake IMAP and SMTP servers for the mailbox link's tests: plain TCP on 127.0.0.1, just enough of each
 // protocol for imapflow and nodemailer (IMAP: LOGIN, AUTHENTICATE XOAUTH2, SELECT/EXAMINE, UID FETCH, UID SEARCH, IDLE;
 // SMTP: EHLO with DSN, AUTH, MAIL/RCPT with their parameters, DATA). Never a real mailbox.
-import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 
 const listen = async (server: Server) => {
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-	return (server.address() as AddressInfo).port;
+	const address = server.address();
+	if (address === null || typeof address === 'string')
+		throw new Error('The mail server has no TCP address.');
+	return address.port;
 };
 const closer = (server: Server, sockets: Set<Socket>) => async () => {
 	for (const s of sockets) s.destroy();
@@ -48,8 +51,8 @@ export async function fakeImap(o: {
 				.map((m) => m.uid)
 				.filter((uid) =>
 					set.split(',').some((part) => {
-						const [a, b = a] = part.split(':').map((x) => (x === '*' ? max : Number(x)));
-						const [lo, hi] = [Math.min(a!, b!), Math.max(a!, b!)];
+						const [a = Number.NaN, b = a] = part.split(':').map((x) => (x === '*' ? max : Number(x)));
+						const [lo, hi] = [Math.min(a, b), Math.max(a, b)];
 						return uid >= lo && uid <= hi;
 					})
 				);
@@ -135,12 +138,13 @@ export async function fakeImap(o: {
 						commands.push(items);
 						const cap = /BODY\.PEEK\[\]<0\.(\d+)>/i.exec(items)?.[1];
 						for (const uid of found) {
-							const m = messages.find((x) => x.uid === uid)!,
-								seq = messages.indexOf(m) + 1;
+							const m = messages.find((x) => x.uid === uid);
+							if (m === undefined) throw new Error('The requested fake IMAP message disappeared.');
+							const seq = messages.indexOf(m) + 1;
 							const received = m.receivedAt
 								?.toUTCString()
 								.replace(/^\w+, (\d+) (\w+) (\d+) ([\d:]+) GMT$/, '$1-$2-$3 $4 +0000');
-							const [section, data] = /BODY\.PEEK\[HEADER\]/i.test(items)
+							const [section, data]: readonly [string, string] = /BODY\.PEEK\[HEADER\]/i.test(items)
 								? ['BODY[HEADER]', m.raw.slice(0, m.raw.indexOf('\r\n\r\n') + 4)]
 								: cap === undefined
 									? ['BODY[]', m.raw]
@@ -243,8 +247,8 @@ export async function fakeSmtp(o: { accept?: (user: string, secret: string) => b
 		socket.on('error', () => undefined);
 		let buffer = '',
 			data: string[] | null = null,
-			cur = { mailFrom: '', rcpts: [] as string[] },
 			authing = false;
+		let cur: { mailFrom: string; rcpts: string[] } = { mailFrom: '', rcpts: [] };
 		const say = (s: string) => {
 			if (!socket.destroyed) socket.write(`${s}\r\n`);
 		};

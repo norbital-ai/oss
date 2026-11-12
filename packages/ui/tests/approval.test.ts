@@ -1,3 +1,4 @@
+import { single_act } from './act-envelope.ts';
 // The approval panel (spec §7): a scope selector over a record's requests and a two-step decision form showing exactly
 // the host's decisions.
 import './dom.ts';
@@ -54,8 +55,8 @@ const request: ApprovalView = {
 	step: 0,
 	steps,
 	superseded_by: [],
-	teamNames: { field_ops_controllers: 'Controllers', commercial: 'Commercial' },
-	userNames: {},
+	team_names: { field_ops_controllers: 'Controllers', commercial: 'Commercial' },
+	user_names: {},
 	requestor: by('Bob'),
 	log: [entry('request', 'Bob', '2026-10-13T12:00:00Z')],
 	records: [{ model: 'jobs', id: 'j1', op: 'update' }],
@@ -71,7 +72,8 @@ const panel = (
 		const outcomes: Outcome[] = [];
 		const { bolt } = yield* browser(() =>
 			viewFixture({
-				act: (callable, input) => {
+				act: (body) => {
+					const { callable, input } = single_act(body);
 					act?.(callable, input);
 					return { kind: 'committed', output: null, records: [] };
 				}
@@ -85,7 +87,7 @@ const panel = (
 				catalog: {},
 				part: 'approval',
 				view: ApprovalPanel,
-				props: { requests, onOutcome: (o: Outcome) => outcomes.push(o) }
+				props: { requests, on_outcome: (o: Outcome) => outcomes.push(o) }
 			}
 		});
 		mounted.push(async () => {
@@ -115,7 +117,7 @@ it.live(
 					status: 'Rejected',
 					log: [
 						...request.log,
-						entry('requestChanges', 'Sam', '2026-10-14T12:00:00Z', {
+						entry('request_changes', 'Sam', '2026-10-14T12:00:00Z', {
 							to: 'ChangesRequested',
 							reason: 'Add the quote'
 						}),
@@ -126,8 +128,8 @@ it.live(
 						entry('reject', 'Sam', '2026-10-16T12:00:00Z', {
 							to: 'Rejected',
 							reason: 'Too costly',
-							rolledBack: [{ model: 'jobs', id: 'j1', action: 'restored' }],
-							skipped: [{ model: 'jobs', id: 'j1', field: 'customer', reason: 'deletedTarget' }]
+							rolled_back: [{ model: 'jobs', id: 'j1', action: 'restored' }],
+							skipped: [{ model: 'jobs', id: 'j1', field: 'customer', reason: 'deleted_target' }]
 						})
 					]
 				}
@@ -142,7 +144,7 @@ it.live(
 			const log = popover();
 			assert.deepEqual(
 				[...log.querySelectorAll<HTMLElement>('[data-move]')].map((li) => li.dataset['move']),
-				['requestChanges', 'resubmit', 'reject']
+				['request_changes', 'resubmit', 'reject']
 			);
 			assert.deepEqual([...log.querySelectorAll('[data-reason]')].map(textOf), [
 				'“Add the quote”',
@@ -177,7 +179,7 @@ it.live(
 					{
 						...request,
 						moves: [
-							{ decision: 'requestChanges', reason: 'required' },
+							{ decision: 'request_changes', reason: 'required' },
 							{ decision: 'approve', reason: 'optional' },
 							{ decision: 'reject', reason: 'required' }
 						]
@@ -189,7 +191,7 @@ it.live(
 				decisions(target).map((b) => textOf(b).trim()),
 				['Approve', 'Reject', 'Request changes']
 			);
-			required(decisions(target).find((b) => b.dataset['decision'] === 'requestChanges')).click();
+			required(decisions(target).find((b) => b.dataset['decision'] === 'request_changes')).click();
 			yield* browser(() => settle());
 			const form = element<HTMLFormElement>(target, '[data-view=approval-controls] form');
 			const reason = element<HTMLTextAreaElement>(form, 'textarea');
@@ -202,7 +204,7 @@ it.live(
 			element<HTMLButtonElement>(form, '[data-back]').click();
 			yield* browser(() => settle());
 			assert.equal(decisions(target).length, 3);
-			required(decisions(target).find((b) => b.dataset['decision'] === 'requestChanges')).click();
+			required(decisions(target).find((b) => b.dataset['decision'] === 'request_changes')).click();
 			yield* browser(() => settle());
 			const note = element<HTMLTextAreaElement>(target, '[data-view=approval-controls] textarea');
 			note.value = 'Add the quote';
@@ -215,7 +217,7 @@ it.live(
 			assert.deepEqual(sent, [
 				{
 					callable: 'approvals.decide',
-					input: { requestId: 'r1', decision: 'requestChanges', reason: 'Add the quote' }
+					input: { request_id: 'r1', decision: 'request_changes', reason: 'Add the quote' }
 				}
 			]);
 			assert.equal(outcomes.length, 1);
@@ -233,7 +235,7 @@ it.live('approve takes an optional reason; a superseder sees the same three deci
 					moves: [
 						{ decision: 'approve', reason: 'optional' },
 						{ decision: 'reject', reason: 'required' },
-						{ decision: 'requestChanges', reason: 'required' }
+						{ decision: 'request_changes', reason: 'required' }
 					]
 				}
 			],
@@ -247,7 +249,7 @@ it.live('approve takes an optional reason; a superseder sees the same three deci
 		assert.equal(confirm.disabled, false);
 		confirm.click();
 		yield* browser(() => settle());
-		assert.deepEqual(sent, [{ requestId: 'r1', decision: 'approve' }]);
+		assert.deepEqual(sent, [{ request_id: 'r1', decision: 'approve' }]);
 
 		// a superseder: the host requires the reason for their approve
 		const superseder = yield* panel([
@@ -256,7 +258,7 @@ it.live('approve takes an optional reason; a superseder sees the same three deci
 				moves: [
 					{ decision: 'approve', reason: 'required' },
 					{ decision: 'reject', reason: 'required' },
-					{ decision: 'requestChanges', reason: 'required' }
+					{ decision: 'request_changes', reason: 'required' }
 				]
 			}
 		]);
@@ -293,7 +295,7 @@ it.live(
 			assert.equal(confirm.disabled, false);
 			confirm.click();
 			yield* browser(() => settle());
-			assert.deepEqual(sent, [{ requestId: 'r1', decision: 'withdraw' }]);
+			assert.deepEqual(sent, [{ request_id: 'r1', decision: 'withdraw' }]);
 
 			const closed = yield* panel([
 				{
@@ -321,7 +323,7 @@ it.live('the requester of a request that asks for changes is told that saving re
 				mine: true,
 				log: [
 					...request.log,
-					entry('requestChanges', 'Sam', '2026-10-14T12:00:00Z', {
+					entry('request_changes', 'Sam', '2026-10-14T12:00:00Z', {
 						to: 'ChangesRequested',
 						reason: 'Add the quote'
 					})
@@ -376,11 +378,11 @@ it.live('several requests: the selector defaults to the open one and switches th
 it('a row approval decodes once; a malformed `$approval` is no approval', async () => {
 	const { approvalOf, resubmits } = await import('../src/approval/row.ts');
 	const $approval = {
-		requestId: 'r1',
+		request_id: 'r1',
 		state: 'ChangesRequested',
 		step: 0,
 		steps: [{ name: 'Review', teams: ['ops'], users: [] }],
-		requestedBy: 'ada'
+		requested_by: 'ada'
 	};
 	assert.deepEqual(approvalOf({ id: 'x', $approval }), $approval);
 	assert.equal(resubmits({ $approval }), true);

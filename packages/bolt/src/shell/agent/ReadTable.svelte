@@ -4,22 +4,20 @@
 -->
 <script lang="ts">
 	import { Schema } from 'effect';
-	import { StructuredData } from '@norbital-ai/ui';
+	import { StructuredData, type UiContext } from '@norbital-ai/ui';
 
-	let { value, t }: { value: unknown; t: (key: string) => string } = $props();
+	let { ctx, value, t }: { ctx: UiContext; value: unknown; t: (key: string) => string } = $props();
 	type Row = Readonly<Record<string, unknown>>;
+	type Root = { name: string; rows: readonly Row[]; total: number; next: string | null };
 	const object = (v: unknown): v is Readonly<Record<string, unknown>> =>
 		typeof v === 'object' && v !== null && !Array.isArray(v);
 	const roots = $derived.by(() => {
 		if (!object(value)) return [];
-		return Object.entries(value).flatMap(([name, held]) => {
-			if (Array.isArray(held))
-				return [
-					{ name, rows: held as readonly Row[], total: held.length, next: null as string | null }
-				];
+		return Object.entries(value).flatMap(([name, held]): Root[] => {
+			if (Array.isArray(held)) return [{ name, rows: held.filter(object), total: held.length, next: null }];
 			if (!object(held) || !Array.isArray(held.rows)) return [];
 			// a grouped row's key is its columns
-			const rows: readonly Row[] = (held.rows.filter(object) as readonly Row[]).map(
+			const rows: readonly Row[] = held.rows.filter(object).map(
 				({ key, ...row }) =>
 					object(key) ? { ...key, ...row } : key === undefined ? row : { key, ...row }
 			);
@@ -73,7 +71,7 @@
 														>{Array.isArray(cell) ? `${cell.length} items` : 'Open'}</summary
 													>
 													<div class="max-h-40 overflow-auto">
-														<StructuredData
+														<StructuredData {ctx}
 															value={Schema.decodeUnknownSync(Schema.Json)(cell)}
 															name={column}
 															frame={false}

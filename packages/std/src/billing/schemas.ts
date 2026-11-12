@@ -17,12 +17,12 @@ export type BillingCataloguePriceModel = Schema.Schema.Type<
 	typeof BillingCataloguePriceModelSchema
 >;
 
-/** The schema of one price tier: the quantity it runs `upTo` (or `inf`) and its amount. */
+/** The schema of one price tier: the quantity it runs `up_to` (or `inf`) and its amount. */
 export const BillingCatalogueTierSchema = Schema.Struct({
-	upTo: Schema.Union([Schema.Number, Schema.Literal('inf')]),
+	up_to: Schema.Union([Schema.Number, Schema.Literal('inf')]),
 	amount: Schema.String
 });
-/** One price tier: the quantity it runs `upTo` (or `inf`) and its amount. */
+/** One price tier: the quantity it runs `up_to` (or `inf`) and its amount. */
 export type BillingCatalogueTier = Schema.Schema.Type<typeof BillingCatalogueTierSchema>;
 
 /** The schema of a billing provider environment: `sandbox` or `production`. */
@@ -50,12 +50,12 @@ export const BillingCataloguePriceSchema = Schema.Struct({
 	model: BillingCataloguePriceModelSchema,
 	interval: BillingCatalogueIntervalSchema,
 	checkout: Schema.Boolean,
-	stripePriceIds: BillingCatalogueProviderPriceIdsSchema,
+	stripe_price_ids: BillingCatalogueProviderPriceIdsSchema,
 	amount: Schema.optional(Schema.String),
-	unitAmountDecimal: Schema.optional(Schema.String),
-	meterId: Schema.optional(Schema.String),
+	unit_amount_decimal: Schema.optional(Schema.String),
+	meter_id: Schema.optional(Schema.String),
 	dimensions: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-	tiersMode: Schema.optional(Schema.Literals(['graduated', 'volume'])),
+	tiers_mode: Schema.optional(Schema.Literals(['graduated', 'volume'])),
 	tiers: Schema.optional(Schema.Array(BillingCatalogueTierSchema))
 });
 /**
@@ -71,8 +71,8 @@ export type BillingCataloguePrice = Schema.Schema.Type<typeof BillingCataloguePr
  */
 export const BillingCataloguePlanSchema = Schema.Struct({
 	id: Schema.String,
-	trialDays: Schema.Number,
-	allowPromotionCodes: Schema.Boolean
+	trial_days: Schema.Number,
+	allow_promotion_codes: Schema.Boolean
 });
 /** A plan: the base subscription's id, trial days and whether promotion codes are allowed. */
 export type BillingCataloguePlan = Schema.Schema.Type<typeof BillingCataloguePlanSchema>;

@@ -13,6 +13,66 @@ const first = <A>(rows: readonly A[]): A => {
 };
 
 describe('typed read projections', () => {
+	it.effect('keeps nulls in predicate complements and refuses null membership literals', () =>
+		Effect.gen(function* () {
+			const declaration = schema({
+				entry: table({ key: 'text', fields: { value: { kind: 'text', optional: true } } })
+			});
+			const pg = yield* database;
+			yield* script(pg, `${(yield* build(declaration)).join(';\n')};`);
+			const db = store(declaration),
+				execute = run(pg);
+			yield* execute(
+				yield* db.create('entry', [
+					{ id: 'null', value: null },
+					{ id: 'a', value: 'a' },
+					{ id: 'b', value: 'b' }
+				])
+			);
+			const members = yield* execute(
+				yield* db.read('entry', { where: { value: { in: ['a'] } }, order_by: 'id', all: true })
+			);
+			expect(members.rows.map((row) => row.id)).toEqual(['a']);
+			const complement = yield* execute(
+				yield* db.read('entry', {
+					where: { not: { value: { in: ['a'] } } },
+					order_by: 'id',
+					all: true
+				})
+			);
+			expect(complement.rows.map((row) => row.id)).toEqual(['b', 'null']);
+			const different = yield* execute(
+				yield* db.read('entry', { where: { value: { ne: 'a' } }, order_by: 'id', all: true })
+			);
+			expect(different.rows.map((row) => row.id)).toEqual(['b', 'null']);
+			const absent = yield* execute(
+				yield* db.read('entry', { where: { value: { is_null: true } }, all: true })
+			);
+			expect(absent.rows.map((row) => row.id)).toEqual(['null']);
+			const empty = yield* execute(
+				yield* db.read('entry', { where: { value: { in: [] } }, all: true })
+			);
+			expect(empty.rows).toEqual([]);
+			const outside_empty = yield* execute(
+				yield* db.read('entry', {
+					where: { not: { value: { in: [] } } },
+					order_by: 'id',
+					all: true
+				})
+			);
+			expect(outside_empty.rows.map((row) => row.id)).toEqual(['a', 'b', 'null']);
+			for (const where of [
+				{ value: { eq: null } },
+				{ value: { ne: null } },
+				{ value: { in: ['a', null] } },
+				{ value: { nin: ['a'] } },
+				{ value: { isNull: true } }
+			]) {
+				const failure = yield* Effect.flip(read(db.catalog, 'entry', { where, all: true }));
+				expect(failure.code).toBe('invalid');
+			}
+		})
+	);
 	it.effect(
 		'pages filtered inline values through tied and null sort keys without losing rows',
 		() =>
@@ -27,7 +87,7 @@ describe('typed read projections', () => {
 								optional: true,
 								fields: {
 									rank: { kind: 'int', optional: true },
-									tags: { kind: 'list', of: { kind: 'text' } }
+									tags: { kind: 'text', many: true }
 								}
 							}
 						}
@@ -50,11 +110,11 @@ describe('typed read projections', () => {
 				);
 				const where = {
 					active: { eq: true },
-					or: [{ profile: { tags: { some: { eq: 'keep' } } } }, { profile: { isNull: true } }]
+					or: [{ profile: { tags: { some: { eq: 'keep' } } } }, { profile: { is_null: true } }]
 				};
 				for (const direction of ['asc', 'desc'] as const) {
-					const orderBy = { 'profile.rank': direction };
-					const all = yield* execute(yield* db.read('entry', { where, orderBy, all: true }));
+					const order_by = { 'profile.rank': direction };
+					const all = yield* execute(yield* db.read('entry', { where, order_by, all: true }));
 					expect(all.rows.map((row) => row.id)).toEqual(
 						direction === 'asc' ? [1, 2, 3, 4, 5] : [4, 5, 3, 1, 2]
 					);
@@ -64,7 +124,7 @@ describe('typed read projections', () => {
 						const result = yield* execute(
 							yield* db.read('entry', {
 								where,
-								orderBy,
+								order_by,
 								limit: 2,
 								...(after === undefined ? {} : { after })
 							})
@@ -75,18 +135,18 @@ describe('typed read projections', () => {
 					}
 					expect(after).toBeUndefined();
 					expect(seen).toEqual(all.rows.map((row) => row.id));
-					const first = yield* execute(yield* db.read('entry', { where, orderBy, limit: 2 }));
+					const first = yield* execute(yield* db.read('entry', { where, order_by, limit: 2 }));
 					expect(first.next).not.toBeNull();
 					expect(
 						(yield* Effect.flip(
 							db.read('entry', {
 								where: { active: { eq: false } },
-								orderBy,
+								order_by,
 								limit: 2,
 								after: first.next ?? ''
 							})
 						)).code
-					).toBe('badCursor');
+					).toBe('bad_cursor');
 				}
 			})
 	);
@@ -103,12 +163,12 @@ describe('typed read projections', () => {
 			const rows = yield* execute(yield* db.create('entry', [{}, {}]));
 			expect(rows.map((row) => row.id)).toEqual([1, 2]);
 			expect(rows.map((row) => row.name)).toEqual(['Untitled', 'Untitled']);
-			const page = yield* execute(yield* db.read('entry', { orderBy: { id: 'desc' }, limit: 1 }));
+			const page = yield* execute(yield* db.read('entry', { order_by: { id: 'desc' }, limit: 1 }));
 			expect(page.rows.map((row) => row.id)).toEqual([2]);
 			expect(page.next).not.toBeNull();
 			const next = yield* execute(
 				yield* db.read('entry', {
-					orderBy: { id: 'desc' },
+					order_by: { id: 'desc' },
 					limit: 1,
 					after: page.next ?? ''
 				})
@@ -203,7 +263,7 @@ describe('typed read projections', () => {
 							order: { select: { number: true }, with: { customer: { select: { name: true } } } }
 						}
 					},
-					orderBy: 'body',
+					order_by: 'body',
 					all: true
 				});
 				let statements = 0;
@@ -277,13 +337,13 @@ describe('typed read projections', () => {
 					with: {
 						lines: {
 							where: { qty: { gt: 0 } },
-							orderBy: { sku: 'desc' },
+							order_by: { sku: 'desc' },
 							limit: 1,
 							select: { sku: true },
 							with: { order: { select: { number: true } } }
 						}
 					},
-					orderBy: 'number',
+					order_by: 'number',
 					all: true
 				});
 				const page = yield* execute(statement);
@@ -354,7 +414,7 @@ describe('typed read projections', () => {
 								}
 							}
 						},
-						orderBy: 'code',
+						order_by: 'code',
 						all: true,
 						with: {
 							orders: {
@@ -376,7 +436,7 @@ describe('typed read projections', () => {
 								{ orders: { some: { address: { city: { eq: 'Singapore' } } } } }
 							]
 						},
-						orderBy: 'code',
+						order_by: 'code',
 						all: true
 					})
 				);
@@ -388,7 +448,7 @@ describe('typed read projections', () => {
 								orders: { some: { status: { eq: 'open' }, address: { city: { eq: 'Singapore' } } } }
 							}
 						},
-						orderBy: 'code',
+						order_by: 'code',
 						all: true
 					})
 				);
@@ -482,12 +542,12 @@ describe('typed read projections', () => {
 											kind: 'object',
 											fields: { city: { kind: 'text' }, floor: { kind: 'int' } }
 										},
-										tags: { kind: 'list', of: { kind: 'text' } },
+										tags: { kind: 'text', many: true },
 										price: { kind: 'decimal', scale: 2, optional: true }
 									}
 								}
 							},
-							amounts: { kind: 'list', of: { kind: 'decimal', scale: 2 }, default: [] },
+							amounts: { kind: 'decimal', scale: 2, many: true, default: [] },
 							owner: { kind: 'ref', to: 'owner' },
 							about: { kind: 'ref', to: ['owner', 'tenant'], optional: true }
 						}
@@ -503,7 +563,7 @@ describe('typed read projections', () => {
 				);
 				yield* execute(yield* db.create('tenant', { handle: 'beta', name: 'Beta' }));
 				const tenants = yield* execute(
-					yield* db.read('tenant', { orderBy: { handle: 'desc' }, all: true })
+					yield* db.read('tenant', { order_by: { handle: 'desc' }, all: true })
 				);
 				expect(tenants.rows.map((row) => row.handle)).toEqual(['beta', 'acme']);
 				const document = first(
@@ -530,7 +590,7 @@ describe('typed read projections', () => {
 							payload: { location: { floor: { gte: 4 } }, tags: { some: { eq: 'a' } } },
 							owner: { eq: owner.id }
 						},
-						orderBy: { 'payload.location.city': 'asc' },
+						order_by: { 'payload.location.city': 'asc' },
 						all: true
 					})
 				);
@@ -578,7 +638,7 @@ describe('typed read projections', () => {
 								tenant: { select: { name: true } }
 							}
 						},
-						orderBy: 'id',
+						order_by: 'id',
 						all: true
 					})
 				);

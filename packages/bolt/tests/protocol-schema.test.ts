@@ -9,15 +9,15 @@ import { afterAll } from 'vitest';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, FileSystem, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { artifactHash, CONTRACT, readArtifact, treeHash } from '../src/engine/artifact/read.ts';
-import { prepareMigrations } from '../../bolt-cli/src/compiler/migrations.ts';
+import { artifact_hash, CONTRACT, read_artifact, tree_hash } from '../src/engine/artifact/read.ts';
+import { prepare_migrations } from '../../bolt-cli/src/compiler/migrations.ts';
 import { Pristine } from '../src/node/db/pglite.ts';
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 import type { Outcome as EngineOutcome } from '../src/engine/contracts.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import { BoltError } from '../src/protocol/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { fingerprint, schemaSlice } from '../src/engine/schema/plan.ts';
+import { fingerprint, schema_slice } from '../src/engine/schema/plan.ts';
 import {
 	ActBody,
 	ActReply,
@@ -43,8 +43,8 @@ import {
 	type Outcome,
 	type WriteOutcome
 } from '../src/protocol/schema.ts';
-import { clientPage } from '../src/protocol/static.ts';
-import { refusalOfStatus, statusOf, wireError } from '../src/protocol/wire.ts';
+import { client_page } from '../src/protocol/static.ts';
+import { refusal_of_status, status_of, wire_error } from '../src/protocol/wire.ts';
 
 /** `value` decodes, and its encoding decodes to the same value. */
 const trip = <A, I>(schema: Schema.Codec<A, I>, value: unknown): A => {
@@ -64,11 +64,17 @@ describe('the wire Schemas', () => {
 		trip(QBody, { reads: [read, { m: 'transcript', a: ['c1', { tail: 20 }] }] });
 		trip(QReply, { answers: [[{ id: 'o1' }], null] });
 		trip(ActBody, {
-			callable: 'orders.create',
-			input: [{ total: { $dec: '1.20' } }],
-			issuedAt: '2026-10-14T00:00:00.000Z',
-			observed: { o1: 3 },
-			onConflict: 'keep'
+			acts: {
+				'orders.create': [{ total: { $dec: '1.20' } }],
+				'orders.update': [{ target: { id: 'o1', revision: 3 }, set: { total: { $dec: '2.40' } } }],
+				'orders.delete': [{ target: { id: 'o2', revision: 4 } }]
+			},
+			issued_at: '2026-10-14T00:00:00.000Z'
+		});
+		trip(ActBody, {
+			callable: 'run',
+			input: { automation: 'nightly', id: 'r1' },
+			issued_at: '2026-10-14T00:00:00.000Z'
 		});
 		for (const outcome of [
 			{
@@ -76,7 +82,7 @@ describe('the wire Schemas', () => {
 				output: { id: 'o1' },
 				records: [{ model: 'orders', id: 'o1', revision: 1 }]
 			},
-			{ kind: 'pendingApproval', requestId: 'r1', records: [] },
+			{ kind: 'pending_approval', request_id: 'r1', records: [] },
 			{
 				kind: 'refused',
 				code: 'unique',
@@ -85,9 +91,9 @@ describe('the wire Schemas', () => {
 				row: 0,
 				rows: [0, 2],
 				rule: 'orders.transform',
-				data: { requestId: 'r1' }
+				data: { request_id: 'r1' }
 			},
-			{ kind: 'conflict', records: [{ model: 'orders', id: 'o1', fields: ['total'] }] },
+			{ kind: 'conflict', records: [{ model: 'orders', id: 'o1' }] },
 			{ kind: 'unknown', invocation: 'i1' }
 		])
 			trip(ActReply, { outcome, v: 7 });
@@ -97,7 +103,7 @@ describe('the wire Schemas', () => {
 			add: [{ view: 'v', read }],
 			drop: ['w']
 		});
-		trip(LiveReply, { errors: [{ view: 'v', code: 'tooManySubscriptions', message: 'too many' }] });
+		trip(LiveReply, { errors: [{ view: 'v', code: 'too_many_subscriptions', message: 'too many' }] });
 		for (const frame of [
 			{ t: 'hello', conn: 'c', v: 0 },
 			{ t: 'answer', view: 'v', v: 1, value: [], arrivals: [{ id: 'o1' }] },
@@ -110,7 +116,8 @@ describe('the wire Schemas', () => {
 					{ op: 'remove', id: 'o2' }
 				]
 			},
-			{ t: 'error', view: 'v', code: 'cellBudget', message: 'over' },
+			{ t: 'error', view: 'v', code: 'subscription_too_large', message: 'too many rows' },
+			{ t: 'error', view: 'v', code: 'cell_budget', message: 'over' },
 			{ t: 'v', v: 3 },
 			{ t: 'close', release: 'r2' }
 		])
@@ -120,7 +127,7 @@ describe('the wire Schemas', () => {
 		trip(PushBody, {
 			kind: 'apns',
 			endpoint: 'ab'.repeat(32),
-			keys: { topic: 'ai.norbital.app', environment: 'production', teamId: 'TEAM123456' }
+			keys: { topic: 'ai.norbital.app', environment: 'production', team_id: 'TEAM123456' }
 		});
 		trip(Usage, {
 			input: 10,
@@ -140,8 +147,18 @@ describe('the wire Schemas', () => {
 			tag: null,
 			author: null,
 			files: [{ id: 'f1', name: 'a.png', mime: 'image/png' }],
-			tool: { name: 'read', failed: false, running: true, args: '{}', ms: 3 },
+			tool: { name: 'read', behavior: { data: true }, failed: false, running: true, args: '{}', ms: 3 },
 			compact: { cutoff: 4, keep: ['m0'], origin: 'manual' }
+		});
+		trip(AgentRow, {
+			id: 'q1',
+			seq: 2,
+			role: 'assistant',
+			text: 'Choose a delivery time.',
+			state: null,
+			tag: null,
+			asked: true,
+			question: { question: 'When should the report arrive?', options: ['Morning', 'Evening'] }
 		});
 		trip(AgentConversation, {
 			id: 'c1',
@@ -179,6 +196,27 @@ describe('the wire Schemas', () => {
 		refuses(SessionRequest, { path: 'code', body: { address: 'a', via: 'pigeon' } });
 	});
 
+	it('refuses retired write options at the same strict boundary used by HTTP requests', () => {
+		const decode = Schema.decodeUnknownOption(ActBody, { onExcessProperty: 'error' });
+		const write = {
+			acts: { 'orders.update': [{ target: { id: 'o1', revision: 3 }, set: { note: null } }] },
+			issued_at: '2026-10-14T00:00:00.000Z'
+		};
+		expect(decode(write)._tag).toBe('Some');
+		for (const retired of [
+			{ observed: { o1: 3 } },
+			{ on_conflict: 'keep' },
+			{ once: 'write-one' },
+			{ callable: 'orders.update', input: [] }
+		])
+			expect(decode({ ...write, ...retired })._tag).toBe('None');
+		refuses(ActReply, { outcome: { kind: 'pending_approval', requestId: 'r1', records: [] }, v: 1 });
+		refuses(PushBody, {
+			kind: 'apns', endpoint: 'ab'.repeat(32),
+			keys: { topic: 'ai.norbital.app', environment: 'production', teamId: 'TEAM123456' }
+		});
+	});
+
 	it('types a write outcome as the engine does; the wire adds `running`', () => {
 		const same: Same<WriteOutcome, EngineOutcome> = true;
 		expect(same).toBe(true);
@@ -192,39 +230,40 @@ describe('the status map (rule 32)', () => {
 			code,
 			message: code
 		});
-		expect(statusOf({ kind: 'committed', output: null, records: [] })).toBe(200);
-		expect(statusOf({ kind: 'pendingApproval', requestId: 'r', records: [] })).toBe(202);
-		expect(statusOf({ kind: 'conflict', records: [] })).toBe(409);
-		expect(statusOf({ kind: 'unknown', invocation: 'i' })).toBe(504);
+		expect(status_of({ kind: 'committed', output: null, records: [] })).toBe(200);
+		expect(status_of({ kind: 'pending_approval', request_id: 'r', records: [] })).toBe(202);
+		expect(status_of({ kind: 'running', run: 'r1' })).toBe(202);
+		expect(status_of({ kind: 'conflict', records: [] })).toBe(409);
+		expect(status_of({ kind: 'unknown', invocation: 'i' })).toBe(504);
 		expect(
 			(
 				[
-					'invalidInput',
+					'invalid_input',
 					'forbidden',
 					'locked',
-					'notFound',
-					'rateLimited',
+					'not_found',
+					'rate_limited',
 					'unique',
 					'internal',
-					'tooLarge'
+					'too_large'
 				] as const
-			).map((c) => statusOf(refused(c)))
+			).map((c) => status_of(refused(c)))
 		).toEqual([400, 403, 403, 404, 429, 422, 422, 422]);
-		for (const code of ['invalidInput', 'forbidden', 'notFound', 'rateLimited'] as const)
-			expect(refusalOfStatus(statusOf(refused(code)))).toBe(code);
-		expect(refusalOfStatus(401)).toBe('forbidden');
-		expect([409, 422, 500, 504].map(refusalOfStatus)).toEqual([null, null, null, null]);
+		for (const code of ['invalid_input', 'forbidden', 'not_found', 'rate_limited'] as const)
+			expect(refusal_of_status(status_of(refused(code)))).toBe(code);
+		expect(refusal_of_status(401)).toBe('forbidden');
+		expect([409, 422, 500, 504].map(refusal_of_status)).toEqual([null, null, null, null]);
 	});
 
 	it("answers a transport failure at its code's status, and anything else as a 500 that names nothing", () => {
 		expect(
-			wireError(BoltError.make('unknownCallable', 'decode', "there is no callable 'x'"))
+			wire_error(BoltError.make('unknown_callable', 'decode', "there is no callable 'x'"))
 		).toEqual({
 			status: 404,
-			body: { error: { code: 'unknownCallable', message: "there is no callable 'x'" } }
+			body: { error: { code: 'unknown_callable', message: "there is no callable 'x'" } }
 		});
-		expect(wireError(BoltError.make('invalid', 'decode', 'the body is not JSON')).status).toBe(400);
-		expect(wireError(new Error('secret detail'))).toEqual({
+		expect(wire_error(BoltError.make('invalid', 'decode', 'the body is not JSON')).status).toBe(400);
+		expect(wire_error(new Error('secret detail'))).toEqual({
 			status: 500,
 			body: { error: { code: 'internal', message: 'The request failed.' } }
 		});
@@ -233,34 +272,37 @@ describe('the status map (rule 32)', () => {
 
 describe('the own callables', () => {
 	it('decode by callable, with the refusal each one has always answered', () => {
-		const decode = Schema.decodeUnknownOption(OwnCall);
-		expect(decode({ callable: 'start', input: { automation: 'nightly', id: 'r1' } })._tag).toBe(
+		const decode = Schema.decodeUnknownOption(OwnCall, { onExcessProperty: 'error' });
+		expect(decode({ callable: 'run', input: { automation: 'nightly', id: 'r1' } })._tag).toBe(
 			'Some'
 		);
 		expect(
 			decode({
-				callable: 'start',
+				callable: 'run',
 				input: { automation: 'nightly', runs: [{ id: 'r1' }, { id: 'r2' }] }
 			})._tag
 		).toBe('Some');
-		expect(decode({ callable: 'start', input: { automation: 'nightly', runs: [] } })._tag).toBe(
+		expect(decode({ callable: 'run', input: { automation: 'nightly', runs: [] } })._tag).toBe(
 			'None'
 		);
-		expect(decode({ callable: 'start', input: { automation: 'nightly' } })._tag).toBe('None');
-		expect(ownRefusal('start', { automation: 'nightly' })).toBe(
-			'start takes { automation, input, id } or { automation, runs: [{ input, id }] }'
+		expect(decode({ callable: 'run', input: { automation: 'nightly' } })._tag).toBe('Some');
+		expect(decode({ callable: 'start', input: { automation: 'nightly', id: 'r1' } })._tag).toBe('None');
+		expect(ownRefusal('run', {})).toBe(
+			'run takes { automation, input, id } or { automation, runs: [{ input, id }] }'
 		);
 		expect(
 			decode({
 				callable: 'approvals.decide',
-				input: { requestId: 'r', decision: 'approve', reason: 'Reviewed.' }
+				input: { request_id: 'r', decision: 'approve', reason: 'Reviewed.' }
 			})
 		).toMatchObject({
-			value: { input: { requestId: 'r', decision: 'approve', reason: 'Reviewed.' } }
+			value: { input: { request_id: 'r', decision: 'approve', reason: 'Reviewed.' } }
 		});
 		expect(
-			decode({ callable: 'approvals.decide', input: { requestId: 'r', decision: 'maybe' } })._tag
+			decode({ callable: 'approvals.decide', input: { request_id: 'r', decision: 'maybe' } })._tag
 		).toBe('None');
+		expect(decode({ callable: 'approvals.decide', input: { request_id: 'r', decision: 'request_changes' } })._tag).toBe('Some');
+		expect(decode({ callable: 'approvals.decide', input: { requestId: 'r', decision: 'approve' } })._tag).toBe('None');
 		// a post needs text or an attachment
 		expect(
 			decode({ callable: 'sys_message.post', input: { conversation: 'c', text: '  ' } })._tag
@@ -276,10 +318,12 @@ describe('the own callables', () => {
 		expect(decode({ callable: 'sys_message.file', input: { message: 'm' } })).toMatchObject({
 			value: { input: { message: 'm', about: null } }
 		});
-		expect(decode({ callable: 'sys_notification.markRead', input: { all: true } })._tag).toBe(
+		expect(decode({ callable: 'sys_message.restart', input: { message: 'earlier-input' } })._tag).toBe('Some');
+		expect(decode({ callable: 'sys_message.restart', input: { conversation: 'c' } })._tag).toBe('None');
+		expect(decode({ callable: 'sys_notification.mark_read', input: { all: true } })._tag).toBe(
 			'Some'
 		);
-		expect(decode({ callable: 'sys_notification.markRead', input: { ids: [1] } })._tag).toBe(
+		expect(decode({ callable: 'sys_notification.mark_read', input: { ids: [1] } })._tag).toBe(
 			'None'
 		);
 		// starting a conversation is never refused: what does not decode takes the defaults
@@ -287,14 +331,14 @@ describe('the own callables', () => {
 			value: { input: {} }
 		});
 		// the checks run in the order the sender has always met them
-		expect(ownRefusal('sys_conversation.setModel', { model: 'strong' })).toBe(
+		expect(ownRefusal('sys_conversation.set_model', { model: 'strong' })).toBe(
 			'this call takes { conversation }'
 		);
-		expect(ownRefusal('sys_conversation.setModel', { conversation: 'c' })).toBe(
-			'sys_conversation.setModel takes { conversation, model }'
+		expect(ownRefusal('sys_conversation.set_model', { conversation: 'c' })).toBe(
+			'sys_conversation.set_model takes { conversation, model }'
 		);
-		expect(ownRefusal('sys_message.revise', { message: 'm', text: ' ' })).toBe(
-			'sys_message.revise takes { message, text }'
+		expect(ownRefusal('sys_message.revise', { message: 'm', text: 42 })).toBe(
+			'sys_message.revise takes { message, text, attachments? }'
 		);
 		expect(ownRefusal('filter.describe', { model: 'orders' })).toBe(
 			'filter.describe takes { model, text }'
@@ -314,7 +358,7 @@ describe('an instance status', () => {
 			driver: 'email',
 			state: 'connected',
 			account: 5,
-			lastDisconnect: { code: 401 },
+			last_disconnect: { code: 401 },
 			providers: [{ id: 'p', label: 'P', setup: { kind: 'none' } }, { id: 'q' }],
 			test: { to: 'nobody' }
 		});
@@ -323,7 +367,7 @@ describe('an instance status', () => {
 				instance: 'i',
 				integration: '',
 				stored: false,
-				lastDisconnect: { code: 401 },
+				last_disconnect: { code: 401 },
 				providers: [{ id: 'p', setup: { kind: 'none', steps: [] } }]
 			}
 		});
@@ -337,7 +381,7 @@ describe('an instance status', () => {
 
 describe('norbital.template.json', () => {
 	const manifest = {
-		schemaVersion: 1,
+		schema_version: 1,
 		key: 'norbital_construction',
 		name: 'Construction Operations',
 		industry: 'Construction',
@@ -345,17 +389,11 @@ describe('norbital.template.json', () => {
 		visibility: 'public',
 		counts: { models: 16, apps: 3, automations: 4 },
 		tags: ['Operations'],
-		name_zh: '施工',
-		seed: {
-			bankTree: 'construction',
-			layout: 'snapshots',
-			stages: [['team'], ['user']],
-			producers: [{ model: 'photo_evidence', kind: 'photos' }]
-		}
+		name_zh: '施工'
 	};
 	it('decodes the catalogue entry the gate checks', () => {
-		trip(TemplateManifest, manifest);
-		refuses(TemplateManifest, { ...manifest, schemaVersion: 2 });
+		expect(trip(TemplateManifest, manifest)).toEqual(manifest);
+		refuses(TemplateManifest, { ...manifest, schema_version: 2 });
 		refuses(TemplateManifest, { ...manifest, key: 'Not A Handle' });
 		refuses(TemplateManifest, { ...manifest, name: '  ' });
 		refuses(TemplateManifest, {
@@ -377,11 +415,10 @@ const workspace: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	groups: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 /** The workspace's generated migrations, prepared (and replay-verified) once for every artifact below. */
@@ -389,7 +426,7 @@ const migrations = await Effect.runPromise(
 	Effect.gen(function* () {
 		const fs = yield* FileSystem.FileSystem;
 		const dir = yield* fs.makeTempDirectory({ prefix: 'bolt-artifact-migrations-' });
-		yield* prepareMigrations(dir, workspace, 'generate');
+		yield* prepare_migrations(dir, workspace, 'generate');
 		return join(dir, 'migrations');
 	}).pipe(Effect.provide(Pristine.layer), Effect.provide(NodeServices.layer))
 );
@@ -413,19 +450,19 @@ const built = Effect.gen(function* () {
 		contract: CONTRACT,
 		handle: 'norbital_test',
 		name: 'Test',
-		schema: fingerprint(schemaSlice(workspace)),
+		schema: fingerprint(schema_slice(workspace)),
 		client: { entry: 'app.js', css: [] },
 		pages: {},
 		hashes: {
-			manifest: sha256Hex(manifestText),
-			guest: sha256Hex(guest),
-			client: yield* treeHash(join(dir, 'client')),
-			server: yield* treeHash(join(dir, 'server'))
+			manifest: sha256_hex(manifestText),
+			guest: sha256_hex(guest),
+			client: yield* tree_hash(join(dir, 'client')),
+			server: yield* tree_hash(join(dir, 'server'))
 		}
 	};
 	writeFileSync(
 		join(dir, 'artifact.json'),
-		JSON.stringify({ ...body, hash: yield* artifactHash(dir, body) })
+		JSON.stringify({ ...body, hash: yield* artifact_hash(dir, body) })
 	);
 	return dir;
 });
@@ -434,9 +471,40 @@ describe('the artifact a host reads', () => {
 	it.effect('reads the native artifact once with its manifest and descriptor', () =>
 		Effect.gen(function* () {
 			const dir = yield* built;
-			expect((yield* readArtifact(dir)).manifest.workspace.tz).toBe('Asia/Singapore');
-			expect((yield* readArtifact(dir)).artifact.handle).toBe('norbital_test');
-			expect((yield* readArtifact(dir)).dir).toBe(dir);
+			expect((yield* read_artifact(dir)).manifest.workspace.tz).toBe('Asia/Singapore');
+			expect((yield* read_artifact(dir)).artifact.handle).toBe('norbital_test');
+			expect((yield* read_artifact(dir)).dir).toBe(dir);
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.effect('keeps guest source maps under their current public key without changing the verified code', () =>
+		Effect.gen(function* () {
+			const dir = yield* built;
+			const map = JSON.stringify({ version: 3, sources: ['workspace.ts'], names: [], mappings: '' });
+			const fs = yield* FileSystem.FileSystem;
+			yield* fs.writeFileString(join(dir, 'guest.mjs.map'), map);
+			const artifact = yield* read_artifact(dir);
+			expect(artifact.guest.source_map).toBe(map);
+			expect(artifact.guest).not.toHaveProperty('sourceMap');
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+
+	it.effect('refuses tampered code and every tree covered by the whole artifact digest', () =>
+		Effect.gen(function* () {
+			const fs = yield* FileSystem.FileSystem;
+			for (const relative of [
+				'guest.mjs',
+				'client/app.js',
+				'server/extra.mjs',
+				'assets/logo.png',
+				'skills/triage/SKILL.md',
+				'workspace/src/private.ts'
+			]) {
+				const dir = yield* built;
+				const file = join(dir, relative);
+				yield* fs.makeDirectory(dirname(file), { recursive: true });
+				yield* fs.writeFileString(file, 'changed after the artifact was sealed');
+				expect(yield* Effect.flip(read_artifact(dir))).toMatchObject({ code: 'artifact_digest' });
+			}
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 
@@ -446,14 +514,14 @@ describe('the artifact a host reads', () => {
 			Effect.gen(function* () {
 				const dir = yield* built;
 				writeFileSync(join(dir, 'artifact.json'), JSON.stringify({ format: 2 }));
-				expect(yield* Effect.flip(readArtifact(dir))).toBeInstanceOf(ManifestInvalid);
+				expect(yield* Effect.flip(read_artifact(dir))).toBeInstanceOf(ManifestInvalid);
 				const other = yield* built;
 				writeFileSync(
 					join(other, 'manifest.json'),
 					JSON.stringify({ ...workspace, unknownPart: {} })
 				);
-				expect(yield* Effect.flip(readArtifact(other))).toBeInstanceOf(ManifestInvalid);
-				expect(yield* Effect.flip(readArtifact(join(other, 'nowhere')))).toMatchObject({
+				expect(yield* Effect.flip(read_artifact(other))).toBeInstanceOf(ManifestInvalid);
+				expect(yield* Effect.flip(read_artifact(join(other, 'nowhere')))).toMatchObject({
 					message: expect.stringMatching(/holds no artifact.json/)
 				});
 			}).pipe(Effect.provide(NodeServices.layer))
@@ -479,12 +547,12 @@ describe("a workspace's pages", () => {
 				]) {
 					const pathname = new URL(path, 'https://workspace.invalid').pathname;
 					expect(pathname).toBe(path);
-					expect(yield* clientPage(dir, pathname, workspace)).toMatchObject({
+					expect(yield* client_page(dir, pathname, workspace)).toMatchObject({
 						file: join(dir, 'client', 'index.html'),
 						document: true
 					});
 				}
-				expect(yield* clientPage(dir, '/assets/nested%2flogo%20one.svg', workspace)).toEqual({
+				expect(yield* client_page(dir, '/assets/nested%2flogo%20one.svg', workspace)).toEqual({
 					file: join(dir, 'assets', 'nested', 'logo one.svg'),
 					document: false,
 					headers: {
@@ -499,18 +567,18 @@ describe("a workspace's pages", () => {
 		() =>
 			Effect.gen(function* () {
 				const dir = yield* built;
-				expect(yield* clientPage(dir, '/app.js', workspace)).toEqual({
+				expect(yield* client_page(dir, '/app.js', workspace)).toEqual({
 					file: join(dir, 'client', 'app.js'),
 					document: false,
 					headers: { 'content-type': 'text/javascript', 'cache-control': 'no-cache' }
 				});
-				expect((yield* clientPage(dir, '/assets/logo.png', workspace))?.headers).toEqual({
+				expect((yield* client_page(dir, '/assets/logo.png', workspace))?.headers).toEqual({
 					'content-type': 'image/png',
 					'cache-control': 'public, max-age=31536000, immutable'
 				});
-				expect(yield* clientPage(dir, '/__bolt', workspace)).toBeUndefined();
-				expect(yield* clientPage(dir, '/__bolt/nope', workspace)).toBeUndefined();
-				expect(yield* clientPage(dir, '/orders/o1', workspace)).toEqual({
+				expect(yield* client_page(dir, '/__bolt', workspace)).toBeUndefined();
+				expect(yield* client_page(dir, '/__bolt/nope', workspace)).toBeUndefined();
+				expect(yield* client_page(dir, '/orders/o1', workspace)).toEqual({
 					file: join(dir, 'client', 'index.html'),
 					document: true,
 					headers: {
@@ -520,11 +588,11 @@ describe("a workspace's pages", () => {
 					}
 				});
 				// never a file outside the build or the assets
-				expect((yield* clientPage(dir, '/../manifest.json', workspace))?.document).toBe(true);
-				expect((yield* clientPage(dir, '/manifest.json', workspace))?.document).toBe(true);
+				expect((yield* client_page(dir, '/../manifest.json', workspace))?.document).toBe(true);
+				expect((yield* client_page(dir, '/manifest.json', workspace))?.document).toBe(true);
 				const fs = yield* FileSystem.FileSystem;
 				expect(
-					yield* clientPage(
+					yield* client_page(
 						yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-empty-' }),
 						'/',
 						workspace

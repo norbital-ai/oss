@@ -1,6 +1,6 @@
 import { expect, it } from '@effect/vitest';
-import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
-import { mountEdge } from '@norbital-ai/ui/effect';
+import { Effect, Layer, ManagedRuntime, Queue, Stream } from 'effect';
+import { mount_edge } from '@norbital-ai/ui/effect';
 import { page, userEvent } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
 import Bell from '../src/shell/Bell.svelte';
@@ -24,31 +24,37 @@ const opened = async (
 	rows: readonly NoticeRow[],
 	run: (seen: { read: string[][]; to: string[] }) => Promise<void>
 ) => {
-	const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 	const target = document.createElement('div');
 	document.body.replaceChildren(target);
 	const seen: { read: string[][]; to: string[] } = { read: [], to: [] };
-	const done = Effect.succeed<ActOutcome>({ kind: 'running', run: 'r' });
+	let current = [...rows];
+	let emit: (() => void) | undefined;
+	const answer = () => ({ rows: [...current], unread: current.filter((row) => !row.read).length });
+	const done = Effect.succeed<ActOutcome>({ kind: 'committed', output: null, records: [] });
+	const read = (ids: readonly string[]) => Effect.suspend(() => {
+		seen.read.push([...ids]);
+		current = current.map((row) => ids.includes(row.id) ? { ...row, read: true } : row);
+		emit?.();
+		return done;
+	});
 	const view = mount(Bell, {
 		target,
 		props: {
 			api: {
-				markNoticesRead: (ids: readonly string[]) =>
-					Effect.suspend(() => {
-						seen.read.push([...ids]);
-						return done;
-					}),
-				markAllNoticesRead: () => done
+				mark_notices_read: read,
+				mark_all_notices_read: () => read(current.filter((row) => !row.read).map((row) => row.id))
 			},
 			bolt: {
-				observe: () =>
-					Stream.concat(
-						Stream.make({ rows: [...rows], unread: rows.filter((row) => !row.read).length }),
-						Stream.never
-					)
+				observe: () => Stream.callback<{ rows: NoticeRow[]; unread: number }>((queue) =>
+					Effect.sync(() => {
+						emit = () => { Queue.offerUnsafe(queue, answer()); };
+						emit();
+					})
+				)
 			},
 			t: (key: string) => key,
-			onNavigate: (href: string) => {
+			on_navigate: (href: string) => {
 				seen.to.push(href);
 			}
 		}
@@ -73,7 +79,6 @@ it('puts what is addressed to the reader first and folds the workspace’s news 
 		],
 		async () => {
 			await expect.element(page.getByText('Order approved')).toBeInTheDocument();
-			await expect.element(page.getByText('2 updates', { exact: false })).toBeInTheDocument();
 			await expect.element(page.getByText('Order waiting on you')).not.toBeInTheDocument();
 			await expect.element(page.getByText('Ada merged change !4')).not.toBeInTheDocument();
 			await page.getByRole('button', { name: /Workspace updates/ }).click();
@@ -110,3 +115,33 @@ it('runs from the keyboard: moves, marks read, and opens a whole line', () =>
 			expect(seen.to).toEqual(['/inbox?record=orders/1']);
 		}
 	));
+
+
+it('keeps read lines steady until the next open, then folds them below an empty inbox', () =>
+	opened([notice('n1', 'A completed update'), notice('n2', 'Another completed update')], async (seen) => {
+		await expect.element(page.getByText('A completed update')).toBeVisible();
+		// measure the settled popover, not its open animation
+		await Promise.all(document.getAnimations().map((animation) => animation.finished));
+		const before = page.getByRole('button', { name: /A completed update/ }).element().getBoundingClientRect();
+		await page.getByRole('button', { name: 'Mark all read', exact: true }).click();
+		await expect.poll(() => seen.read).toEqual([['n1', 'n2']]);
+		await expect.element(page.getByText('A completed update')).toBeVisible();
+		const after = page.getByRole('button', { name: /A completed update/ }).element().getBoundingClientRect();
+		expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1);
+		await page.getByTestId('notification-bell').click();
+		await page.getByTestId('notification-bell').click();
+		await expect.element(page.getByText('You’re all caught up', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('A completed update')).not.toBeInTheDocument();
+		const empty = document.querySelector<HTMLElement>('[data-notice-empty]');
+		if (empty === null) throw new Error('Missing empty inbox');
+		expect(empty.getBoundingClientRect().height).toBeGreaterThanOrEqual(140);
+		const history = page.getByText('Read', { exact: true });
+		await history.click();
+		await expect.element(page.getByText('A completed update')).toBeVisible();
+		await expect.element(page.getByText('Another completed update')).toBeVisible();
+		await page.getByTestId('notification-bell').click();
+		await page.getByTestId('notification-bell').click();
+		await expect.element(page.getByText('A completed update')).not.toBeInTheDocument();
+		await expect.element(page.getByText('You’re all caught up', { exact: true })).toBeVisible();
+	})
+);

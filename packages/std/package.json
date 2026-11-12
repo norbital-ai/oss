@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/std",
-	"version": "0.0.24",
+	"version": "0.0.25",
 	"description": "Value libraries for Bolt workspaces: decimals, dates, calendars, sheets, formulas, pricing and billing.",
 	"type": "module",
 	"sideEffects": [
@@ -34,10 +34,6 @@
 			"types": "./build/billing/index.d.ts",
 			"default": "./build/billing/index.js"
 		},
-		"./calendar": {
-			"types": "./build/calendar.d.ts",
-			"default": "./build/calendar.js"
-		},
 		"./date": {
 			"types": "./build/date.d.ts",
 			"default": "./build/date.js"
@@ -46,10 +42,6 @@
 			"types": "./build/decimal.d.ts",
 			"default": "./build/decimal.js"
 		},
-		"./facts": {
-			"types": "./build/facts.d.ts",
-			"default": "./build/facts.js"
-		},
 		"./formula": {
 			"types": "./build/formula.d.ts",
 			"default": "./build/formula.js"
@@ -57,6 +49,10 @@
 		"./host-op": {
 			"types": "./build/host-op.d.ts",
 			"default": "./build/host-op.js"
+		},
+		"./id": {
+			"types": "./build/id.d.ts",
+			"default": "./build/id.js"
 		},
 		"./json": {
 			"types": "./build/json.d.ts",
@@ -70,13 +66,13 @@
 			"types": "./build/label.d.ts",
 			"default": "./build/label.js"
 		},
-		"./pricing": {
-			"types": "./build/pricing.d.ts",
-			"default": "./build/pricing.js"
-		},
 		"./sheet": {
 			"types": "./build/sheet.d.ts",
 			"default": "./build/sheet.js"
+		},
+		"./sql": {
+			"types": "./build/sql.d.ts",
+			"default": "./build/sql.js"
 		},
 		"./vars": {
 			"types": "./build/vars.d.ts",

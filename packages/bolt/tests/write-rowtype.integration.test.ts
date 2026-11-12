@@ -3,7 +3,7 @@ import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { act, type ActRequest } from '../src/engine/write/act.ts';
-import { restoreSource, seed } from '../src/engine/write/seed.ts';
+import { restore_source, seed } from '../src/engine/write/seed.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
 import { open } from './write-p2.fixture.ts';
 
@@ -14,14 +14,16 @@ const manifest: EngineManifest = {
 	models: {
 		point: {
 			description: 'A parent named after a PostgreSQL type, with its child roll-up.',
-			label: 'code',
+			record_label: 'record.code',
 			key: ['code'],
+            unique: [{ fields: ['code'], import_key: true }],
 			fields: { code: { kind: 'text' }, total: { kind: 'sum', of: 'lines.amount' } }
 		},
 		line: {
 			description: 'A child named after a PostgreSQL type, with row alias collisions.',
-			label: 'code',
+			record_label: 'record.code',
 			key: ['code'],
+            unique: [{ fields: ['code'], import_key: true }],
 			fields: {
 				code: { kind: 'text' },
 				amount: { kind: 'int' },
@@ -33,12 +35,12 @@ const manifest: EngineManifest = {
 	relationships: { 'line.point': { to: 'point', inverse: 'lines' } },
 	exposures: {
 		point: {
-			read: { point: { fields: 'all' } },
+			outputs: { default: { point: { fields: 'all' } } },
 			create: { columns: { point: ['code'] } },
 			update: { columns: { point: ['code'] } }
 		},
 		line: {
-			read: { line: { fields: 'all' } },
+			outputs: { default: { line: { fields: 'all' } } },
 			create: { columns: { line: ['code', 'amount', 'point'] } },
 			update: { columns: { line: ['code', 'amount'] } },
 			delete: {}
@@ -52,7 +54,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 		yield* seed(
 			manifest,
 			db,
-			restoreSource({
+			restore_source({
 				point: [{ id: PARENT, code: 'P', total: 2 }],
 				line: [{ id: CHILD, code: 'L', point: PARENT, amount: 2 }]
 			}),
@@ -63,7 +65,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 			model: string,
 			verb: ActRequest['verb'],
 			input: Json,
-			onConflict?: 'update' | 'keep'
+			on_conflict?: 'update' | 'keep'
 		) =>
 			act(
 				{ manifest, db },
@@ -71,7 +73,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 					model,
 					verb,
 					input,
-					onConflict,
+					on_conflict,
 					mode: { _tag: 'Direct' },
 					key: `rowtype-${serial}`,
 					invocationId: `rowtype-${serial++}`,
@@ -92,7 +94,7 @@ it.effect('writes models named after Postgres types using their actual relation 
 		yield* run('line', 'upsert', [{ code: 'L', amount: 5, point: PARENT }], 'update');
 		yield* run('line', 'import', {
 			rows: [{ code: 'IMPORTED', amount: 1, point: { code: 'P2' } }],
-			onConflict: 'update'
+			on_conflict: 'update'
 		});
 		yield* run('line', 'delete', [{ target: CHILD }]);
 		expect(

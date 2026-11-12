@@ -2,10 +2,23 @@
 // terminal failure wins over anything after it; an auto-reply is recorded and never moves the status.
 import type { DeliveryKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
+import { Predicate, Schema } from 'effect';
 
 export type { DeliveryKind };
+/** A provider-chosen id persisted before I/O; registration alone is no delivery acknowledgement. */
+export const OutboundReference = Schema.Struct({
+	message: Schema.NonEmptyString,
+	provider_id: Schema.NonEmptyString
+});
+export type OutboundReference = typeof OutboundReference.Type;
+/** A send's acknowledgement, decoded once where the provider crosses into the engine. */
+export const SendReceipt = Schema.Struct({
+	provider_id: Schema.NonEmptyString,
+	presume_after_ms: Schema.optional(Schema.Number)
+});
+export type SendReceipt = typeof SendReceipt.Type;
 /**
- * What a provider reports about one message it sent, keyed by the `providerId` its `send` returned. Replies and
+ * What a provider reports about one message it sent, keyed by the `provider_id` its `send` returned. Replies and
  * auto-replies are not reported: they arrive as inbound messages and bolt classifies them.
  */
 export type DeliveryReport = {
@@ -31,7 +44,7 @@ const REPORTED: ReadonlySet<string> = new Set([
 	'complained'
 ]);
 /** Whether a provider may report `kind` (a delivery event arriving from outside is checked here). */
-export const isReported = (kind: string): kind is DeliveryReport['kind'] => REPORTED.has(kind);
+export const is_reported = (kind: string): kind is DeliveryReport['kind'] => REPORTED.has(kind);
 /** One entry of a message's timeline (`sys_message.delivery`, oldest first). `reply` is the inbound message's row id. */
 export type DeliveryEntry = Omit<DeliveryReport, 'kind'> & { kind: DeliveryKind; reply?: string };
 
@@ -54,7 +67,8 @@ export const sendRefusal = (
 	e: unknown
 ): { message: string; code?: string; permanent: boolean } | null => {
 	if (!(e instanceof Error) || e.name !== 'SendRefused') return null;
-	const { code, permanent } = e as Partial<SendRefused>;
+	const code = Predicate.hasProperty(e, 'code') ? e.code : undefined;
+	const permanent = Predicate.hasProperty(e, 'permanent') ? e.permanent : undefined;
 	return {
 		message: e.message,
 		permanent: permanent !== false,
@@ -82,15 +96,20 @@ export const RANK: { readonly [status: string]: number } = {
 	replied: 5
 };
 
+/** Accepted outbound messages remain context when later delivery and reply reports advance them. */
+export const confirmed_send = (status: string | null | undefined): boolean =>
+	status != null && status !== 'uncertain' && !TERMINAL.has(status) && (RANK[status] ?? 0) >= 1;
+
 /**
  * The status after `kind` is reported on a message at `current`:
  * `queued < sent < deferred < delivered < read | opened < replied`; `bounced`, `failed`, `complained` are terminal (a later
  * `delivered` never overrides a `bounced`); `auto_replied` never changes it; `read` and `opened` do not replace each other.
  */
-export function statusAfter(current: string, kind: DeliveryKind): string {
+export function status_after(current: string, kind: DeliveryKind): string {
 	if (kind === 'auto_replied' || TERMINAL.has(current)) return current;
 	if (TERMINAL.has(kind)) return kind;
-	return RANK[kind]! > (RANK[current] ?? 0) ? kind : current;
+	const rank = RANK[kind];
+	return rank !== undefined && rank > (RANK[current] ?? 0) ? kind : current;
 }
 
 /**
@@ -98,7 +117,7 @@ export function statusAfter(current: string, kind: DeliveryKind): string {
  * auto-responders set: `X-Autoreply`, `X-Autorespond`, `Precedence: auto_reply | bulk | junk`, Exchange's
  * "Automatic reply:" subject).
  */
-export function isAutoReply(headers: { readonly [name: string]: string }, subject = ''): boolean {
+export function is_auto_reply(headers: { readonly [name: string]: string }, subject = ''): boolean {
 	const h = new Map(
 		Object.entries(headers).map(([k, v]) => [k.toLowerCase(), String(v).trim().toLowerCase()])
 	);

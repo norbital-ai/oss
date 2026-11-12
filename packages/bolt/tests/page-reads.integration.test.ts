@@ -3,20 +3,20 @@ import { expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority } from '../src/engine/contracts.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { QReply, WireError } from '../src/protocol/schema.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { WireRead } from '../src/protocol/wire.ts';
 import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			orders: {
 				description: 'An order',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					doc: { kind: 'json', optional: true },
@@ -45,7 +45,10 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			orders: {
-				read: { orders: { fields: 'all' } },
+				outputs: {
+					default: { orders: { fields: 'all' } },
+					summary: { orders: { fields: ['title'] } }
+				},
 				create: { columns: { orders: ['title', 'doc', 'color'] } },
 				update: { columns: { orders: ['title'] } }
 			}
@@ -55,21 +58,37 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { read: true, create: true, update: true, history: true }
+					orders: { outputs: { default: { history: true } }, create: {}, update: {} }
 				}
+			},
+			reader: {
+				description: 'Current rows',
+				grants: { orders: { outputs: { default: {} } } }
+			},
+			historian: {
+				description: 'History of alpha orders',
+				grants: {
+					orders: {
+						outputs: {
+							default: { history: true, scopes: { orders: { title: { like: 'alpha%' } } } }
+						}
+					}
+				}
+			},
+			named_historian: {
+				description: 'History through the summary output',
+				grants: { orders: { outputs: { summary: { history: true } } } }
 			}
 		},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
-		customFields: {
+		custom_fields: {
 			probe_window: {
 				description: 'A synthetic probe window',
 				shape: {
 					kind: 'object',
-					fields: { samples: { kind: 'list', of: { kind: 'number' }, min: 1, max: 2 } }
+					fields: { samples: { kind: 'number', many: true, min_items: 1, max_items: 2 } }
 				},
 				check: true
 			}
@@ -82,9 +101,9 @@ const manifest = Result.getOrThrow(
 const guest =
 	program(`export default { custom_field: { probe_window: { check: (window) => window.samples.some((value) => value < 0) ? 'Probe samples cannot be negative.' : undefined } }, model: { orders: { bodies: {
 	indexes: { hue: {
-		probe: (q) => ({ vector: [q.r.toNumber(), 0, 0] }),
+		probe: (q) => ({ vector: [q.r.to_number(), 0, 0] }),
 		// the exact score: nearest to 0.5 on the first channel, whatever the probe
-		rerank: (q, row) => Math.abs(row.color[0] - (0.5 + q.r.toNumber())),
+		rerank: (q, row) => Math.abs(row.color[0] - (0.5 + q.r.to_number())),
 	} },
 } } } };`);
 
@@ -94,10 +113,10 @@ const fixture = () =>
 	Effect.gen(function* () {
 		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
-			route = yield* routeFixture(context);
-		const rep = t.as(t.member(['rep'])).authority;
+			route = yield* route_fixture(context);
+		const rep = (yield* t.as(t.member(['rep']))).authority;
 		const act = (callable: string, input: Json) =>
-			actReply(route, rep, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, rep, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
 		const q = (reads: readonly WireRead[], who: Authority = rep) =>
@@ -137,7 +156,7 @@ const seeded = Layer.effectDiscard(
 			}
 			const first = ids[0];
 			if (first === undefined) throw new Error('first order missing');
-			yield* act('orders.update', [{ target: first, set: { title: 'alpha 2' } }]);
+			yield* act('orders.update', [{ target: { id: first, revision: 1 }, set: { title: 'alpha 2' } }]);
 			yield* t.db.write({
 				text: `INSERT INTO sys_user (id, email, name, kind) VALUES ('ada', 'ada@x.test', 'Ada', 'staff')`,
 				params: []
@@ -163,7 +182,7 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 			Effect.gen(function* () {
 				const { q } = yield* setup();
 				const r = yield* q([
-					{ m: 'query', a: [{ orders: { fields: ['title'], orderBy: 'title' } }] }
+					{ m: 'query', a: [{ orders: { fields: ['title'], order_by: 'title' } }] }
 				]);
 				expect(r.status).toBe(200);
 				const [answer] = answers(r.body);
@@ -233,12 +252,12 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 			})
 	);
 
-	it.effect('answers a browser history with no `at` or a null `at`', () =>
+	it.effect('answers browser history without a point or with declared options', () =>
 		Effect.gen(function* () {
 			const { q, id } = yield* setup();
 			for (const a of [
 				['orders', id(0)],
-				['orders', id(0), null]
+				['orders', id(0), {}]
 			]) {
 				const r = yield* q([{ m: 'history', a }]);
 				expect(r.status).toBe(200);
@@ -248,6 +267,43 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 					)(answers(r.body)[0])).map((x) => x.revision)
 				).toEqual([1, 2]);
 			}
+		})
+	);
+
+	it.effect('refuses retired history points outside the tagged options object', () =>
+		Effect.gen(function* () {
+			const { q, id } = yield* setup();
+			const retired: readonly Json[] = [null, 1, { revision: 1 }, { at: 1 }, { at: '2026-01-01T00:00:00Z' }];
+			for (const options of retired) {
+				const reply = yield* q([{ m: 'history', a: ['orders', id(0), options] }]);
+				expect(reply.status).toBe(400);
+			}
+			const revision = yield* q([{ m: 'history', a: ['orders', id(0), { at: { revision: 1 } }] }]);
+			expect(revision.status).toBe(200);
+			expect(Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ revision: Schema.Number })))(answers(revision.body)[0]).map((row) => row.revision)).toEqual([1]);
+		})
+	);
+
+	it.effect('history stays inside the output grant even beside a broader current-row grant', () =>
+		Effect.gen(function* () {
+			const { t, q, id } = yield* setup();
+			const reader = (yield* t.as(t.member(['reader']))).authority;
+			const combined = (yield* t.as(t.member(['reader', 'historian']))).authority;
+			const named = (yield* t.as(t.member(['reader', 'named_historian']))).authority;
+			const revisionRows = Schema.Array(Schema.Struct({ revision: Schema.Number }));
+			const history = (index: number, authority: Authority) =>
+				q([{ m: 'history', a: ['orders', id(index)] }], authority).pipe(
+					Effect.map((reply) => Schema.decodeUnknownSync(revisionRows)(answers(reply.body)[0]))
+				);
+			expect(yield* history(0, reader)).toEqual([]);
+			expect((yield* history(0, combined)).map((row) => row.revision)).toEqual([1, 2]);
+			expect(yield* history(2, combined)).toEqual([]);
+			expect(yield* history(0, named)).toEqual([]);
+			const summary = yield* q(
+				[{ m: 'history', a: ['orders', id(0), { output: 'summary' }] }],
+				named
+			);
+			expect(Schema.decodeUnknownSync(revisionRows)(answers(summary.body)[0])).toHaveLength(2);
 		})
 	);
 
@@ -316,7 +372,7 @@ layer(seeded, { excludeTestServices: true })('/q page reads', (it) => {
 	it.effect('reads sys_user by its text id, one and several', () =>
 		Effect.gen(function* () {
 			const { t, q } = yield* setup();
-			const admin = t.as(t.admin).authority;
+			const admin = (yield* t.as(t.admin)).authority;
 			const r = yield* q(
 				[
 					{ m: 'query', a: [{ sys_user: { where: { id: { eq: 'ada' } }, fields: ['name'] } }] },

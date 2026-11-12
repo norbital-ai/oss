@@ -1,3 +1,5 @@
+import { UI_TEXT, type UiTextKey } from '../i18n.js';
+export { ui_text_for, type UiTextKey } from '../i18n.js';
 import { type ClassValue, clsx } from 'clsx';
 import { getContext, setContext } from 'svelte';
 import { MediaQuery } from 'svelte/reactivity';
@@ -29,7 +31,7 @@ export function stepActive(
 }
 
 /** A byte count as short text in binary units (`512.0 B`, `12.0 KB`, `3.4 MB`); `0 B` for none. */
-export function formatFileSize(bytes: number): string {
+export function format_file_size(bytes: number): string {
 	if (bytes === 0) return '0 B';
 	const units = ['B', 'KB', 'MB', 'GB'];
 	const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
@@ -59,131 +61,11 @@ export const coarsePointer = new MediaQuery('pointer: coarse');
 /** The main input cannot hover; the same query `base.css` restates. */
 export const noHover = new MediaQuery('hover: none');
 
-/** The kit's own chrome strings. English by default; the shell sets the workspace locale's text once (`setUiText`). */
-const UI_TEXT = {
-	close: 'Close',
-	expand: 'Expand',
-	collapse: 'Collapse',
-	resize: 'Resize',
-	save: 'Save',
-	saving: 'Saving…',
-	requestApproval: 'Request approval',
-	cancel: 'Cancel',
-	clear: 'Clear',
-	create: 'Create',
-	add: 'Add',
-	remove: 'Remove',
-	none: '—',
-	yes: 'Yes',
-	no: 'No',
-	upload: 'Upload files',
-	uploading: 'Uploading…',
-	useMyLocation: 'Use my location',
-	latitude: 'Latitude',
-	longitude: 'Longitude',
-	searchAddress: 'Search address',
-	pickOnMap: 'Pick on map',
-	mapUnavailable: 'Map unavailable',
-	addressSearchUnavailable: 'Address search unavailable',
-	locationDenied: 'Location unavailable',
-	from: 'From',
-	to: 'To',
-	openEnded: 'Open-ended',
-	pendingApproval: 'Submitted for approval',
-	conflict: 'This record changed since you opened it. Review and save again.',
-	unknown: 'The outcome is not known yet. Check again before retrying.',
-	running: 'Still working: this continues in the background.',
-	select: 'Select…',
-	selectItem: 'Select',
-	searching: 'Searching…',
-	explore: 'Explore',
-	back: 'Back',
-	search: 'Search…',
-	noResults: 'No results',
-	optionsUnavailable: 'Could not load options',
-	required: 'Required',
-	invalid: 'Invalid value',
-	noAccess: 'No access',
-	notFound: 'Not found or no access',
-	field: 'Field',
-	kind: 'Kind',
-	optional: 'Optional',
-	useDefault: 'Use default',
-	fields: 'Fields',
-	today: 'Today',
-	previous: 'Previous',
-	next: 'Next',
-	more: '+{n} more',
-	selectedCount: '{n} selected',
-	day: 'Day',
-	week: 'Week',
-	month: 'Month',
-	year: 'Year',
-	openCalendar: 'Open calendar',
-	notifications: 'Notifications',
-	fullScreen: 'Full screen',
-	exitFullScreen: 'Exit full screen',
-	createdAt: 'Created {when} by {who}',
-	updatedAt: 'Updated {when} by {who}',
-	syncOwned: 'Managed by a sync',
-	ownedParent: 'An owned record cannot change its parent',
-	noGrant: 'Your permissions do not allow editing this field',
-	stateLocked: 'Locked by the record’s current state',
-	ownedParentLocked: 'Locked by the owning record’s current state',
-	underApproval: 'Under approval: this request does not allow you to edit this record.',
-	unsaved: 'Unsaved changes',
-	discard: 'Discard',
-	discardDraft: 'Discard your unsaved changes?',
-	copy: 'Copy',
-	copied: 'Copied',
-	addFiles: 'Add files',
-	addFile: 'Add file',
-	upToFiles: 'Up to {n} files',
-	fileSize: 'Size',
-	fileType: 'Type',
-	uploaded: 'Uploaded',
-	uploadedBy: 'Uploaded by',
-	sizeEach: '{size} each',
-	fileCount: '{n} files',
-	download: 'Download',
-	preview: 'Preview',
-	retry: 'Retry',
-	uploadFailed: 'Upload failed',
-	countryCode: 'Country code',
-	invalidPhone: 'Enter a valid phone number',
-	currency: 'Currency',
-	mobileNumber: 'Mobile number',
-	sendCode: 'Send code',
-	resendCode: 'Resend code',
-	verify: 'Verify',
-	code: 'Six-digit code',
-	codeSent: 'We texted a code to {phone}.',
-	enterCode: 'Enter code',
-	changeNumber: 'Change number',
-	searchMeaning: 'Search by meaning',
-	searchPick: 'Type / to choose a search',
-	searchClear: 'Back to plain search',
-	searchRun: 'Search',
-	searchRaw: '{field} is a raw vector: run this search from a page',
-	searchView: 'This view cannot show ranked rows: open it in a table',
-	searchNone: 'No search indexes here',
-	searchFields: 'Searches {fields}',
-	searchCommands: 'Type / for a command',
-	schemaField: 'Field',
-	schemaKey: 'Key',
-	schemaType: 'Type',
-	schemaLabel: 'Label',
-	schemaValues: 'Allowed values',
-	schemaHelp: 'Description',
-	schemaValue: 'Value'
-} as const;
-/** A key of the kit's own chrome strings. */
-export type UiTextKey = keyof typeof UI_TEXT;
 const TEXT = Symbol.for('norbital.ui.text');
 /** Sets the kit's chrome strings for everything beneath (the shell passes the workspace locale's text once). */
-export const setUiText = (text: Partial<Record<UiTextKey, string>>) => setContext(TEXT, text);
+export const set_ui_text = (text: Partial<Record<UiTextKey, string>>) => setContext(TEXT, text);
 /** Resolve once per component (it reads context); returns `t(key)`. */
-export function uiText(): (key: UiTextKey) => string {
+export function ui_text(): (key: UiTextKey) => string {
 	const text = getContext<Partial<Record<UiTextKey, string>> | undefined>(TEXT);
 	return (key) => text?.[key] ?? UI_TEXT[key];
 }
@@ -206,8 +88,8 @@ export const claimFieldControl = (): string | undefined =>
 export type Controls = { readonly readonly: boolean; readonly disabled: boolean };
 const CONTROLS = Symbol.for('norbital.ui.controls');
 const FREE: Controls = { readonly: false, disabled: false };
-/** The enclosing `Form`'s, `Fieldset`'s or `Field`'s control mode; editable outside any. */
-export const useControls = (): Controls => getContext<Controls | undefined>(CONTROLS) ?? FREE;
+/** The enclosing `Form`'s or `Field`'s control mode; editable outside any. */
+export const use_controls = (): Controls => getContext<Controls | undefined>(CONTROLS) ?? FREE;
 /** Hands a control mode to every control beneath; a member `own` leaves `undefined` inherits the enclosing one. Readonly
  * only adds: a `readonly={false}` beneath a readonly form (a viewed record) stays readonly. Only a form's own boundary
  * (`boundary`: a create sheet opened inside a readonly form) starts afresh. */
@@ -215,7 +97,7 @@ export function provideControls(
 	own: () => { readonly?: boolean | null | undefined; disabled?: boolean | null | undefined },
 	boundary = false
 ): Controls {
-	const parent = useControls();
+	const parent = use_controls();
 	return setContext(CONTROLS, {
 		get readonly() {
 			const mine = own().readonly;

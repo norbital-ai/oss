@@ -4,10 +4,11 @@ The right-hand accent a list row or card carries while an open approval request 
 one-line tooltip: who asked, where it stands, whom it waits on. Its container is `relative`.
 -->
 <script lang="ts">
-	import { useBolt } from '../client/context.js';
+	import type { UiContext } from '../client/contract.js';
+	import { bolt_of } from '../client/context.js';
 	import { approvalOf, approvalText } from './row.js';
-	let { row }: { row: unknown } = $props();
-	const bolt = useBolt();
+	let { ctx, row }: { ctx: UiContext; row: unknown } = $props();
+	const bolt = $derived(bolt_of(ctx));
 	const a = $derived(approvalOf(row));
 	const text = $derived(a === null ? '' : approvalText(bolt, a));
 </script>

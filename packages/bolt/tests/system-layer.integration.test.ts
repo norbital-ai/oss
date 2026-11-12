@@ -1,3 +1,4 @@
+import { seed_envoys } from './support/envoys.ts';
 // The built-in layer's integration instances on PGlite: `sys_integration` written through ordinary acts and its
 // engine-side transform (FINAL §3), and the instance credential store's epoch fence (§4.5).
 import { randomBytes } from 'node:crypto';
@@ -11,18 +12,17 @@ import { PgliteDb, type PgliteClient } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
 import { toPred } from '../src/engine/access/pred.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
-import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
 import { Keys } from '../src/engine/ports.ts';
 import { Secrets } from '../src/engine/secrets.ts';
-import { keysPort } from '../src/node/keys.ts';
-import { act, recordCapabilities, type ActRequest } from '../src/engine/write/act.ts';
+import { keys_port } from '../src/node/keys.ts';
+import { act, record_capabilities, type ActRequest } from '../src/engine/write/act.ts';
 import {
-	loadPack,
+	load_pack,
 	packLoader,
-	sourceOf,
+	source_of,
 	type Pack,
 	type PackStep
 } from '../src/engine/write/pack.ts';
@@ -30,13 +30,13 @@ import {
 	admin,
 	arm,
 	authority,
-	deleteArm,
+	delete_arm,
 	grants,
 	manifest as base,
 	member,
 	NOW,
 	TODAY,
-	writeArm
+	write_arm
 } from './write-fixture.ts';
 
 const m: EngineManifest = {
@@ -47,32 +47,28 @@ const m: EngineManifest = {
 			driver: 'http',
 			configuration: { region: { kind: 'text' }, lag: { kind: 'int', default: 15 } }
 		}
-	},
-	connections: { mail: { integration: 'email' }, desk: { integration: 'whatsapp' } },
-	envoys: {
-		desk: {
-			name: 'Desk',
-			audience: 'private',
-			policies: ['p'],
-			delegation: 'disabled',
-			task: 'Answer.'
-		}
 	}
 };
+const deskEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: deskEnvoy,
+		name: 'Desk',
+		audience: 'private',
+		policies: ['p'],
+		delegation: 'disabled',
+		task: 'Answer.'
+	}
+] satisfies Parameters<typeof seed_envoys>[1];
+
 const ada = member.kind === 'member' ? member.id : '';
 const Id = Schema.Struct({ id: Schema.String });
 const Count = Schema.Struct({ n: Schema.Number });
 const IdConfiguration = Schema.Struct({ id: Schema.String, configuration: Schema.Json });
-const NamedConfiguration = Schema.Struct({
-	id: Schema.String,
-	named: Schema.Boolean,
-	configuration: Schema.Json
-});
 const Instance = Schema.Struct({
 	id: Schema.String,
 	integration: Schema.String,
 	name: Schema.String,
-	named: Schema.Boolean,
 	owner: Schema.NullOr(Schema.String),
 	active: Schema.Boolean,
 	configuration: Schema.Json,
@@ -102,9 +98,14 @@ const fixture = Effect.gen(function* () {
 		}
 	};
 	const db = PgliteDb.make(client);
+	yield* seed_envoys(db, runtimeEnvoys);
 	yield* db.write({
 		text: `insert into sys_user (id, name) values ($1, 'Ada'), ('u2', 'Bob')`,
 		params: [ada]
+	});
+	yield* db.write({
+		text: `INSERT INTO sys_integration (id, integration, name) VALUES ('mail', 'email', 'mail'), ('desk', 'whatsapp', 'desk')`,
+		params: []
 	});
 	let n = 0;
 	const read = <A>(schema: Schema.Decoder<A>, sql: string, params: readonly Json[] = []) =>
@@ -132,7 +133,7 @@ const fixture = Effect.gen(function* () {
 	});
 	const codec = () =>
 		Effect.gen(function* () {
-			const port = keysPort(randomBytes(32));
+			const port = keys_port(randomBytes(32));
 			const keyCall = async <A>(method: 'seal' | 'open', work: () => Promise<A>): Promise<A> => {
 				expect(native.active).toBe(0);
 				native.keyActive++;
@@ -194,7 +195,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					})
 				).toMatchObject({ kind: 'refused', field: 'owner' });
 				expect(
-					yield* read(Count, `select count(*)::int as n from sys_integration where not named`)
+					yield* read(Count, `select count(*)::int as n from sys_integration where integration = 'erp'`)
 				).toEqual([{ n: 0 }]);
 				// a valid one is created, its configuration decoded and defaulted
 				const id = yield* created({
@@ -205,14 +206,13 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* read(
 						Instance,
-						`select id, integration, name, named, owner, active, configuration, revision from sys_integration order by named, name`
+						`select id, integration, name, owner, active, configuration, revision from sys_integration order by name`
 					)
 				).toEqual([
 					{
 						id,
 						integration: 'erp',
 						name: 'Ledger',
-						named: false,
 						owner: null,
 						active: true,
 						configuration: { lag: 15, region: 'sg' },
@@ -222,7 +222,6 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 						id: 'desk',
 						integration: 'whatsapp',
 						name: 'desk',
-						named: true,
 						owner: null,
 						active: true,
 						configuration: {},
@@ -232,7 +231,6 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 						id: 'mail',
 						integration: 'email',
 						name: 'mail',
-						named: true,
 						owner: null,
 						active: true,
 						configuration: {},
@@ -242,7 +240,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* run({
 						verb: 'update',
-						input: [{ target: id, set: { configuration: { region: 'my', lag: 5 }, active: false } }]
+						input: [{ target: { id }, set: { configuration: { region: 'my', lag: 5 }, active: false } }]
 					})
 				).toMatchObject({ kind: 'committed' });
 				expect(
@@ -260,7 +258,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 	);
 
 	it.effect(
-		"deploys a declared envoy only on a workspace instance of a conversation definition; never changes an instance's definition or owner, never deletes a named one",
+		"deploys a runtime envoy only on a workspace conversation instance; preserves definition and owner; deletes ordinary runtime accounts",
 		() =>
 			Effect.gen(function* () {
 				const { read, run, created } = yield* SystemFixture;
@@ -275,53 +273,52 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 					owner: ada
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: erp, set: { envoy: 'desk' } }] })
+					yield* run({ verb: 'update', input: [{ target: { id: erp }, set: { envoy: deskEnvoy } }] })
 				).toMatchObject({
 					kind: 'refused',
 					field: 'envoy',
 					message: expect.stringMatching(/conversation/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: personal, set: { envoy: 'desk' } }] })
+					yield* run({ verb: 'update', input: [{ target: { id: personal }, set: { envoy: deskEnvoy } }] })
 				).toMatchObject({
 					kind: 'refused',
 					field: 'envoy',
 					message: expect.stringMatching(/personal/)
 				});
 				expect(
-					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: 'nope' } }] })
+					yield* run({ verb: 'update', input: [{ target: { id: 'desk' }, set: { envoy: 'nope' } }] })
 				).toMatchObject({ kind: 'refused', field: 'envoy' });
 				expect(
-					yield* run({ verb: 'update', input: [{ target: 'desk', set: { envoy: 'desk' } }] })
+					yield* run({ verb: 'update', input: [{ target: { id: 'desk' }, set: { envoy: deskEnvoy } }] })
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* read(
 						Schema.Struct({ envoy: Schema.NullOr(Schema.String) }),
 						`select envoy from sys_integration where id = 'desk'`
 					)
-				).toEqual([{ envoy: 'desk' }]);
+				).toEqual([{ envoy: deskEnvoy }]);
 
 				expect(
 					yield* run({
 						verb: 'update',
-						input: [{ target: personal, set: { integration: 'email' } }]
+						input: [{ target: { id: personal }, set: { integration: 'email' } }]
 					})
-				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
+				).toMatchObject({ kind: 'refused', code: 'invalid_input' });
 				expect(
-					yield* run({ verb: 'update', input: [{ target: personal, set: { owner: 'u2' } }] })
-				).toMatchObject({ kind: 'refused', code: 'invalidInput' });
-				expect(yield* run({ verb: 'delete', input: [{ target: 'mail' }] })).toMatchObject({
-					kind: 'refused',
-					field: 'id'
+					yield* run({ verb: 'update', input: [{ target: { id: personal }, set: { owner: 'u2' } }] })
+				).toMatchObject({ kind: 'refused', code: 'invalid_input' });
+				expect(yield* run({ verb: 'delete', input: [{ target: { id: 'mail' } }] })).toMatchObject({
+					kind: 'committed'
 				});
-				expect(yield* run({ verb: 'delete', input: [{ target: personal }] })).toMatchObject({
+				expect(yield* run({ verb: 'delete', input: [{ target: { id: personal } }] })).toMatchObject({
 					kind: 'committed'
 				});
 				expect(
-					(yield* read(Id, `select id from sys_integration where named or id = $1 order by id`, [
+					(yield* read(Id, `select id from sys_integration where id in ('desk', 'mail', $1) order by id`, [
 						personal
 					])).map((r) => r['id'])
-				).toEqual(['desk', 'mail']);
+				).toEqual(['desk']);
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 
@@ -329,11 +326,11 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 		"an administrator manages every instance (the bypass); identity stays the admin verbs'",
 		() =>
 			Effect.gen(function* () {
-				const a = compileAuthority(
+				const a = (yield* compile_authority(
 					m,
 					{ actor: admin.actor, policies: [], admin: true },
 					'admin'
-				).models;
+				)).models;
 				expect([
 					a['sys_integration']?.create.length,
 					a['sys_integration']?.update.length,
@@ -348,15 +345,15 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 		() =>
 			Effect.gen(function* () {
 				const { db, run, created } = yield* SystemFixture;
-				const own = toPred(m, 'sys_integration', { owner: { eq: { var: 'requestor.id' } } });
+				const own = yield* toPred(m, 'sys_integration', { owner: { eq: { var: 'requestor.id' } } });
 				// the kernel directory's staff read (an owner is a readable member), and the instances it owns
 				const caller = authority({
 					sys_user: grants('sys_user', { create: [], update: [], delete: [] }),
 					sys_integration: grants('sys_integration', {
 						read: { default: { sys_integration: [arm(own)] } },
-						create: [writeArm({ sys_integration: ['integration', 'name', 'owner'] })],
-						update: [writeArm({ sys_integration: ['name', 'active'] })],
-						delete: [deleteArm()]
+						create: [write_arm({ sys_integration: ['integration', 'name', 'owner'] })],
+						update: [write_arm({ sys_integration: ['name', 'active'] })],
+						delete: [delete_arm()]
 					})
 				});
 				const mine = yield* created({ integration: 'email', name: 'Ada mail', owner: ada });
@@ -378,34 +375,34 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				expect(
 					yield* run({
 						verb: 'update',
-						input: [{ target: mine, set: { configuration: { region: 'sg' } } }],
+						input: [{ target: { id: mine }, set: { configuration: { region: 'sg' } } }],
 						authority: caller
 					})
 				).toMatchObject({ kind: 'refused', code: 'forbidden', field: 'configuration' });
 				expect(
 					yield* run({
 						verb: 'update',
-						input: [{ target: mine, set: { name: 'Work mail' } }],
+						input: [{ target: { id: mine }, set: { name: 'Work mail' } }],
 						authority: caller
 					})
 				).toMatchObject({ kind: 'committed' });
 				expect(
 					yield* run({
 						verb: 'update',
-						input: [{ target: 'mail', set: { name: 'Mine now' } }],
+						input: [{ target: { id: 'mail' }, set: { name: 'Mine now' } }],
 						authority: caller
 					})
-				).toMatchObject({ kind: 'refused', code: 'notFound' });
+				).toMatchObject({ kind: 'refused', code: 'not_found' });
 				// a native form (the shell's instance sheet) reads the same allowlist and grants as advice;
 				// the record is the one the caller's read arm (`owner = actor`) reached
 				const row = (_c: string, id: string) =>
 					db
 						.one(Instance, {
-							text: `select id, integration, name, named, owner, active, configuration, revision from sys_integration where id = $1 and owner = $2`,
+							text: `select id, integration, name, owner, active, configuration, revision from sys_integration where id = $1 and owner = $2`,
 							params: [id, ada]
 						})
 						.pipe(Effect.map(Option.getOrNull));
-				const advice = yield* recordCapabilities(
+				const advice = yield* record_capabilities(
 					{ manifest: m, db },
 					'sys_integration',
 					mine,
@@ -427,7 +424,7 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 				});
 				expect(advice?.fields).not.toHaveProperty('envoy');
 				expect(
-					yield* recordCapabilities(
+					yield* record_capabilities(
 						{ manifest: m, db },
 						'sys_integration',
 						'mail',
@@ -440,9 +437,9 @@ describe('sys_integration: ordinary acts and the engine transform', () => {
 	);
 });
 
-describe("seed packs: run-time instances beside the plan's named ones", () => {
+describe('seed packs: runtime accounts are tenant data', () => {
 	it.effect(
-		"a database holding only the named instances is empty to a pack; the pack's instances and rows then load once",
+		'existing runtime accounts block restoration; an empty identity store loads the accounts and model rows once',
 		() =>
 			Effect.gen(function* () {
 				const { db, read } = yield* SystemFixture;
@@ -465,29 +462,35 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 						tags: [{ id: '0199a000-0000-7000-8000-000000000043', name: 'vip' }]
 					}
 				};
+				expect(yield* (yield* packLoader(db, m, source_of(pack), NOW)).step).toBe('hadRows');
+				expect(yield* read(IdConfiguration, 'select id, configuration from sys_integration order by id'))
+					.toEqual([{ id: 'desk', configuration: {} }, { id: 'mail', configuration: {} }]);
+				expect(yield* read(Count, 'select count(*)::int as n from tags')).toEqual([{ n: 0 }]);
+				yield* db.write({ text: 'DELETE FROM sys_integration', params: [] });
 				// it loads in steps: identity, each model, the last step; then the answer stays
-				const loader = yield* packLoader(db, m, sourceOf(pack), NOW);
+				const loader = yield* packLoader(db, m, source_of(pack), NOW);
 				let step: PackStep = 'more';
 				for (let i = 0; i < 10 && step === 'more'; i++) step = yield* loader.step;
 				expect(step).toBe('loaded');
 				expect(yield* loader.step).toBe('loaded');
 				expect(
 					yield* read(
-						NamedConfiguration,
-						`select id, named, configuration from sys_integration order by named, id`
+						IdConfiguration,
+						`select id, configuration from sys_integration order by id`
 					)
 				).toEqual([
-					{ id, named: false, configuration: { lag: 15, region: 'sg' } },
-					{ id: 'desk', named: true, configuration: {} },
-					{ id: 'mail', named: true, configuration: {} }
+					{ id, configuration: { lag: 15, region: 'sg' } }
 				]);
-				expect(yield* (yield* packLoader(db, m, sourceOf(pack), NOW)).step).toBe('hadRows');
-				expect(yield* loadPack(db, m, sourceOf(pack), NOW)).toBe(false);
+				expect(yield* read(Schema.Struct({ id: Schema.String, name: Schema.String }), 'select id, name from tags'))
+					.toEqual([{ id: '0199a000-0000-7000-8000-000000000043', name: 'vip' }]);
+				expect(yield* (yield* packLoader(db, m, source_of(pack), NOW)).step).toBe('hadRows');
+				expect(yield* load_pack(db, m, source_of(pack), NOW)).toBe(false);
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 	it.effect('the same pack loader retries a failed identity batch before advancing', () =>
 		Effect.gen(function* () {
 			const { db, read } = yield* SystemFixture;
+			yield* db.write({ text: 'DELETE FROM sys_integration', params: [] });
 			yield* db.write({ text: 'DELETE FROM sys_user', params: [] });
 			const id = '0199a000-0000-7000-8000-000000000055';
 			const pack: Pack = {
@@ -502,7 +505,7 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 				transaction: (batch) =>
 					Effect.suspend(() => (++attempts === 1 ? Effect.fail(failure) : db.transaction(batch)))
 			});
-			const loader = yield* packLoader(once, m, sourceOf(pack), NOW);
+			const loader = yield* packLoader(once, m, source_of(pack), NOW);
 			expect(yield* Effect.flip(loader.step)).toBe(failure);
 			expect(attempts).toBe(1);
 			expect(yield* read(Id, 'select id from sys_user')).toEqual([]);
@@ -514,23 +517,30 @@ describe("seed packs: run-time instances beside the plan's named ones", () => {
 					'select id, name from sys_user'
 				)
 			).toEqual([{ id, name: 'Retried member' }]);
+			// the last step has no roll-up or counter to derive, so it opens no transaction
 			expect(yield* loader.step).toBe('loaded');
-			expect(attempts).toBe(3);
+			expect(attempts).toBe(2);
 			expect(yield* loader.step).toBe('loaded');
-			expect(attempts).toBe(3);
+			expect(attempts).toBe(2);
 		}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 });
 
 describe('one configuration shape, however an instance is made', () => {
-	it.effect("a named slot starts with its definition's defaults, as a created instance does", () =>
+	it.effect('a seeded runtime account and a created instance both store the definition defaults', () =>
 		Effect.gen(function* () {
 			const { db, read, created } = yield* SystemFixture;
-			const slotted: EngineManifest = {
-				...m,
-				connections: { ...m.connections, ledger: { integration: 'erp' } }
+			yield* db.write({ text: 'DELETE FROM sys_integration', params: [] });
+			yield* db.write({ text: 'DELETE FROM sys_user', params: [] });
+			const pack: Pack = {
+				dir: '',
+				meta: { format: 1, name: 'test', hash: '', start: [], assets: [], rows: { sys_user: 2, sys_integration: 1 } },
+				rows: {
+					sys_user: [{ id: ada, name: 'Ada' }, { id: 'u2', name: 'Bob' }],
+					sys_integration: [{ id: 'ledger', integration: 'erp', name: 'Ledger', configuration: { region: 'sg' } }]
+				}
 			};
-			yield* applyPlan(db, yield* plan(yield* readApplied(db), slotted), { accept: true });
+			expect(yield* load_pack(db, m, source_of(pack), NOW)).toBe(true);
 			const id = yield* created({
 				integration: 'erp',
 				name: 'Ledger 2',
@@ -539,11 +549,11 @@ describe('one configuration shape, however an instance is made', () => {
 			expect(
 				yield* read(
 					IdConfiguration,
-					`select id, configuration from sys_integration where integration = 'erp' order by named, id`
+					`select id, configuration from sys_integration where integration = 'erp' order by id`
 				)
 			).toEqual([
 				{ id, configuration: { lag: 15, region: 'sg' } },
-				{ id: 'ledger', configuration: { lag: 15 } }
+				{ id: 'ledger', configuration: { lag: 15, region: 'sg' } }
 			]);
 		}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
@@ -594,7 +604,7 @@ describe("instance credentials: sealed rows under the opener's epoch", () => {
 					creds: { me: '+65 8000 0000' },
 					'key:2': 'k2'
 				});
-				expect(yield* Effect.flip(store.open('nope'))).toMatchObject({ code: 'notFound' });
+				expect(yield* Effect.flip(store.open('nope'))).toMatchObject({ code: 'not_found' });
 				expect(native.batches).toBeGreaterThan(batches);
 				expect(native.keyCalls.seal).toBeGreaterThan(0);
 				expect(native.keyCalls.open).toBeGreaterThan(0);
@@ -641,7 +651,7 @@ describe("instance credentials: sealed rows under the opener's epoch", () => {
 				expect((yield* store.read('desk')).values.get('token')).toBe('t2');
 				expect(
 					yield* Effect.flip(store.write('nope', null, new Map([['token', 'x']])))
-				).toMatchObject({ code: 'notFound' });
+				).toMatchObject({ code: 'not_found' });
 			}).pipe(Effect.provide(SystemFixtureLive), Effect.scoped)
 	);
 });

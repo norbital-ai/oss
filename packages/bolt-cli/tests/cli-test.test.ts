@@ -14,13 +14,19 @@ import { expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { authorErrors } from '../src/cli/build.ts';
-import { testWorkspace } from '../src/cli/test.ts';
+import { suiteWorkers, testWorkspace, workers } from '../src/cli/test.ts';
 
 it('a failed build names its first diagnostic, never only a count', () => {
 	expect(
 		authorErrors([{ code: 'E1', path: 'src/a.ts', message: 'amount is not a decimal' }]).message
 	).toBe('1 error: amount is not a decimal');
 	expect(authorErrors([]).message).toBe('The workspace could not be built.');
+});
+
+it('a suite forks a worker per free core, and only 4 on a busy machine', () => {
+	expect(suiteWorkers(0)).toBe(workers);
+	expect(suiteWorkers(80)).toBe(Math.min(workers, 4));
+	expect(suiteWorkers(workers - 6)).toBe(Math.min(workers, 6));
 });
 
 it.live('bolt test generates the fresh checkout config before loading Vitest', () =>

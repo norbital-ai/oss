@@ -8,11 +8,12 @@ import {
 	type Ingested,
 	type IngestPort
 } from './contracts.ts';
-import { ingestAnswer, type Convert } from './ports.ts';
+import type { Convert } from './ports.ts';
+import { ingest_answer } from './media.ts';
 import { fromBase64, toBase64 } from './crypto.ts';
 import { Port } from './port.ts';
 
-export type DocumentConverterConfig = {
+type DocumentConverterConfig = {
 	readonly url: string;
 	readonly key: string;
 	readonly fetch?: typeof fetch | undefined;
@@ -127,14 +128,14 @@ const submit = <A>(
 			: { result: seen.result };
 	});
 
-export function documentConverter(
+export function document_converter(
 	config: DocumentConverterConfig
 ): Convert['Service'] & Required<Pick<Convert['Service'], 'previewPdf'>> {
 	const input = (source: Parameters<Convert['Service']['convert']>[0]) =>
 		'markdown' in source
 			? { from: 'markdown', source: source.markdown }
-			: 'layoutHtml' in source
-				? { from: 'layout-html', source: source.layoutHtml }
+			: 'layout_html' in source
+				? { from: 'layout-html', source: source.layout_html }
 				: { from: 'html', source: source.html };
 	return {
 		targets: CONVERT_TARGETS,
@@ -188,7 +189,7 @@ export function documentConverter(
 	};
 }
 
-const WireIngest = ingestAnswer(Schema.Uint8ArrayFromBase64);
+const WireIngest = ingest_answer(Schema.Uint8ArrayFromBase64);
 const WireResult = Schema.fromJsonString(WireIngest);
 const settled = (job: typeof Job.Type) => job.state === 'succeeded' || job.state === 'failed';
 
@@ -200,7 +201,12 @@ const POLL = { firstMs: 100, growth: 1.5, lastMs: 5000 };
  */
 const ingestJob = (
 	config: DocumentConverterConfig,
-	file: { readonly name: string; readonly mime: string; readonly sha256?: string; readonly lane?: string },
+	file: {
+		readonly name: string;
+		readonly mime: string;
+		readonly sha256?: string;
+		readonly lane?: string;
+	},
 	bytes: Uint8Array | ReadableStream<Uint8Array>,
 	{ password, ...options }: object & { readonly password?: string }
 ) =>
@@ -268,7 +274,11 @@ const ingestJob = (
 		const started = yield* job(posted);
 		// a queue under a burst answers in its time: every job asking four times a second would be the burst
 		let ended = started;
-		for (let wait = POLL.firstMs; !settled(ended); wait = Math.min(wait * POLL.growth, POLL.lastMs)) {
+		for (
+			let wait = POLL.firstMs;
+			!settled(ended);
+			wait = Math.min(wait * POLL.growth, POLL.lastMs)
+		) {
 			yield* Effect.sleep(wait);
 			ended = yield* Port.attempt('convert', (signal) =>
 				fetcher(`${base}/v1/jobs/${started.id}`, { headers, signal })
@@ -290,7 +300,7 @@ const ingestJob = (
  * The `IngestPort` over Norbital Convert's job routes (plan 12): a host constructs it from Convert's URL and key. A
  * converter with no transcription model rejects audio as `unavailable`.
  */
-export function documentIngester(config: DocumentConverterConfig): IngestPort {
+export function document_ingester(config: DocumentConverterConfig): IngestPort {
 	return {
 		ingest: (file, options, signal) =>
 			Effect.runPromise(

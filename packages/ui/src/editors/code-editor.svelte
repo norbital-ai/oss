@@ -6,16 +6,16 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	import type { CodeEditorLanguage } from './code-setup.js';
 	export type { CodeEditorLanguage };
 	/**
-	 * The props of `CodeEditor`: the text and `onChange`, the language, read-only and invalid states, and the minimum height.
+	 * The props of `CodeEditor`: the text and `on_change`, the language, read-only and invalid states, and the minimum height.
 	 */
 	export type CodeEditorProps = {
 		value: string;
-		onChange?(next: string): void;
+		on_change?(next: string): void;
 		language?: CodeEditorLanguage;
 		readonly?: boolean;
 		invalid?: boolean;
 		/** CSS min-height of the editing area; one line is `2.25rem` (a field's height). */
-		minHeight?: string;
+		min_height?: string;
 		/** Long lines wrap at the editor's width instead of scrolling sideways (an expression, prose). */
 		wrap?: boolean;
 		id?: string;
@@ -30,15 +30,15 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 	import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
 	import { EditorView } from '@codemirror/view';
 	import { cn } from '../primitives/utils.js';
-	import { codeHighlight, codeLanguage, codeTheme } from './code-setup.js';
+	import { code_highlight, code_language, code_theme } from './code-setup.js';
 
 	let {
 		value,
-		onChange,
+		on_change,
 		language = 'plaintext',
 		readonly = false,
 		invalid = false,
-		minHeight = '7rem',
+		min_height = '7rem',
 		wrap = false,
 		id,
 		class: className,
@@ -46,12 +46,12 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		'aria-labelledby': ariaLabelledby
 	}: CodeEditorProps = $props();
 
-	/** Marks a transaction that mirrors `value` in, so it is not echoed back through `onChange`. */
+	/** Marks a transaction that mirrors `value` in, so it is not echoed back through `on_change`. */
 	const External = Annotation.define<boolean>();
 	const config = new Compartment();
 	const tools = new Compartment();
 	const settings = (): Extension => [
-		codeLanguage(language),
+		code_language(language),
 		wrap ? EditorView.lineWrapping : [],
 		EditorState.readOnly.of(readonly),
 		EditorView.editable.of(!readonly),
@@ -73,12 +73,12 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 					doc: value,
 					extensions: [
 						tools.of([]),
-						codeTheme,
-						codeHighlight,
+						code_theme,
+						code_highlight,
 						config.of(settings()),
 						EditorView.updateListener.of((u) => {
 							if (u.docChanged && !u.transactions.some((tr) => tr.annotation(External)))
-								onChange?.(u.state.doc.toString());
+								on_change?.(u.state.doc.toString());
 						})
 					]
 				})
@@ -117,7 +117,7 @@ A CodeMirror code editor for JavaScript (also CEL and TypeScript expressions), J
 		readonly && 'bg-muted',
 		className
 	)}
-	style:min-height={minHeight}
+	style:min-height={min_height}
 	data-code-editor={language}
 	{@attach mount}
 ></div>

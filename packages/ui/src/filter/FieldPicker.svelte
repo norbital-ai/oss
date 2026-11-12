@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	// The view popover's field tree with search (rule 16b): own fields, one-relations (a record condition, or expanded to
 	// the target's fields, two hops) and, at the top, many-relations — exactly the paths the engine's catalogue offers.
 	import FieldIndicator from './FieldIndicator.svelte';
@@ -8,30 +9,24 @@
 	import type { ModelExposure } from '../kinds/context.js';
 	import { cn, stepActive } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
-	import { useBolt } from '../client/context.js';
-	import {
-		filterable,
-		INDEX,
-		offeredPaths,
-		pathLabel,
-		resolve,
-		childOf,
-		type FilterStep,
-		type Offer
-	} from './filter.js';
+	import { bolt_of } from '../client/context.js';
+	import { filterable, INDEX, offeredPaths, resolve, childOf, type FilterStep, type Offer } from './catalog.js';
+	import { pathLabel } from './text.js';
 	import { humanize, msg } from '../text/messages.js';
 	import type { Kind } from '@norbital-ai/std/kind';
 
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
 	let {
+		ctx,
 		catalog,
 		model,
 		offers,
 		prefix = [],
 		value,
 		many = true,
-		onPick
+		on_pick
 	}: {
+		ctx: UiContext;
 		catalog: { readonly [c: string]: ModelExposure };
 		model: string;
 		/** The engine's catalogue for the view. */
@@ -42,9 +37,9 @@
 		value: string;
 		/** Offer many-relations (only at a view's top level). */
 		many?: boolean;
-		onPick(path: string, many: boolean): void;
+		on_pick(path: string, many: boolean): void;
 	} = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	let open = $state(false),
 		query = $state(''),
 		active = $state(0);
@@ -60,7 +55,7 @@
 		(k?.kind === 'json' &&
 			(k.shape === undefined ||
 				k.shape.kind === 'json' ||
-				((k.shape.kind === 'record' || k.shape.kind === 'list') && k.shape.of.kind === 'json')));
+				(k.shape.kind === 'record' && k.shape.of.kind === 'json')));
 
 	function level(c: string, prefix: string, depth: number, all: boolean): Entry[] {
 		const x = catalog[c];
@@ -87,12 +82,11 @@
 				if (offered.conditions.has(prefix + f) && resolve(catalog, model, prefix + f) !== null)
 					out.push({ path: prefix + f, label: pathLabel(catalog, c, f, humanize), depth });
 		for (const [fk, rel] of Object.entries(x.relations ?? {})) {
-			for (const step of rel.targets.length > 1 ? rel.targets.map((t) => `${fk}:${t}`) : [fk]) {
+			for (const target of rel.targets) {
+				const step = rel.targets.length > 1 ? `${fk}:${target}` : fk;
 				const path = prefix + step;
 				if (!offered.conditions.has(path)) continue;
-				const canOpen =
-					depth < 2 &&
-					catalog[step.includes(':') ? step.split(':')[1]! : rel.targets[0]!] !== undefined;
+				const canOpen = depth < 2 && catalog[target] !== undefined;
 				const isOpen = all || expanded.has(path);
 				out.push({
 					path,
@@ -103,7 +97,7 @@
 				if (canOpen && isOpen)
 					out.push(
 						...level(
-							step.includes(':') ? step.split(':')[1]! : rel.targets[0]!,
+							target,
 							`${path}.`,
 							depth + 1,
 							all
@@ -134,7 +128,7 @@
 	const selectedMany = $derived(childOf(catalog, model, value) !== undefined);
 	const shown = $derived(value === '' ? '' : pathLabel(catalog, model, value, humanize));
 	const pick = (e: Entry) => {
-		onPick(e.path, e.many === true);
+		on_pick(e.path, e.many === true);
 		open = false;
 		query = '';
 	};
@@ -161,7 +155,7 @@
 
 <Popover.Root
 	bind:open
-	onOpenChange={(next) => {
+	on_open_change={(next) => {
 		if (next)
 			active = Math.max(
 				0,
@@ -179,16 +173,16 @@
 					'flex h-auto min-h-8 w-36 max-w-full items-center justify-between gap-2 px-2 py-1 text-left'
 				)}
 				aria-label={shown
-					? `${msg(bolt, 'view.field', 'Field')}: ${shown}`
-					: msg(bolt, 'view.field', 'Field')}
+					? `${msg(bolt, 'view.field')}: ${shown}`
+					: msg(bolt, 'view.field')}
 				data-field-picker
 			>
-				<FieldIndicator resolved={selected} many={selectedMany} nested={value.includes('.')} />
+				<FieldIndicator {ctx} resolved={selected} many={selectedMany} nested={value.includes('.')} />
 				<span
 					class={cn(
 						'min-w-0 flex-1 whitespace-normal break-words',
 						value === '' && 'text-muted-foreground font-normal'
-					)}>{shown || msg(bolt, 'view.field', 'Field')}</span
+					)}>{shown || msg(bolt, 'view.field')}</span
 				>
 				<svg
 					viewBox="0 0 24 24"
@@ -204,7 +198,7 @@
 	<Popover.Content
 		align="start"
 		class="flex w-64 flex-col gap-1 p-1"
-		aria-label={msg(bolt, 'view.field', 'Field')}
+		aria-label={msg(bolt, 'view.field')}
 		data-field-list
 		onkeydown={keydown}
 	>
@@ -217,15 +211,12 @@
 			aria-controls="field-options"
 			aria-expanded="true"
 			aria-activedescendant={activeId}
-			placeholder={msg(bolt, 'view.searchFields', 'Search fields')}
+			placeholder={msg(bolt, 'view.searchFields')}
 			bind:value={query}
 			oninput={() => (active = 0)}
 		/>
 		<p class="text-muted-foreground px-2 py-1 text-xs">
-			{msg(
-				bolt,
-				'view.fieldHelp',
-				'Icons show field types. Expand a linked record to see its fields.'
+			{msg(bolt, 'view.fieldHelp'
 			)}
 		</p>
 		<ul bind:this={list} id="field-options" class="max-h-64 overflow-auto" role="listbox">
@@ -249,14 +240,14 @@
 						onmousemove={() => (active = i)}
 						onclick={() => pick(e)}
 					>
-						<FieldIndicator
+						<FieldIndicator {ctx}
 							resolved={resolve(catalog, model, e.path)}
 							many={e.many === true}
 							nested={e.path.includes('.')}
 						/>
 						<span class="min-w-0 flex-1 truncate">{e.label}</span>{#if e.many}{' '}<span
 								class="text-muted-foreground text-xs"
-								>{msg(bolt, 'view.related', 'related records')}</span
+								>{msg(bolt, 'view.related')}</span
 							>{/if}
 					</button>
 					{#if e.open !== undefined}
@@ -264,7 +255,7 @@
 							type="button"
 							class="text-muted-foreground hover:bg-muted grid size-8 shrink-0 place-items-center rounded-sm"
 							data-expand={e.path}
-							aria-label={msg(bolt, 'view.expand', 'Fields of {field}', { field: e.label })}
+							aria-label={msg(bolt, 'view.expand', { field: e.label })}
 							aria-expanded={e.open}
 							onclick={() =>
 								expanded.has(e.path) ? expanded.delete(e.path) : expanded.add(e.path)}
@@ -282,7 +273,7 @@
 				</li>
 			{:else}
 				<li class="text-muted-foreground px-2 py-1.5 text-xs">
-					{msg(bolt, 'view.noFields', 'No matching fields')}
+					{msg(bolt, 'view.noFields')}
 				</li>
 			{/each}
 		</ul>

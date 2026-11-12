@@ -1,10 +1,11 @@
+import { committed, single_act, type SentAct } from './act-envelope.ts';
 import { required, textOf } from './view-fixture.ts';
 import { element } from './elements.ts';
 import {
 	viewFixture,
 	jsonRecord,
+	jsonArray,
 	recordRootsOf,
-	type ActOptions,
 	type ViewScript,
 	browser
 } from './view-fixture.ts';
@@ -21,15 +22,18 @@ import type { RecordCapabilities } from '../src/record/types.ts';
 import type { Row } from '../src/model/types.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { ViewPart } from './view-harness.svelte';
+import type { RecordFooterHarnessProps } from './record-footer-harness.svelte';
 import type { Outcome as WireOutcome } from '../../bolt/build/protocol/schema.js';
 import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: Harness } = await import('./view-harness.svelte');
 const { default: RecordShell } = await import('../src/record/RecordShell.svelte');
+const { default: FooterHarness } = await import('./record-footer-harness.svelte');
 
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' }, crew: { kind: 'text', optional: true } },
 		update: { columns: ['title', 'crew'] }
@@ -49,27 +53,39 @@ const PAST: Record<number, Row> = {
 const HISTORY: readonly HistoryEntry[] = [
 	{
 		revision: 1,
+		schema_version: 'schema-1',
 		at: '2026-09-01T00:00:00.000Z',
 		actor: { kind: 'member', id: 'u1' },
-		restoredFrom: null,
+		restored_from: null,
 		approval: null,
-		changed: { title: 'Paint' }
+		changed: { title: 'Paint' },
+		cause: 'direct',
+		incompatible: [],
+		valid: true
 	},
 	{
 		revision: 2,
+		schema_version: 'schema-1',
 		at: '2026-09-02T00:00:00.000Z',
 		actor: { kind: 'system', id: 'run1' },
-		restoredFrom: null,
+		restored_from: null,
 		approval: null,
-		changed: { title: 'Paint v2', updated_at: 'x' }
+		changed: { title: 'Paint v2', updated_at: 'x' },
+		cause: 'direct',
+		incompatible: [],
+		valid: true
 	},
 	{
 		revision: 3,
+		schema_version: 'schema-1',
 		at: '2026-09-03T00:00:00.000Z',
 		actor: { kind: 'member', id: 'u1' },
-		restoredFrom: null,
+		restored_from: null,
 		approval: null,
-		changed: { title: 'Paint v3', crew: 'B' }
+		changed: { title: 'Paint v3', crew: 'B' },
+		cause: 'direct',
+		incompatible: [],
+		valid: true
 	}
 ];
 const approvalView = (request: Partial<ApprovalView> & { id: string }): ApprovalView => ({
@@ -81,8 +97,8 @@ const approvalView = (request: Partial<ApprovalView> & { id: string }): Approval
 	step: 0,
 	steps: [{ name: 'Review', teams: ['reviewers'], users: [] }],
 	superseded_by: [],
-	teamNames: {},
-	userNames: {},
+	team_names: {},
+	user_names: {},
 	requestor: { ref: 'u1', name: 'Ada' },
 	log: [],
 	records: [{ model: 'jobs', id: 'j1', op: 'update' }],
@@ -93,18 +109,21 @@ const approvalView = (request: Partial<ApprovalView> & { id: string }): Approval
 });
 async function fake(
 	live: Value,
-	requests: readonly (Partial<ApprovalView> & { id: string })[] = []
+	requests: readonly (Partial<ApprovalView> & { id: string })[] = [],
+	cat: NonNullable<KindsHost['catalog']> = catalog
 ) {
 	const calls: {
 		gets: { c: string; id: string; revision?: number; layers?: Readonly<Record<string, Json>> }[];
 		history: number;
 		historyViews: number[];
-		acts: { callable: string; input: Json; options: ActOptions }[];
+		acts: SentAct[];
 	} = { gets: [], history: 0, acts: [], historyViews: [] };
 	const fixture = await viewFixture({
+		// the host's catalogue also exposes the people a record's history names
+		catalog: { ...cat, sys_user: { label: ['name'], fields: { name: { kind: 'text' } }, audit: false } },
 		get: (c, id, layers, options) => {
 			// a past revision is read as of the instant its history entry was written
-			const revision = HISTORY.find((entry) => entry.at === options?.asOf)?.revision;
+			const revision = HISTORY.find((entry) => entry.at === options?.as_of)?.revision;
 			calls.gets.push({
 				c,
 				id,
@@ -136,23 +155,19 @@ async function fake(
 							record: id,
 							revision,
 							at: HISTORY.find((h) => h.revision === revision)?.at ?? null,
-							schemaVersion: 'schema-1',
+							schema_version: 'schema-1',
 							fields: { title: { kind: 'text' }, crew: { kind: 'text', optional: true } },
 							values,
 							compatible: values,
-							uncompatible: []
+							incompatible: []
 						};
 			}
 			calls.history++;
 			return HISTORY;
 		},
-		act: (callable, input, options) => {
-			calls.acts.push({ callable, input, options });
-			return {
-				kind: 'committed',
-				output: null,
-				records: [{ model: 'jobs', id: 'j1', revision: 4 }]
-			};
+		act: (body, key) => {
+			calls.acts.push({ ...single_act(body), key });
+			return { ...committed(body), records: [{ model: 'jobs', id: 'j1', revision: 4 }] };
 		},
 		approval: (params) =>
 			params.has('id')
@@ -252,7 +267,9 @@ it.live("an authored title names the sheet instead of the record's label", () =>
 );
 it.live('the record heading uses its id when no label is declared', () =>
 	browser(async () => {
-		const { target } = await show(LIVE, { jobs: { ...catalog.jobs, label: [] } });
+		const { target } = await show(LIVE, {
+			jobs: { ...catalog.jobs, record_label: undefined, label: [] }
+		});
 		assert.match(target.textContent ?? '', /j1/);
 	})
 );
@@ -268,7 +285,7 @@ async function show(
 	requests: readonly (Partial<ApprovalView> & { id: string })[] = [],
 	history?: ViewScript['history']
 ) {
-	const { bolt, script, setCapabilities, calls } = await fake(live, requests);
+	const { bolt, script, setCapabilities, calls } = await fake(live, requests, shownCatalog);
 	if (act !== undefined) script.act = act;
 	if (history !== undefined) script.history = history;
 	if (capabilities !== undefined) setCapabilities(capabilities);
@@ -314,7 +331,7 @@ const backToCurrent = async () => {
 const edit = (t: ParentNode) =>
 	[...t.querySelectorAll<HTMLButtonElement>('button')].find((b) => textOf(b).trim() === 'Edit');
 
-it.live('history renders old field labels and values with an uncompatible indicator', () =>
+it.live('history renders old field labels and values with an incompatible indicator', () =>
 	Effect.gen(function* () {
 		const v = yield* browser(() =>
 			show(LIVE, catalog, undefined, undefined, [], (_model, _id, options) =>
@@ -324,17 +341,17 @@ it.live('history renders old field labels and values with an uncompatible indica
 							record: 'j1',
 							revision: 2,
 							at: HISTORY[1]?.at ?? null,
-							schemaVersion: 'old-schema',
+							schema_version: 'old-schema',
 							fields: {
 								old_title: { kind: 'text', label: 'Original title' },
 								retired: { kind: 'text', label: 'Retired field' }
 							},
 							values: { old_title: 'Old paint', retired: 'Original value' },
 							compatible: { title: 'Old paint' },
-							uncompatible: ['retired']
+							incompatible: ['retired']
 						}
 					: HISTORY.map((entry) =>
-							entry.revision === 2 ? { ...entry, uncompatible: ['retired'], valid: false } : entry
+							entry.revision === 2 ? { ...entry, incompatible: ['retired'], valid: false } : entry
 						)
 			)
 		);
@@ -351,8 +368,8 @@ it.live('history renders old field labels and values with an uncompatible indica
 		const retired = element<HTMLElement>(v.target, '[data-history-field=retired]');
 		assert.match(textOf(retired), /Original value/);
 		assert.equal(
-			textOf(element<HTMLElement>(retired, '[data-history-uncompatible]')).trim(),
-			'uncompatible'
+			textOf(element<HTMLElement>(retired, '[data-history-incompatible]')).trim(),
+			'incompatible'
 		);
 		assert.equal(v.target.querySelector('[data-field=title]'), null);
 	})
@@ -412,23 +429,16 @@ it.live(
 					revision === 2
 						? [{ field: 'title', current: 'Paint v3', restored: 'Paint v2', approval: false }]
 						: [],
-				skipped: [{ field: 'crew', reason: 'noGrant', current: 'B', restored: null }]
+				skipped: [{ field: 'crew', reason: 'no_grant', current: 'B', restored: null }]
 			});
 			const v = yield* browser(() =>
-				show(LIVE, catalog, (callable, input, options) => {
-					acts.push({
-						callable,
-						input,
-						...(options.observed === undefined ? {} : { observed: options.observed })
-					});
+				show(LIVE, catalog, (body) => {
+					const { callable, input, observed } = single_act(body);
+					acts.push({ callable, input, ...(observed === undefined ? {} : { observed }) });
 					const asked = jsonRecord(input)['revision'];
 					return callable === 'history.preview'
 						? { kind: 'committed', output: preview(Number(asked)), records: [] }
-						: {
-								kind: 'committed',
-								output: null,
-								records: [{ model: 'jobs', id: 'j1', revision: 4 }]
-							};
+						: { ...committed(body), records: [{ model: 'jobs', id: 'j1', revision: 4 }] };
 				})
 			);
 			yield* browser(() => v.openHistory());
@@ -442,7 +452,7 @@ it.live(
 			const dialog = element<HTMLElement>(document, '[data-restore-preview="2"]');
 			assert.match(textOf(element(dialog, '[data-restore-field=title]')), /Paint v3.*Paint v2/);
 			const skipped = element<HTMLElement>(dialog, '[data-restore-skip=crew]');
-			assert.equal(skipped.getAttribute('data-reason'), 'noGrant');
+			assert.equal(skipped.getAttribute('data-reason'), 'no_grant');
 			assert.match(textOf(skipped), /You may not change this field/);
 			element<HTMLButtonElement>(dialog, '[data-restore-confirm]').click();
 			yield* browser(settle);
@@ -470,6 +480,7 @@ it.live(
 // A record's fields are the author's: an omitted field or relation stays out of the read view and the edit form.
 const deals = {
 	deals: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -480,11 +491,11 @@ const deals = {
 		layers: ['client'],
 		update: { columns: ['title', 'kind', 'channel'] }
 	},
-	clients: { label: ['name'], fields: { name: { kind: 'text' } } }
+	clients: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 } satisfies NonNullable<KindsHost['catalog']>;
 const DEAL = { id: 'd1', revision: 1, title: 'Build', kind: 'sow', channel: 'mail', client: 'c1' };
 async function mountDeal(fixture: Extract<ViewPart, { part: 'record' }>) {
-	const { bolt, script, calls } = await fake(DEAL);
+	const { bolt, script, calls } = await fake(DEAL, [], deals);
 	const get = script.get;
 	// a select naming the relation reads its target nested, as the engine does
 	script.get = (c, id, layers, options) =>
@@ -539,10 +550,28 @@ it.live(
 		Effect.gen(function* () {
 			let current = { id: 'j1', revision: 1, title: 'Agreement', crew: 'A', status: 'draft' };
 			const readers = new Set<() => void>();
-			const { bolt, script, setCapabilities } = yield* browser(() => fake(current));
+			const rules: NonNullable<KindsHost['catalog']> = {
+				jobs: {
+					...catalog.jobs,
+					locks: [{ where: { status: { eq: 'confirmed' } }, except: ['crew', 'status'] }, { where: { status: { eq: 'closed' } } }],
+					fields: {
+						...catalog.jobs.fields,
+						status: {
+							kind: 'state',
+							initial: 'draft',
+							states: {
+								draft: { to: ['confirmed'] },
+								confirmed: { to: ['closed'] },
+								closed: {}
+							}
+						}
+					}
+				}
+			};
+			const { bolt, script, setCapabilities } = yield* browser(() => fake(current, [], rules));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
+				c === 'jobs' && options?.as_of === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
@@ -553,23 +582,6 @@ it.live(
 					};
 				}
 				return () => {};
-			};
-			const rules: NonNullable<KindsHost['catalog']> = {
-				jobs: {
-					...catalog.jobs,
-					fields: {
-						...catalog.jobs.fields,
-						status: {
-							kind: 'state',
-							initial: 'draft',
-							states: {
-								draft: { to: ['confirmed'] },
-								confirmed: { to: ['closed'], edit: ['crew'] },
-								closed: { edit: 'none' }
-							}
-						}
-					}
-				}
 			};
 			const target = document.body.appendChild(document.createElement('div'));
 			const app = mount(Harness, {
@@ -620,7 +632,11 @@ it.live(
 
 it.live('native history merges scoped related records and keeps its scrubber', () =>
 	Effect.gen(function* () {
-		const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE));
+		const related: NonNullable<KindsHost['catalog']> = {
+			...catalog,
+			activities: { record_label: 'record.title', label: ['title'], fields: { title: { kind: 'text' } } }
+		};
+		const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(LIVE, [], related));
 		let query: import('./view-fixture.ts').ReadOptions | undefined;
 		script.read = (c, o) => {
 			query = o;
@@ -629,37 +645,39 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 		script.history = (c, id) =>
 			c === 'jobs'
 				? HISTORY
-				: [
+				: ([
 						{
 							revision: 2,
+							schema_version: 'schema-1',
 							at: '2026-09-04T00:00:00.000Z',
 							actor: { kind: 'member', id: 'u1' },
-							restoredFrom: null,
+							restored_from: null,
 							approval: null,
-							changed: { title: 'Customer call' }
+							changed: { title: 'Customer call' },
+							cause: 'direct',
+							incompatible: [],
+							valid: true
 						},
 						// a related save that changed no visible field is not a timeline event
 						{
 							revision: 3,
+							schema_version: 'schema-1',
 							at: '2026-09-05T00:00:00.000Z',
 							actor: { kind: 'member', id: 'u1' },
-							restoredFrom: null,
+							restored_from: null,
 							approval: null,
-							changed: {}
+							changed: {},
+							cause: 'direct',
+							incompatible: [],
+							valid: true
 						}
-					];
+					] satisfies readonly HistoryEntry[]);
 		const target = document.body.appendChild(document.createElement('div'));
 		const app = mount(Harness, {
 			target,
 			props: {
 				bolt,
-				catalog: {
-					...catalog,
-					activities: {
-						label: ['title'],
-						fields: { title: { kind: 'text' } }
-					}
-				},
+				catalog: related,
 				part: 'record',
 				view: RecordShell,
 				props: {
@@ -678,13 +696,11 @@ it.live('native history merges scoped related records and keeps its scrubber', (
 		yield* browser(() => settle());
 		element<HTMLElement>(target, '[data-timeline-trigger]').click();
 		yield* browser(() => settle());
-		assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT });
+		assert.deepEqual(query, { where: { job: { eq: 'j1' } }, limit: READ_LIMIT, fields: ['title'] });
 		const events = element<HTMLElement>(document, '[data-record-history-events]');
 		assert.match(textOf(events), /Customer call/);
 		assert.match(textOf(events), /Ada/);
-		const relatedEvents = events.querySelectorAll<HTMLElement>(
-			'[data-history-model="activities"]'
-		);
+		const relatedEvents = events.querySelectorAll<HTMLElement>('[data-history-model="activities"]');
 		assert.equal(relatedEvents.length, 1, 'a related no-op save stays out of the timeline');
 		const [firstEvent, secondEvent] = events.querySelectorAll<HTMLElement>('[data-history-model]');
 		assert.equal(required(firstEvent).dataset.historyModel, 'jobs');
@@ -698,7 +714,7 @@ it.live(
 	() =>
 		Effect.gen(function* () {
 			const v = yield* browser(() =>
-				show(LIVE, { jobs: { ...catalog.jobs, readonlyFields: { crew: 'syncOwned' } } })
+				show(LIVE, { jobs: { ...catalog.jobs, readonly_fields: { crew: 'sync_owned' } } })
 			);
 			required(edit(v.target)).click();
 			yield* browser(() => settle());
@@ -724,9 +740,9 @@ it.live(
 				new Event('submit', { bubbles: true, cancelable: true })
 			);
 			yield* browser(() => settle());
-			assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
+			assert.deepEqual(jsonRecord(required(jsonArray(required(v.calls.acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 			assert.deepEqual(required(v.calls.acts[0]).input, [
-				{ target: 'j1', set: { title: 'A changed title' } }
+				{ target: { id: 'j1', revision: 3 }, set: { title: 'A changed title' } }
 			]);
 		})
 );
@@ -754,7 +770,9 @@ it.live('an edit survives closing its record: it reopens as a draft, and Cancel 
 			)
 		).click();
 		yield* browser(async () => {
-			await vi.waitFor(() => assert.ok(document.querySelector('[data-confirm-dialog][data-state=open]')));
+			await vi.waitFor(() =>
+				assert.ok(document.querySelector('[data-confirm-dialog][data-state=open]'))
+			);
 			element<HTMLButtonElement>(document, '[data-confirm-accept]').click();
 			await settle();
 		});
@@ -808,9 +826,9 @@ it.live('custom representation forms share the shell view/edit mode, draft and o
 		yield* browser(() => settle());
 		assert.equal(calls.acts.length, 1);
 		assert.deepEqual(required(calls.acts[0]).input, [
-			{ target: 'j1', set: { title: 'Shared title', crew: 'Shared crew' } }
+			{ target: { id: 'j1', revision: 3 }, set: { title: 'Shared title', crew: 'Shared crew' } }
 		]);
-		assert.deepEqual(required(calls.acts[0]).options.observed, { j1: 3 });
+		assert.deepEqual(jsonRecord(required(jsonArray(required(calls.acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 		assert.equal(target.querySelector('input'), null, 'committed save returns every form to view');
 		assert.equal(element<HTMLElement>(target, '[data-record-mode]').dataset.recordMode, 'view');
 	})
@@ -825,7 +843,7 @@ it.live(
 			const { bolt, script, setCapabilities, calls } = yield* browser(() => fake(current));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
+				c === 'jobs' && options?.as_of === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
@@ -869,8 +887,8 @@ it.live(
 			);
 			yield* browser(() => settle());
 			assert.deepEqual(
-				required(calls.acts.find((a) => a.callable === 'jobs.update')).options.observed,
-				{ j1: 3 }
+				jsonRecord(required(jsonArray(required(calls.acts.find((a) => a.callable === 'jobs.update')).input)[0])).target,
+				{ id: 'j1', revision: 3 }
 			);
 		})
 );
@@ -881,12 +899,12 @@ const nativeCapabilities: RecordCapabilities = {
 	revision: 3,
 	fields: {
 		title: { writable: true, proposal: false, reasons: [] },
-		crew: { writable: false, proposal: false, reasons: ['stateLocked'] }
+		crew: { writable: false, proposal: false, reasons: ['state_locked'] }
 	},
 	update: { allowed: true, proposal: false, reasons: [] },
-	delete: { allowed: false, proposal: false, reasons: ['noGrant'] },
+	delete: { allowed: false, proposal: false, reasons: ['no_grant'] },
 	moves: {},
-	proposalMoves: {}
+	proposal_moves: {}
 };
 
 it.live('native row capabilities govern editing and explain partially writable fields', () =>
@@ -900,7 +918,7 @@ it.live('native row capabilities govern editing and explain partially writable f
 		const crew = element<HTMLElement>(v.target, '[data-field=crew]');
 		assert.equal(crew.querySelector('input'), null);
 		assert.match(
-			textOf(element<HTMLElement>(crew, '[data-field-restriction=stateLocked]')),
+			textOf(element<HTMLElement>(crew, '[data-field-restriction=state_locked]')),
 			/current state/
 		);
 	})
@@ -913,20 +931,20 @@ it.live(
 			const proposal: RecordCapabilities = {
 				...nativeCapabilities,
 				fields: {
-					title: { writable: false, proposal: true, reasons: ['noGrant'] },
-					crew: { writable: false, proposal: false, reasons: ['syncOwned'] },
+					title: { writable: false, proposal: true, reasons: ['no_grant'] },
+					crew: { writable: false, proposal: false, reasons: ['sync_owned'] },
 					note: { writable: true, proposal: false, reasons: [] }
 				},
 				update: { allowed: true, proposal: true, reasons: [] },
-				proposalMoves: {}
+				proposal_moves: {}
 			};
 			const v = yield* browser(() =>
 				show(
 					LIVE,
 					catalog,
-					(callable, input, options) => {
-						v.calls.acts.push({ callable, input, options });
-						return { kind: 'pendingApproval', requestId: 'approval1', records: [] };
+					(body, key) => {
+						v.calls.acts.push({ ...single_act(body), key });
+						return { kind: 'pending_approval', request_id: 'approval1', records: [] };
 					},
 					async () => proposal
 				)
@@ -945,9 +963,9 @@ it.live(
 			assert.ok(request);
 			request.click();
 			yield* browser(() => settle());
-			assert.deepEqual(required(v.calls.acts[0]).options.observed, { j1: 3 });
+			assert.deepEqual(jsonRecord(required(jsonArray(required(v.calls.acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 			assert.deepEqual(required(v.calls.acts[0]).input, [
-				{ target: 'j1', set: { title: 'Proposed title' } }
+				{ target: { id: 'j1', revision: 3 }, set: { title: 'Proposed title' } }
 			]);
 			assert.equal(v.target.querySelector('[data-field=title] input'), null);
 			assert.match(textOf(element<HTMLElement>(v.target, '[data-field=title]')), /Paint v3/);
@@ -965,7 +983,7 @@ it.live(
 			setCapabilities(() => new Promise((resolve) => answers.push(resolve)));
 			const originalLiveGet = script.get;
 			script.get = (c, id, select, options) =>
-				c === 'jobs' && options?.asOf === undefined
+				c === 'jobs' && options?.as_of === undefined
 					? current
 					: originalLiveGet(c, id, select, options);
 			script.changes = (read, emit) => {
@@ -1006,11 +1024,11 @@ it.live('a routed create settles pending approval and opens the record it commit
 	Effect.gen(function* () {
 		const { bolt, script } = yield* browser(() => fake(null, []));
 		const acts: string[] = [];
-		script.act = (callable) => {
-			acts.push(callable);
+		script.act = (body) => {
+			acts.push(single_act(body).callable);
 			return {
-				kind: 'pendingApproval',
-				requestId: 'r1',
+				kind: 'pending_approval',
+				request_id: 'r1',
 				records: [{ model: 'jobs', id: 'candidate', revision: 1 }]
 			};
 		};
@@ -1041,5 +1059,162 @@ it.live('a routed create settles pending approval and opens the record it commit
 		yield* browser(() => settle());
 		assert.deepEqual(acts, ['jobs.create']);
 		assert.deepEqual(new URL(location.href).searchParams.getAll('record'), ['jobs/candidate']);
+	})
+);
+
+const nativeFooter = (target: ParentNode) => {
+	assert.equal(target.querySelectorAll('[data-record-foot]').length, 1, 'one native footer');
+	const footer = element<HTMLElement>(target, '[data-record-foot]');
+	assert.equal(footer.closest('[data-record-main]'), null, 'footer is outside scrolling content');
+	return footer;
+};
+async function showFooter(
+	fixture: Awaited<ReturnType<typeof fake>>,
+	props: Partial<Omit<RecordFooterHarnessProps, 'bolt'>> = {}
+) {
+	const target = document.body.appendChild(document.createElement('div'));
+	const app = mount(FooterHarness, { target, props: { bolt: fixture.bolt, catalog, ...props } });
+	mounted.push(async () => {
+		await unmount(app);
+		target.remove();
+	});
+	await settle();
+	return target;
+}
+const represented = async (target: ParentNode) => {
+	await vi.waitFor(() => assert.ok(target.querySelector('[data-long-detail]')));
+	await settle();
+};
+
+it.live('loading, readonly, missing and failed records retain one native footer', () =>
+	browser(async () => {
+		const waiting = await fake(null);
+		const gate = Promise.withResolvers<Value>();
+		waiting.script.get = () => gate.promise;
+		const loading = await showFooter(waiting, { representation: 'generated' });
+		const foot = nativeFooter(loading);
+		assert.ok(loading.querySelector('[data-read=loading]'));
+		gate.resolve(LIVE);
+		await settle();
+		assert.equal(nativeFooter(loading), foot, 'settling the read keeps the native frame');
+
+		const readonly = await showFooter(await fake(LIVE), {
+			representation: 'generated', catalog: { jobs: { label: catalog.jobs.label, fields: catalog.jobs.fields } }
+		});
+		nativeFooter(readonly);
+		assert.equal(edit(readonly), undefined);
+		assert.equal(readonly.querySelector('[data-form-footer]'), null);
+
+		const missing = await showFooter(await fake(null), { representation: 'generated' });
+		nativeFooter(missing);
+		assert.ok(missing.querySelector('[data-read=not_found]'));
+
+		const failed = await fake(null);
+		failed.script.get = () => Response.json({ error: { code: 'internal', message: 'Read unavailable' } }, { status: 500 });
+		const error = await showFooter(failed, { representation: 'generated' });
+		await vi.waitFor(() => assert.ok(error.querySelector('[data-read=error]')));
+		nativeFooter(error);
+		assert.equal(edit(error), undefined);
+	})
+);
+
+it.live('raw and decorated registered representations share one native frame and footer across tabs', () =>
+	browser(async () => {
+		for (const representation of ['raw', 'decorated'] as const) {
+			let actions = 0;
+			const target = await showFooter(await fake(LIVE), { representation, on_native_action: () => actions++ });
+			await represented(target);
+			const foot = nativeFooter(target);
+			assert.equal(target.querySelectorAll('[data-view=record]').length, 1);
+			assert.equal(target.querySelectorAll('[data-record-head]').length, 1);
+			if (representation === 'decorated') {
+				assert.equal(element<HTMLElement>(target, '[role=dialog]').getAttribute('aria-label'), 'Authored job');
+				assert.match(textOf(foot), /Authored footer/);
+				element<HTMLButtonElement>(foot, '[data-native-action]').click();
+				assert.equal(actions, 1);
+				const tabs = [...target.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+				required(tabs.find((tab) => textOf(tab).trim() === 'Extra detail')).click();
+				await settle();
+				assert.ok(target.querySelector('[data-extra-detail]'));
+				assert.equal(nativeFooter(target), foot);
+				assert.ok(edit(foot), 'record edit remains available on an authored tab');
+				required(tabs.find((tab) => textOf(tab).trim() === 'Record')).click();
+				await settle();
+			}
+		}
+	})
+);
+
+it.live('registered historical content and footer actions are readonly while approval decisions stay enabled', () =>
+	browser(async () => {
+		let actions = 0;
+		const fixture = await fake(LIVE, [{ id: 'footer-approval', moves: [{ decision: 'approve', reason: 'optional' }] }]);
+		const target = await showFooter(fixture, { on_native_action: () => actions++ });
+		await represented(target);
+		element<HTMLButtonElement>(target, '[data-native-action]').click();
+		assert.equal(actions, 1);
+		element<HTMLButtonElement>(target, 'header [data-timeline-trigger]').click();
+		await settle();
+		await pickHistory(2);
+		await represented(target);
+		nativeFooter(target);
+		assert.match(textOf(element<HTMLElement>(target, '[data-field=title]')), /Paint v2/);
+		assert.equal(edit(target), undefined);
+		// the DOM fixture does not apply a disabled fieldset to its controls; a browser disables (and stops clicks on) them
+		const disabled = (button: HTMLButtonElement) => button.matches(':disabled') || button.closest('fieldset[disabled]') !== null;
+		const action = element<HTMLButtonElement>(target, '[data-native-action]');
+		assert.equal(disabled(action), true);
+
+		element<HTMLButtonElement>(target, '[data-record-pane=approval]').click();
+		await settle();
+		nativeFooter(target);
+		const approve = element<HTMLButtonElement>(target, 'button[data-decision=approve]');
+		assert.equal(disabled(approve), false);
+		approve.click();
+		await settle();
+		assert.ok(target.querySelector('form[data-decision=approve]'), 'approval decision can advance while viewing history');
+		element<HTMLButtonElement>(target, '[data-record-pane=record]').click();
+		await settle();
+		element<HTMLButtonElement>(target, '[data-record-back]').click();
+		await settle();
+		await represented(target);
+		const current = element<HTMLButtonElement>(nativeFooter(target), '[data-native-action]');
+		assert.equal(disabled(current), false);
+		current.click();
+		assert.equal(actions, 2);
+	})
+);
+
+it.live('a custom create keeps one native submit label and preserves local and independent form ownership', () =>
+	browser(async () => {
+		const fixture = await fake(null);
+		const target = await showFooter(fixture, {
+			mode: 'create', form_actions: true, independent_form: true, on_done: () => {},
+			catalog: {
+				jobs: { ...catalog.jobs, create: { columns: ['title', 'crew'] } },
+				notes: { label: ['title'], fields: { title: { kind: 'text' } }, create: { columns: ['title'] } }
+			}
+		});
+		await represented(target);
+		const foot = nativeFooter(target);
+		assert.equal([...target.querySelectorAll('button')].filter((button) => textOf(button).trim() === 'Create named job').length, 1);
+		assert.match(textOf(foot), /Create named job/);
+		const local = element<HTMLButtonElement>(target, '[data-form-action]');
+		const matching = element<HTMLFormElement>(target, '[data-long-detail] form');
+		assert.equal(local.form, matching, 'authored submit remains associated with its original form');
+		const independent = [...target.querySelectorAll<HTMLButtonElement>('button')].find((button) => textOf(button).trim() === 'Create independent note');
+		assert.ok(independent);
+		assert.ok(independent.form);
+		assert.notEqual(independent.form, matching);
+		assert.equal(foot.contains(independent), false);
+		const title = element<HTMLInputElement>(matching, '[data-field=title] input');
+		title.value = 'Named job';
+		title.dispatchEvent(new Event('input', { bubbles: true }));
+		await settle();
+		element<HTMLButtonElement>(foot, '[data-record-save]').click();
+		await settle();
+		assert.equal(fixture.calls.acts.length, 1);
+		assert.equal(required(fixture.calls.acts[0]).callable, 'jobs.create');
+		assert.deepEqual(required(fixture.calls.acts[0]).input, [{ title: 'Named job' }]);
 	})
 );

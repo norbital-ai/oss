@@ -14,9 +14,9 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 | Page-level operation | `toolbar.actions`, the ⚡ menu |
 | One-row operation | the view's row `actions`: an automation or guarded verb |
 | One-record operation | `RecordShell` `actions` |
-| A run's progress | an item whose `run` returns `bolt.start(…)`; `RunStatus` or `RunsFor` elsewhere |
+| A run's progress | an item whose `run` returns `ctx.run(…)`; `RunStatus` or `RunsFor` elsewhere |
 | Create | `toolbar.new`, which opens `RecordShell mode="create"` |
-| Filter and sort | the toolbar popover; fixed scope is `where`, a starting filter `initialFilter` |
+| Filter and sort | the toolbar popover; fixed scope is `where`, a starting filter `initial_filter` |
 | Row range and paging | the table's footer |
 
 - The toolbar is one row: title (1 to 3 words), ⓘ `description`, then widgets flush left; New alone flush right and last when wrapped. A slot never moves.
@@ -27,7 +27,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 
 ## The ⚡ menu
 
-- It lists Sync now, each file sync's Import, Export and Download template, and Delete selected, with no page wiring. Each file operation starts `<model>.sync.<name>`.
+- It lists Sync now, each file sync's Import, Export and Download template, and Delete selected, with no page wiring. The native `bolt.sync_control(model, sync, input)` operation owns refresh and file transfer; syncs are never automation callables or schedule targets. Remote refresh requires `capabilities.syncs: ['model.sync_name']`; file transfer uses the caller's model grants.
 - A `toolbar.actions` item is `icon`, `name`, optional `description` and `run(selected)`. The menu derives the row's state from what `run` returns:
 
 | `run` returns | Row |
@@ -35,14 +35,14 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 | nothing | closes the menu |
 | an Effect | spinner, then Done; a typed failure shows in place and as a toast |
 | an Effect from `bolt.act` | its committed or pending-approval result is toasted; refusals use the failure channel |
-| an Effect from `bolt.start` | the run's live status under the toolbar |
+| an Effect from `ctx.run` | the run's live status under the toolbar |
 
-- `requiresSelection: true` lists it under Bulk and turns selection on. `disabled: (selected) => string | null` says why not.
+- `requires_selection: true` lists it under Bulk and turns selection on. `disabled: (selected) => string | null` says why not.
 - Never toast or track a spinner for a menu item yourself.
 - `toolbar.context` is what the view is scoped to; file syncs receive it.
 - A `CustomView` over one model names its model source: its menu offers that model's file syncs, title and New; search runs over its own rows.
-- Client-generated text documents go through `downloadTextFiles`: one downloads, several zip. Never loop download clicks. Build documents with a pure helper; an export too heavy for the page is a file sync.
-- A custom record-header action passes its typed outcome to `notifyOutcome`.
+- Client-generated text documents go through `download_text_files`: one downloads, several zip. Never loop download clicks. Build documents with a pure helper; an export too heavy for the page is a file sync.
+- A custom record-header action passes its typed outcome to `notify_outcome`.
 
 ## AppShell and tabs
 
@@ -54,7 +54,7 @@ A page whose subject is a model is that view: no heading card, paragraph or butt
 - One tab size: use `Tabs`, or `TabStrip` without bodies. Never hand-roll `role="tab"` or restyle a tab.
 - One control size: inputs, pickers, date fields and form buttons are compact. `Button` has `default`, `icon`, and `lg` only for a lone call to action outside forms. Pass a width through `class`, never height, padding or font.
 - A record view has one tab row: `RecordShell` has no History tab; a shell nested in another shows its body only; a tab a page's strip already shows is dropped.
-- A tab holding a form is `keepAlive: true`.
+- A tab holding a form is `keep_alive: true`.
 
 ## Table behaviour
 
@@ -74,7 +74,7 @@ Rows are one line; a click opens the record; headers do not sort; each header's 
 - A section groups at least two controls or one large control. A lone small field merges into its neighbour.
 - A field never appears in two sections. Repeated values have one add/edit path. Show derived results as readonly.
 - Tabs are for distinct tasks, not length. Never nest accordions.
-- `Section`: give a stable `name` (titles change with locale); `defaultOpen={false}` marks secondary, with a useful `summary`. A collapsed body stays mounted, validates and saves; a section with an error opens itself.
+- `Section`: give a stable `name` (titles change with locale); `default_open={false}` marks secondary, with a useful `summary`. A collapsed body stays mounted, validates and saves; a section with an error opens itself.
 - Generated record views take `sections`; fields no section lists follow in one group, so nothing disappears. `fields` on create offers fields beyond `values`; on update it restricts and orders.
 
 ## Prefill and disclosure
@@ -90,7 +90,7 @@ Rows are one line; a click opens the record; headers do not sort; each header's 
 | `readonly` | no field chrome, value as text by kind, copy on hover | a record the viewer may see, not change |
 | `disabled` | editor stays, muted, submit disabled | editable in principle, not right now |
 
-- Set the mode once; it reaches every control. A `Field` or `Fieldset` may override. A `Form` never inherits an outer mode.
+- Set the mode once; it reaches every control. A `Field` may override. A `Form` never inherits an outer mode.
 - Use the shared record controller for view, edit and create. Never `readonly={!admin}` or a parallel policy matcher. An update contract is not permission.
 - A readonly `Field` renders its kind, not its `editor` snippet.
 

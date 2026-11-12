@@ -22,7 +22,7 @@ export type Kernel = {
 };
 /** What `open` answers: the marshalled HOST_API, and the cell's two entries. */
 export type CellEnd = {
-	/** HOST_API in its wire form; `cookieSite` is its two answers, `[insecure, secure]`. */
+	/** HOST_API in its wire form; `cookie_site` is its two answers, `[insecure, secure]`. */
 	readonly api: unknown;
 	/** One membrane message from the kernel. */
 	readonly receive: (message: unknown) => Answer;
@@ -38,7 +38,7 @@ const open = (kernel: Kernel): CellEnd => {
 	return {
 		api: side.encode({
 			...HOST_API,
-			cookieSite: [HOST_API.cookieSite(false), HOST_API.cookieSite(true)]
+			cookie_site: [HOST_API.cookie_site(false), HOST_API.cookie_site(true)]
 		}),
 		receive: side.receive,
 		fire: cellGlobals.fire

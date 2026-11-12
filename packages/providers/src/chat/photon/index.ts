@@ -2,11 +2,12 @@
 // edits, unsends and anything a webhook missed come from the durable event log. `Spectrum()` itself is not used: it hooks
 // SIGINT and SIGTERM to exit the process, and its send takes no dedupe key. Its platform definition's own `lifecycle`
 // makes the same clients, renews their token and closes them. Tokens and gRPC go around `host.fetch`.
+import { parse as parseJson } from '../http.ts';
+import { Predicate, Schema } from 'effect';
 import type { imessage } from '@spectrum-ts/imessage';
-import { Predicate } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, signed } from '../verify.ts';
+import { fresh, hmac, signed } from '../verify.ts';
 
 type Lines = Awaited<
 	ReturnType<ReturnType<typeof imessage.config>['__def']['lifecycle']['createClient']>
@@ -26,23 +27,42 @@ type Content = {
 	readonly target?: { readonly id?: string };
 	readonly items?: readonly { readonly content?: Content }[];
 };
-type Space = { readonly id: string; readonly phone?: string; readonly platform?: string };
-type Envelope = {
-	readonly event: string;
-	readonly space?: Space;
-	readonly message: {
-		readonly id: string;
-		readonly platform?: string;
-		readonly direction?: string;
-		readonly timestamp?: string;
-		readonly sender?: { readonly id: string };
-		readonly space: Space;
-		readonly content: Content;
-	};
-};
+const Content: Schema.Codec<Content> = Schema.suspend(() =>
+	Schema.Struct({
+		type: Schema.String,
+		text: Schema.optionalKey(Schema.String),
+		url: Schema.optionalKey(Schema.String),
+		id: Schema.optionalKey(Schema.String),
+		name: Schema.optionalKey(Schema.String),
+		mimeType: Schema.optionalKey(Schema.String),
+		size: Schema.optionalKey(Schema.Number),
+		content: Schema.optionalKey(Content),
+		target: Schema.optionalKey(Schema.Struct({ id: Schema.optionalKey(Schema.String) })),
+		items: Schema.optionalKey(Schema.Array(Schema.Struct({ content: Schema.optionalKey(Content) })))
+	})
+);
+const Space = Schema.Struct({
+	id: Schema.String,
+	phone: Schema.optionalKey(Schema.String),
+	platform: Schema.optionalKey(Schema.String)
+});
+type Space = typeof Space.Type;
+const Envelope = Schema.Struct({
+	event: Schema.String,
+	space: Schema.optionalKey(Space),
+	message: Schema.optionalKey(Schema.Unknown)
+});
+const Message = Schema.Struct({
+	id: Schema.String,
+	platform: Schema.optionalKey(Schema.String),
+	direction: Schema.optionalKey(Schema.String),
+	timestamp: Schema.optionalKey(Schema.String),
+	sender: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+	space: Space,
+	content: Content
+});
 
 const SHARED = 'shared',
-	TOLERANCE_S = 300,
 	/** Apple's placeholder for an attachment inside a message's text. */
 	OBJECT = /\uFFFC/g;
 const isGroup = (chat: string) => chat.includes(';+;');
@@ -126,7 +146,7 @@ export const photon: ChatPlatform = {
 				return {
 					...base,
 					id: event.messageGuid,
-					sentAt: event.retractedAt.toISOString(),
+					sent_at: event.retractedAt.toISOString(),
 					text: '',
 					deleted: true
 				};
@@ -134,7 +154,7 @@ export const photon: ChatPlatform = {
 				return {
 					...base,
 					id: event.messageGuid,
-					sentAt: event.editedAt.toISOString(),
+					sent_at: event.editedAt.toISOString(),
 					version: event.editedAt.toISOString(),
 					text: event.content.text ?? ''
 				};
@@ -147,11 +167,11 @@ export const photon: ChatPlatform = {
 			return {
 				...base,
 				id: message.guid,
-				sentAt: event.occurredAt.toISOString(),
+				sent_at: event.occurredAt.toISOString(),
 				from: { handle: message.sender?.address ?? '', name: null },
 				text: content.text?.replace(OBJECT, '').trim() ?? '',
 				title: message.groupTitle ?? null,
-				replyTo: message.replyTargetGuid ?? message.threadOriginatorGuid ?? null,
+				reply_to: message.replyTargetGuid ?? message.threadOriginatorGuid ?? null,
 				mentioned: content.mentions.some((mention) => mention.address === line.phone),
 				files: content.attachments.map((file): IncomingFile => ({
 					name: file.fileName,
@@ -175,15 +195,16 @@ export const photon: ChatPlatform = {
 			account: first.phone === SHARED ? projectId : first.phone,
 			async deliver(request, body) {
 				const at = request.headers.get('x-spectrum-timestamp') ?? '';
-				if (!(Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S))
-					throw new Unverified('stale timestamp');
+				if (!fresh(at)) throw new Unverified('stale timestamp');
 				signed(
 					request.headers.get('x-spectrum-signature'),
 					`v0=${hmac(webhookSecret, `v0:${at}:${body}`, 'hex')}`
 				);
-				const { event, space, message } = JSON.parse(body) as Envelope;
+				const { event, space, message: raw } = await parseJson(Envelope, body);
+				if (event !== 'messages') return nothing();
+				const message = await Schema.decodeUnknownPromise(Message)(raw);
 				const platform = message.platform ?? message.space.platform;
-				if (event !== 'messages' || message.direction === 'outbound') return nothing();
+				if (message.direction === 'outbound') return nothing();
 				if (platform !== undefined && platform !== 'iMessage') return nothing();
 				const parts = leaves(message.content),
 					text = parts
@@ -197,21 +218,21 @@ export const photon: ChatPlatform = {
 					line = lines.find((one) => one.phone === phone) ?? first,
 					chat = message.space.id,
 					target = message.content.type === 'reply' ? message.content.target?.id : undefined,
-					replyTo = target?.replace(/^p:\d+\//, '') ?? null;
+					reply_to = target?.replace(/^p:\d+\//, '') ?? null;
 				return {
 					messages: [
 						{
 							id: message.id,
 							thread: threadOf(chat, line.phone),
-							sentAt: message.timestamp ?? new Date(Number(at) * 1000).toISOString(),
+							sent_at: message.timestamp ?? new Date(Number(at) * 1000).toISOString(),
 							from: { handle: message.sender?.id ?? '', name: null },
 							text,
 							group: isGroup(chat),
-							replyTo,
-							repliedTo:
+							reply_to,
+							replied_to:
 								isGroup(chat) &&
-								replyTo !== null &&
-								(await line.client.messages.get(replyTo).then(
+								reply_to !== null &&
+								(await line.client.messages.get(reply_to).then(
 									(found) => found.isFromMe,
 									() => false
 								)),
@@ -243,7 +264,10 @@ export const photon: ChatPlatform = {
 			},
 			// each line keeps its own log, so the cursor holds one place per line
 			async changes(cursor) {
-				const held: Readonly<Record<string, number>> = cursor === null ? {} : JSON.parse(cursor),
+				const held =
+						cursor === null
+							? {}
+							: await parseJson(Schema.Record(Schema.String, Schema.Number), cursor),
 					places: Record<string, number> = {},
 					messages: Incoming[] = [];
 				let gap = false;

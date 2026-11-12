@@ -16,7 +16,7 @@ import type { Artifact } from '../engine/artifact/read.ts';
 import type { CrossAnswer } from '../engine/contracts.ts';
 import { Activation, Guest, GuestLimits, Manifest, Reads } from '../engine/services.ts';
 import { ShellHandler, type PublicPageRoute } from '../shell/host.ts';
-import { audienceOf, framePolicy, route, type ShellManifest } from '../shell/nav.ts';
+import { audience_of, frame_policy, route, type ShellManifest } from '../shell/nav.ts';
 import { BoltError } from './errors.ts';
 import {
 	bindings,
@@ -24,21 +24,21 @@ import {
 	readAdmitted,
 	requestReadRate,
 	requestUrl,
-	responseError,
+	response_error,
 	RateLimits
 } from './http.ts';
-import { PublicBoot, PublicHydration, toPublicBoot } from './public-page.ts';
+import { PublicBoot, PublicHydration, PublicReads, toPublicBoot } from './public-page.ts';
 
 type PageMode = PublicPageRoute & { readonly key: string };
 
 /** Route eligibility is pure and uses the same resolver as browser navigation. */
-export function renderMode(manifest: ShellManifest, path: string): PageMode | null {
+export function render_mode(manifest: ShellManifest, path: string): PageMode | null {
 	const selected = route(manifest, new URL(path, 'http://bolt.local'));
-	if (selected.kind === 'page' && audienceOf(manifest.apps[selected.app]) !== 'members')
+	if (selected.kind === 'page' && audience_of(manifest.apps[selected.app]) !== 'members')
 		return { kind: 'app', app: selected.app, key: `app/${selected.app}/${selected.page}` };
 	if (
 		selected.kind === 'kiosk' &&
-		(manifest.kiosks?.[selected.kiosk]?.auth ?? 'members') !== 'members'
+		(manifest.apps[selected.kiosk]?.audience ?? 'members') !== 'members'
 	)
 		return {
 			kind: 'kiosk',
@@ -51,7 +51,7 @@ export function renderMode(manifest: ShellManifest, path: string): PageMode | nu
 const PageOutput = Schema.Struct({
 	body: Schema.String,
 	head: Schema.String,
-	data: Schema.Json,
+	reads: PublicReads,
 	messages: Schema.Record(Schema.String, Schema.String)
 });
 const json = (value: unknown) =>
@@ -99,7 +99,7 @@ export class PublicPages extends Context.Service<
 >()('bolt/PublicPages') {}
 
 /** Programs and documents are verified artifact data; tenant modules never enter the host's module graph. */
-export const publicPages = (artifact: Artifact) =>
+export const public_pages = (artifact: Artifact) =>
 	Layer.effect(
 		PublicPages,
 		Effect.gen(function* () {
@@ -126,14 +126,14 @@ export const publicPages = (artifact: Artifact) =>
 			) {
 				if (request.method !== 'GET' && request.method !== 'HEAD') return Option.none();
 				const url = requestUrl(request);
-				const selected = renderMode(manifest, url.pathname);
+				const selected = render_mode(manifest, url.pathname);
 				if (selected === null) return Option.none();
 				const page = artifact.pages[selected.key];
 				const document = documents.get(selected.key);
 				if (page === undefined || document === undefined)
 					return yield* Effect.fail(
 						BoltError.make(
-							'missingBody',
+							'missing_body',
 							'admission',
 							'The public page is absent from this release.'
 						)
@@ -146,6 +146,7 @@ export const publicPages = (artifact: Artifact) =>
 				if (!rate.ok) return Option.some(rateLimitedResponse(rate.retryAfter));
 				const boot = yield* toPublicBoot(caller.boot, {
 					base: caller.base,
+					location: { pathname: url.pathname, search: url.search },
 					kiosk: selected.kind === 'kiosk' ? selected.kiosk : null,
 					messages: {}
 				});
@@ -158,7 +159,7 @@ export const publicPages = (artifact: Artifact) =>
 						id,
 						kind: 'page',
 						target: selected.key,
-						input: { request: { pathname: url.pathname, search: url.search }, boot: encodedBoot },
+						input: { boot: encodedBoot },
 						ctx: {
 							actor: caller.authority.actor,
 							now: bound.now,
@@ -170,14 +171,14 @@ export const publicPages = (artifact: Artifact) =>
 						},
 						budget: {
 							crossings: limits.crossings.sync,
-							readBytes: limits.readBytes
+							readBytes: limits.read_bytes
 						}
 					},
 					{
 						cross: (calls) =>
 							Effect.forEach(calls, (call): Effect.Effect<CrossAnswer> => {
 								if (call._tag !== 'read')
-									return Effect.succeed(denied('Public page loaders may only read.'));
+									return Effect.succeed(denied('Public pages may only read while rendering.'));
 								if (!readAdmitted(caller.authority, call.read))
 									return Effect.succeed(denied('Visitors may not do this.'));
 								return reads
@@ -188,7 +189,7 @@ export const publicPages = (artifact: Artifact) =>
 												? Effect.succeed<CrossAnswer>({ ok: true, value: answers[0] })
 												: Effect.fail(
 														BoltError.make(
-															'badAnswer',
+															'bad_answer',
 															'deliver',
 															'The reader omitted a public page answer.'
 														)
@@ -210,14 +211,14 @@ export const publicPages = (artifact: Artifact) =>
 				);
 				if (outcome.kind === 'failed') return yield* Effect.fail(outcome.error);
 				if (outcome.kind === 'refused')
-					return yield* Effect.fail(BoltError.make('guestRefused', 'guest', outcome.message));
+					return yield* Effect.fail(BoltError.make('guest_refused', 'guest', outcome.message));
 				const output = yield* Schema.decodeUnknownEffect(PageOutput)(outcome.output);
 				const hydration = yield* Schema.encodeEffect(Schema.toCodecJson(PublicHydration))({
 					route: selected.key,
 					release: activation.release,
 					locale: boot.workspace.locale,
 					boot: { ...boot, messages: output.messages },
-					data: output.data
+					reads: output.reads
 				});
 				const html = document
 					.replace(
@@ -247,7 +248,7 @@ export const publicPages = (artifact: Artifact) =>
 							...caller.headers,
 							'content-type': 'text/html; charset=utf-8',
 							'cache-control': 'private, no-store',
-							'content-security-policy': framePolicy(manifest, url.pathname),
+							'content-security-policy': frame_policy(manifest, url.pathname),
 							vary: 'Cookie, Authorization'
 						}
 					})
@@ -258,7 +259,7 @@ export const publicPages = (artifact: Artifact) =>
 					FiberSet.run(
 						requests,
 						render(request).pipe(
-							Effect.catch((error) => Effect.succeed(Option.some(responseError(error))))
+							Effect.catch((error) => Effect.succeed(Option.some(response_error(error))))
 						)
 					).pipe(
 						Effect.flatMap((fiber) =>

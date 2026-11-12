@@ -7,23 +7,23 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** How a `Split` divides its width between `start` and `end`. */
-	export type SplitRatio = 'rail' | 'sidebar' | 'third' | 'half' | 'wide';
+	type SplitRatio = 'rail' | 'sidebar' | 'third' | 'half' | 'wide';
 	/** What a `Split` does when narrow: `stack` the panes, `switch` between them, or `none`. */
-	export type SplitCollapse = 'stack' | 'switch' | 'none';
+	type SplitCollapse = 'stack' | 'switch' | 'none';
 	/** The props of `Split`. */
-	export interface SplitProps extends LayoutAttributes {
+	interface SplitProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: SplitRatio;
 		collapse?: SplitCollapse;
-		collapseAt?: 'compact' | 'narrow';
+		collapse_at?: 'compact' | 'narrow';
 		gap?: LayoutGap;
-		/** `content` (default): its own height; `fill`: the space left in its parent, handed to both panes (down to `minHeight`). */
+		/** `content` (default): its own height; `fill`: the space left in its parent, handed to both panes (down to `min_height`). */
 		size?: LayoutSize;
 		/** A `fill` split's floor (a CSS length; default 0). */
-		minHeight?: string;
+		min_height?: string;
 		start: Snippet;
 		end: Snippet;
-		switchLabels?: readonly [string, string];
+		switch_labels?: readonly [string, string];
 	}
 </script>
 
@@ -37,13 +37,13 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 		ref = $bindable(null),
 		ratio = 'half',
 		collapse = 'stack',
-		collapseAt = 'narrow',
+		collapse_at = 'narrow',
 		gap = 'md',
 		size = 'content',
-		minHeight,
+		min_height,
 		start,
 		end,
-		switchLabels,
+		switch_labels,
 		class: className,
 		...restProps
 	}: SplitProps = $props();
@@ -69,22 +69,22 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 		// The caller's class last: floors, layers and colours it names win; layout itself is props.
 		className
 	)}
-	style:min-height={size === 'fill' ? minHeight : undefined}
+	style:min-height={size === 'fill' ? min_height : undefined}
 	data-layout="split"
 	data-collapse={collapse}
-	data-collapse-at={collapseAt}
+	data-collapse-at={collapse_at}
 	{...restProps}
 >
 	{#if collapse === 'switch'}
 		<div class="split__switch">
 			<TabStrip
-				label={switchLabels?.join(' or ') ?? 'Views'}
+				label={switch_labels?.join(' or ') ?? 'Views'}
 				value={String(active)}
-				items={(switchLabels ?? ['First', 'Second']).map((title, index) => ({
+				items={(switch_labels ?? ['First', 'Second']).map((title, index) => ({
 					name: String(index),
 					title
 				}))}
-				onValueChange={(next) => (active = next === '1' ? 1 : 0)}
+				on_value_change={(next) => (active = next === '1' ? 1 : 0)}
 			/>
 		</div>
 	{/if}

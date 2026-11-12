@@ -27,7 +27,7 @@ export const codeHighlighter = tagHighlighter([
 ]);
 
 /** An expression as highlighted tokens on one line: each line break becomes a space. */
-export function highlightedLine(code: string): { text: string; class: string }[] {
+export function highlighted_line(code: string): { text: string; class: string }[] {
 	const tokens: { text: string; class: string }[] = [];
 	highlightCode(
 		code,

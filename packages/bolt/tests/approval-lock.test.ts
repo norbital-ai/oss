@@ -1,11 +1,29 @@
 import { describe, expect, it } from '@effect/vitest';
+import { Effect } from 'effect';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
-import { approvable, ownedEdges } from '../src/engine/approvals/lock.ts';
+import { catalog_of } from '../src/engine/access/pred.ts';
+import { approvable, heldModels, lockPieces } from '../src/engine/approvals/lock.ts';
+import { Chain } from '../src/engine/write/sql.ts';
+import { member } from './write-fixture.ts';
+import type { Catalog } from '@norbital-ai/store';
+import { DbError } from '../src/engine/errors.ts';
+
+it.effect('reports a database failure while loading held approval models', () =>
+	Effect.gen(function* () {
+		const outage = DbError.make('08006', 'database unavailable');
+		expect(yield* Effect.result(heldModels({ rows: () => Effect.fail(outage) }))).toMatchObject({
+			_tag: 'Failure',
+			failure: outage
+		});
+		expect(
+			yield* heldModels({ rows: () => Effect.fail(DbError.make('42P01', 'not yet planned')) })
+		).toEqual(new Set());
+	})
+);
 
 const model = (description: string): EngineManifest['models'][string] => ({
 	description,
-	label: 'name',
+	record_label: 'record.name',
 	fields: { name: { kind: 'text' } }
 });
 const manifest = (
@@ -20,20 +38,29 @@ const manifest = (
 	exposures: Object.fromEntries(
 		Object.keys(models).map((name): [string, EngineManifest['exposures'][string]] => [
 			name,
-			{ read: { [name]: { fields: 'all' } }, delete: {} }
+			{ outputs: { default: { [name]: { fields: 'all' } } }, delete: {} }
 		])
 	),
 	policies,
 	integrations: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 });
+
+const locked_edges = (m: EngineManifest, catalog: Catalog) => {
+ const statement = new Chain();
+ lockPieces(m, catalog, statement, member, 'allp');
+ const sql = statement.sql('1').text;
+ const touch = sql.slice(sql.indexOf('ap_touch AS'), sql.indexOf('ap_hit AS'));
+ // the relationship names are manifest constants: literals in the statement text, never per-act parameters
+ const edges = [...touch.matchAll(/SELECT '([^']+)'::text, image\.j ->> '([^']+)' FROM allp[\s\S]*?WHERE c = '([^']+)' AND/g)];
+ return edges.map((match) => [match[3], match[2], match[1]]);
+};
 
 describe('approval relationship traversal', () => {
 	it('finds inverse-less owned links and each physical polymorphic FK column', () => {
@@ -44,7 +71,7 @@ describe('approval relationship traversal', () => {
 				'children.owner': { to: ['first', 'second'], owned: true }
 			}
 		);
-		expect(ownedEdges(m, catalogOf(m))).toEqual([
+		expect(locked_edges(m, catalog_of(m))).toEqual([
 			['children', 'parent', 'first'],
 			['children', 'owner__first', 'first'],
 			['children', 'owner__second', 'second']
@@ -70,7 +97,7 @@ describe('approval relationship traversal', () => {
 			{ parent: model('Parent'), kept: model('Kept child'), orphan: model('Unlinked child') },
 			{ 'kept.parent': { to: 'parent', owned: true } }
 		);
-		expect(ownedEdges(m, catalogOf(reduced))).toEqual([['kept', 'parent', 'parent']]);
+		expect(locked_edges(m, catalog_of(reduced))).toEqual([['kept', 'parent', 'parent']]);
 	});
 
 	it('includes inverse-less non-owned references and terminates a cyclic graph', () => {
@@ -82,17 +109,17 @@ describe('approval relationship traversal', () => {
 				unrelated: model('Unrelated')
 			},
 			{
-				'child.root': { to: 'root', onDelete: 'restrict' },
-				'root.child': { to: 'child', onDelete: 'restrict' },
-				'leaf.child': { to: 'child', onDelete: 'restrict' }
+				'child.root': { to: 'root', on_delete: 'restrict' },
+				'root.child': { to: 'child', on_delete: 'restrict' },
+				'leaf.child': { to: 'child', on_delete: 'restrict' }
 			},
 			{
 				requester: {
 					description: 'Requests root deletion: its delete check may approve',
-					grants: { root: { read: true, delete: { check: true } } }
+					grants: { root: { outputs: { default: {} }, delete: { verdict: true } } }
 				}
 			}
 		);
-		expect([...approvable(m, catalogOf(m))].sort()).toEqual(['child', 'leaf', 'root']);
+		expect([...approvable(m, catalog_of(m))].sort()).toEqual(['child', 'leaf', 'root']);
 	});
 });

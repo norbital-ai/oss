@@ -11,7 +11,7 @@
 <Combobox
 	{options}
 	{value}
-	onChange={(next) => {
+	on_change={(next) => {
 		value = next;
 		onChange(next);
 	}}

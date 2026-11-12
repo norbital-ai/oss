@@ -1,10 +1,10 @@
-// What the kit's renderers and editors learn from the shell, once per page (hook:ui-shell sets `provideKinds` beside
-// `provideBolt`): the models' exposure, the workspace's custom fields, and the optional facilities the host has.
+// What the kit's renderers and editors learn from the shell, once per page (`ctx.ui.kinds`, beside `ctx.ui.bolt`): the
+// models' exposure, the workspace's custom fields, and the optional facilities the host has.
 // Every optional member absent is a working page: files show names, points search with the keyless geocoder.
 import { Effect, Result, Schema } from 'effect';
 import { FetchHttpClient, HttpClient, HttpClientResponse, type HttpClientError } from 'effect/http';
-import { getContext, setContext, type Component } from 'svelte';
-import type { ActFailure, ReadError } from '../client/contract.js';
+import type { Component } from 'svelte';
+import type { ActFailure, ReadError, UiContext } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
 import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
 
@@ -12,7 +12,7 @@ export type ChildInput = {
 	model: string;
 	parent: string;
 	owned?: true;
-	create?: { columns: readonly string[]; filled?: readonly string[]; proposalOnly?: true };
+	create?: { columns: readonly string[]; filled?: readonly string[]; proposal_only?: true };
 	update?: { columns: readonly string[] };
 	delete?: true;
 	link?: true;
@@ -25,7 +25,7 @@ export type ModelExposure = {
 	label: readonly string[];
 	/** CEL over the record; `label` contains its read dependencies for projections and picker fallback. */
 	record_label?: string;
-	labelPaths?: readonly string[];
+	label_paths?: readonly string[];
 	/** Search fields when the model declares `search.text`; else the picker searches `label`'s text fields. */
 	search?: readonly string[];
 	/** The model declares `search.semantic` (text or file fields on an embedding model): the toolbar offers `/semantic`. */
@@ -58,23 +58,23 @@ export type ModelExposure = {
 	create?: {
 		columns: readonly string[];
 		filled?: readonly string[];
-		proposalOnly?: true;
+		proposal_only?: true;
 		with?: Readonly<Record<string, ChildInput>>;
 	};
 	update?: { columns: readonly string[]; with?: Readonly<Record<string, ChildInput>> };
 	/** Host-declared field restrictions, in addition to ordinary write grants: a read-only sync's fields, an owned parent. */
-	readonlyFields?: { readonly [field: string]: 'syncOwned' | 'ownedParent' };
-	/** The model's own-field lock: a matching record is read-only and its record page offers a lock instead of Edit. */
-	locked?: Where;
+	readonly_fields?: { readonly [field: string]: 'sync_owned' | 'owned_parent' };
+	/** Matching constraint predicates restrict writes to their excepted fields and child relations. */
+	locks?: readonly { readonly where: Where; readonly except?: readonly string[] }[];
 	/** The view toolbar's info text: the model's declared description, else its model's. */
 	description?: string;
 	/** The caller holds a delete arm. */
 	delete?: true;
-	/** The model's syncs the caller may run from the toolbar (`<c>.sync.<name>`). */
+	/** The native refresh/file-transfer controls the caller may use from the toolbar. */
 	syncs?: { readonly [sync: string]: SyncExposure };
 };
 /** A declared automation the caller may start, with the fields its native form renders. */
-export type AutomationExposure = { input: Fields; description?: string };
+export type AutomationExposure = { input: Fields; description?: string; mode?: 'job' | 'call' };
 /** A file parser: a built-in (`xlsx`, `csv`, `tsv`, `json`, `ics`) or a custom one by its media type and extensions. */
 export type ParserExposure = string | { type: string; extensions: readonly string[] };
 /**
@@ -103,23 +103,23 @@ type ViewCommon<V> = {
 	row?: { readonly [f: string]: Value };
 	kind?: Kind;
 	id?: string;
-	address?: { value: string | null; onChange?(next: string | null): void };
+	address?: { value: string | null; on_change?(next: string | null): void };
 };
 /** What a kind's renderer receives (a built-in custom field's, structurally bolt's `CustomFieldView`): its value and, in
- * `edit` mode, `onChange`, `disabled` and the field's error. */
+ * `edit` mode, `on_change`, `disabled` and the field's error. */
 export type KindView<V = Value> =
 	| (ViewCommon<V> & { mode: 'show'; dense?: true })
 	| (ViewCommon<V> & {
 			mode: 'edit';
 			disabled: boolean;
 			error?: string;
-			onChange(next: V | null): void;
+			on_change(next: V | null): void;
 	  });
 /** A custom field as the ui renders it: its shape, label and optional renderer component; built-ins and tenant fields alike. */
 export type CustomFieldEntry = {
 	shape: Kind;
 	label?: string;
-	renderer?: Component<{ view: KindView }>;
+	renderer?: Component<{ view: KindView; ctx: UiContext }>;
 };
 /** The host's address search (and reverse lookup) a `PointInput` uses when present. */
 export type Geocoder = {
@@ -136,7 +136,7 @@ export type Geocoder = {
 export type KindsHost = {
 	catalog?: { readonly [model: string]: ModelExposure } | undefined;
 	automations?: { readonly [automation: string]: AutomationExposure } | undefined;
-	customFields?: { readonly [name: string]: CustomFieldEntry } | undefined;
+	custom_fields?: { readonly [name: string]: CustomFieldEntry } | undefined;
 	/** `bolt.upload`; without it a file field is read-only. */
 	upload?(
 		file: File,
@@ -145,8 +145,8 @@ export type KindsHost = {
 		FileRef,
 		Extract<ActFailure, { _tag: 'ActRefused' }> | Extract<ReadError, { _tag: 'TransportFailed' }>
 	>;
-	fileUrl?(ref: FileRef, options?: FileUrlOptions): string;
-	/** The host's geocoder (P19); without one, address search uses the keyless `photonGeocoder`. */
+	file_url?(ref: FileRef, options?: FileUrlOptions): string;
+	/** The host's geocoder (P19); without one, address search uses the keyless `photon_geocoder`. */
 	geocoder?: Geocoder;
 	/** A keyless tile template; the host may override the OpenStreetMap default. */
 	basemap?: { url: string; attribution: string };
@@ -166,11 +166,6 @@ export type KindsHost = {
 	currency?: string | undefined;
 };
 
-const KEY = Symbol.for('norbital.ui.kinds');
-/** Hands the host's `KindsHost` to every kind editor beneath; the shell calls it once. */
-export const provideKinds = (host: KindsHost) => setContext(KEY, host);
-/** The `KindsHost` provided above, or an empty host. */
-export const useKinds = (): KindsHost => getContext<KindsHost | undefined>(KEY) ?? {};
 /** The keyless OpenStreetMap tile template used when the host names no basemap. */
 export const DEFAULT_BASEMAP = {
 	url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -261,7 +256,7 @@ const photon = (
  * Road" is London's first), so with the workspace's region the query is also asked with that country's name (both at
  * once), and its places come first.
  */
-export const photonGeocoder = {
+export const photon_geocoder = {
 	search: (q: string, options?: { region?: string }) => {
 		const region = options?.region;
 		const name = regionName(region);

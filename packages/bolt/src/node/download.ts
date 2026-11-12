@@ -9,9 +9,9 @@ import { request as httpsRequest } from 'node:https';
 import { Duration, Effect, type Scope } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
 import type { Downloaded } from '../engine/contracts.ts';
-import { DOWNLOAD, mediaType } from '../engine/files/media.ts';
+import { DOWNLOAD, media_type } from '../engine/files/media.ts';
 import type { PortFailure } from '../engine/port.ts';
-import { pinnedLookup, publicDestination, type Address } from './net.ts';
+import { pinned_lookup, public_destination, type Address } from './net.ts';
 
 /** Where a download streams: an upload begun once the body is media, its parts in order, then completed or aborted. */
 export type DownloadSink<U> = {
@@ -23,16 +23,15 @@ export type DownloadSink<U> = {
 };
 export type DownloadOptions = {
 	/** A development host's own loopback origin (`localhost`, `127.0.0.1`) is reachable; nothing else private, ever. */
-	allowLoopback?: boolean;
-	maxBytes?: number;
-	idleMs?: number;
+	allow_loopback?: boolean;
+	max_bytes?: number;
+	idle_ms?: number;
 	/** The `cookie` header a request to this URL carries: asked per redirect hop, so each host gets only its own. */
 	cookie?: (url: URL) => string;
 };
 /** A part is sent once it reaches this size (S3's smallest part but the last). */
 const DOWNLOAD_PART_BYTES = 5 * 1024 * 1024;
 
-const invalid = (message: string) => new FacilityFailure({ kind: 'invalid', message });
 const upstream = (error: unknown) =>
 	new FacilityFailure({
 		kind: 'upstream',
@@ -63,10 +62,10 @@ const addressesOf = (
 	(url.protocol !== 'http:' && url.protocol !== 'https:') ||
 	url.username !== '' ||
 	url.password !== ''
-		? Effect.fail(invalid('download takes a public http(s) URL without credentials.'))
+		? Effect.fail(FacilityFailure.invalid('download takes a public http(s) URL without credentials.'))
 		: allowLoopback && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
 			? Effect.succeed([{ address: '127.0.0.1', family: 4 }])
-			: publicDestination(
+			: public_destination(
 					url.hostname,
 					Number(url.port || (url.protocol === 'https:' ? 443 : 80))
 				).pipe(Effect.map((destination) => destination.addresses));
@@ -78,7 +77,7 @@ const open = (url: URL, addresses: readonly Address[], cookie: string) =>
 			url,
 			{
 				agent: false,
-				lookup: pinnedLookup(addresses),
+				lookup: pinned_lookup(addresses),
 				headers: {
 					'user-agent': 'norbital-download/1',
 					'accept-encoding': 'identity',
@@ -103,15 +102,15 @@ const open = (url: URL, addresses: readonly Address[], cookie: string) =>
 	);
 
 /** Fetches `url` under the policy and streams its body into `sink` when its first bytes are media. */
-export const downloadMedia = <U>(
+export const download_media = <U>(
 	url: string,
 	sink: DownloadSink<U>,
 	options: DownloadOptions = {}
 ): Effect.Effect<Downloaded, PortFailure> =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const maxBytes = options.maxBytes ?? DOWNLOAD.maxBytes,
-				idleMs = options.idleMs ?? DOWNLOAD.idleMs;
+			const maxBytes = options.max_bytes ?? DOWNLOAD.maxBytes,
+				idleMs = options.idle_ms ?? DOWNLOAD.idleMs;
 			const stalled = {
 				duration: Duration.millis(idleMs),
 				orElse: () =>
@@ -129,11 +128,11 @@ export const downloadMedia = <U>(
 				Effect.gen(function* () {
 					if (hop > DOWNLOAD.redirects)
 						return yield* Effect.fail(
-							invalid(`The URL redirected more than ${DOWNLOAD.redirects} times.`)
+							FacilityFailure.invalid(`The URL redirected more than ${DOWNLOAD.redirects} times.`)
 						);
 					const response = yield* open(
 						target,
-						yield* addressesOf(target, options.allowLoopback ?? false),
+						yield* addressesOf(target, options.allow_loopback ?? false),
 						options.cookie?.(target) ?? ''
 					).pipe(Effect.timeoutOrElse(stalled));
 					const status = response.statusCode ?? 0,
@@ -150,16 +149,16 @@ export const downloadMedia = <U>(
 						);
 					const next = yield* Effect.try({
 						try: () => new URL(location, target),
-						catch: () => invalid('A redirect named an invalid URL.')
+						catch: () => FacilityFailure.invalid('A redirect named an invalid URL.')
 					});
 					return yield* follow(next, hop + 1);
 				});
 			const { response, url: final } = yield* follow(
-				yield* Effect.try({ try: () => new URL(url), catch: () => invalid('The URL is invalid.') }),
+				yield* Effect.try({ try: () => new URL(url), catch: () => FacilityFailure.invalid('The URL is invalid.') }),
 				0
 			);
 			const chunks = response[Symbol.asyncIterator]();
-			return yield* storeMedia(
+			return yield* store_media(
 				nameOf(response.headers['content-disposition'], final),
 				Effect.tryPromise({
 					try: (): Promise<IteratorResult<unknown, undefined>> => chunks.next(),
@@ -184,7 +183,7 @@ export const downloadMedia = <U>(
  * Streams a body (`next` answers its chunks in order, `undefined` at the end) into `sink` when its first bytes are media;
  * anything else is refused before an upload begins. The browser's download feeds it the page's parts.
  */
-export const storeMedia = <U, E>(
+export const store_media = <U, E>(
 	name: string,
 	next: Effect.Effect<Uint8Array | undefined, E>,
 	sink: DownloadSink<U>,
@@ -199,7 +198,7 @@ export const storeMedia = <U, E>(
 				if (chunk === undefined) return Effect.succeed(undefined);
 				size += chunk.byteLength;
 				if (size > maxBytes)
-					return Effect.fail(invalid(`The file is over ${maxBytes} bytes; nothing was stored.`));
+					return Effect.fail(FacilityFailure.invalid(`The file is over ${maxBytes} bytes; nothing was stored.`));
 				hash.update(chunk);
 				return Effect.succeed(chunk);
 			})
@@ -216,11 +215,11 @@ export const storeMedia = <U, E>(
 			bytes += chunk.byteLength;
 		}
 		const first = Buffer.concat(head),
-			mime = mediaType(first.subarray(0, DOWNLOAD.headBytes));
+			mime = media_type(first.subarray(0, DOWNLOAD.headBytes));
 		// what came back, so a host's stub or error page reads as such: its size and its first bytes, printable
 		if (mime === undefined)
 			return yield* Effect.fail(
-				invalid(
+				FacilityFailure.invalid(
 					`The file is not media (an image, audio, video, a PDF or an HTML page): it is ${ended ? '' : 'at least '}${size} bytes${
 						size === 0
 							? ''
@@ -230,18 +229,15 @@ export const storeMedia = <U, E>(
 			);
 		const upload = yield* sink.begin(mime);
 		const stored = yield* Effect.gen(function* () {
-			let part: Uint8Array[] = [first],
-				partBytes = first.byteLength;
+			// S3 and R2 refuse a multipart upload whose non-final parts differ in length: every part but the last is exactly
+			// DOWNLOAD_PART_BYTES, the remainder carried into the next
+			let held: Buffer = first;
 			for (let chunk = yield* read; chunk !== undefined; chunk = yield* read) {
-				part.push(chunk);
-				partBytes += chunk.byteLength;
-				if (partBytes >= DOWNLOAD_PART_BYTES) {
-					yield* sink.part(upload, Buffer.concat(part));
-					part = [];
-					partBytes = 0;
-				}
+				held = Buffer.concat([held, chunk]);
+				for (; held.byteLength >= DOWNLOAD_PART_BYTES; held = held.subarray(DOWNLOAD_PART_BYTES))
+					yield* sink.part(upload, held.subarray(0, DOWNLOAD_PART_BYTES));
 			}
-			if (partBytes > 0) yield* sink.part(upload, Buffer.concat(part));
+			if (held.byteLength > 0) yield* sink.part(upload, held);
 			const sha256 = hash.digest('hex');
 			return { key: yield* sink.complete(upload, sha256), sha256 };
 		}).pipe(Effect.onError(() => sink.abort(upload)));

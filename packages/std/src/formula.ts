@@ -8,6 +8,7 @@ import { children } from './cel-ast.ts';
 import * as Result from 'effect/Result';
 import { Decimal } from './decimal.ts';
 import { PlainDate } from './date.ts';
+import * as Predicate from 'effect/Predicate';
 import type { Json } from './wire.ts';
 
 type Scalar =
@@ -22,46 +23,45 @@ type Scalar =
 	| 'time'
 	| 'enum'
 	| 'currency'
-	| 'duration'
 	| 'count'
 	| 'sum';
 /** A root's kind: the field-kind literals of §3.3.2 that a formula can read. */
-type Kind =
+type Kind = { readonly many?: true } & (
 	| { readonly kind: Scalar; readonly optional?: true; readonly values?: readonly string[] }
-	| { readonly kind: 'list'; readonly of: Kind; readonly optional?: true }
 	| { readonly kind: 'record'; readonly of: Kind; readonly optional?: true }
 	| {
 			readonly kind: 'object';
 			readonly fields: { readonly [name: string]: Kind };
 			readonly optional?: true;
 	  }
-	| { readonly kind: 'json'; readonly optional?: true };
+	| { readonly kind: 'json'; readonly optional?: true }
+);
 type Roots = { readonly [name: string]: Kind };
 type Mode = 'decimal' | 'float';
 type Fn = { readonly signature: string; readonly fn: (...args: never[]) => unknown };
 
 type Num<M extends Mode> = M extends 'float' ? number : Decimal;
-type In<K> = K extends { optional: true } ? In0<K> | null : In0<K>;
-type In0<K> = K extends { kind: 'list'; of: infer O }
-	? readonly In<O>[]
-	: K extends { kind: 'record'; of: infer O }
-		? { readonly [key: string]: In<O> }
-		: K extends { kind: 'object'; fields: infer F }
-			? { readonly [N in keyof F]: In<F[N]> }
-			: K extends { kind: 'decimal' | 'money' | 'sum' }
-				? Decimal | number | string
-				: K extends { kind: 'int' | 'number' | 'duration' | 'count' }
-					? number
-					: K extends { kind: 'bool' }
-						? boolean
-						: K extends { kind: 'json' }
-							? unknown
-							: string;
+type InValue<K> = K extends { many: true } ? readonly In0<K>[] : In0<K>;
+type In<K> = K extends { optional: true } ? InValue<K> | null : InValue<K>;
+type In0<K> = K extends { kind: 'record'; of: infer O }
+	? { readonly [key: string]: In<O> }
+	: K extends { kind: 'object'; fields: infer F }
+		? { readonly [N in keyof F]: In<F[N]> }
+		: K extends { kind: 'decimal' | 'money' | 'sum' }
+			? Decimal | number | string
+			: K extends { kind: 'int' | 'number' | 'count' }
+				? number
+				: K extends { kind: 'bool' }
+					? boolean
+					: K extends { kind: 'json' }
+						? unknown
+						: string;
 type ValuesOf<R extends Roots> = { readonly [N in keyof R]: In<R[N]> };
 
 /** The type a compiled formula must produce. */
-export type FormulaResult = 'bool' | 'decimal' | 'money' | 'int' | 'date' | 'text' | 'json';
-type Out<T extends FormulaResult, M extends Mode> = T extends 'json'
+type FormulaResult = 'bool' | 'decimal' | 'money' | 'int' | 'date' | 'text' | 'json';
+/** The value a compiled formula produces for its result kind and numeric mode. */
+export type Out<T extends FormulaResult, M extends Mode> = T extends 'json'
 	? Json
 	: T extends 'bool'
 		? boolean
@@ -73,16 +73,29 @@ type Out<T extends FormulaResult, M extends Mode> = T extends 'json'
 					? PlainDate
 					: string;
 
-type Site<R extends Roots, M extends Mode> = { readonly roots: R; readonly numbers: M };
+type Reader<T extends FormulaResult, M extends Mode> = (v: unknown, bad: () => TypeError) => Out<T, M>;
+type Readers<M extends Mode> = { readonly [T in FormulaResult]: Reader<T, M> };
+type Site<R extends Roots, M extends Mode> = {
+	readonly roots: R;
+	readonly numbers: M;
+	/** Each result kind's reader in this mode, so a result carries its `Out` type. */
+	readonly read: Readers<M>;
+};
 /**
  * A formula context from `context()`: the typed roots a formula reads, the numeric mode, its registered functions and an optional typed `derive` from rows to root values.
  */
-export type FormulaContext<R extends Roots = Roots, M extends Mode = Mode, D = undefined> = Site<
+type FormulaContext<R extends Roots = Roots, M extends Mode = Mode, D = undefined> = Site<
 	R,
 	M
 > & {
 	/** M1: the typed builder from the caller's rows to this context's values, when one was declared. */
-	readonly derive: D extends (rows: infer X) => unknown ? (rows: X) => ValuesOf<R> : undefined;
+	readonly derive: D;
+};
+type Derive<R extends Roots> = ((rows: never) => ValuesOf<R>) | undefined;
+type Options<M extends Mode, D> = {
+	readonly numbers?: M;
+	readonly functions?: { readonly [name: string]: Fn };
+	readonly derive?: D;
 };
 type Compiled<R extends Roots, M extends Mode, T extends FormulaResult> = {
 	readonly text: string;
@@ -92,14 +105,14 @@ type Compiled<R extends Roots, M extends Mode, T extends FormulaResult> = {
 };
 
 const DIV_SCALE = 12; // ponytail: `/` on decimals rounds to 12 places half-up; a formula needing more calls round() itself
-const NUMERIC = new Set<string>(['int', 'decimal', 'money', 'number', 'duration', 'count', 'sum']);
+const NUMERIC = new Set<string>(['int', 'decimal', 'money', 'number', 'count', 'sum']);
 const EXACT = new Set<string>(['decimal', 'money', 'sum']);
 const internals = new WeakMap<object, { env: Environment; cache: Map<string, ParseResult> }>();
 /** A null literal is a dyn value for checking, then evaluates to null; cel-js 8 rejects it beside a concrete branch. */
 const NULL_ROOT = '__cel_null';
 
 function celType(k: Kind, mode: Mode): string {
-	if (k.kind === 'list') return 'list<dyn>';
+	if (k.many === true) return 'list<dyn>';
 	if (k.kind === 'record' || k.kind === 'object') return 'map<string, dyn>';
 	if (k.kind === 'json') return 'dyn';
 	if (k.kind === 'bool') return 'bool';
@@ -133,8 +146,8 @@ function arithmetic(env: Environment, mode: Mode) {
 		}
 		return;
 	}
-	const d = (x: unknown) =>
-		x instanceof Decimal ? x : typeof x === 'number' ? fromDouble(x) : Decimal.of(x as bigint);
+	const d = (x: Decimal | number | bigint) =>
+		x instanceof Decimal ? x : typeof x === 'number' ? fromDouble(x) : Decimal.of(x);
 	const calc = {
 		'+': (a: Decimal, b: Decimal) => a.plus(b),
 		'-': (a: Decimal, b: Decimal) => a.minus(b),
@@ -149,7 +162,7 @@ function arithmetic(env: Environment, mode: Mode) {
 		'==': (c: number) => c === 0
 	};
 	env.registerType('Decimal', { ctor: Decimal });
-	env.registerOperator('-Decimal', (a) => (a as Decimal).neg());
+	env.registerOperator('-Decimal', (a: Decimal) => a.neg());
 	for (const [l, r] of [
 		['Decimal', 'Decimal'],
 		['Decimal', 'int'],
@@ -162,41 +175,44 @@ function arithmetic(env: Environment, mode: Mode) {
 			if (op !== '==' || l === 'Decimal')
 				env.registerOperator(`${l} ${op} ${r}`, (a, b) => test[op](d(a).cmp(d(b)))); // == registers its mirror and !=
 	}
-	env.registerFunction('round(Decimal, int): Decimal', (a, s) => (a as Decimal).round(Number(s)));
-	env.registerFunction('decimal(string): Decimal', (s) => Decimal.of(s as string));
+	env.registerFunction('round(Decimal, int): Decimal', (a: Decimal, s: bigint) =>
+		a.round(Number(s))
+	);
+	env.registerFunction('decimal(string): Decimal', (s: string) => Decimal.of(s));
 }
 
 /**
  * A formula context: its roots (field-kind literals), numeric mode, registered CEL functions (`{ signature, fn }`,
  * today's `registerFunction`) and, for derived roots (M1), a typed `derive(rows)` builder.
  */
-export function context<
-	const R extends Roots,
-	M extends Mode = 'decimal',
-	D extends ((rows: never) => ValuesOf<R>) | undefined = undefined
->(
+export function context<const R extends Roots, D extends Derive<R> = undefined>(
 	roots: R,
-	opts: {
-		readonly numbers?: M;
-		readonly functions?: { readonly [name: string]: Fn };
-		readonly derive?: D;
-	} = {}
-): FormulaContext<R, M, D> {
-	const numbers = (opts.numbers ?? 'decimal') as M;
+	opts?: Options<'decimal', D>
+): FormulaContext<R, 'decimal', D>;
+export function context<const R extends Roots, M extends Mode, D extends Derive<R> = undefined>(
+	roots: R,
+	opts: Options<M, D> & { readonly numbers: M }
+): FormulaContext<R, M, D>;
+export function context(
+	roots: Roots,
+	opts: Options<Mode, Derive<Roots>> = {}
+): FormulaContext<Roots, Mode, Derive<Roots>> {
+	const numbers = opts.numbers ?? 'decimal';
 	const env = new Environment({ homogeneousAggregateLiterals: false });
 	arithmetic(env, numbers);
-	const allRoots = { ...roots, [NULL_ROOT]: { kind: 'json' as const } } as R & { readonly __cel_null: Kind };
+	const allRoots: Roots = { ...roots, [NULL_ROOT]: { kind: 'json' } };
 	for (const [name, k] of Object.entries(allRoots)) env.registerVariable(name, celType(k, numbers));
 	for (const { signature, fn } of Object.values(opts.functions ?? {}))
-		env.registerFunction(signature, (...args: unknown[]) =>
-			(fn as (...a: unknown[]) => unknown)(...args.map(plain))
+		env.registerFunction(signature, (...args: unknown[]): unknown =>
+			Reflect.apply(fn, undefined, args.map(plain))
 		);
-	const ctx = { roots, numbers, derive: opts.derive } as FormulaContext<R, M, D>;
+	const read: Readers<Mode> = numbers === 'float' ? FLOAT : DECIMAL;
+	const ctx = { roots, numbers, read, derive: opts.derive };
 	internals.set(ctx, { env, cache: new Map() });
 	return ctx;
 }
 
-function chain(n: ASTNode): string[] | null {
+function chain(n: ASTNode): [string, ...string[]] | null {
 	if (n.op === 'id') return [n.args];
 	if (n.op !== '.' && n.op !== '.?') return null;
 	const c = chain(n.args[0]);
@@ -207,10 +223,11 @@ function unknownPath(n: ASTNode, roots: Roots): string | null {
 	const c = chain(n);
 	if (c !== null) {
 		if (c[0] === NULL_ROOT) return null;
-		let k: Kind | undefined = roots[c[0]!];
-		for (let i = 1; i < c.length && k?.kind === 'object'; i++) {
-			k = k.fields[c[i]!];
-			if (k === undefined) return c.slice(0, i + 1).join('.');
+		let k: Kind | undefined = roots[c[0]];
+		for (const [i, part] of c.slice(1).entries()) {
+			if (k?.kind !== 'object') break;
+			k = k.fields[part];
+			if (k === undefined) return c.slice(0, i + 2).join('.');
 		}
 		return null;
 	}
@@ -235,17 +252,15 @@ const ACCEPTS: { readonly [T in FormulaResult]: { readonly [M in Mode]: readonly
 };
 /** A double (a CEL literal like `0.17`) as the decimal it prints as. */
 const fromDouble = (x: number) =>
-	/e/i.test(String(x)) ? Decimal.fromNumber(x, 15) : Decimal.of(String(x));
-const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0]!;
+	/e/i.test(String(x)) ? Decimal.from_number(x, 15) : Decimal.of(String(x));
+const first = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n', 1).join('');
 /** Replace every null literal with the hidden dyn root so optional branches keep one checkable type. */
 function rewriteNull(node: unknown, nullNode: ASTNode): unknown {
 	if (Array.isArray(node)) return node.map((child) => rewriteNull(child, nullNode));
 	if (node == null || typeof node !== 'object') return node;
-	const held = node as { op?: unknown; args?: unknown };
-	if (held.op === 'value' && held.args === null) return nullNode;
+	if ('op' in node && node.op === 'value' && 'args' in node && node.args === null) return nullNode;
 	for (const [key, value] of Object.entries(node))
-		if (value != null && typeof value === 'object')
-			(node as Record<string, unknown>)[key] = rewriteNull(value, nullNode);
+		if (value != null && typeof value === 'object') Reflect.set(node, key, rewriteNull(value, nullNode));
 	return node;
 }
 
@@ -288,18 +303,20 @@ export function compile<R extends Roots, M extends Mode, T extends FormulaResult
 
 function input(k: Kind, v: unknown, mode: Mode): unknown {
 	if (v === null || v === undefined) return null;
+	if (k.many === true) {
+		const { many: _many, optional: _optional, ...item } = k;
+		return Array.isArray(v) ? v.map((value) => input(item, value, mode)) : v;
+	}
 	switch (k.kind) {
-		case 'list':
-			return (v as readonly unknown[]).map((x) => input(k.of, x, mode));
 		case 'record':
 			return Object.fromEntries(
-				Object.entries(v as object).map(([n, x]) => [n, input(k.of, x, mode)])
+				Object.entries(Predicate.isObject(v) ? v : {}).map(([n, x]) => [n, input(k.of, x, mode)])
 			);
 		case 'object':
 			return Object.fromEntries(
 				Object.entries(k.fields).map(([n, f]) => [
 					n,
-					input(f, (v as Record<string, unknown>)[n], mode)
+					input(f, Predicate.isObject(v) ? v[n] : undefined, mode)
 				])
 			);
 		case 'json':
@@ -307,8 +324,11 @@ function input(k: Kind, v: unknown, mode: Mode): unknown {
 	}
 	if (!NUMERIC.has(k.kind)) return v;
 	if (mode === 'float' || k.kind === 'number')
-		return v instanceof Decimal ? v.toNumber() : Number(v);
-	return EXACT.has(k.kind) ? Decimal.of(v as string) : BigInt(v as number);
+		return v instanceof Decimal ? v.to_number() : Number(v);
+	if (!EXACT.has(k.kind)) return BigInt(typeof v === 'bigint' || typeof v === 'string' ? v : Number(v));
+	if (v instanceof Decimal || typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint')
+		return Decimal.of(v);
+	throw new TypeError(`${String(v)} is not a decimal`);
 }
 
 function jsonValue(value: unknown): Json {
@@ -345,38 +365,40 @@ export function evaluate<R extends Roots, M extends Mode, T extends FormulaResul
 ): Out<T, M> {
 	const { context: ctx, result } = compiled,
 		mode = ctx.numbers;
+	const given = new Map<string, unknown>(Object.entries(values));
 	const scope: Record<string, unknown> = { [NULL_ROOT]: null };
-	for (const [name, k] of Object.entries(ctx.roots))
-		scope[name] = input(k, (values as Record<string, unknown>)[name], mode);
+	for (const [name, k] of Object.entries(ctx.roots)) scope[name] = input(k, given.get(name), mode);
 	const v: unknown = compiled.program(scope);
-	const bad = () => new TypeError(`'${compiled.text}' produced ${String(v)}, not a ${result}`);
-	switch (result) {
-		case 'json':
-			return jsonValue(v) as Out<T, M>;
-		case 'bool':
-			if (typeof v !== 'boolean') throw bad();
-			return v as Out<T, M>;
-		case 'text':
-			if (typeof v !== 'string') throw bad();
-			return v as Out<T, M>;
-		case 'date':
-			if (typeof v !== 'string') throw bad();
-			return PlainDate(v) as Out<T, M>;
-		case 'int': {
-			const n = typeof v === 'bigint' ? Number(v) : v;
-			if (typeof n !== 'number' || !Number.isInteger(n)) throw bad();
-			return n as Out<T, M>;
-		}
-	}
-	if (mode === 'float') {
-		if (typeof v !== 'bigint' && typeof v !== 'number') throw bad();
-		return Number(v) as Out<T, M>;
-	}
-	if (v instanceof Decimal) return v as Out<T, M>;
-	if (typeof v === 'bigint') return Decimal.of(v) as Out<T, M>;
-	if (typeof v === 'number' && Number.isFinite(v)) return fromDouble(v) as Out<T, M>;
-	throw bad();
+	return ctx.read[result](v, () => new TypeError(`'${compiled.text}' produced ${String(v)}, not a ${result}`));
 }
+
+const asBool = (v: unknown, bad: () => TypeError): boolean => {
+	if (typeof v !== 'boolean') throw bad();
+	return v;
+};
+const asText = (v: unknown, bad: () => TypeError): string => {
+	if (typeof v !== 'string') throw bad();
+	return v;
+};
+const asDate = (v: unknown, bad: () => TypeError): PlainDate => PlainDate(asText(v, bad));
+const asInt = (v: unknown, bad: () => TypeError): number => {
+	const n = typeof v === 'bigint' ? Number(v) : v;
+	if (typeof n !== 'number' || !Number.isInteger(n)) throw bad();
+	return n;
+};
+const asDouble = (v: unknown, bad: () => TypeError): number => {
+	if (typeof v !== 'bigint' && typeof v !== 'number') throw bad();
+	return Number(v);
+};
+const asDecimal = (v: unknown, bad: () => TypeError): Decimal => {
+	if (v instanceof Decimal) return v;
+	if (typeof v === 'bigint') return Decimal.of(v);
+	if (typeof v === 'number' && Number.isFinite(v)) return fromDouble(v);
+	throw bad();
+};
+const SAME = { json: jsonValue, bool: asBool, text: asText, date: asDate, int: asInt };
+const DECIMAL: Readers<'decimal'> = { ...SAME, decimal: asDecimal, money: asDecimal };
+const FLOAT: Readers<'float'> = { ...SAME, decimal: asDouble, money: asDouble };
 
 /** A value validator for stored formula text (a custom field's `validate`, a transform refusal): the error or undefined. */
 export const formula =

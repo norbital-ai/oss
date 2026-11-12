@@ -1,34 +1,33 @@
 // SMS and iMessage through AgentPhone's REST API; it publishes no SDK. Every thread is a person's number. All its source
 // shows is a send and a reaction: no read, history, typing, dedupe key, edit or delete. Call and reaction events carry
 // no chat message.
-import type { ChatConnection, ChatPlatform, IncomingFile } from '../adapter.ts';
+import { Schema } from 'effect';
+import { parse as parseJson, json, fileOf } from '../http.ts';
+import type { ChatConnection, ChatPlatform } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, signed } from '../verify.ts';
+import { fresh, hmac, signed } from '../verify.ts';
 
-type Delivered = {
-	readonly event: string;
-	readonly data: {
-		readonly messageId: string;
-		readonly from: string;
-		readonly contact: { readonly name: string | null } | null;
-		readonly message: string;
-		readonly mediaUrls?: readonly string[];
-		readonly direction: 'inbound' | 'outbound';
-		readonly receivedAt: string;
-	};
-};
+const Delivered = Schema.Struct({
+	event: Schema.String,
+	data: Schema.Struct({
+		messageId: Schema.String,
+		from: Schema.String,
+		contact: Schema.Union([
+			Schema.Struct({
+				name: Schema.Union([Schema.String, Schema.Null])
+			}),
+			Schema.Null
+		]),
+		message: Schema.String,
+		mediaUrls: Schema.optionalKey(Schema.Array(Schema.String)),
+		direction: Schema.Union([Schema.Literal('inbound'), Schema.Literal('outbound')]),
+		receivedAt: Schema.String
+	})
+});
 
 const API = 'https://api.agentphone.ai',
-	TEXT_MAX = 1600,
-	TOLERANCE_S = 300;
-const IMAGES: Readonly<Record<string, string>> = {
-	jpg: 'image/jpeg',
-	jpeg: 'image/jpeg',
-	png: 'image/png',
-	gif: 'image/gif',
-	heic: 'image/heic',
-	webp: 'image/webp'
-};
+	TEXT_MAX = 1600;
 
 export const agentphone: ChatPlatform = {
 	id: 'agentphone',
@@ -54,39 +53,29 @@ export const agentphone: ChatPlatform = {
 		const probe = await post('', '');
 		if ([401, 403, 404].includes(probe.status))
 			throw new PlatformError(`${probe.status}: ${await probe.text()}`, probe.status);
-		const fileOf = (url: string): IncomingFile => {
-			const name = url.split(/[?#]/)[0]?.split('/').pop() ?? '';
-			return {
-				name: name || 'attachment',
-				mime: IMAGES[name.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream',
-				fetch: async () => {
-					const response = await host.fetch(url);
-					if (!response.ok) throw new PlatformError('AgentPhone media', response.status);
-					return new Uint8Array(await response.arrayBuffer());
-				}
-			};
-		};
+		const file = (url: string) => fileOf(url, host.fetch);
 		const connection: ChatConnection = {
 			account: agentId,
 			async deliver(request, body) {
 				const at = request.headers.get('x-webhook-timestamp') ?? '';
-				if (!(Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S))
-					throw new Unverified('stale timestamp');
+				if (!fresh(at)) throw new Unverified('stale timestamp');
 				signed(
 					request.headers.get('x-webhook-signature'),
 					`sha256=${hmac(webhookSecret, `${at}.${body}`, 'hex')}`
 				);
-				const { event, data } = JSON.parse(body) as Delivered;
-				if (event !== 'agent.message' || data.direction !== 'inbound') return nothing();
+				const envelope = await parseJson(Schema.Struct({ event: Schema.String }), body);
+				if (envelope.event !== 'agent.message') return nothing();
+				const { data } = await parseJson(Delivered, body);
+				if (data.direction !== 'inbound') return nothing();
 				return {
 					messages: [
 						{
 							id: data.messageId,
 							thread: data.from,
-							sentAt: data.receivedAt,
+							sent_at: data.receivedAt,
 							from: { handle: data.from, name: data.contact?.name ?? null },
 							text: data.message,
-							files: (data.mediaUrls ?? []).map(fileOf)
+							files: (data.mediaUrls ?? []).map(file)
 						}
 					]
 				};
@@ -97,9 +86,18 @@ export const agentphone: ChatPlatform = {
 					throw new PlatformError(
 						`${response.status}: ${await response.text()}`,
 						response.status,
-						Number(response.headers.get('retry-after')) * 1000 || undefined
+						retry_after_ms(response.headers.get('retry-after'))
 					);
-				return { id: ((await response.json()) as { id: string }).id };
+				return {
+					id: (
+						await json(
+							Schema.Struct({
+								id: Schema.String
+							}),
+							response
+						)
+					).id
+				};
 			}
 		};
 		return connection;

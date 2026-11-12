@@ -4,13 +4,9 @@
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
+import { PAPER_SIZES } from '../decl/runtime/facilities.ts';
+import { MessageValues } from '../decl/errors/refusal.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
-import {
-	CONVERT_TARGETS,
-	type EngineActor,
-	type RunTrigger,
-	type RunTriggerView
-} from '../engine/contracts.ts';
 
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
@@ -25,6 +21,26 @@ export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
  * `capturedAt`) are read at its top level.
  */
 export const STUDIO_ROLES = ['preview', 'view', 'logs', 'merge', 'rollback'] as const;
+
+/** Native tool behavior, declared by its owner and carried with its stored step. */
+export const ToolBehavior = Schema.Struct({
+	pure: Schema.optionalKey(Schema.Literal(true)),
+	progress_check: Schema.optionalKey(Schema.Literal(true)),
+	diagnostics: Schema.optionalKey(Schema.Literal(true)),
+	discovery: Schema.optionalKey(Schema.Literal(true)),
+	data: Schema.optionalKey(Schema.Literal(true)),
+	page: Schema.optionalKey(Schema.Literal(true)),
+	downloads: Schema.optionalKey(Schema.Literal(true)),
+	resume: Schema.optionalKey(Schema.Struct({ argument: Schema.String, roots: Schema.optionalKey(Schema.Literal(true)) }))
+});
+export type ToolBehavior = typeof ToolBehavior.Type;
+
+/** A question keeps its choices through storage, channel delivery and the shell. */
+export const AgentQuestion = Schema.Struct({
+	question: Schema.String,
+	options: Schema.Array(Schema.String)
+});
+export type AgentQuestion = typeof AgentQuestion.Type;
 
 /** A closed action in the person's active tab: click visible text, scroll CSS pixels, or go back/forward. */
 export const PageAction = Schema.Struct({
@@ -58,7 +74,7 @@ const Member = Schema.Struct({
 	phone: Schema.NullOr(Schema.String),
 	external: Schema.Boolean,
 	teams: Schema.Array(Schema.String),
-	teamPath: Schema.Array(Schema.String),
+	team_path: Schema.Array(Schema.String),
 	admin: Schema.Boolean,
 	party: Schema.NullOr(Schema.Struct({ model: Schema.String, id: Schema.String }))
 });
@@ -78,10 +94,10 @@ const Requestor = Schema.Union([
 		visitor: Schema.String,
 		anonymous: Schema.optionalKey(Schema.Literal(true))
 	}),
-	Schema.Struct({ kind: Schema.Literal('apiKey'), key: Schema.String })
+	Schema.Struct({ kind: Schema.Literal('api_key'), key: Schema.String })
 ]);
 /** An engine actor (`EngineActor`): a member, an envoy's turn, a visitor, an API key or the system identity's run. */
-export const EngineActorSchema: Schema.Codec<EngineActor> = Schema.Union([
+export const EngineActorSchema = Schema.Union([
 	...Requestor.members,
 	Schema.Struct({
 		kind: Schema.Literal('system'),
@@ -94,22 +110,25 @@ export const EngineActorSchema: Schema.Codec<EngineActor> = Schema.Union([
 	})
 ]);
 const SystemTrigger = [
-	Schema.Struct({ kind: Schema.Literal('system'), cause: Schema.Literals(['cron', 'webhook']) }),
+	Schema.Struct({ kind: Schema.Literal('system'), cause: Schema.Literal('cron') }),
 	Schema.Struct({
 		kind: Schema.Literal('system'),
 		cause: Schema.Literal('effect'),
 		model: Schema.String,
-		verb: Schema.Literals(['created', 'updated', 'deleted']),
+		verb: Schema.Literals(['create', 'update', 'delete']),
 		records: Schema.Array(Schema.String)
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('system'),
 		cause: Schema.Literal('schedule'),
-		by: Schema.optionalKey(Schema.Struct({ automation: Schema.String, run: Schema.String }))
+		by: Schema.optionalKey(Schema.Union([
+			Schema.Struct({ automation: Schema.String, run: Schema.String }),
+			Schema.Struct({ automation: Schema.String, invocation: Schema.String })
+		]))
 	})
 ] as const;
 /** An automation run's trigger (`RunTrigger`, `sys_run.trigger`). */
-export const RunTriggerSchema: Schema.Codec<RunTrigger> = Schema.Union([
+export const RunTriggerSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('person'),
 		actor: Requestor,
@@ -118,7 +137,7 @@ export const RunTriggerSchema: Schema.Codec<RunTrigger> = Schema.Union([
 	...SystemTrigger
 ]);
 /** A run's trigger as the run ledger answers it (`RunTriggerView`). */
-export const RunTriggerViewSchema: Schema.Codec<RunTriggerView> = Schema.Union([
+export const RunTriggerViewSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('person'),
 		ref: Schema.String,
@@ -159,7 +178,7 @@ const READ_METHODS = [
 ] as const;
 /**
  * One read as the guest names it (`ctx.query('c', q)` → `{ m: 'query', a: ['c', q] }`; a read request
- * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lowerRead` decodes `a`.
+ * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lower_read` decodes `a`.
  * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own) are the agent panel's, live only:
  * `/live` checks the caller may read them, `/q` refuses them. `runs` (`a: [{ automation?, id?, limit?, brief? }]`) is the runs
  * the caller may see (rule 56), live through `sys_run` changes.
@@ -177,45 +196,63 @@ export type QReply = typeof QReply.Type;
  * `/act`: every write, action, `start` and approval decision; the key rides `Idempotency-Key` (rule 31). A model's
  * callable is `<model>.<name>`; the others are `OwnCall`'s.
  */
-export const ActBody = Schema.Struct({
+export const WriteMapBody = Schema.Struct({
+	acts: Schema.Record(Schema.String, Schema.Json),
+	issued_at: Schema.String
+});
+export type WriteMapBody = typeof WriteMapBody.Type;
+/** Platform and agent commands have their own input codecs and capabilities. */
+export const CommandBody = Schema.Struct({
 	callable: Schema.String,
 	input: Schema.Json,
-	issuedAt: Schema.String,
-	observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number)),
-	onConflict: Schema.optionalKey(Schema.Literals(['update', 'keep']))
+	issued_at: Schema.String,
+	observed: Schema.optionalKey(Schema.Record(Schema.String, Schema.Number))
 });
+export const ActBody = Schema.Union([WriteMapBody, CommandBody]);
 export type ActBody = typeof ActBody.Type;
+/** Native manual sync control; sync identities never enter the author callable namespace. */
+export const SyncControlBody = Schema.Struct({
+	model: Schema.String,
+	sync: Schema.String,
+	id: Schema.String,
+	input: Schema.Json,
+	issued_at: Schema.String
+});
+export type SyncControlBody = typeof SyncControlBody.Type;
 
 /** A refusal's code (rule 32): an authored `refused` or one of the platform's (`PlatformRefusal`). */
-const REFUSAL_CODES = [
+export const REFUSAL_CODES = [
 	'refused',
 	'locked',
-	'sourceChanged',
+	'source_changed',
 	'timeout',
 	'unsupported',
-	'readBudgetExceeded',
+	'read_budget_exceeded',
 	'forbidden',
-	'notFound',
-	'invalidInput',
+	'not_found',
+	'invalid_input',
 	'unique',
 	'check',
 	'overlap',
-	'missingRef',
+	'missing_ref',
 	'restricted',
 	'required',
 	'overflow',
-	'rateLimited',
-	'keyReuse',
-	'approvalSplit',
-	'releaseChanged',
+	'rate_limited',
+	'key_reuse',
+	'approval_split',
+	/** The act names a contract this workspace no longer runs; reload the page. */
+	'release_changed',
+	/** An `issued_at` older than 23 hours or more than five minutes ahead. */
 	'expired',
+	/** Tenant-code exceptions and guest budgets. */
 	'internal',
-	'cpuBudget',
-	'crossingBudget',
+	'cpu_budget',
+	'crossing_budget',
 	'memory',
-	'tooLarge'
+	'too_large'
 ] as const;
-const Written = Schema.Array(
+export const Written = Schema.Array(
 	Schema.Struct({ model: Schema.String, id: Schema.String, revision: Schema.Number })
 );
 /** A write's outcome (rule 32), told apart by `kind`: what the engine stores and replays for an idempotency key. */
@@ -230,32 +267,27 @@ export const WriteOutcome = Schema.Union([
 		)
 	}),
 	Schema.Struct({
-		kind: Schema.Literal('pendingApproval'),
-		requestId: Schema.String,
+		kind: Schema.Literal('pending_approval'),
+		request_id: Schema.String,
 		records: Written
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('refused'),
 		code: Schema.Literals(REFUSAL_CODES),
+		/** The text a person reads; an authored refusal's catalogue `key` and `values` rendered it. */
 		message: Schema.String,
+		key: Schema.optionalKey(Schema.String),
+		values: Schema.optionalKey(MessageValues),
 		field: Schema.optionalKey(Schema.String),
-		/** The write path a refused field belongs to (`'orders.lines'`); absent on the root. */
-		path: Schema.optionalKey(Schema.String),
 		row: Schema.optionalKey(Schema.Number),
 		rows: Schema.optionalKey(Schema.Array(Schema.Number)),
 		/** The tenant code that refused — `'<model>.transform'` or `'<model>.<action>'`. */
 		rule: Schema.optionalKey(Schema.String),
-		data: Schema.optionalKey(Schema.Struct({ requestId: Schema.String }))
+		data: Schema.optionalKey(Schema.Struct({ request_id: Schema.String }))
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('conflict'),
-		records: Schema.Array(
-			Schema.Struct({
-				model: Schema.String,
-				id: Schema.String,
-				fields: Schema.Array(Schema.String)
-			})
-		)
+		records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String }))
 	}),
 	Schema.Struct({ kind: Schema.Literal('unknown'), invocation: Schema.String })
 ]);
@@ -287,7 +319,7 @@ export const LiveBody = Schema.Struct({
 	drop: Schema.optionalKey(Schema.Array(Schema.String))
 });
 export type LiveBody = typeof LiveBody.Type;
-/** `subscriptionTooLarge`, `tooManySubscriptions`, `cellBudget`, or an engine failure's code. */
+/** `subscription_too_large`, `too_many_subscriptions`, `cell_budget`, or an engine failure's code. */
 export const LiveErrorCode = Schema.String;
 export type LiveErrorCode = typeof LiveErrorCode.Type;
 export const LiveReply = Schema.Struct({
@@ -304,7 +336,8 @@ export const PatchOp = Schema.Union([
 	Schema.Struct({ op: Schema.Literal('upsert'), index: Schema.Number, row: Schema.Json }),
 	Schema.Struct({ op: Schema.Literal('remove'), id: Schema.String }),
 	/** One top-level value of a page beside its rows (a transcript's conversation `status`), set without a re-read. */
-	Schema.Struct({ op: Schema.Literal('meta'), key: Schema.String, value: Schema.Json })
+	Schema.Struct({ op: Schema.Literal('meta'), key: Schema.String, value: Schema.Json }),
+	Schema.Struct({ op: Schema.Literal('unset'), key: Schema.String })
 ]);
 export type PatchOp = typeof PatchOp.Type;
 export const Frame = Schema.Union([
@@ -322,7 +355,8 @@ export const Frame = Schema.Union([
 		t: Schema.Literal('patch'),
 		view: Schema.String,
 		v: Schema.Number,
-		ops: Schema.Array(PatchOp)
+		ops: Schema.Array(PatchOp),
+		arrivals: Schema.optionalKey(Schema.Array(Schema.Json))
 	}),
 	Schema.Struct({
 		t: Schema.Literal('error'),
@@ -350,7 +384,7 @@ export type NoticeRow = typeof NoticeRow.Type;
 const ApnsKeys = Schema.Struct({
 	topic: Schema.NonEmptyString,
 	environment: Schema.Literals(['development', 'production']),
-	teamId: Schema.NonEmptyString
+	team_id: Schema.NonEmptyString
 });
 /**
  * `POST /__bolt/push`: `{ endpoint, remove: true }`; a browser `PushSubscription.toJSON()` (kind `web`); or a native
@@ -415,16 +449,19 @@ export const AgentRow = Schema.Struct({
 	receipts: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
-				outcome: Schema.Literals(['committed', 'pendingApproval']),
+				outcome: Schema.Literals(['committed', 'pending_approval']),
 				callable: Schema.String,
 				records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String })),
-				requestId: Schema.optionalKey(Schema.String)
+				request_id: Schema.optionalKey(Schema.String)
 			})
 		)
 	),
 	usage: Schema.optionalKey(Usage),
-	/** A sub-agent's reply that is a question to its delegating agent (`ask_parent`), not its answer. */
+	/** A question to the person, or to a sub-agent's delegating agent. */
 	asked: Schema.optionalKey(Schema.Literal(true)),
+	question: Schema.optionalKey(AgentQuestion),
+	answered: Schema.optionalKey(Schema.Literal(true)),
+	answer_to: Schema.optionalKey(Schema.String),
 	/** A sub-agent's report in its parent (tag `report`): which sub-agent, and whether it asks something. */
 	report: Schema.optionalKey(
 		Schema.Struct({
@@ -436,7 +473,7 @@ export const AgentRow = Schema.Struct({
 	author: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	detail: Schema.optionalKey(Schema.String),
 	about: Schema.optionalKey(Schema.Json),
-	/** The files a message carries (`id` when stored, for `fileUrl`). */
+	/** The files a message carries (`id` when stored, for `file_url`). */
 	files: Schema.optionalKey(
 		Schema.mutable(
 			Schema.Array(
@@ -452,6 +489,7 @@ export const AgentRow = Schema.Struct({
 	tool: Schema.optionalKey(
 		Schema.Struct({
 			name: Schema.String,
+			behavior: ToolBehavior,
 			failed: Schema.Boolean,
 			child: Schema.optionalKey(Schema.String),
 			runs: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -466,7 +504,7 @@ export const AgentRow = Schema.Struct({
 			/** A current-tab action this step requested (a closed vocabulary: click, scroll, back/forward). */
 			page: Schema.optionalKey(PageAction),
 			/** The active tab's answer to that request, written by the client after it acts. */
-			pageResult: Schema.optionalKey(PageResult),
+			page_result: Schema.optionalKey(PageResult),
 			/** What a Studio result says it shows (environment, release, commit, message, branch, url, viewport, capturedAt), for its caption. */
 			about: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 			/** A source edit's files and compact diffs, kept whole beside a clipped result for the panel's Changes tab. */
@@ -543,6 +581,7 @@ const LocalFilterField = Schema.Struct({
 	kind: Schema.Literals(['text', 'number', 'bool']),
 	optional: Schema.optionalKey(Schema.Boolean)
 });
+export type LocalFilterField = typeof LocalFilterField.Type;
 const Conversation = { conversation: Schema.String };
 const Message = { message: Schema.String };
 const ConversationIn = Schema.Struct(Conversation),
@@ -550,36 +589,28 @@ const ConversationIn = Schema.Struct(Conversation),
 const Notify = Schema.Struct({ ...Conversation, text: Schema.String });
 const StartRun = Schema.Struct({ input: Schema.optionalKey(Schema.Json), id: Schema.String });
 /** One run (`id`, `input`) or many (`runs`, a bulk start in one request: one run per record). */
-const Start = Schema.Union([
+const Run = Schema.Union([
 	Schema.Struct({ automation: Schema.String, ...StartRun.fields }),
-	Schema.Struct({ automation: Schema.String, runs: Schema.NonEmptyArray(StartRun) })
+	Schema.Struct({ automation: Schema.String, runs: Schema.NonEmptyArray(StartRun) }),
+	Schema.Struct({ automation: Schema.String, input: Schema.optionalKey(Schema.Json) })
 ]);
 export const Decide = Schema.Struct({
-	requestId: Schema.String,
-	decision: Schema.Literals(['approve', 'reject', 'requestChanges', 'withdraw']),
+	request_id: Schema.String,
+	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'withdraw']),
 	reason: tolerant(Schema.String)
 });
 const ConvertSource = Schema.Union([
 	Schema.Struct({ html: Schema.String }),
-	Schema.Struct({ layoutHtml: Schema.String }),
+	Schema.Struct({ layout_html: Schema.String }),
 	Schema.Struct({ markdown: Schema.String })
 ]);
 const PdfOptions = {
-	page: Schema.optionalKey(Schema.Literals(['A4', 'A3', 'Letter'])),
+	page: Schema.optionalKey(Schema.Literals(PAPER_SIZES)),
 	landscape: Schema.optionalKey(Schema.Boolean)
 };
 export const PreviewPdf = Schema.Struct({
 	source: ConvertSource,
 	options: Schema.Struct(PdfOptions)
-});
-const ConvertDocument = Schema.Struct({
-	source: ConvertSource,
-	request: Schema.Struct({
-		to: Schema.Literals(CONVERT_TARGETS),
-		name: Schema.String,
-		...PdfOptions,
-		reference: Schema.optionalKey(Schema.Struct({ id: Schema.String }))
-	})
 });
 const Describe = Schema.Struct({
 	model: Schema.String,
@@ -593,6 +624,8 @@ const Options = Schema.Struct({
 const PostFields = Schema.Struct({
 	...Conversation,
 	text: Schema.String,
+	/** Answer this question once, in the same commit as the message. */
+	question: Schema.optionalKey(Schema.String),
 	attachments: Schema.optionalKey(Schema.Array(Schema.Json)),
 	/** `compact` is `/compact`; `plan` plans; anything else is the agent. */
 	mode: tolerant(Schema.Literals(['agent', 'plan', 'compact'])),
@@ -611,7 +644,7 @@ const Post = PostFields.check(
 );
 const SetModel = Schema.Struct({ ...Conversation, model: Schema.String });
 const SetAgent = Schema.Struct({ ...Conversation, agent: Schema.String });
-const Revise = Schema.Struct({ ...Message, text: Schema.String.check(Schema.isPattern(/\S/)) });
+const Revise = Schema.Struct({ ...Message, text: Schema.String, attachments: Schema.optionalKey(Schema.Array(Schema.Json)) });
 const Reorder = Schema.Struct({ ...Conversation, messages: Schema.Array(Schema.String) });
 const FileAbout = Schema.Struct({
 	...Message,
@@ -634,9 +667,8 @@ const own = <C extends string, I extends Schema.Constraint>(callable: C, input: 
 	Schema.Struct({ callable: Schema.Literal(callable), input });
 /** An own callable's call, decoded by `callable`. */
 export const OwnCall = Schema.Union([
-	own('start', Start),
+	own('run', Run),
 	own('approvals.decide', Decide),
-	own('convert.document', ConvertDocument),
 	own('filter.describe', Describe),
 	own('filter.options', Options),
 	/** Never refused: what does not decode starts a conversation with the defaults. */
@@ -648,19 +680,20 @@ export const OwnCall = Schema.Union([
 	),
 	own('sys_message.post', Post),
 	own('sys_conversation.notify', Notify),
-	own('sys_conversation.respondNow', ConversationIn),
+	own('sys_conversation.respond_now', ConversationIn),
 	own('sys_conversation.stop', ConversationIn),
 	own('sys_conversation.resume', ConversationIn),
-	own('sys_conversation.setModel', SetModel),
-	own('sys_conversation.setAgent', SetAgent),
+	own('sys_conversation.set_model', SetModel),
+	own('sys_conversation.set_agent', SetAgent),
 	own('sys_message.revise', Revise),
+	own('sys_message.restart', MessageIn),
 	own('sys_message.dequeue', MessageIn),
 	own('sys_message.reorder', Reorder),
-	own('sys_message.executePlan', ConversationIn),
-	own('sys_message.discardPlan', ConversationIn),
+	own('sys_message.execute_plan', ConversationIn),
+	own('sys_message.discard_plan', ConversationIn),
 	own('sys_message.file', FileAbout),
-	own('sys_message.markRead', ConversationIn),
-	own('sys_notification.markRead', MarkNotices),
+	own('sys_message.mark_read', ConversationIn),
+	own('sys_notification.mark_read', MarkNotices),
 	own('sys_message.confirm', Confirm),
 	own('history.preview', RestoreTarget),
 	own('history.restore', RestoreTarget)
@@ -673,13 +706,10 @@ const conversationFirst: Check = [ConversationIn, 'this call takes { conversatio
 	messageFirst: Check = [MessageIn, 'this call takes { message }'];
 /** Each own callable's checks of its input, in the order its sender has always met them, each with its refusal. */
 const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = {
-	start: [
-		[Start, 'start takes { automation, input, id } or { automation, runs: [{ input, id }] }']
+	run: [
+		[Run, 'run takes { automation, input, id } or { automation, runs: [{ input, id }] }']
 	],
-	'approvals.decide': [[Decide, 'approvals.decide takes { requestId, decision, reason? }']],
-	'convert.document': [
-		[ConvertDocument, 'convert.document takes { source, request: { to, name } }']
-	],
+	'approvals.decide': [[Decide, 'approvals.decide takes { request_id, decision, reason? }']],
 	'filter.describe': [
 		[
 			Schema.Struct({ model: Schema.String, text: Schema.String }),
@@ -698,33 +728,34 @@ const CHECKS: { readonly [C in RefusableCall]: readonly [Check, ...Check[]] } = 
 		conversationFirst,
 		[Notify, 'sys_conversation.notify takes { conversation, text }']
 	],
-	'sys_conversation.respondNow': [
-		[ConversationIn, 'sys_conversation.respondNow takes { conversation }']
+	'sys_conversation.respond_now': [
+		[ConversationIn, 'sys_conversation.respond_now takes { conversation }']
 	],
 	'sys_conversation.stop': [conversationFirst],
 	'sys_conversation.resume': [conversationFirst],
-	'sys_conversation.setModel': [
+	'sys_conversation.set_model': [
 		conversationFirst,
-		[SetModel, 'sys_conversation.setModel takes { conversation, model }']
+		[SetModel, 'sys_conversation.set_model takes { conversation, model }']
 	],
-	'sys_conversation.setAgent': [
+	'sys_conversation.set_agent': [
 		conversationFirst,
-		[SetAgent, 'sys_conversation.setAgent takes { conversation, agent }']
+		[SetAgent, 'sys_conversation.set_agent takes { conversation, agent }']
 	],
-	'sys_message.revise': [messageFirst, [Revise, 'sys_message.revise takes { message, text }']],
+	'sys_message.revise': [messageFirst, [Revise, 'sys_message.revise takes { message, text, attachments? }']],
+	'sys_message.restart': [messageFirst],
 	'sys_message.dequeue': [messageFirst],
 	'sys_message.reorder': [
 		conversationFirst,
 		[Reorder, 'sys_message.reorder takes { conversation, messages }']
 	],
-	'sys_message.executePlan': [conversationFirst],
-	'sys_message.discardPlan': [conversationFirst],
+	'sys_message.execute_plan': [conversationFirst],
+	'sys_message.discard_plan': [conversationFirst],
 	'sys_message.file': [
 		[FileAbout, 'sys_message.file takes { message, about: { model, id } | null }']
 	],
-	'sys_message.markRead': [conversationFirst],
-	'sys_notification.markRead': [
-		[MarkNotices, 'sys_notification.markRead takes { ids } or { all: true }']
+	'sys_message.mark_read': [conversationFirst],
+	'sys_notification.mark_read': [
+		[MarkNotices, 'sys_notification.mark_read takes { ids } or { all: true }']
 	],
 	'sys_message.confirm': [[Confirm, 'sys_message.confirm takes { message, approve }']],
 	'history.preview': [[RestoreTarget, 'history.preview takes { model, record, revision }']],
@@ -773,19 +804,19 @@ export const SetupField = Schema.Struct({
 export type SetupField = typeof SetupField.Type;
 /**
  * One instruction, in order. `href` is where to do it (the provider's console); `copy` a value to paste there: the
- * instance's `webhookUrl`, or `redirectUrl` (the host's one OAuth callback, to register with an OAuth app once).
+ * instance's `webhook_url`, or `redirect_url` (the host's one OAuth callback, to register with an OAuth app once).
  */
 export const SetupStep = Schema.Struct({
 	text: LocalText,
 	href: tolerant(Schema.String),
-	copy: tolerant(Schema.Literals(['webhookUrl', 'redirectUrl']))
+	copy: tolerant(Schema.Literals(['webhook_url', 'redirect_url']))
 });
 export type SetupStep = typeof SetupStep.Type;
 /**
  * How a provider is set up, as data the shell renders with no provider-named component (P18). `kind` is what `pair`
  * takes: `form` sends `fields`; `qr`/`code` sends the optional `fields` and then shows what `pairing` publishes; `oauth`
  * sends nothing and publishes a sign-in; `none` needs nothing. A `qr`, `code` or `oauth` setup starts on Connect.
- * `webhook`: the operator pastes `about.webhookUrl` into the provider.
+ * `webhook`: the operator pastes `about.webhook_url` into the provider.
  */
 export const SetupDescription = Schema.Struct({
 	kind: Schema.Literals(['form', 'qr', 'code', 'oauth', 'none']),
@@ -825,7 +856,7 @@ export const ImportStart = Schema.Union([
 	}),
 	Schema.Struct({
 		kind: Schema.Literal('native'),
-		selectedAt: ImportInstant,
+		selected_at: ImportInstant,
 		provider: Schema.String,
 		values: Schema.Record(Schema.String, Schema.String)
 	})
@@ -856,7 +887,7 @@ export const ProviderChoice = Schema.Struct({
 	id: Schema.String,
 	label: LocalText,
 	setup: SetupDescription,
-	importStart: Schema.optionalKey(ImportStartCapability),
+	import_start: Schema.optionalKey(ImportStartCapability),
 	/** Short catalogue name; the full registration label remains in `label`. */
 	name: tolerant(LocalText),
 	/** Concise catalogue description, localized by the authored surface. */
@@ -897,7 +928,7 @@ export const Pairing = Schema.Struct({
 		Schema.withDecodingDefaultKey(Effect.succeed(null))
 	),
 	/** The provider's own deadline for `value` (ISO), when it publishes one. */
-	expiresAt: tolerant(Schema.String),
+	expires_at: tolerant(Schema.String),
 	/** What to call the field, for `credential` (a Telegram bot token is not "credential"); `oauth`: the sign-in button. */
 	label: tolerant(Schema.String),
 	/** `form`: what to collect, sent back as `{ [name]: value }`. */
@@ -915,9 +946,9 @@ const LinkStatusFields = {
 	/** A terminal error's kind (`replaced`, `loggedOut`, `forbidden`, …), for a notice that names its action. */
 	code: tolerant(Schema.String),
 	/** The provider's last disconnect (its code, tag and instant). */
-	lastDisconnect: Schema.optionalKey(Schema.Json),
+	last_disconnect: Schema.optionalKey(Schema.Json),
 	/**
-	 * Facts the connected view shows generically: `webhookUrl`, `address` (email), `botName`, `workspace`/`team` (Slack),
+	 * Facts the connected view shows generically: `webhook_url`, `address` (email), `botName`, `workspace`/`team` (Slack),
 	 * `guilds`/`inviteUrl` (Discord), `account` (WeChat), `from` (Twilio number).
 	 */
 	about: Schema.optionalKey(Schema.Json)
@@ -945,7 +976,7 @@ export const InstanceStatus = Schema.Struct({
 	provider: tolerant(Schema.String),
 	/** What the driver can be set up with on this host; the shell asks which when there are several. */
 	providers: Schema.optionalKey(listOf(ProviderChoice)),
-	importStart: Schema.optionalKey(Schema.NullOr(ImportStart)),
+	import_start: Schema.optionalKey(Schema.NullOr(ImportStart)),
 	/** Present when the connected provider can send a test message: the shell offers Test, asking for `to` when it names one. */
 	test: tolerant(TestSend)
 });
@@ -989,7 +1020,7 @@ const Copy = Schema.String.check(Schema.isPattern(/\S/));
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 /** What the template repositories' gate checks, the website draws and a host's template picker lists. */
 export const TemplateManifest = Schema.Struct({
-	schemaVersion: Schema.Literal(1),
+	schema_version: Schema.Literal(1),
 	/** The workspace handle: the tenant id a host provisions it as (not the directory name). */
 	key: Schema.String.check(Schema.isPattern(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/)),
 	name: Copy,

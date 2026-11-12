@@ -1,6 +1,13 @@
 import { Effect, Schema } from 'effect';
 import type { TenantDbShape } from './db/tenant-db.ts';
 
+const unacknowledged = new WeakMap<TenantDbShape, Set<string>>();
+/** Operations whose terminal events are appended but whose receipts the next commit statement acknowledges. */
+export const acknowledgements = (db: TenantDbShape): Set<string> => {
+	let pending = unacknowledged.get(db);
+	if (pending === undefined) unacknowledged.set(db, (pending = new Set()));
+	return pending;
+};
 /** Acknowledgement follows a durable full external append, never just a prepared intent. */
 export const acknowledgeAudit = (db: TenantDbShape, operation: string) =>
 	db
@@ -18,7 +25,7 @@ export const expireAudit = (db: TenantDbShape, operation: string) =>
 		.returning(Schema.Struct({ operation: Schema.String }), {
 			text: `UPDATE bolt_audit_receipt SET expired_at=clock_timestamp()
 		WHERE operation=$1 AND acknowledged_at IS NULL AND expired_at IS NULL
-		AND coalesce(expires_at,(SELECT expires_at FROM bolt_audit_retention WHERE one))<=clock_timestamp()
+		AND expires_at<=clock_timestamp()
 		RETURNING operation`,
 			params: [operation]
 		})

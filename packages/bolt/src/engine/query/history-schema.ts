@@ -1,68 +1,82 @@
 import { Predicate, Result, Schema } from 'effect';
-import { canonical, FieldSpec, TableSpec, SYSTEM_COLUMNS, type Json } from '@norbital-ai/store';
-import { Decimal, minorDigits } from '@norbital-ai/std/decimal';
-import { encodeWire } from '@norbital-ai/std/wire';
+import { canonical, field_info, FieldSpec, HistoryTableMetadata, SYSTEM_COLUMN_SET, type Json } from '@norbital-ai/store';
+import { Decimal, minor_digits } from '@norbital-ai/std/decimal';
+import { encode_wire } from '@norbital-ai/std/wire';
+import { input_schema } from '@norbital-ai/std/kind';
 import { decodeInput } from '../callables/decode.ts';
 import type { EngineManifest } from '../manifest.ts';
+import { storedWireValue } from '../db/stored.ts';
+import { BoltError } from '../../protocol/errors.ts';
 
 export const HistorySchema = Schema.Struct({
 	id: Schema.String,
 	lineage: Schema.String,
 	model: Schema.String,
-	definition: TableSpec,
+	definition: HistoryTableMetadata,
 	fields: Schema.Record(Schema.String, Schema.String),
 	current: Schema.optionalKey(Schema.Boolean)
 });
 export type HistorySchema = typeof HistorySchema.Type;
-export const SYSTEM_HISTORY_FIELDS = new Set<string>(SYSTEM_COLUMNS);
 export type HistoricalValue = {
-	readonly version: HistorySchema | undefined;
+	readonly version: HistorySchema;
 	readonly field: string;
 	readonly value: Json;
 };
 
-/** Computed values are displayed as they were written, without executing today's expression or tenant renderer. */
+const json_object = (value: Json | undefined): value is Readonly<Record<string, Json>> =>
+	value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value);
+const json_list = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
+const decode_kind = Schema.decodeUnknownResult(FieldSpec, { onExcessProperty: 'error' });
+/** Project only validated current reference metadata for display; unsupported archived descriptors stay raw. */
+function historical_descriptor(value: Json): Json {
+	if (!json_object(value)) return value;
+	const descriptor: Record<string, Json> = { ...value };
+	if (value['kind'] === 'ref' && Result.isSuccess(decode_kind(value)))
+		for (const key of ['on_delete', 'owned', 'inverse', 'where']) delete descriptor[key];
+	const fields = (members: Json): Json => !json_object(members) ? members
+		: Object.fromEntries(Object.entries(members).map(([name, kind]) => [name, historical_descriptor(kind)]));
+	if (value['kind'] === 'object') {
+		if (value['fields'] !== undefined) descriptor['fields'] = fields(value['fields']);
+		if (value['rest'] !== undefined) descriptor['rest'] = historical_descriptor(value['rest']);
+	} else if (value['kind'] === 'union') {
+		if (json_object(value['arms'])) descriptor['arms'] = Object.fromEntries(Object.entries(value['arms']).map(([tag, members]) => [tag, fields(members)]));
+		if (json_list(value['of'])) descriptor['of'] = value['of'].map(historical_descriptor);
+	} else if (value['kind'] === 'record' && value['of'] !== undefined)
+		descriptor['of'] = historical_descriptor(value['of']);
+	else if (value['kind'] === 'json' && value['shape'] !== undefined)
+		descriptor['shape'] = historical_descriptor(value['shape']);
+	return descriptor;
+}
+const ComputedHistoryKind = Schema.Struct({
+	kind: Schema.Literals(['text', 'int', 'decimal', 'money', 'bool', 'date', 'instant']),
+	scale: Schema.optionalKey(Schema.Number)
+});
+/** Computed values are displayed as written, without executing an archived expression or tenant renderer. */
 export function historyKinds(version: HistorySchema): Readonly<Record<string, FieldSpec>> {
-	return {
-		...version.definition.fields,
-		...Object.fromEntries(
-			Object.entries(version.definition.computed ?? {}).map(([name, spec]) => [
-				name,
-				spec.kind === 'decimal' ? { kind: spec.kind, scale: spec.scale ?? 2 } : { kind: spec.kind }
-			])
-		)
-	};
+	const kinds: Record<string, FieldSpec> = {};
+	for (const [name, archived] of Object.entries(version.definition.fields)) {
+		const kind = decode_kind(historical_descriptor(archived));
+		if (Result.isSuccess(kind)) kinds[name] = kind.success;
+	}
+	for (const [name, archived] of Object.entries(version.definition.computed ?? {})) {
+		const spec = Schema.decodeUnknownResult(ComputedHistoryKind)(archived);
+		if (Result.isSuccess(spec)) kinds[name] = spec.success.kind === 'decimal'
+			? { kind: 'decimal', scale: spec.success.scale ?? 2 } : { kind: spec.success.kind };
+	}
+	return kinds;
 }
 
 export function historicalValue(kind: FieldSpec | undefined, value: Json): Json {
-	if (value === null || kind === undefined) return value;
-	if (
-		['decimal', 'money', 'sum'].includes(kind.kind) &&
-		(typeof value === 'number' || typeof value === 'string')
-	)
-		return { $dec: String(value) };
-	if (kind.kind === 'instant' && typeof value === 'string') {
-		const date = new Date(value);
-		return Number.isNaN(date.valueOf()) ? value : date.toISOString();
-	}
-	if (kind.kind === 'point' && typeof value === 'string') {
-		const point = /^\(([-+.\deE]+),([-+.\deE]+)\)$/.exec(value);
-		if (point !== null) return { lng: Number(point[1]), lat: Number(point[2]) };
-	}
-	if (kind.kind === 'vector' && typeof value === 'string') {
-		const decoded = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json))(value);
-		if (Result.isSuccess(decoded)) return decoded.success;
-	}
-	return value;
+	return kind === undefined ? value : storedWireValue(field_info('', kind), value) ?? value;
 }
 
 /** Decode physical reference arms once, and fold changes by stable identity instead of mutable field names. */
 export function historyChanges(
-	version: HistorySchema | undefined,
+	version: HistorySchema,
 	changes: Readonly<Record<string, Json>>
-): ReadonlyMap<string, HistoricalValue> {
-	const values = new Map<string, HistoricalValue>();
-	const kinds = version === undefined ? {} : historyKinds(version);
+): ReadonlyMap<string, HistoricalValue> | BoltError {
+	const changed = new Map<string, Json>();
+	const kinds = historyKinds(version);
 	const consumed = new Set<string>();
 	for (const [name, kind] of Object.entries(kinds)) {
 		const targets =
@@ -83,39 +97,51 @@ export function historyChanges(
 			typeof kind.to !== 'string' &&
 			kind.to.length === 1 &&
 			typeof value === 'string'
-		)
-			value = { model: kind.to[0] ?? '', id: value };
+		) {
+			const [target] = kind.to;
+			if (target === undefined)
+				return BoltError.make('schema', 'decode', `History schema ${version.id} has an invalid reference descriptor.`);
+			value = { model: target, id: value };
+		}
 		if (value === undefined) continue;
 		consumed.add(name);
-		values.set(version?.fields[name] ?? `legacy:${name}`, {
-			version,
-			field: name,
-			value: historicalValue(kind, value)
-		});
+		changed.set(name, historicalValue(kind, value));
 	}
 	for (const [name, value] of Object.entries(changes))
-		if (!consumed.has(name)) values.set(`legacy:${name}`, { version, field: name, value });
+		if (!consumed.has(name)) changed.set(name, value);
+	const values = new Map<string, HistoricalValue>();
+	for (const [field, value] of changed) {
+		const identity = SYSTEM_COLUMN_SET.has(field) ? `system:${field}` : version.fields[field];
+		if (identity === undefined)
+			return BoltError.make('schema', 'decode', `History schema ${version.id} has no identity for ${field}.`);
+		values.set(identity, { version, field, value });
+	}
 	return values;
 }
 
-const numeric = new Set(['int', 'number', 'decimal', 'money', 'sum', 'count', 'duration']);
+const numeric = new Set(['int', 'number', 'decimal', 'money', 'sum', 'count']);
 /** Only deterministic value-preserving conversions; current validation still decides whether a value is admissible. */
 export function compatibleHistoryValue(
 	value: Json,
-	before: FieldSpec | undefined,
+	before: FieldSpec,
 	after: FieldSpec,
-	customFields?: EngineManifest['customFields']
+	custom_fields?: EngineManifest['custom_fields']
 ): Json | undefined {
-	if (before?.kind === 'custom' && (after.kind !== 'custom' || before.of !== after.of))
+	if (before.kind === 'custom' && (after.kind !== 'custom' || before.of !== after.of))
 		return undefined;
+	// A stored file reference may carry the upload's size and hash metadata.
+	if (after.kind === 'file')
+		return Result.isSuccess(Schema.decodeUnknownResult(input_schema(after))(value))
+			? value
+			: undefined;
 	if (
-		before?.kind === 'money' &&
+		before.kind === 'money' &&
 		after.kind === 'money' &&
 		canonical(before.currency) !== canonical(after.currency)
 	)
 		return undefined;
 	let converted = value;
-	if (value !== null && before?.kind === 'ref') {
+	if (value !== null && before.kind === 'ref') {
 		if (after.kind !== 'ref') return undefined;
 		const target =
 			typeof before.to === 'string'
@@ -129,7 +155,7 @@ export function compatibleHistoryValue(
 		if (typeof target !== 'string' || typeof id !== 'string' || !targets.includes(target))
 			return undefined;
 		converted = typeof after.to === 'string' ? id : { model: target, id };
-	} else if (after.kind === 'ref' && before?.kind !== 'ref' && value !== null) return undefined;
+	} else if (after.kind === 'ref' && before.kind !== 'ref' && value !== null) return undefined;
 	else if (value !== null && numeric.has(after.kind)) {
 		const scalar =
 			Predicate.isObject(value) && typeof value['$dec'] === 'string' ? value['$dec'] : value;
@@ -146,7 +172,7 @@ export function compatibleHistoryValue(
 					: after.kind === 'money'
 						? (after.scale ??
 							(after.currency !== undefined && /^[A-Z]{3}$/.test(after.currency)
-								? minorDigits(after.currency)
+								? minor_digits(after.currency)
 								: undefined))
 						: undefined;
 			if (
@@ -174,9 +200,7 @@ export function compatibleHistoryValue(
 				return undefined;
 			if (Number.isInteger(n) && !Number.isSafeInteger(n)) return undefined;
 			if (
-				((after.kind === 'int' && after.storage !== 'int64') ||
-					after.kind === 'duration' ||
-					after.kind === 'count') &&
+				((after.kind === 'int' && after.storage !== 'int64') || after.kind === 'count') &&
 				(n < -2147483648 || n > 2147483647)
 			)
 				return undefined;
@@ -186,7 +210,6 @@ export function compatibleHistoryValue(
 	} else if (
 		after.kind === 'text' &&
 		after.many !== true &&
-		before !== undefined &&
 		numeric.has(before.kind)
 	) {
 		converted =
@@ -196,34 +219,9 @@ export function compatibleHistoryValue(
 					? null
 					: String(value);
 	}
-	const decoded = decodeInput({ value: after }, { value: converted }, customFields);
+	const decoded = decodeInput({ value: after }, { value: converted }, custom_fields);
 	if (decoded.problems.length > 0 || decoded.value === undefined) return undefined;
-	const encoded = encodeWire(decoded.value);
+	const encoded = encode_wire(decoded.value);
 	return Predicate.isObject(encoded) ? encoded['value'] : undefined;
 }
 
-/** Materialize physical columns only at the restore boundary; the historical view uses its original logical fields. */
-export function historyColumns(
-	kind: FieldSpec | undefined,
-	field: string,
-	value: Json
-): Readonly<Record<string, Json>> {
-	if (kind?.kind === 'ref' && typeof kind.to !== 'string' && kind.to.length === 1)
-		return { [field]: Predicate.isObject(value) ? (value['id'] ?? null) : value };
-	if (kind?.kind === 'ref' && typeof kind.to !== 'string' && kind.to.length > 1)
-		return Object.fromEntries(
-			kind.to.map((target) => [
-				`${field}__${target}`,
-				Predicate.isObject(value) && value['model'] === target ? (value['id'] ?? null) : null
-			])
-		);
-	if (kind?.kind === 'point' && Predicate.isObject(value))
-		return { [field]: `(${value['lng']},${value['lat']})` };
-	if (kind?.kind === 'period' && Predicate.isObject(value)) {
-		if (kind.of === 'date') return { [field]: `[${value['from']},${value['to'] ?? ''}]` };
-		return { [field]: `["${value['start']}",${value['end'] === null ? '' : `"${value['end']}"`})` };
-	}
-	return {
-		[field]: Predicate.isObject(value) && typeof value['$dec'] === 'string' ? value['$dec'] : value
-	};
-}

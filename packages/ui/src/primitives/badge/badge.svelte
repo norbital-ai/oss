@@ -6,7 +6,7 @@ A small label tag in a colour variant.
 	import { type VariantProps, tv } from 'tailwind-variants';
 
 	// Extended badge variants with additional options.
-	export const badgeVariants = tv({
+	export const badge_variants = tv({
 		base: 'focus:ring-ring focus:ring-offset-background inline-flex items-center rounded-badge border px-2 py-0.5 text-xs leading-4 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2',
 		variants: {
 			variant: {
@@ -26,7 +26,7 @@ A small label tag in a colour variant.
 	});
 
 	/** The colour variants of `Badge`. */
-	export type BadgeVariant = VariantProps<typeof badgeVariants>['variant'];
+	export type BadgeVariant = VariantProps<typeof badge_variants>['variant'];
 </script>
 
 <script lang="ts">
@@ -51,7 +51,7 @@ A small label tag in a colour variant.
 	bind:this={ref}
 	{href}
 	class={/* repository-health:allow UI25 -- the badge recipe is a tailwind-variants `tv()` whose literal classes live in the module script */ cn(
-		badgeVariants({ variant }),
+		badge_variants({ variant }),
 		className
 	)}
 	{...restProps}

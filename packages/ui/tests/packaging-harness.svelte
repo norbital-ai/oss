@@ -1,20 +1,21 @@
 <script lang="ts" module>
+	import type { UiContext } from '../src/client/contract.js';
 	import type { ComponentProps } from 'svelte';
 	import type { KindsHost } from '../src/kinds/context.js';
 	import type { ViewBolt } from '../src/client/contract.js';
 	import NativeTable, { type TableSource } from '../src/table/Table.svelte';
 	const Table = NativeTable<TableSource>;
 	export type PackagingPart =
-		| { part: 'form'; props: ComponentProps<typeof Form> }
-		| { part: 'table'; props: ComponentProps<typeof Table> }
-		| { part: 'show'; props: ComponentProps<typeof Show> }
-		| { part: 'record'; props: ComponentProps<typeof RecordShell> }
-		| { part: 'controls'; props: ComponentProps<typeof Controls> };
+		| { part: 'form'; props: Omit<ComponentProps<typeof Form>, 'ctx'> }
+		| { part: 'table'; props: Omit<ComponentProps<typeof Table>, 'ctx'> }
+		| { part: 'show'; props: Omit<ComponentProps<typeof Show>, 'ctx'> }
+		| { part: 'record'; props: Omit<ComponentProps<typeof RecordShell>, 'ctx'> }
+		| { part: 'controls'; props: Omit<ComponentProps<typeof Controls>, 'ctx'> };
 	export type PackagingHarnessProps = PackagingPart & {
 		bolt: ViewBolt;
 		catalog: NonNullable<KindsHost['catalog']>;
-		customFields?: KindsHost['customFields'];
-		representations?: Parameters<typeof provideRepresentations>[0];
+		customFields?: KindsHost['custom_fields'];
+		representations?: Parameters<typeof provide_representations>[0];
 	};
 </script>
 
@@ -22,35 +23,31 @@
 	// Mounts one kit part under a scripted `bolt`, catalog, custom fields and representation registry.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
-	import { mountEdge } from '../src/effect/index.js';
-	import { provideKinds } from '../src/kinds/context.js';
+	import { mount_edge } from '../src/effect/index.js';
 	import Show from '../src/kinds/show.svelte';
 	import Controls from './controls-harness.svelte';
 	import Form from '../src/form/form.svelte';
-	import { provideBolt } from '../src/client/context.js';
-	import { provideRepresentations } from '../src/record/context.js';
+	import { provide_representations } from '../src/record/context.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 
 	let fixture: PackagingHarnessProps = $props();
-	onDestroy(mountEdge(ManagedRuntime.make(Layer.empty)));
+	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provideBolt(fixture.bolt);
-	// svelte-ignore state_referenced_locally
-	provideKinds({
+	const ctx: UiContext = { ui: { bolt: fixture.bolt, kinds: {
 		get catalog() {
 			return fixture.catalog;
 		},
-		get customFields() {
+		get custom_fields() {
 			return fixture.customFields;
 		},
 		query: (request) => fixture.bolt.query(request)
-	});
+	} } };
 	// svelte-ignore state_referenced_locally
-	provideRepresentations(fixture.representations ?? {});
+	provide_representations(fixture.representations ?? {});
 </script>
 
-{#if fixture.part === 'form'}<Form {...fixture.props} />
-{:else if fixture.part === 'table'}<Table {...fixture.props} />
-{:else if fixture.part === 'show'}<Show {...fixture.props} />
-{:else if fixture.part === 'controls'}<Controls {...fixture.props} />
-{:else}<RecordShell {...fixture.props} />{/if}
+{#if fixture.part === 'form'}<Form {ctx} {...fixture.props} />
+{:else if fixture.part === 'table'}<Table {ctx} {...fixture.props} />
+{:else if fixture.part === 'show'}<Show {ctx} {...fixture.props} />
+{:else if fixture.part === 'controls'}<Controls {ctx} {...fixture.props} />
+{:else}<RecordShell {ctx} {...fixture.props} />{/if}

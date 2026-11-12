@@ -1,12 +1,11 @@
 import { Effect } from 'effect';
+import { q, literal as lit } from '@norbital-ai/std/sql';
 import { StoreError } from '../errors.ts';
 import type { Sql } from '../read/sql.ts';
 import type { Json } from '../values.ts';
 import {
-	logLiteral as lit,
-	logName as q,
-	logPath,
-	logSpec,
+	log_path,
+	log_spec,
 	type AppendOnlyLogSpec
 } from './spec.ts';
 
@@ -21,13 +20,13 @@ export type LogQuery = {
 	readonly exact?: readonly { readonly path: readonly string[]; readonly value: string }[];
 };
 const invalid = (message: string) =>
-	StoreError.of('invalidInput', 'decode', `append-only log: ${message}`);
+	StoreError.of('invalid_input', 'decode', `append-only log: ${message}`);
 const instant = (value: string) => Number.isFinite(Date.parse(value));
 
 /** Prepared operations share the declaration's scope, retention, JSON paths and native maintenance policy. */
-export const logStatements = (input: AppendOnlyLogSpec) =>
+export const log_statements = (input: AppendOnlyLogSpec) =>
 	Effect.gen(function* () {
-		const spec = yield* logSpec(input),
+		const spec = yield* log_spec(input),
 			ns = q(spec.namespace),
 			table = `${ns}.event`,
 			retired = `${ns}.tenant_retirement`;
@@ -76,7 +75,7 @@ export const logStatements = (input: AppendOnlyLogSpec) =>
 				for (const filter of query.exact ?? []) {
 					if (!allowed.has(JSON.stringify(filter.path)))
 						return yield* invalid('filter path has no declared log index');
-					where.push(`${logPath(filter.path, 'r.event')}=${bind(filter.value)}`);
+					where.push(`${log_path(filter.path, 'r.event')}=${bind(filter.value)}`);
 				}
 				if (query.since !== undefined)
 					where.push(`r.occurred_at>=${bind(query.since, 'timestamptz')}`);
@@ -92,13 +91,13 @@ export const logStatements = (input: AppendOnlyLogSpec) =>
 						`(r.occurred_at,r.id) ${order === 'ASC' ? '>' : '<'} (${bind(query.after.at, 'timestamptz')},${bind(query.after.id)})`
 					);
 				if (pending) {
-					where.push(`${logPath(spec.pending.status, 'r.event')}=${lit(spec.pending.prepared)}`);
+					where.push(`${log_path(spec.pending.status, 'r.event')}=${lit(spec.pending.prepared)}`);
 					where.push(
 						`NOT EXISTS (SELECT 1 FROM ${table} terminal WHERE ${[
 							...spec.scope.map((field) => `terminal.${q(field)}=r.${q(field)}`),
-							`terminal.id=(${logPath(spec.pending.operation, 'r.event')}) || ${lit(spec.pending.terminalSuffix)}`,
-							`${logPath(spec.pending.operation, 'terminal.event')}=${logPath(spec.pending.operation, 'r.event')}`,
-							`${logPath(spec.pending.status, 'terminal.event')} NOT IN (${spec.pending.unresolved.map(lit).join(',')})`,
+							`terminal.id=(${log_path(spec.pending.operation, 'r.event')}) || ${lit(spec.pending.terminalSuffix)}`,
+							`${log_path(spec.pending.operation, 'terminal.event')}=${log_path(spec.pending.operation, 'r.event')}`,
+							`${log_path(spec.pending.status, 'terminal.event')} NOT IN (${spec.pending.unresolved.map(lit).join(',')})`,
 							retained('terminal')
 						].join(' AND ')})`
 					);
@@ -140,7 +139,7 @@ export const logStatements = (input: AppendOnlyLogSpec) =>
 						params: [...scope, JSON.stringify(events)]
 					} satisfies Sql;
 				}),
-			isRetired: (scope: readonly string[]) => {
+			is_retired: (scope: readonly string[]) => {
 				if (!spec.retirement || scope.length !== 2 || scope.some((value) => value === ''))
 					return Effect.fail(invalid('retirement needs partition and tenant'));
 				return Effect.succeed({

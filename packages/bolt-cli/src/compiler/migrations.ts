@@ -3,25 +3,25 @@ import { Effect, FileSystem, Path, Result, Schema } from 'effect';
 import {
 	INTROSPECT,
 	IntrospectRow,
-	archiveOf,
+	archive_of,
 	build,
 	canonical,
-	checkFile,
-	checkSquashSources,
-	checksumOf,
+	check_file,
+	check_squash_sources,
+	checksum_of,
 	executable,
 	generate,
-	generateSquash,
+	generate_squash,
 	pending,
-	physicalHash,
-	physicalDefinitionsOf,
+	physical_hash,
+	physical_definitions_of,
 	q,
-	readLock,
-	readPhysicalDefinitions,
-	readSnapshot,
-	sha256Hex,
+	read_lock,
+	read_physical_definitions,
+	read_snapshot,
+	sha256_hex,
 	verify,
-	verifySquash,
+	verify_squash,
 	type MigrationLock,
 	type MigrationFile,
 	type PhysicalDefinitions,
@@ -29,17 +29,15 @@ import {
 	type SquashReceipt
 } from '@norbital-ai/store';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
+import type { SchemaSlice } from '@norbital-ai/bolt/tooling';
 import {
-	migrationLines,
-	readMigrationSources,
-	managedTables,
-	historySchemaObjects,
-	HISTORY_SCHEMA_TABLES,
-	fromStore,
-	PgliteDb,
-	Pristine
+	migration_lines,
+	read_migration_sources,
+	history_schema_objects,
+	from_store
 } from '@norbital-ai/bolt/tooling';
-import { migrationObjects, migrationSchema, BoltError } from '@norbital-ai/bolt/engine';
+import { PgliteDb, Pristine } from '@norbital-ai/bolt/node';
+import { migration_objects, migration_schema, BoltError } from '@norbital-ai/bolt/engine';
 
 /** `function <name> <definition>` lines by name: what a body comparison reads off an introspection. */
 const functionLines = (lines: readonly string[]): ReadonlyMap<string, string> =>
@@ -82,14 +80,14 @@ const runtimeFunctions = (
  */
 const pristineDefinitions = new Map<string, readonly string[]>();
 const definitionsOf = Effect.fn('Bolt.pristineDefinitions')(function* (script: string) {
-	const key = sha256Hex(script);
+	const key = sha256_hex(script);
 	const held = pristineDefinitions.get(key);
 	if (held !== undefined) return held;
 	const lines = yield* Effect.scoped(
 		Effect.gen(function* () {
 			const db = PgliteDb.make(yield* PgliteDb.open());
 			yield* db.write({ text: script, params: [] });
-			return migrationLines(
+			return migration_lines(
 				yield* db.rows(IntrospectRow, { text: INTROSPECT, params: [] }),
 				true,
 				true
@@ -110,8 +108,8 @@ const prefixLines = new Map<string, readonly string[]>();
 const prefixImages = new Map<string, Blob>();
 const prefixKeys = (files: readonly MigrationFile[]): readonly string[] =>
 	files.reduce<string[]>(
-		(keys, file) => [...keys, sha256Hex(`${keys.at(-1)}\n${file.name}\n${checksumOf(file)}`)],
-		[sha256Hex('')]
+		(keys, file) => [...keys, sha256_hex(`${keys.at(-1)}\n${file.name}\n${checksum_of(file)}`)],
+		[sha256_hex('')]
 	);
 const rememberLines = (key: string, lines: readonly string[]) => {
 	if (prefixLines.size >= 256) prefixLines.clear();
@@ -124,15 +122,15 @@ const OTHER_SCHEMAS = `select nspname as name from pg_namespace
 	where nspname not like 'pg\\_%' and nspname not in ('information_schema', current_schema())`;
 
 /** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
-export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
+export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function* (
 	root: string,
-	manifest: EngineManifest,
+	manifest: EngineManifest | SchemaSlice,
 	mode: 'generate' | 'verify',
-	options: { readonly squash?: string } = {}
+	options: { readonly squash?: string; readonly accept?: true | readonly string[] } = {}
 ) {
 	if (mode !== 'generate' && options.squash !== undefined)
 		return yield* BoltError.make(
-			'migrationInvalid',
+			'migration_invalid',
 			'admission',
 			'squash generation requires bolt build --squash=<name>'
 		);
@@ -146,86 +144,80 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 		? yield* fs.readFileString(physicalFile)
 		: undefined;
 	const oldLock: MigrationLock | undefined = (yield* fs.exists(lockFile))
-		? yield* readLock(yield* fs.readFileString(lockFile)).pipe(Effect.mapError(fromStore))
+		? yield* read_lock(yield* fs.readFileString(lockFile)).pipe(Effect.mapError(from_store))
 		: undefined;
-	const { files, squashes } = yield* readMigrationSources(directory, oldLock);
+	const { files, squashes } = yield* read_migration_sources(directory, oldLock);
 	const snapshotFile = path.join(directory, 'snapshot.json');
 	let snapshotText = (yield* fs.exists(snapshotFile))
 		? yield* fs.readFileString(snapshotFile)
 		: undefined;
+	if (snapshotText !== undefined && oldLock !== undefined && oldLock.snapshot !== sha256_hex(snapshotText))
+		return yield* BoltError.make('migration_changed', 'admission', 'The original snapshot changed since verification; restore it before planning its successor.');
 	const previous =
 		snapshotText === undefined
 			? null
-			: yield* readSnapshot(snapshotText).pipe(Effect.mapError(fromStore));
-	const next = migrationSchema(manifest);
-	const declared = yield* build(next).pipe(Effect.mapError(fromStore));
-	const native = migrationObjects(next);
+			: yield* read_snapshot(snapshotText).pipe(Effect.mapError(from_store));
+	const next = migration_schema(manifest);
+	const declared = yield* build(next).pipe(Effect.mapError(from_store));
+	const native = yield* migration_objects(next);
 	const held =
 		physicalText === undefined
 			? undefined
-			: yield* readPhysicalDefinitions(physicalText).pipe(Effect.mapError(fromStore));
+			: yield* read_physical_definitions(physicalText).pipe(Effect.mapError(from_store));
 	// a rebased history's own files have no proof yet: its last proved prefix is what it holds
 	const heldLines = held?.[files.findLast((file) => held[file.name] !== undefined)?.name ?? ''];
-	if (mode === 'generate' && (previous === null || canonical(previous) !== canonical(next))) {
+	if (mode === 'generate' && (previous === null || canonical(previous.original) !== canonical(next))) {
 		if (previous === null && files.length > 0)
 			return yield* BoltError.make(
-				'migrationInvalid',
+				'migration_invalid',
 				'admission',
 				'migrations/snapshot.json is missing beside existing files'
 			);
-		// Old Bolt snapshots encoded writer-owned delete behavior in audit; preserve their original bytes and identity.
-		const before =
-			previous === null ? null : { ...previous, tables: managedTables(previous.tables) };
 		const generated = yield* generate(
-			before,
+			previous,
 			next,
 			{
 				number: files.length + 1,
-				name: files.length === 0 ? 'initial' : 'schema'
+				name: files.length === 0 ? 'initial' : 'schema',
+				...(options.accept !== undefined && options.accept !== true
+					? { accept: options.accept }
+					: {})
 			},
-			migrationObjects
-		).pipe(Effect.mapError(fromStore));
+			migration_objects
+		).pipe(Effect.catchTag('StoreError', (e) => Effect.fail(from_store(e))));
 		yield* fs.makeDirectory(directory, { recursive: true });
 		const prologue: string[] = [];
 		if (previous !== null) {
-			// Backfills must use the new audit body, not append unversioned diffs before a later runtime upgrade.
+			// Backfills must use the new runtime bodies: a function a Bolt release changed is re-created first.
 			const expected = yield* definitionsOf(
 				[...declared, ...native.flatMap((object) => object.create)]
 					.map((sql) => `${sql.trim().replace(/;$/, '')};`)
 					.join('\n')
 			).pipe(Effect.provide(Pristine.layer));
-			const missing = !heldLines?.some((line) => line.startsWith('column bolt_history_schema.id '));
-			if (missing) prologue.push(...HISTORY_SCHEMA_TABLES);
 			prologue.push(
 				...runtimeFunctions(heldLines ?? [], heldLines ?? [], expected, [
 					...declared,
 					...native.flatMap((object) => object.create)
 				])
 			);
-			if (missing)
-				prologue.push(
-					...historySchemaObjects(previous.tables, previous.currency).flatMap(
-						(object) => object.create
-					)
-				);
 		}
-		const upgraded =
-			prologue.length === 0
-				? generated.file
-				: {
-						...generated.file,
-						sql: `-- step history:schema:upgrade (backfill)\n${prologue.map((sql) => `${sql};`).join('\n')}\n\n${generated.file.sql}`
-					};
+		const upgraded = {
+			...generated.file,
+			sql: [
+				prologue.length === 0 ? '' : `-- step runtime:functions (backfill)\n${prologue.map((sql) => `${sql};`).join('\n')}`,
+				generated.file.sql
+			].filter((block) => block.length > 0).join('\n\n')
+		};
 		// a Studio build runs on a copy of live's data, and its merge approval accepts these steps: a generated file a failed
 		// build would discard could never carry its accept lines otherwise
 		const accepted =
-			process.env['BOLT_ACCEPT_DESTRUCTIVE'] === '1'
+			options.accept === true || process.env['BOLT_ACCEPT_DESTRUCTIVE'] === '1'
 				? upgraded.sql.replace(/^-- step (\S+) \(destructive\)\s*$/gm, '$&\n-- accept: $1')
 				: upgraded.sql;
 		const file = path.join(directory, upgraded.name);
 		if (yield* fs.exists(file))
 			return yield* BoltError.make(
-				'migrationChanged',
+				'migration_changed',
 				'admission',
 				`${generated.file.name} already exists; existing migrations are never overwritten`
 			);
@@ -236,7 +228,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	}
 	if (snapshotText === undefined)
 		return yield* BoltError.make(
-			'migrationInvalid',
+			'migration_invalid',
 			'admission',
 			'migrations/snapshot.json is missing; run bolt build'
 		);
@@ -245,14 +237,14 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 	if (mode === 'verify') {
 		if (oldLock === undefined || oldLock.physical === undefined || physicalText === undefined)
 			return yield* BoltError.make(
-				'migrationChanged',
+				'migration_changed',
 				'admission',
 				'migrations need physical replay verification; run bolt build'
 			);
-		yield* pending(files, oldLock, [], snapshot, squashes).pipe(Effect.mapError(fromStore));
-		heldPhysical = yield* readPhysicalDefinitions(physicalText).pipe(Effect.mapError(fromStore));
+		yield* pending(files, oldLock, [], snapshot, squashes).pipe(Effect.mapError(from_store));
+		heldPhysical = yield* read_physical_definitions(physicalText).pipe(Effect.mapError(from_store));
 	}
-	const key = sha256Hex(
+	const key = sha256_hex(
 		canonical({
 			proofVersion: 8,
 			snapshot,
@@ -278,7 +270,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 		(yield* fs.readFileString(cache)) === key
 	)
 		return;
-	yield* Effect.forEach(files, checkFile).pipe(Effect.mapError(fromStore));
+	yield* Effect.forEach(files, check_file).pipe(Effect.mapError(from_store));
 	const proof = yield* Effect.scoped(
 		Effect.gen(function* () {
 			// resume from the longest replayed prefix of this history; every shorter prefix's definitions are remembered
@@ -306,7 +298,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			const record = (index: number, lines: readonly string[]) => {
 				const name = index === 0 ? '' : (files[index - 1]?.name ?? '');
 				prefixes.set(index, lines);
-				physical[name] = physicalHash(lines);
+				physical[name] = physical_hash(lines);
 				definitions[name] = lines;
 				rememberLines(keys[index] ?? '', lines);
 			};
@@ -316,7 +308,7 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 				record(
 					index,
 					lines ??
-						migrationLines(yield* (yield* replay).db.rows(IntrospectRow, inspect), true, true)
+						migration_lines(yield* (yield* replay).db.rows(IntrospectRow, inspect), true, true)
 				);
 			if (!all) {
 				const { pg, db } = yield* replay;
@@ -324,13 +316,13 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					yield* db.write({ text: executable(file), params: [] });
 					record(
 						start + index + 1,
-						migrationLines(yield* db.rows(IntrospectRow, inspect), true, true)
+						migration_lines(yield* db.rows(IntrospectRow, inspect), true, true)
 					);
 				}
 				const schemas = yield* db.rows(SchemaName, { text: OTHER_SCHEMAS, params: [] });
 				if (schemas.length > 0)
 					return yield* BoltError.make(
-						'migrationInvalid',
+						'migration_invalid',
 						'admission',
 						`a migration may not create a schema: ${schemas.map((row) => row.name).join(', ')}`
 					);
@@ -354,27 +346,23 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 						])
 					: [])
 			];
-			if (
-				heldLines !== undefined &&
-				!actual.some((line) => line.startsWith('column bolt_history_schema.id '))
-			)
-				bodies.unshift(...HISTORY_SCHEMA_TABLES);
 			// a check passing here would cache this proof, and the next build would skip generating what the runtime needs
 			if (mode === 'verify' && bodies.length > 0)
 				return yield* BoltError.make(
-					'migrationChanged',
+					'migration_changed',
 					'admission',
 					'this Bolt release changed runtime functions the migrations do not hold yet; run bolt build to generate the next migration'
 				);
-			if (bodies.length > 0)
+			if (bodies.length > 0) {
 				bodies.push(
-					...historySchemaObjects(next.tables, next.currency).flatMap((object) => object.create)
+					...(yield* history_schema_objects(next.tables, next.currency)).flatMap((object) => object.create)
 				);
+			}
 			if (bodies.length > 0) {
 				const name = `${String(files.length + 1).padStart(4, '0')}_runtime_functions.sql`;
 				if (yield* fs.exists(path.join(directory, name)))
 					return yield* BoltError.make(
-						'migrationChanged',
+						'migration_changed',
 						'admission',
 						`${name} already exists; existing migrations are never overwritten`
 					);
@@ -382,14 +370,14 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					name,
 					sql: `-- ${name}: runtime function bodies this Bolt release changed.\n\n${bodies.map((text) => `${text.trim().replace(/;$/, '')};`).join('\n\n')}\n`
 				};
-				yield* checkFile(file).pipe(Effect.mapError(fromStore));
+				yield* check_file(file).pipe(Effect.mapError(from_store));
 				yield* fs.writeFileString(path.join(directory, name), file.sql);
 				files.push(file);
 				const { db } = yield* replay;
 				yield* db.write({ text: file.sql, params: [] });
-				actual = migrationLines(yield* db.rows(IntrospectRow, inspect), true, true);
+				actual = migration_lines(yield* db.rows(IntrospectRow, inspect), true, true);
 				prefixes.set(files.length, actual);
-				physical[name] = physicalHash(actual);
+				physical[name] = physical_hash(actual);
 				definitions[name] = actual;
 			}
 			const receipts: SquashReceipt[] = [];
@@ -397,20 +385,20 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 				const file = squashes.find((file) => file.name === receipt.file);
 				if (file === undefined)
 					return yield* BoltError.make(
-						'migrationChanged',
+						'migration_changed',
 						'admission',
 						`${receipt.file} is missing`
 					);
 				const lines = yield* definitionsOf(file.sql);
-				const verified = yield* verifySquash(
+				const verified = yield* verify_squash(
 					files.slice(0, receipt.replaces.length),
 					file,
 					prefixes.get(receipt.replaces.length) ?? [],
 					lines
-				).pipe(Effect.mapError(fromStore));
+				).pipe(Effect.mapError(from_store));
 				if (canonical(verified) !== canonical(receipt))
 					return yield* BoltError.make(
-						'migrationChanged',
+						'migration_changed',
 						'admission',
 						`${receipt.file}: a retained squash receipt changed; create a new squash instead`
 					);
@@ -422,9 +410,9 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			if (options.squash !== undefined) {
 				const prefix: MigrationFile[] = [];
 				for (const file of files) {
-					const checked = yield* Effect.result(checkSquashSources([...prefix, file]));
+					const checked = yield* Effect.result(check_squash_sources([...prefix, file]));
 					if (Result.isFailure(checked)) {
-						if (prefix.length === 0) return yield* fromStore(checked.failure);
+						if (prefix.length === 0) return yield* from_store(checked.failure);
 						break;
 					}
 					prefix.push(file);
@@ -440,18 +428,18 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					}))
 				)
 					return yield* BoltError.make(
-						'migrationInvalid',
+						'migration_invalid',
 						'admission',
 						'a squash cannot replace history that creates rows; schema equality does not prove data equivalence'
 					);
-				const slug = `squash_${options.squash}_${archiveOf(prefix).slice(0, 12)}`
+				const slug = `squash_${options.squash}_${archive_of(prefix).slice(0, 12)}`
 					.replace(/[^a-z0-9]+/gi, '_')
 					.replace(/^_+|_+$/g, '')
 					.toLowerCase();
 				// A procedural/data suffix stays byte-for-byte. Replay the DDL prefix to preserve its historical definitions.
 				const proposed: MigrationFile = complete
-					? (yield* generateSquash(prefix, next, { name: options.squash }, migrationObjects).pipe(
-							Effect.mapError(fromStore)
+					? (yield* generate_squash(prefix, next, { name: options.squash }, migration_objects).pipe(
+							Effect.catchTag('StoreError', (e) => Effect.fail(from_store(e)))
 						)).file
 					: {
 							name: `${String(prefix.length).padStart(4, '0')}_${slug}.sql`,
@@ -464,14 +452,14 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 					: proposed;
 				if (!(yield* fs.exists(destination))) yield* fs.writeFileString(destination, file.sql);
 				const lines = yield* definitionsOf(file.sql);
-				archived = yield* verifySquash(prefix, file, prefixes.get(prefix.length) ?? [], lines).pipe(
-					Effect.mapError(fromStore)
+				archived = yield* verify_squash(prefix, file, prefixes.get(prefix.length) ?? [], lines).pipe(
+					Effect.mapError(from_store)
 				);
 				definitions[file.name] = lines;
 				const existing = receipts.find((receipt) => receipt.file === archived?.file);
 				if (existing !== undefined && canonical(existing) !== canonical(archived))
 					return yield* BoltError.make(
-						'migrationChanged',
+						'migration_changed',
 						'admission',
 						`${file.name}: a retained squash never changes`
 					);
@@ -481,23 +469,23 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			const lock = yield* verify(files, snapshot, next, actual, expected, {
 				physical,
 				...(receipts.length === 0 ? {} : { squashes: receipts })
-			}).pipe(Effect.mapError(fromStore));
+			}).pipe(Effect.mapError(from_store));
 			return { lock, archived, definitions };
 		}).pipe(Effect.provide(Pristine.layer))
 	);
 	if (
 		mode === 'verify' &&
-		canonical(yield* readLock(proof.lock).pipe(Effect.mapError(fromStore))) !== canonical(oldLock)
+		canonical(yield* read_lock(proof.lock).pipe(Effect.mapError(from_store))) !== canonical(oldLock)
 	)
 		return yield* BoltError.make(
-			'migrationChanged',
+			'migration_changed',
 			'admission',
 			'migration replay proofs changed; run bolt build and review migrations.lock.json'
 		);
 	if (mode === 'verify') {
 		if (canonical(heldPhysical) !== canonical(proof.definitions))
 			return yield* BoltError.make(
-				'migrationChanged',
+				'migration_changed',
 				'admission',
 				'migration physical definitions changed; run bolt build and review physical.json'
 			);
@@ -509,25 +497,25 @@ export const prepareMigrations = Effect.fn('Bolt.prepareMigrations')(function* (
 			for (const file of files.slice(0, proof.archived.replaces.length)) {
 				const destination = path.join(archive, file.name);
 				if (yield* fs.exists(destination)) {
-					if (sha256Hex(yield* fs.readFileString(destination)) !== checksumOf(file))
+					if (sha256_hex(yield* fs.readFileString(destination)) !== checksum_of(file))
 						return yield* BoltError.make(
-							'migrationChanged',
+							'migration_changed',
 							'admission',
 							`${file.name}: an existing archive never changes`
 						);
 				} else yield* fs.writeFileString(destination, file.sql);
 			}
 		}
-		yield* fs.writeFileString(physicalFile, physicalDefinitionsOf(proof.definitions));
+		yield* fs.writeFileString(physicalFile, physical_definitions_of(proof.definitions));
 		yield* fs.writeFileString(lockFile, proof.lock);
 		// Only remove redundant source copies once immutable archived bytes and their verified receipt are durable.
 		if (proof.archived !== undefined)
 			for (const file of files.slice(0, proof.archived.replaces.length)) {
 				const source = path.join(directory, file.name);
 				if (yield* fs.exists(source)) {
-					if (sha256Hex(yield* fs.readFileString(source)) !== checksumOf(file))
+					if (sha256_hex(yield* fs.readFileString(source)) !== checksum_of(file))
 						return yield* BoltError.make(
-							'migrationChanged',
+							'migration_changed',
 							'admission',
 							`${file.name} changed during squash; its source copy was preserved`
 						);

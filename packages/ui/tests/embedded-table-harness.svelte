@@ -18,7 +18,7 @@
 {#snippet trailing(row: Item)}<button onclick={() => remove(row)}>Remove {row.name}</button
 	>{/snippet}
 
-<Table
+<Table ctx={{ ui: { kinds: {} } }}
 	of={rows}
 	columns={[
 		{ field: 'name', label: 'Name', width: 180 },
@@ -28,6 +28,6 @@
 	embedded
 	controlled
 	toolbar={false}
-	rowClass={(row) => (row.paid ? 'paid-row' : undefined)}
-	rowTrailing={trailing}
+	row_class={(row) => (row.paid ? 'paid-row' : undefined)}
+	row_trailing={trailing}
 />

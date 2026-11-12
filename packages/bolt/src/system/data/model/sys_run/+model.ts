@@ -1,17 +1,17 @@
 // The one queue (rules 48–52a): a run is a row with a `due_at`. `key` is rule 51's "one queued, unstarted run per
-// key" (an `on conflict` arbiter); a claim moves a workspace run's key to `run_key`. No grant: read through $bolt.runs,
+// key" (an `on conflict` arbiter); a claim moves a workspace run's key to `run_key`. No grant: read through ctx.runs,
 // RunStatus, RunsFor and /runs (rule 56).
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_run', {
+export default bind_system_model('sys_run')({
 	description:
 		'An automation run: queued, running or finished, with its input, progress and results.',
-	label: 'automation',
+	record_label: 'record.automation',
 	fields: {
 		automation: { kind: 'text' },
 		input: { kind: 'json' },
 		due_at: { kind: 'instant' },
-		key: { kind: 'text', optional: true, unique: true },
+		key: { kind: 'text', optional: true },
 		cause: { kind: 'text' },
 		depth: { kind: 'int' },
 		state: { kind: 'text', default: 'queued' },
@@ -29,6 +29,11 @@ export default model('sys_run', {
 		// who or what started an automation run (`RunTrigger`); never its authority
 		trigger: { kind: 'json', optional: true }
 	},
-	table: { primary: 'text', indexes: [{ on: ['due_at'], where: { state: { eq: 'queued' } } }] },
-	read: 'all'
+	constraints: { key: { unique: ['key'] } },
+	table: { primary: 'text' },
+	outputs: { default: { fields: 'all' } },
+	indexes: {
+		by_due_at: { on: ['due_at'], where: { state: { eq: 'queued' } } },
+		by_automation_state: { on: ['automation', 'state'] }
+	}
 });

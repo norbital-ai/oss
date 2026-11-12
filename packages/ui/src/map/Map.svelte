@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ModelKey, FieldOf, RecordFieldOf, RowOf, WhereOf } from '../model/types.js';
 	import type { Toolbar } from '../model/ViewToolbar.svelte';
 	/** Extra marks drawn over the rows: a labelled point, and optionally a dashed line to it from `from`. */
@@ -9,7 +10,9 @@
 		from?: { lat: number; lng: number };
 	};
 	/** Rows of `of` with a `point` field `at`, on the host's keyless basemap; a click opens the record. */
-	export type MapProps<C = ModelKey> = {
+	type MapProps<C = ModelKey> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: C;
 		at: FieldOf<C>;
 		where?: WhereOf<C>;
@@ -28,23 +31,26 @@
 
 <script lang="ts" generics="C extends ModelKey">
 	import { Effect } from 'effect';
+	import { Debounced, watch } from 'runed';
+	import { onDestroy } from 'svelte';
 	import { attach } from '../effect/index.js';
-	import { formatValue as show, isPoint } from '../kinds/kind.js';
+	import { format_value as show, isPoint } from '../kinds/kind.js';
 	// Needs no provider (P19): OpenStreetMap tiles unless the host overrides them; a tile failure still lists the rows.
 	import type { Map as LeafletMap, LayerGroup } from 'leaflet';
-	import { DEFAULT_BASEMAP, useKinds } from '../kinds/context.js';
-	import { openRecord } from '../record/navigation.js';
-	import { useBolt } from '../client/context.js';
+	import { DEFAULT_BASEMAP } from '../kinds/context.js';
+	import { open_record } from '../record/navigation.js';
+	import { bolt_of } from '../client/context.js';
 	import { and } from '../filter/scope.js';
 	import { label as labelOf, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
-	import { pageOf, requestJson } from '../read/request.js';
+	import { page_of, request_json } from '../read/request.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import { mapped, queryState } from '../read/state.js';
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar from '../model/ViewToolbar.svelte';
 
 	let {
+		ctx,
 		of,
 		at,
 		where,
@@ -56,32 +62,29 @@
 		labels = 'hover',
 		overlays = []
 	}: MapProps<C> = $props();
-	const bolt = useBolt();
-	const host = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const host = $derived(ctx.ui.kinds);
 	const catalog = $derived(host.catalog ?? {});
-	const view = viewState(bolt, {
+	const view = viewState(() => ctx, {
 		key: () => key ?? of,
 		model: () => of,
 		catalog: () => catalog,
-		initialFilter: () => undefined
+		initial_filter: () => undefined
 	});
-	let q = $state(''),
-		search = $state('');
-	$effect(() => {
-		const t = q;
-		const timer = setTimeout(() => (search = t.trim()), 300);
-		return () => clearTimeout(timer);
-	});
+	let q = $state('');
+	const debouncedSearch = new Debounced(() => q, 300);
+	onDestroy(debouncedSearch.cancel);
+	const search = $derived(debouncedSearch.current.trim());
 	const page = $derived(
 		queryState(
 			mapped(
 				bolt.query(
-					requestJson(
+					request_json(
 						listRequest(
 							host.catalog,
 							of,
 							{
-								where: and(where, view.where, { [at]: { isNull: false } }),
+								where: and(where, view.where, { [at]: { is_null: false } }),
 								search: search || undefined,
 								limit
 							},
@@ -89,7 +92,7 @@
 						)
 					)
 				),
-				(answer) => pageOf(answer, of)
+				(answer) => page_of(answer, of)
 			)
 		)
 	);
@@ -143,18 +146,23 @@
 					p.text,
 					labels === 'always' ? { permanent: true, direction: 'right', offset: [8, 0] } : {}
 				);
-			if (interactive) m.on('click', () => openRecord(of, p.id));
+			if (interactive) m.on('click', () => open_record(of, p.id));
 		}
-		const all = [...points, ...overlays].map((p) => [p.lat, p.lng] as [number, number]);
+		const all = [...points, ...overlays].map((p): [number, number] => [p.lat, p.lng]);
 		// unanimated: a zoom animation still running when the view unmounts writes to panes Leaflet has already removed
 		if (all.length > 0)
 			map.fitBounds(L.latLngBounds(all), { maxZoom: 15, padding: [24, 24], animate: false });
 	}
-	$effect(() => {
-		void points;
-		void overlays;
-		draw();
-	});
+	watch(
+		[
+			() => points,
+			() => overlays.map((overlay) => [overlay.lat, overlay.lng, overlay.text, overlay.from?.lat, overlay.from?.lng]),
+			() => labels,
+			() => interactive,
+			() => of
+		],
+		() => draw()
+	);
 	const mount = attach((node: HTMLElement) =>
 		Effect.gen(function* () {
 			const module = yield* Effect.tryPromise({
@@ -212,7 +220,7 @@
 	);
 </script>
 
-<ViewToolbar
+<ViewToolbar {ctx}
 	config={toolbar}
 	model={of}
 	{view}
@@ -221,21 +229,21 @@
 	bind:q
 	searchable={(catalog[of]?.search?.length ?? 0) > 0}
 />
-<ReadGate state={page} what={labelOf(bolt, of)}>
+<ReadGate {ctx} state={page} what={labelOf(bolt, of)}>
 	{#snippet children(value)}
 		<div class="flex flex-col gap-1" data-view="map">
 			<div class="h-80 w-full rounded-md border" {@attach mount}></div>
 			{#if failed}<p class="text-muted-foreground text-xs">
-					{msg(bolt, 'map.tiles', 'The map could not load; the places are listed below.')}
+					{msg(bolt, 'map.tiles')}
 				</p>{/if}
 			{#if points.length === 0}<p class="text-muted-foreground text-sm" data-read="empty">
-					{msg(bolt, 'map.empty', 'No places to show')}
+					{msg(bolt, 'map.empty')}
 				</p>{/if}
 			{#if failed}<ul class="text-sm">
 					{#each points as p (p.id)}<li>{p.text || p.id}: {p.lat}, {p.lng}</li>{/each}
 				</ul>{/if}
 			{#if value.next !== null}<p class="text-muted-foreground text-xs">
-					{msg(bolt, 'map.limit', 'Showing the first {n}', { n: limit })}
+					{msg(bolt, 'map.limit', { n: limit })}
 				</p>{/if}
 		</div>
 	{/snippet}

@@ -1,15 +1,15 @@
 <script lang="ts" generics="C extends ModelKey">
+	import type { UiContext } from '../client/contract.js';
 	// One lane expanded in the board's dialog: the same cards and pages as a responsive grid, with a search and filter of
 	// its own ANDed under the lane's condition (which already carries the board's scope), so it only ever narrows.
 	import { onDestroy, untrack } from 'svelte';
-	import { watch } from 'runed';
+	import { Debounced, watch } from 'runed';
 	import type { ModelKey, RowOf } from '../model/types.js';
 	import type { Json } from '../client/contract.js';
-	import { useBolt } from '../client/context.js';
-	import { useKinds } from '../kinds/context.js';
+	import { bolt_of } from '../client/context.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import { and } from '../filter/scope.js';
-	import { orderOf, sortable } from '../filter/filter.js';
+	import { orderOf, sortable } from '../filter/order.js';
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewPopover from '../filter/ViewPopover.svelte';
 	import ToolbarSearch from '../model/toolbar/ToolbarSearch.svelte';
@@ -18,49 +18,50 @@
 	import BoardLane from './BoardLane.svelte';
 
 	let {
+		ctx,
 		of,
 		card,
 		label,
 		dot,
 		count,
 		where,
-		orderBy,
+		order_by,
 		search = '',
-		pageSize,
-		viewKey,
+		page_size,
+		view_key,
 		selectable,
 		selected,
-		onSelect,
-		onChange,
-		onOpen
-	}: Pick<BoardProps<C>, 'of' | 'card'> & {
+		on_select,
+		on_change,
+		on_open
+	}: Pick<BoardProps<C>, 'ctx' | 'of' | 'card'> & {
 		label: string;
 		/** The lane dot's tone class, or null. */
 		dot: string | null;
 		count: number | null;
 		/** The lane's condition under the board's scope: never widened here. */
 		where: Json | undefined;
-		orderBy: Json | undefined;
+		order_by: Json | undefined;
 		/** The board's search, the box's starting text. */
 		search?: string;
-		pageSize: number;
+		page_size: number;
 		/** The board's URL key; the lane's filter lives under `<key>.lane` while the dialog is open. */
-		viewKey: string;
+		view_key: string;
 		selectable: boolean;
 		selected: ReadonlySet<RowOf<C>['id']>;
-		onSelect: (id: RowOf<C>['id'], on: boolean) => void;
-		onChange: () => void;
-		onOpen: (id: string) => void;
+		on_select: (id: RowOf<C>['id'], on: boolean) => void;
+		on_change: () => void;
+		on_open: (id: string) => void;
 	} = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const catalog = $derived(kinds.catalog ?? {});
-	const key = untrack(() => `${viewKey}.lane`);
-	const view = viewState(bolt, {
+	const key = untrack(() => `${view_key}.lane`);
+	const view = viewState(() => ctx, {
 		key: () => key,
 		model: () => of,
 		catalog: () => catalog,
-		initialFilter: () => undefined
+		initial_filter: () => undefined
 	});
 	// each opening starts clean: the lane's filter leaves the URL with the dialog
 	onDestroy(() => {
@@ -69,18 +70,16 @@
 		url.searchParams.delete(`${key}.order`);
 		history.replaceState(history.state, '', url);
 	});
-	let q = $state(untrack(() => search)),
-		searched = $state(untrack(() => search));
-	watch(
-		() => q,
-		(text) => {
-			const timer = setTimeout(() => (searched = text.trim()), 300);
-			return () => clearTimeout(timer);
-		},
-		{ lazy: true }
-	);
+	let q = $state(untrack(() => search));
+	let edited = $state(false);
+	// The inherited search stays verbatim until this dialog's first edit.
+	watch(() => q, () => { edited = true; }, { lazy: true });
+	const debouncedSearch = new Debounced(() => ({ text: q, edited }), 300);
+	onDestroy(debouncedSearch.cancel);
+	const searched = $derived(debouncedSearch.current.edited
+		? debouncedSearch.current.text.trim() : debouncedSearch.current.text);
 	const scope = $derived(and(where, view.where));
-	const order = $derived(view.order.length > 0 ? orderOf(view.order) : orderBy);
+	const order = $derived(view.order.length > 0 ? orderOf(view.order) : order_by);
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col bg-muted/70 dark:bg-muted/40">
@@ -95,9 +94,9 @@
 		<div class="flex shrink-0 items-center gap-1" data-lane-toolbar>
 			{#if (catalog[of]?.search?.length ?? 0) > 0}<ToolbarSearch
 					bind:value={q}
-					label={msg(bolt, 'table.search', 'Search')}
+					label={msg(bolt, 'table.search')}
 				/>{/if}
-			<ViewPopover
+			<ViewPopover {ctx}
 				{view}
 				{catalog}
 				model={of}
@@ -112,19 +111,19 @@
 			class="grid grid-cols-[repeat(auto-fill,minmax(min(16rem,100%),1fr))] content-start gap-3"
 			data-lane-grid
 		>
-			<BoardLane
+			<BoardLane {ctx}
 				{of}
 				{card}
 				lane={label}
 				where={scope}
-				orderBy={order}
+				order_by={order}
 				search={searched || undefined}
-				{pageSize}
+				{page_size}
 				{selectable}
 				{selected}
-				{onSelect}
-				{onChange}
-				{onOpen}
+				{on_select}
+				{on_change}
+				{on_open}
 				grid
 			/>
 		</div>

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // The artifact's `client/**`: an internal SPA whose main-thread module graph initializes before admission, and a
 // shared Vite/Svelte multi-entry graph for server-rendered public routes. Each public entry reaches its requested
-// page, shared wrapper and codec; the internal shell, agent and session registry remain in the private SPA.
+// page and shared wrapper; the internal shell, agent and session registry remain in the private SPA.
 // The SPA imports the shell, Bolt's page entries, ui, svelte and effect from the platform layer (`platform.ts`, under
 // `client/assets/platform/`), the same bytes in every artifact on this Bolt, and bundles only the workspace's code.
 // There is no template Vite config (§3.2: `vite.config.ts` is deleted with no successor). Runtime assets live in the
@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, posix } from 'node:path';
 import type { Server } from 'node:http';
 import { build, createServer, type Connect, type InlineConfig, type Rolldown } from 'vite';
+import { page_route_key, public_page_keys } from '@norbital-ai/bolt/artifact';
 import type { EngineManifest } from '@norbital-ai/bolt/engine';
 import type { ShellManifest } from '@norbital-ai/bolt/tooling';
 import type { Discovered } from '../discover.ts';
@@ -31,7 +32,7 @@ import {
 import { publicWrapper } from './public-wrapper.ts';
 import { cachedSvelte } from './svelte-cache.ts';
 import { BOLT, BOLT_PACKAGE, EXT } from '../bolt.ts';
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 
 const BOLT_INDEX = join(BOLT, `index${EXT}`);
 /** The modules the SPA's entry and pages reach Bolt by path: `bolt dev` pre-bundles each (`bolt:prebundled-platform`). */
@@ -100,7 +101,12 @@ export const prepareLayer = Effect.fn('bolt.prepareLayer')(function* (dir: strin
 	const fs = yield* FileSystem.FileSystem;
 	const out = join(dir, '.out'),
 		cache = join(dir, '.cache');
-	yield* cachedPlatformLayer(dir, `prepared-${PLATFORM_CACHE_VERSION}`, out, buildLayer(out, cache));
+	yield* cachedPlatformLayer(
+		dir,
+		`prepared-${PLATFORM_CACHE_VERSION}`,
+		out,
+		buildLayer(out, cache)
+	);
 	for (const scratch of [out, cache]) yield* fs.remove(scratch, { recursive: true, force: true });
 });
 
@@ -120,7 +126,7 @@ const document = (
 	entry: string,
 	css: readonly string[],
 	preloads: readonly string[],
-	nativeModules: readonly string[],
+	native_modules: readonly string[],
 	accessStyles: string
 ) => `<!doctype html>
 <html lang="en">
@@ -146,7 +152,7 @@ ${accessStyles}
 </style>
 ${css.map((c) => `<link rel="stylesheet" href="/${c}">`).join('\n')}
 ${preloads.map((file) => `<link rel="modulepreload" href="/${file}">`).join('\n')}
-<script type="application/json" id="bolt-initial-modules">${key({ css, nativeModules }).replaceAll('<', '\\u003c')}</script>
+<script type="application/json" id="bolt-initial-modules">${key({ css, native_modules }).replaceAll('<', '\\u003c')}</script>
 <script type="module" src="/${entry}"></script>
 </head>
 <body><div id="bolt"></div><div id="bolt-loading" role="status" aria-live="polite" aria-busy="true" class="access-frame"><main class="access-loading-content"><div class="access-loading-cluster"><img class="access-loading-mark" src="/assets/bolt-apple-icon.png" alt=""><h1 class="access-loading-name">${escape(title)}</h1><p class="access-loading-status">Opening workspace…</p><div class="access-loading-track" aria-hidden="true"></div></div></main></div></body>
@@ -307,28 +313,18 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	title: string
 ) {
 	const fs = yield* FileSystem.FileSystem;
-	const publicFiles = files.filter((file) => {
-		if (file.role !== 'page' && file.role !== 'kiosk_page') return false;
-		const owner = file.name.slice(0, file.name.lastIndexOf('/'));
-		return (
-			(file.role === 'page'
-				? (m.apps[owner]?.audience ?? 'members')
-				: (m.kiosks?.[owner]?.auth ?? 'members')) !== 'members'
-		);
+	const public_routes = new Set(public_page_keys(m));
+	const pageFiles = files.filter((file) => file.role === 'page');
+	const publicFiles = pageFiles.filter((file) => public_routes.has(page_route_key(m, file.name)));
+	const pages = pageFiles.map((file) => {
+		const route = page_route_key(m, file.name);
+		const name = route.startsWith('app/') ? file.name : route;
+		return `${key(name)}: () => import(${key(join(root, file.path))})`;
 	});
-	const pages = [
-		...files
-			.filter((f) => f.role === 'page')
-			.map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`),
-		...files
-			.filter((f) => f.role === 'kiosk_page')
-			.map((f) => `${key(`kiosk/${f.name}`)}: () => import(${key(join(root, f.path))})`)
-	];
 	const sessions = files.filter((f) => f.role === 'session');
 	const shell: ShellManifest = {
 		workspace: m.workspace,
 		apps: m.apps,
-		kiosks: m.kiosks ?? {},
 		groups: m.groups ?? {}
 	};
 	// hook:ui-kit — the client stylesheet: ui's tokens + Tailwind, scanning the shell and the workspace's pages
@@ -346,12 +342,12 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	const reps = files
 		.filter((f) => f.role === 'representation')
 		.map((f) => `${key(f.name)}: () => import(${key(join(root, f.path))})`);
-	const integrationSetups = files
+	const integration_setups = files
 		.filter((f) => f.role === 'integration_setup')
 		.map((f) => `${key(f.name)}: { load: () => import(${key(join(root, f.path))}) }`);
 	// custom fields: the manifest's shape, and the renderer (imported with the entry: display grids render it synchronously)
 	const renderers = files.filter((f) => f.role === 'renderer');
-	const customFields = Object.entries(m.customFields).map(([name, spec]) => {
+	const custom_fields = Object.entries(m.custom_fields).map(([name, spec]) => {
 		const r = renderers.findIndex((f) => f.name === name);
 		return `${key(name)}: { shape: ${key(spec.shape)}${typeof spec.label === 'string' ? `, label: ${key(spec.label)}` : ''}${r < 0 ? '' : `, renderer: F${r}`} }`;
 	});
@@ -365,7 +361,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 		node: process.versions.node
 	};
 	const entry = `import ${key(styles)};
-import { initializeShellAssets, mountShell } from ${key(join(SHELL, `mount${EXT}`))};
+import { initialize_shell_assets, mount_shell } from ${key(join(SHELL, `mount${EXT}`))};
 ${base === undefined ? 'const base = {};' : `import base from ${key(join(root, base.path))};`}
 ${locales.map((l, i) => `import L${i} from ${key(join(root, l.path))};`).join('\n')}
 ${sessions.map((s, i) => `import S${i} from ${key(join(root, s.path))};`).join('\n')}
@@ -374,11 +370,11 @@ const locales = { ${locales.map((l, i) => `${key(l.name.toLowerCase())}: L${i}`)
 const workspaceLocale = ${key(shell.workspace.locale)}.toLowerCase();
 const tag = [workspaceLocale, workspaceLocale.split('-')[0]].find((l) => l in locales);
 globalThis.__BOLT_BUILD__ = ${key(versions)};
-const ready = initializeShellAssets(import.meta.url);
-ready.then(() => mountShell(document.getElementById('bolt'), { ready, workspaceName: ${key(title)}, publicRoutes: ${key(publicFiles.map((file) => `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`))}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
+const ready = initialize_shell_assets(import.meta.url);
+ready.then(() => mount_shell(document.getElementById('bolt'), { ready, workspace_name: ${key(title)}, public_routes: ${key([...public_routes])}, manifest: ${key(shell)}, pages: { ${pages.join(', ')} },
 	sessions: { ${sessions.map((s, i) => `${key(s.name)}: S${i}`).join(', ')} },
 	messages: { ...base, ...(tag === undefined ? {} : locales[tag]) },
-	integrationSetups: { ${integrationSetups.join(', ')} }, representations: { ${reps.join(', ')} }, customFields: { ${customFields.join(', ')} } })).catch((cause) => {
+	integration_setups: { ${integration_setups.join(', ')} }, representations: { ${reps.join(', ')} }, custom_fields: { ${custom_fields.join(', ')} } })).catch((cause) => {
 	const status = document.querySelector('#bolt-loading p');
 	if (status !== null) { status.textContent = 'The workspace could not finish loading. Reload to try again.'; status.setAttribute('role', 'alert'); }
 	console.error(cause);
@@ -402,7 +398,6 @@ const graphConfig = (
 		root,
 		// relative: chunks and assets resolve from their importer, so the host may serve the workspace under a path
 		base: './',
-		// `$bolt` is resolved below, not aliased: rolldown reads `$bolt` in a regex alias's replacement as a capture group
 		resolve: {
 			dedupe: EDITOR_SINGLETONS,
 			alias: [{ find: /^@norbital-ai\/bolt$/, replacement: BOLT_INDEX }]
@@ -415,12 +410,7 @@ const graphConfig = (
 				// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
 				async resolveId(id, importer) {
 					if (id === ENTRY) return `\0${id}`;
-					if (id === '$bolt' || (publicPage && id === '@norbital-ai/bolt/page'))
-						return publicPage
-							? join(SHELL, 'public', `client${EXT}`)
-							: join(BOLT, 'page', `index${EXT}`);
-					// one Svelte runtime and one ui, the shell's: pages and the record view reach ui as the shell does, so its
-					// contexts (`$bolt`, kinds) are the shell's
+					// The page and its controls share the shell's Svelte and UI runtime.
 					if (shellRuntime(id, importer))
 						return this.resolve(id, join(SHELL, `mount${EXT}`), { skipSelf: true });
 					return null;
@@ -515,8 +505,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			visit(entry);
 			return reached;
 		};
-		const nativeModules = reach(chunk.fileName);
-		nativeModules.delete(chunk.fileName);
+		const native_modules = reach(chunk.fileName);
+		native_modules.delete(chunk.fileName);
 		const preloads = reach(chunk.fileName, false);
 		preloads.delete(chunk.fileName);
 		const sourcesFor = (entry: string) => {
@@ -549,7 +539,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			entry: chunk.fileName,
 			css,
 			preloads: [...preloads],
-			nativeModules: [...nativeModules].sort(),
+			native_modules: [...native_modules].sort(),
 			chunks,
 			sourcesFor,
 			manifest
@@ -604,7 +594,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 				? yield* layerBuild
 				: yield* cachedPlatformLayer(
 						join(root, '.norbital', 'cache', 'platform-layer'),
-						sha256Hex(JSON.stringify([PLATFORM_CACHE_VERSION, import.meta.url, lock, overlay])),
+						sha256_hex(JSON.stringify([PLATFORM_CACHE_VERSION, import.meta.url, lock, overlay])),
 						out,
 						layerBuild
 					));
@@ -627,7 +617,7 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			internal.entry,
 			css,
 			internal.preloads,
-			internal.nativeModules,
+			internal.native_modules,
 			yield* fs.readFileString(require.resolve('@norbital-ai/ui/brand/access.css'))
 		)
 	);
@@ -636,19 +626,14 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 	const publicEntries: Record<string, string> = {};
 	const publicStylesheets = new Map<string, string>();
 	for (const file of internalOnly ? [] : publicFiles) {
-		const role = file.role === 'page' ? 'page_server' : 'kiosk_page_server';
-		if (!files.some((candidate) => candidate.role === role && candidate.name === file.name))
-			return yield* new BuildError({
-				cause: new Error(`Public page ${file.path} requires a server loader and shared data codec.`)
-			});
-		const route = `${file.role === 'page' ? 'app' : 'kiosk'}/${file.name}`;
+		const route = page_route_key(m, file.name);
 		const publicStyles = join(gen, `${encodeURIComponent(route)}.css`);
 		yield* fs.writeFileString(
 			publicStyles,
 			`@import ${key(require.resolve('@norbital-ai/ui/base.css'))};\n@source ${key(join(root, file.path))};\n@source ${key(join(SHELL, 'public', 'PublicPage.svelte'))};\n`
 		);
-		const codec = join(root, file.path.replace(/\+([^/]+)\.page\.svelte$/, '$1.page.data.ts'));
-		const wrapper = yield* publicWrapper(root, file);
+
+		const wrapper = yield* publicWrapper(root, file, route);
 		const browser = join(gen, 'public', `${route}.ts`);
 		yield* fs.makeDirectory(dirname(browser), { recursive: true });
 		yield* fs.writeFileString(
@@ -656,9 +641,8 @@ export const buildClient = Effect.fn('bolt.buildClient')(function* (
 			`import ${key(publicStyles)};
 import { Effect } from 'effect';
 import Page from ${key(wrapper)};
-import codec from ${key(codec)};
-import { hydratePublicPage } from ${key(join(SHELL, 'public', `client${EXT}`))};
-Effect.runPromise(hydratePublicPage(Page, codec, ${key(route)})).catch((cause) => {
+import { hydrate_public_page } from ${key(join(SHELL, 'public', `client${EXT}`))};
+Effect.runPromise(hydrate_public_page(Page, ${key(route)})).catch((cause) => {
 	console.error('Public page could not hydrate', cause);
 	const status = document.createElement('p'); status.setAttribute('role', 'alert'); status.textContent = 'This page could not become interactive. Reload to try again.'; document.getElementById('bolt')?.append(status);
 });`

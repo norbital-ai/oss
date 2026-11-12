@@ -6,10 +6,11 @@ import { Effect, Result } from 'effect';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { describe, expect } from 'vitest';
 import { it } from '@effect/vitest';
-import { checkRules, cronValid } from '../src/compiler/check/rules.ts';
+import { checkRules } from '../src/compiler/check/rules.ts';
+import { parse_cron } from '@norbital-ai/bolt/tooling';
 import { evaluationCpuMs } from '../src/compiler/check/index.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
-import { decodeProjectedManifest } from '../../bolt/src/engine/manifest.ts';
+import { decode_projected_manifest } from '../../bolt/src/engine/manifest.ts';
 const emptyManifest: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -20,11 +21,9 @@ const emptyManifest: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 describe('bolt check', () => {
@@ -57,27 +56,23 @@ describe('bolt check', () => {
 		const valid = {
 			description: 'Read a document',
 			policies: ['treasury'],
-			input: { document: { kind: 'id', of: 'documents' } }
+			input: { document: { kind: 'ref', to: 'documents' } }
 		};
-		const inspect = (input: unknown) =>
-			checkRules(
-				Result.getOrThrow(
-					decodeProjectedManifest({
-						...Object.fromEntries(Object.entries(emptyManifest).filter(([key]) => key !== 'needs')),
-						policies: { treasury: { description: 'Treasury', grants: {} } },
-						automations: { read_advice: { ...valid, input } }
-					})
-				),
-				{ automations: ['read_advice'] },
-				(_role, name) => name
-			).filter((finding) => finding.code === 'automation/input');
-		expect(inspect({ document: { kind: 'id' } })).toEqual([
-			expect.objectContaining({
-				path: 'read_advice',
-				message: expect.stringContaining('["document"]["of"]')
-			})
-		]);
-		expect(inspect(valid.input)).toEqual([]);
+		const decode = (input: unknown) =>
+			decode_projected_manifest({
+				...Object.fromEntries(Object.entries(emptyManifest).filter(([key]) => key !== 'needs')),
+				policies: { treasury: { description: 'Treasury', grants: {} } },
+				automations: { read_advice: { ...valid, input } }
+			});
+		// the manifest decoder itself refuses the malformed input, so no artifact carrying it reaches a shell
+		const invalid = decode({ document: { kind: 'ref' } });
+		if (Result.isSuccess(invalid)) throw new Error('A ref input without its target decoded.');
+		expect(invalid.failure.issues.join('\n')).toContain('["automations"]["read_advice"]["input"]["document"]["to"]');
+		expect(
+			checkRules(Result.getOrThrow(decode(valid.input)), { automations: ['read_advice'] }, (_role, name) => name).filter(
+				(finding) => finding.code === 'automation/input'
+			)
+		).toEqual([]);
 	});
 	it.live(
 		'refuses a label naming an id or a foreign key, and an instant named as a calendar day (model/label, model/instant-date)',
@@ -89,7 +84,8 @@ describe('bolt check', () => {
 					models: {
 						lines: {
 							description: 'lines',
-							label: ['order', 'title'],
+							record_label:
+								"[record.order != null ? string(record.order) : '', record.title != null ? string(record.title) : ''].filter(part, part != '').join(' · ')",
 							fields: {
 								title: { kind: 'text' },
 								shipped_on: { kind: 'instant' },
@@ -98,10 +94,10 @@ describe('bolt check', () => {
 								born_on: { kind: 'date' }
 							}
 						},
-						orders: { description: 'orders', label: 'id', fields: {} },
+						orders: { description: 'orders', record_label: 'record.id', fields: {} },
 						notes: {
 							description: 'notes',
-							label: 'code',
+							record_label: 'record.code',
 							fields: {},
 							computed: { code: { kind: 'text', expr: { field: 'id' } } }
 						}
@@ -130,7 +126,7 @@ describe('bolt check', () => {
 			models: {
 				tasks: {
 					description: 'tasks',
-					label: 'title',
+					record_label: 'record.title',
 					fields: {
 						title: { kind: 'text' },
 						due_on: { kind: 'date', default: { today: '' } },
@@ -155,7 +151,7 @@ describe('bolt check', () => {
 			models: {
 				trials: {
 					description: 'trials',
-					label: 'name',
+					record_label: 'record.name',
 					fields: { name: { kind: 'text' }, lab: { kind: 'vector', dim: 3, metric: 'l2' } },
 					search: {
 						text: ['name'],
@@ -177,12 +173,20 @@ describe('bolt check', () => {
 			"trials: search.indexes.mismatched: vector 'lab' is a vector field of dim 4"
 		]);
 	});
-	it("checks a sync: its connection, a file's parsers, a remote's cadence and partitions, and a write's one instance (sync/*)", () => {
+	it("checks a sync: its definition, a file's parsers, a remote's cadence and partitions, and runtime account fanout (sync/*)", () => {
 		const m: EngineManifest = {
 			...emptyManifest,
 			models: {
-				customers: { description: 'c', label: 'name', fields: { name: { kind: 'text' } } },
-				events: { description: 'e', label: 'title', fields: { title: { kind: 'text' } } }
+				customers: {
+					description: 'c',
+					record_label: 'record.name',
+					fields: { name: { kind: 'text' } }
+				},
+				events: {
+					description: 'e',
+					record_label: 'record.title',
+					fields: { title: { kind: 'text' } }
+				}
 			},
 			relationships: {
 				'events.calendar': {
@@ -195,16 +199,12 @@ describe('bolt check', () => {
 				calendar: {
 					description: 'Calendars',
 					driver: 'calendar',
-					configuration: { calendars: { kind: 'list', of: { kind: 'text' } } }
+					configuration: { calendars: { kind: 'text', many: true } }
 				}
-			},
-			connections: {
-				crm_a: { integration: 'crm' },
-				crm_b: { integration: 'crm' }
 			},
 			exposures: {
 				customers: {
-					read: { customers: { fields: 'all' } },
+					outputs: { default: { customers: { fields: 'all' } } },
 					syncs: {
 						sheet: { with: 'file', parser: ['xlsx', 'csv'] },
 						ofx: {
@@ -218,7 +218,7 @@ describe('bolt check', () => {
 					}
 				},
 				events: {
-					read: { events: { fields: 'all' } },
+					outputs: { default: { events: { fields: 'all' } } },
 					syncs: {
 						calendar: { with: 'calendar', partitions: 'calendars', read: true, write: true },
 						typo: { with: 'calendar', partitions: 'calendar', read: true }
@@ -233,46 +233,39 @@ describe('bolt check', () => {
 			"sync/parser customers: syncs.ofx: 'numbers' is no built-in parser (xlsx, csv, tsv, json, ics, txt)",
 			"sync/parser customers: syncs.ofx: a custom parser lists its file extensions ('.ofx')",
 			"sync/every customers: syncs.crm: 'often' is not a duration ('15min', '1h')",
-			expect.stringContaining(
-				"sync/instance customers: syncs.crm: a write goes through one instance of 'crm'"
-			),
 			"sync/with customers: syncs.erp: with 'erp' is 'file' or an integration definition",
 			"sync/partitions events: syncs.typo: 'calendar' is no configuration field of 'calendar'"
 		]);
 	});
-	it('an embedding origin is https://host[:port], and only a kiosk or a portal page is embedded (kiosk/embed, app/embed)', () => {
+	it('an embedding origin is https://host[:port], for an app or kiosk (app/embed)', () => {
 		const page = { title: 'P' };
 		const m: EngineManifest = {
 			...emptyManifest,
 			policies: { lobby: { description: 'l', grants: {} } },
-			kiosks: {
+			apps: {
 				lobby: {
 					title: 'L',
 					description: 'L',
 					icon: 'x',
-					auth: 'members',
+					shell: 'kiosk',
 					policies: ['lobby'],
 					pages: { home: page },
 					embed: ['https://partner.example', 'https://partner.example:8443/path', 'https://a b']
-				}
-			},
-			apps: {
+				},
 				shop: {
 					title: 'S',
 					description: 'S',
 					icon: 'x',
-					pages: {
-						home: { ...page, portal: true, embed: ['https://*.example'] },
-						open: { ...page, portal: true, embed: ['https://partner.example'] }
-					}
+					embed: ['https://*.example', 'https://partner.example'],
+					pages: { home: page, open: page }
 				}
 			}
 		};
 		expect(
 			checkRules(m, { automations: [] }, (_r, n) => n).map((f) => `${f.code} ${f.message}`)
 		).toEqual([
-			"kiosk/embed lobby: embed: 'https://partner.example:8443/path' is an origin, https://host[:port] (no path, no wildcard)",
-			"kiosk/embed lobby: embed: 'https://a b' is an origin, https://host[:port] (no path, no wildcard)",
+			"app/embed lobby: embed: 'https://partner.example:8443/path' is an origin, https://host[:port] (no path, no wildcard)",
+			"app/embed lobby: embed: 'https://a b' is an origin, https://host[:port] (no path, no wildcard)",
 			"app/embed shop: embed: 'https://*.example' is an origin, https://host[:port] (no path, no wildcard)"
 		]);
 	});
@@ -284,14 +277,14 @@ describe('bolt check', () => {
 			models: {
 				items: {
 					description: 'items',
-					label: 'name',
+					record_label: 'record.name',
 					fields: { name: { kind: 'text' }, cost: { kind: 'int' } }
 				}
 			},
 			exposures: {
 				items: {
-					read: { items: { fields: 'all' } },
 					outputs: {
+						default: { items: { fields: 'all' } },
 						public: { items: { fields: ['name'] } },
 						unlabelled: { items: { fields: ['cost'] } }
 					},
@@ -300,23 +293,23 @@ describe('bolt check', () => {
 				}
 			},
 			policies: {
-				anyone: { description: 'a', grants: { items: { outputs: { public: true } } } },
+				anyone: { description: 'a', grants: { items: { outputs: { public: {} } } } },
 				wide: {
 					description: 'w',
-					grants: { items: { read: true, outputs: { unlabelled: true } } }
+					grants: { items: { outputs: { default: {}, unlabelled: {} } } }
 				},
 				desk: {
 					description: 'd',
-					grants: { items: { outputs: { public: true }, create: true, delete: true } }
+					grants: { items: { outputs: { public: {} }, create: {}, delete: {} } }
 				}
 			},
-			apps: { shop: { ...shop, audience: { public: ['anyone', 'wide'] } } },
-			kiosks: {
+			apps: {
+				shop: { ...shop, audience: { public: ['anyone', 'wide'] } },
 				lobby: {
 					title: 'L',
 					description: 'L',
 					icon: 'x',
-					auth: 'members',
+					shell: 'kiosk',
 					policies: ['desk'],
 					pages: { home: page }
 				}
@@ -339,8 +332,14 @@ describe('bolt check', () => {
 	});
 	it.live('parses cron strings at build (rule 52)', () =>
 		Effect.gen(function* () {
-			for (const ok of ['0 2 * * *', '*/15 * * * *', '0 9-17 * * 1-5', '5,35 0 1 1,6 0', '@daily'])
-				expect(cronValid(ok)).toBe(true);
+			for (const ok of [
+				'0 2 * * *',
+				'*/15 * * * *',
+				'0 9-17 * * 1-5',
+				'5,35 0 1 1,6 0',
+				' @daily '
+			])
+				expect(Result.isSuccess(parse_cron(ok))).toBe(true);
 			for (const bad of [
 				'61 * * * *',
 				'* * * *',
@@ -348,9 +347,10 @@ describe('bolt check', () => {
 				'*/0 * * * *',
 				'0 0 * 13 *',
 				'5-1 * * * *',
+				'*/60 * * * *',
 				'@often'
 			])
-				expect(cronValid(bad)).toBe(false);
+				expect(Result.isSuccess(parse_cron(bad))).toBe(false);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it('grades evaluation CPU at reference speed: a thread slowed by load is not over budget (rule 6)', () => {

@@ -1,92 +1,25 @@
-import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope, type Schema } from 'effect';
+import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope } from 'effect';
 import { hydrate, mount, tick, unmount, type Component } from 'svelte';
-import { mountEdge } from '@norbital-ai/ui/effect';
-import type { Json } from '../../decl/values.ts';
-import { createBolt, type Bolt, type BoltConfig } from '../../page/bolt.ts';
-import { storedFileUrl } from '../../page/file-ref.ts';
-import { awaitDevice, resolveDevice, type DeviceApi } from '../../page/device.ts';
+import { mount_edge } from '@norbital-ai/ui/effect';
+import { create_bolt, type Bolt, type BoltConfig } from '../../page/bolt.ts';
+import { await_device } from '../../page/device.ts';
+import { public_context, public_ui } from './context.ts';
+import { view_client } from '../../page/view-client.ts';
+import type { UiContext } from '@norbital-ai/ui';
 import {
 	decodePublicHydration,
 	PublicHydrationFailure,
 	PUBLIC_HYDRATION_ID,
+	public_read_key,
 	type PublicBoot
 } from '../../protocol/public-page.ts';
 import Turnstile from '../auth/Turnstile.svelte';
 import type { ChallengeQueue } from '../runtime.ts';
 import { HEADERS, PATHS } from '../../protocol/wire.ts';
 
-export { attach, fork, run } from '@norbital-ai/ui/effect';
-export { resolveDevice, type DeviceApi } from '../../page/device.ts';
-export { fileRef } from '../../page/file-ref.ts';
-export { frameworkText } from '../i18n.ts';
-
-type PublicClient = Bolt & {
-	readonly org: { readonly name: string; readonly logo: string | null };
-	readonly device: DeviceApi;
-	href(app: string, page?: string, record?: { model: string; id: string }): string;
-};
-let current: PublicClient | null = null;
-const client = (): PublicClient => {
-	if (current === null) throw new Error('$bolt was read before public page hydration.');
-	return current;
-};
-/** This browser facade has no dependency on the internal shell, Norbius, Studio or app sessions. */
-export const bolt: Omit<PublicClient, 'describe'> & {
-	readonly describe: PublicClient['describe'];
-} = {
-	get aggregate() {
-		return client().aggregate;
-	},
-	get history() {
-		return client().history;
-	},
-	get query() {
-		return client().query;
-	},
-	act: (...args) => client().act(...args),
-	recordCapabilities: (...args) => client().recordCapabilities(...args),
-	decode: (...args) => client().decode(...args),
-	get describe() {
-		return client().describe;
-	},
-	options: (...args) => client().options(...args),
-	start: (...args) => client().start(...args),
-	clock: (...args) => client().clock(...args),
-	convert: (...args) => client().convert(...args),
-	previewPdf: (...args) => client().previewPdf(...args),
-	observe: (...args) => client().observe(...args),
-	upload: (...args) => client().upload(...args),
-	fileUrl: (...args) => client().fileUrl(...args),
-	get approvals() {
-		return client().approvals;
-	},
-	get restore() {
-		return client().restore;
-	},
-	get session() {
-		return client().session;
-	},
-	get actor() {
-		return client().actor;
-	},
-	get locale() {
-		return client().locale;
-	},
-	t: (...args) => client().t(...args),
-	get closed() {
-		return client().closed;
-	},
-	get sync() {
-		return client().sync;
-	},
-	get org() {
-		return client().org;
-	},
-	get device() {
-		return client().device;
-	},
-	href: (...args) => client().href(...args)
-};
+export type PublicClient = Omit<Bolt, 'native_query' | 'observe' | 'closed' | 'sync'> &
+	ReturnType<typeof public_context> &
+	UiContext;
 
 const scopedFetch =
 	(
@@ -120,13 +53,12 @@ const scopedFetch =
 	};
 
 /** Hydrates the same wrapper and decoded props the isolated server rendered; navigation stays document based. */
-export const hydratePublicPage = <D>(
-	component: Component<{ data: D; boot: PublicBoot }>,
-	codec: Schema.Codec<D, Json>,
+export const hydrate_public_page = (
+	component: Component<{ boot: PublicBoot; ctx: PublicClient }>,
 	route: string,
 	options: {
 		readonly fetch?: typeof globalThis.fetch;
-		readonly openStream?: BoltConfig['openStream'];
+		readonly open_stream?: BoltConfig['open_stream'];
 	} = {}
 ) =>
 	Effect.gen(function* () {
@@ -143,13 +75,14 @@ export const hydratePublicPage = <D>(
 			return yield* new PublicHydrationFailure({
 				reason: 'Public page hydration metadata is missing.'
 			});
-		const props = yield* decodePublicHydration(text, codec, { route, release });
-		yield* Effect.tryPromise(awaitDevice);
+		const props = yield* decodePublicHydration(text, { route, release });
+		let initialReads = props.reads;
+		yield* Effect.tryPromise(await_device);
 		const scope = yield* Scope.make();
 		const tokens = yield* Queue.unbounded<string>();
 		let reset = () => {};
 		const challenge: ChallengeQueue | null =
-			props.boot.visitor?.siteKey === undefined
+			props.boot.visitor?.site_key === undefined
 				? null
 				: {
 						put: (token) => {
@@ -160,73 +93,52 @@ export const hydratePublicPage = <D>(
 							reset = next;
 						}
 					};
-		const pageClient = yield* createBolt({
+		const pageClient = yield* create_bolt({
 			actor: props.boot.actor,
 			locale: props.boot.workspace.locale,
 			tz: props.boot.workspace.tz,
 			messages: props.boot.messages,
 			base: props.boot.base,
 			catalog: props.boot.catalog,
+			read_catalog: props.boot.read_catalog,
+			operation_outputs: props.boot.operation_outputs,
 			describe: props.boot.describe,
 			contract: props.boot.contract,
+			initial_read: (read) => initialReads[public_read_key(read)],
 			fetch: scopedFetch(props.boot, challenge, options.fetch ?? globalThis.fetch),
-			openStream: (url) => {
+			open_stream: (url) => {
 				const scoped = new URL(url, location.href);
 				if (props.boot.visitor !== null && props.boot.kiosk === null)
 					scoped.searchParams.set('app', props.boot.visitor.app);
 				if (props.boot.kiosk !== null) scoped.searchParams.set('kiosk', props.boot.kiosk);
 				return (
-					options.openStream?.(scoped.href) ?? new EventSource(scoped, { withCredentials: true })
+					options.open_stream?.(scoped.href) ?? new EventSource(scoped, { withCredentials: true })
 				);
 			}
 		}).pipe(
 			Scope.provide(scope),
 			Effect.onError(() => Scope.close(scope, Exit.void))
 		);
-		const installed = Object.assign(pageClient, {
-			fileUrl: (ref: { readonly id: string }, options: Parameters<Bolt['fileUrl']>[1] = {}) =>
-				storedFileUrl(
-					props.boot.base,
-					ref.id,
-					options,
-					props.boot.kiosk !== null
-						? { kiosk: props.boot.kiosk }
-						: props.boot.visitor === null
-							? undefined
-							: { app: props.boot.visitor.app }
-				),
-			org: { name: props.boot.workspace.name, logo: props.boot.workspace.logo ?? null },
-			device: resolveDevice(),
-			href: (app: string, page?: string, record?: { model: string; id: string }) => {
-				const path = `${props.boot.base}/app/${app}${page === undefined ? '' : `/${page}`}`;
-				return record === undefined
-					? path
-					: `${path}?record=${encodeURIComponent(record.model)}/${encodeURIComponent(record.id)}`;
-			}
-		});
-		current = installed;
-		const dispose = mountEdge(ManagedRuntime.make(Layer.empty));
+		const { native_query: _native_query, observe: _observe, closed: _closed, sync: _sync, ...authored } = pageClient;
+		const page = Object.assign(authored, public_context(props.boot));
+		const views = view_client({ ...pageClient, ...public_context(props.boot) }, props.boot.read_catalog, props.boot.catalog);
+		const ctx = Object.assign(page, { ui: public_ui(props.boot, page, views) });
+		const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 		const view = yield* Effect.try({
-			try: () => hydrate(component, { target, props, recover: false }),
+			try: () => hydrate(component, { target, props: { boot: props.boot, ctx }, recover: false }),
 			catch: (cause) => new PublicHydrationFailure({ reason: String(cause) })
 		}).pipe(
 			Effect.onError(() =>
-				Effect.sync(() => {
-					if (current === installed) current = null;
-				}).pipe(
-					Effect.andThen(Scope.close(scope, Exit.void)),
-					Effect.ensuring(Effect.promise(dispose))
-				)
+				Scope.close(scope, Exit.void).pipe(Effect.ensuring(Effect.promise(dispose)))
 			)
 		);
-		const mountWidget = (target: HTMLElement, siteKey: string, queue: ChallengeQueue) =>
-			mount(Turnstile, { target, props: { siteKey, queue } });
+		const mountWidget = (target: HTMLElement, site_key: string, queue: ChallengeQueue) =>
+			mount(Turnstile, { target, props: { site_key, queue } });
 		let widget: ReturnType<typeof mountWidget> | null = null;
 		let closed = false;
 		const cleanup = Effect.suspend(() => {
 			if (closed) return Effect.void;
 			closed = true;
-			if (current === installed) current = null;
 			const mountedWidget = widget;
 			return Effect.tryPromise(() => unmount(view)).pipe(
 				Effect.ensuring(
@@ -240,15 +152,16 @@ export const hydratePublicPage = <D>(
 			);
 		});
 		yield* Effect.promise(tick).pipe(Effect.onError(() => cleanup.pipe(Effect.orDie)));
+		initialReads = {};
 		const challengeTarget = document.getElementById('bolt-public-challenge');
 		if (
 			challenge !== null &&
 			challengeTarget !== null &&
-			props.boot.visitor?.siteKey !== undefined
+			props.boot.visitor?.site_key !== undefined
 		) {
-			const siteKey = props.boot.visitor.siteKey;
+			const site_key = props.boot.visitor.site_key;
 			widget = yield* Effect.try({
-				try: () => mountWidget(challengeTarget, siteKey, challenge),
+				try: () => mountWidget(challengeTarget, site_key, challenge),
 				catch: (cause) => new PublicHydrationFailure({ reason: String(cause) })
 			}).pipe(Effect.onError(() => cleanup.pipe(Effect.orDie)));
 		}

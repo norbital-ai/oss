@@ -24,6 +24,7 @@ const JOB = {
 };
 const catalog: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -37,7 +38,7 @@ const mounted: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	while (mounted.length > 0) await mounted.pop()?.();
 });
-async function show(props: PackagingPart & { customFields?: KindsHost['customFields'] }) {
+async function show(props: PackagingPart & { customFields?: KindsHost['custom_fields'] }) {
 	const client = await viewFixture({
 		read: () => ({ rows: [JOB], next: null }),
 		get: () => JOB,
@@ -59,14 +60,14 @@ async function show(props: PackagingPart & { customFields?: KindsHost['customFie
 }
 
 test('a stored kind names its built-in; a custom reference names a built-in or a workspace field alike', () => {
-	assert.equal(k.fieldName({ kind: 'money' }), 'money');
-	assert.equal(k.fieldName({ kind: 'file', accept: ['*/*'], max: '1MiB' }), 'file');
-	assert.equal(k.fieldName({ kind: 'point' }), 'point');
-	assert.equal(k.fieldName({ kind: 'text', format: 'phone' }), 'phone');
-	assert.equal(k.fieldName({ kind: 'text', format: 'phone', many: true }), undefined);
-	assert.equal(k.fieldName({ kind: 'text' }), undefined);
-	assert.equal(k.fieldName({ kind: 'custom', of: 'phone' }), 'phone');
-	assert.equal(k.fieldName({ kind: 'custom', of: 'bank_account' }), 'bank_account');
+	assert.equal(k.field_name({ kind: 'money' }), 'money');
+	assert.equal(k.field_name({ kind: 'file', accept: ['*/*'], max: '1MiB' }), 'file');
+	assert.equal(k.field_name({ kind: 'point' }), 'point');
+	assert.equal(k.field_name({ kind: 'text', format: 'phone' }), 'phone');
+	assert.equal(k.field_name({ kind: 'text', format: 'phone', many: true }), undefined);
+	assert.equal(k.field_name({ kind: 'text' }), undefined);
+	assert.equal(k.field_name({ kind: 'custom', of: 'phone' }), 'phone');
+	assert.equal(k.field_name({ kind: 'custom', of: 'bank_account' }), 'bank_account');
 });
 
 test('phone numbers are stored E.164 and read grouped with their calling code', () => {
@@ -87,29 +88,29 @@ test('phone numbers are stored E.164 and read grouped with their calling code', 
 });
 
 test('a sender or recipient handle reads per transport: a WhatsApp number JID as its phone, the rest as given', () => {
-	assert.equal(phone.formatHandle('whatsapp', '6591234567@s.whatsapp.net'), '+65 9123 4567');
-	assert.equal(phone.formatHandle('whatsapp', '6591234567:14@s.whatsapp.net'), '+65 9123 4567');
-	assert.equal(phone.formatHandle(null, '6591234567@s.whatsapp.net'), '+65 9123 4567');
-	assert.equal(phone.formatHandle('whatsapp', '6591234567'), '+65 9123 4567');
-	assert.equal(phone.formatHandle(null, 'whatsapp:+6591234567'), '+65 9123 4567');
-	assert.equal(phone.formatHandle('whatsapp', '8881234567@s.whatsapp.net'), '+8881234567');
+	assert.equal(phone.format_handle('whatsapp', '6591234567@s.whatsapp.net'), '+65 9123 4567');
+	assert.equal(phone.format_handle('whatsapp', '6591234567:14@s.whatsapp.net'), '+65 9123 4567');
+	assert.equal(phone.format_handle(null, '6591234567@s.whatsapp.net'), '+65 9123 4567');
+	assert.equal(phone.format_handle('whatsapp', '6591234567'), '+65 9123 4567');
+	assert.equal(phone.format_handle(null, 'whatsapp:+6591234567'), '+65 9123 4567');
+	assert.equal(phone.format_handle('whatsapp', '8881234567@s.whatsapp.net'), '+8881234567');
 	assert.equal(
-		phone.formatHandle('whatsapp', '120363041234567890@g.us'),
+		phone.format_handle('whatsapp', '120363041234567890@g.us'),
 		'120363041234567890@g.us'
 	);
-	assert.equal(phone.formatHandle('whatsapp', '123456789012345@lid'), '123456789012345@lid');
-	assert.equal(phone.formatHandle('whatsapp', '6591234567@s.whatsapp.net', 'Wei Jie'), 'Wei Jie');
+	assert.equal(phone.format_handle('whatsapp', '123456789012345@lid'), '123456789012345@lid');
+	assert.equal(phone.format_handle('whatsapp', '6591234567@s.whatsapp.net', 'Wei Jie'), 'Wei Jie');
 	assert.equal(
-		phone.formatHandle('email', 'hello@riverstone.example.test'),
+		phone.format_handle('email', 'hello@riverstone.example.test'),
 		'hello@riverstone.example.test'
 	);
-	assert.equal(phone.formatHandle('telegram', '123456789'), '123456789');
-	assert.equal(phone.formatHandle('telegram', '123456789', 'Ana'), 'Ana');
-	assert.equal(phone.formatHandle('slack', 'U0123ABCD', ' '), 'U0123ABCD');
+	assert.equal(phone.format_handle('telegram', '123456789'), '123456789');
+	assert.equal(phone.format_handle('telegram', '123456789', 'Ana'), 'Ana');
+	assert.equal(phone.format_handle('slack', 'U0123ABCD', ' '), 'U0123ABCD');
 });
 
 test('a workspace custom field renders through its renderer, and a host entry of a built-in name wins', async () => {
-	const customFields: NonNullable<KindsHost['customFields']> = {
+	const customFields: NonNullable<KindsHost['custom_fields']> = {
 		sign: { shape: { kind: 'text' }, renderer: Renderer },
 		phone: { shape: { kind: 'text', format: 'phone' }, renderer: Renderer }
 	};
@@ -145,7 +146,7 @@ test('readonly Show renders nested native decimals as copyable values without in
 				kind: 'object',
 				fields: {
 					amount: { kind: 'decimal', scale: 2 },
-					nested: { kind: 'list', of: { kind: 'decimal', scale: 2 } }
+					nested: { kind: 'decimal', scale: 2, many: true }
 				}
 			},
 			value: { amount: Decimal.of('12345678901234567.89'), nested: [Decimal.of('2.50')] },

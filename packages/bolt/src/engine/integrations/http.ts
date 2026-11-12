@@ -26,7 +26,7 @@ export function target(base: string, path: string): URL {
 	const rel = path.startsWith('/') ? path.slice(1) : path;
 	const refuse = () =>
 		BoltError.make(
-			'invalidInput',
+			'invalid_input',
 			'facility',
 			`the path '${path}' leaves the integration's base URL`
 		);
@@ -68,7 +68,7 @@ const send = (url: string, method: string, headers: Record<string, string>, body
 				headers: Object.entries(headers),
 				...(body === undefined ? {} : { body: new TextEncoder().encode(body) })
 			},
-			{ redirects: 5, maxBytes: 2 * 1024 * 1024 }
+			{ redirects: 5, max_bytes: 2 * 1024 * 1024 }
 		);
 		return {
 			status: response.status,
@@ -88,7 +88,7 @@ export type HttpInstance = {
 export type HttpOptions = {
 	readonly secrets?: Readonly<Record<string, string>> | undefined;
 };
-export const httpOAuth = (
+export const http_oauth = (
 	def: IntegrationSpec
 ):
 	| { client: string; secret: string; authorize: string; token: string; scopes?: readonly string[] }
@@ -98,9 +98,9 @@ export const httpOAuth = (
 		? undefined
 		: { ...oauth, authorize: oauth.authorize, token: oauth.token };
 };
-const invalid = (message: string) => BoltError.make('invalidInput', 'facility', message);
+const invalid = (message: string) => BoltError.make('invalid_input', 'facility', message);
 const unavailable = (message: string) => BoltError.make('unavailable', 'facility', message);
-export const httpRequest = (
+export const http_request = (
 	def: IntegrationSpec,
 	instance: HttpInstance,
 	op: Json,
@@ -118,10 +118,10 @@ export const httpRequest = (
 			typeof op['path'] !== 'string'
 		)
 			return yield* Effect.fail(invalid('an http request is { method, path, … }'));
-		const base = spec.baseUrl.startsWith('https://')
-			? spec.baseUrl
+		const base = spec.base_url.startsWith('https://')
+			? spec.base_url
 			: Predicate.isObject(instance.configuration)
-				? instance.configuration[spec.baseUrl]
+				? instance.configuration[spec.base_url]
 				: undefined;
 		if (typeof base !== 'string' || base === '')
 			return yield* Effect.fail(unavailable('the instance has no base URL configured'));
@@ -151,7 +151,7 @@ export const httpRequest = (
 					: Effect.succeed(value);
 			});
 		const auth = spec.auth,
-			oauth = httpOAuth(def);
+			oauth = http_oauth(def);
 		if (oauth !== undefined)
 			headers['authorization'] = `Bearer ${yield* token(oauth, instance, options)}`;
 		else if (auth !== undefined && 'bearer' in auth)
@@ -202,8 +202,8 @@ const token = (
 					? Effect.fail(unavailable(`${name} is not set`))
 					: Effect.succeed(value);
 			});
-		const clientId = yield* secret(client.client),
-			clientSecret = yield* secret(client.secret);
+		const client_id = yield* secret(client.client),
+			client_secret = yield* secret(client.secret);
 		const response = yield* send(
 			client.token,
 			'POST',
@@ -211,8 +211,8 @@ const token = (
 			new URLSearchParams({
 				grant_type: 'refresh_token',
 				refresh_token: refresh,
-				client_id: clientId,
-				client_secret: clientSecret
+				client_id: client_id,
+				client_secret: client_secret
 			}).toString()
 		);
 		const raw = Schema.decodeUnknownOption(Schema.fromJsonString(TokenResponse))(response.text);
@@ -226,7 +226,7 @@ const token = (
 			)
 				return yield* Effect.fail(
 					BoltError.make(
-						response.status === 429 ? 'rateLimited' : 'upstream',
+						response.status === 429 ? 'rate_limited' : 'upstream',
 						'facility',
 						`the token endpoint answered ${response.status}`
 					)

@@ -33,16 +33,20 @@
 	});
 	/** Seated once over a whole cycle, as the mark is: a per-frame fit would make the band breathe. */
 	const FIT = measureFit(norbiusStripGeometry, LATTICE, 'ready');
+	type Rgb = readonly [number, number, number];
 
 	/** Any CSS colour → [r, g, b], through a 1×1 canvas (computed colours may be oklch()). */
-	function rgb(color: string): [number, number, number] {
+	function rgb(color: string): Rgb {
 		const probe = document.createElement('canvas');
 		probe.width = probe.height = 1;
-		const c = probe.getContext('2d')!;
+		const c = probe.getContext('2d');
+		if (c === null) throw new Error('The color canvas is unavailable.');
 		c.fillStyle = color;
 		c.fillRect(0, 0, 1, 1);
 		const [r, g, b] = c.getImageData(0, 0, 1, 1).data;
-		return [r!, g!, b!];
+		if (r === undefined || g === undefined || b === undefined)
+			throw new RangeError('The canvas did not return an RGB pixel.');
+		return [r, g, b];
 	}
 
 	function band(
@@ -61,9 +65,7 @@
 			frame = 0,
 			last = 0,
 			time = 3;
-		let ink: number[] = [],
-			brand: number[] = [],
-			ground: number[] = [],
+		let colors: readonly [Rgb, Rgb, Rgb] | undefined,
 			themeKey = '';
 		const xs = new Float32Array(LATTICE.length),
 			ys = new Float32Array(LATTICE.length),
@@ -86,17 +88,20 @@
 			const key = [inkSwatch, brandSwatch, groundSwatch]
 				.map((e) => getComputedStyle(e).color)
 				.join();
-			if (key !== themeKey) {
+			if (key !== themeKey || colors === undefined) {
 				themeKey = key;
-				[ink, brand, ground] = [inkSwatch, brandSwatch, groundSwatch].map((e) =>
-					rgb(getComputedStyle(e).color)
-				);
+				colors = [
+					rgb(getComputedStyle(inkSwatch).color),
+					rgb(getComputedStyle(brandSwatch).color),
+					rgb(getComputedStyle(groundSwatch).color)
+				];
 			}
+			const [ink, brand, ground] = colors;
 
 			// the agent mark's own band, seated like the mark and grown to page scale
 			const reach = Math.min(width * 0.46, height * 0.45);
-			for (let i = 0; i < LATTICE.length; i++) {
-				const p = norbiusStripGeometry.point('ready', LATTICE[i]!, i, time);
+			for (const [i, seed] of LATTICE.entries()) {
+				const p = norbiusStripGeometry.point('ready', seed, i, time);
 				xs[i] = width / 2 + (p.x - FIT.cx) * FIT.scale * reach;
 				ys[i] = height / 2 - (p.y - FIT.cy) * FIT.scale * reach;
 				zs[i] = p.z;
@@ -104,20 +109,28 @@
 				heat[i] = Math.min(1, p.accent);
 				order[i] = i;
 			}
-			order.sort((a, b) => zs[a]! - zs[b]!);
+			order.sort((a, b) => {
+				const za = zs[a], zb = zs[b];
+				if (za === undefined || zb === undefined)
+					throw new RangeError('The band order names a missing dot.');
+				return za - zb;
+			});
 			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 			ctx.clearRect(0, 0, width, height);
 			// a backdrop, not the mark: the whole field sits at a share of full ink
 			const share = dark ? 0.55 : 0.5;
 			for (const i of order) {
-				const depth = Math.min(1, Math.max(0, (zs[i]! + 1) / 2));
-				const h = heat[i]!;
+				const x = xs[i], y = ys[i], z = zs[i], light = lit[i], h = heat[i];
+				if (x === undefined || y === undefined || z === undefined || light === undefined || h === undefined)
+					throw new RangeError('The band order names a missing dot.');
+				const depth = Math.min(1, Math.max(0, (z + 1) / 2));
 				const strength =
 					share *
-					Math.min(1, (INK_FLOOR + (1 - INK_FLOOR) * depth) * (0.6 + 0.4 * lit[i]!) + h * 0.4);
-				ctx.fillStyle = `rgb(${ground.map((g, j) => Math.round(g + (ink[j]! + (brand[j]! - ink[j]!) * h - g) * strength)).join(' ')})`;
+					Math.min(1, (INK_FLOOR + (1 - INK_FLOOR) * depth) * (0.6 + 0.4 * light) + h * 0.4);
+				const channel = (j: 0 | 1 | 2) => Math.round(ground[j] + (ink[j] + (brand[j] - ink[j]) * h - ground[j]) * strength);
+				ctx.fillStyle = `rgb(${channel(0)} ${channel(1)} ${channel(2)})`;
 				ctx.beginPath();
-				ctx.arc(xs[i]!, ys[i]!, FAR + (NEAR - FAR) * depth, 0, TAU);
+				ctx.arc(x, y, FAR + (NEAR - FAR) * depth, 0, TAU);
 				ctx.fill();
 			}
 		}

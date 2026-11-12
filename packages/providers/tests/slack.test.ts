@@ -5,7 +5,7 @@ import { Effect } from 'effect';
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { slack } from '../src/slack/index.ts';
-import { fakeFetch, file, host, json, messagesOf, signal } from './kit.ts';
+import { required, fakeFetch, file, host, json, messagesOf, signal } from './kit.ts';
 
 const NOW = 1_790_000_000_000,
 	SECRET = '8f742231b10e8888abcd99yyyzzz85a5'.replace(/[^0-9a-f]/g, 'a');
@@ -35,7 +35,7 @@ const paired = () =>
 	Effect.gen(function* () {
 		const f = api(),
 			h = yield* host(slack(), f);
-		yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+		yield* required(h.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
 		return { f, h };
 	});
 const signed = (body: object, ts = String(NOW / 1000), secret = SECRET) => {
@@ -77,14 +77,14 @@ describe('Slack', () => {
 						(c) => (c.url.endsWith('/chat.postMessage') ? json({ ok: false, error }) : undefined)
 					]);
 				const gone = yield* host(slack(), answer('channel_not_found'));
-				yield* gone.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+				yield* required(gone.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
 				expect(
-					yield* Effect.flip(gone.link.send!({ to: 'C1', text: 'x' }, undefined))
+					yield* Effect.flip(required(gone.link.send)({ to: 'C1', text: 'x' }, undefined))
 				).toMatchObject({ _tag: 'ProviderRefused', code: 'channel_not_found' });
 				const busy = yield* host(slack(), answer('internal_error'));
-				yield* busy.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+				yield* required(busy.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
 				expect(
-					yield* Effect.flip(busy.link.send!({ to: 'C1', text: 'x' }, undefined))
+					yield* Effect.flip(required(busy.link.send)({ to: 'C1', text: 'x' }, undefined))
 				).toMatchObject({ _tag: 'ProviderUnavailable' });
 			})
 	);
@@ -93,17 +93,17 @@ describe('Slack', () => {
 			yield* TestClock.setTime(NOW);
 			const f = api(),
 				h = yield* host(slack(), f);
-			expect((yield* Effect.flip(h.link.pair!({ botToken: 'xoxb-good' }))).message).toMatch(
+			expect((yield* Effect.flip(required(h.link.pair)({ botToken: 'xoxb-good' }))).message).toMatch(
 				/signing secret is required/
 			);
 			expect(
-				(yield* Effect.flip(h.link.pair!({ botToken: 'xoxp-user', signingSecret: SECRET }))).message
+				(yield* Effect.flip(required(h.link.pair)({ botToken: 'xoxp-user', signingSecret: SECRET }))).message
 			).toMatch(/bot token does not look right/);
 			expect(
-				(yield* Effect.flip(h.link.pair!({ botToken: 'xoxb-bad', signingSecret: SECRET }))).message
+				(yield* Effect.flip(required(h.link.pair)({ botToken: 'xoxb-bad', signingSecret: SECRET }))).message
 			).toMatch(/invalid_auth/);
 			expect(h.writes).toEqual([]);
-			yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+			yield* required(h.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
 			expect(h.status).toEqual({
 				state: 'connected',
 				account: 'deskbot',
@@ -129,16 +129,16 @@ describe('Slack', () => {
 				const { h } = yield* paired();
 				const bad = signed(event({}));
 				bad.headers.set('x-slack-signature', 'v0=00');
-				expect((yield* h.link.webhook!(bad)).status).toBe(401);
-				expect((yield* h.link.webhook!(signed(event({}), undefined, 'b'.repeat(32)))).status).toBe(
+				expect((yield* required(h.link.webhook)(bad)).status).toBe(401);
+				expect((yield* required(h.link.webhook)(signed(event({}), undefined, 'b'.repeat(32)))).status).toBe(
 					401
 				);
-				expect((yield* h.link.webhook!(signed(event({}), String(NOW / 1000 - 600)))).status).toBe(
+				expect((yield* required(h.link.webhook)(signed(event({}), String(NOW / 1000 - 600)))).status).toBe(
 					401
 				);
 				expect(h.events).toEqual([]);
 				expect(
-					yield* h.link.webhook!(signed({ type: 'url_verification', challenge: 'c-1' })).pipe(
+					yield* required(h.link.webhook)(signed({ type: 'url_verification', challenge: 'c-1' })).pipe(
 						Effect.flatMap((response) => Effect.tryPromise(() => response.json()))
 					)
 				).toEqual({ challenge: 'c-1' });
@@ -150,8 +150,8 @@ describe('Slack', () => {
 			Effect.gen(function* () {
 				yield* TestClock.setTime(NOW);
 				const { h } = yield* paired();
-				yield* h.link.webhook!(signed(event({ text: 'hey <@UBOT> status?' })));
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(signed(event({ text: 'hey <@UBOT> status?' })));
+				yield* required(h.link.webhook)(
 					signed(
 						event({
 							ts: '1790000000.000300',
@@ -161,12 +161,12 @@ describe('Slack', () => {
 						})
 					)
 				);
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					signed(event({ channel: 'D9', channel_type: 'im', ts: '1790000000.000400' }))
 				);
-				yield* h.link.webhook!(signed(event({ bot_id: 'B1' })));
-				yield* h.link.webhook!(signed(event({ user: 'UBOT' })));
-				yield* h.link.webhook!(signed(event({ subtype: 'message_changed' })));
+				yield* required(h.link.webhook)(signed(event({ bot_id: 'B1' })));
+				yield* required(h.link.webhook)(signed(event({ user: 'UBOT' })));
+				yield* required(h.link.webhook)(signed(event({ subtype: 'message_changed' })));
 				expect(messagesOf(h.events)).toMatchObject([
 					{
 						id: 'C1:1790000000.000100',
@@ -174,13 +174,13 @@ describe('Slack', () => {
 						group: true,
 						invocation: 'mention',
 						from: { handle: 'U7' },
-						sentAt: '2026-09-21T14:13:20.000Z'
+						sent_at: '2026-09-21T14:13:20.000Z'
 					},
 					{
 						id: 'C1:1790000000.000300',
 						thread: 'C1:1790000000.000100',
 						invocation: 'reply',
-						replyTo: 'C1:1790000000.000100'
+						reply_to: 'C1:1790000000.000100'
 					},
 					{ id: 'D9:1790000000.000400', thread: 'D9', group: false, invocation: 'direct' }
 				]);
@@ -204,7 +204,7 @@ describe('Slack', () => {
 						})
 					);
 				const original = { type: 'message', user: 'U7', ts: '1790000000.000100' };
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					changed({
 						...original,
 						text: 'fixed',
@@ -212,13 +212,13 @@ describe('Slack', () => {
 						edited: { user: 'U7', ts: '1790000060.000000' }
 					})
 				);
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					changed({ ...original, text: 'hi', attachments: [{ title: 'unfurl' }] })
 				);
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					changed({ ...original, bot_id: 'B1', edited: { user: 'U7', ts: '1790000061.000000' } })
 				);
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					signed(
 						event({
 							channel: 'D9',
@@ -229,7 +229,7 @@ describe('Slack', () => {
 						})
 					)
 				);
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					signed(
 						event({
 							subtype: 'message_deleted',
@@ -242,7 +242,7 @@ describe('Slack', () => {
 					)
 				);
 				// a thread parent deleted under its replies is no `message_deleted`: it turns into a tombstone
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					changed({
 						type: 'message',
 						subtype: 'tombstone',
@@ -257,7 +257,7 @@ describe('Slack', () => {
 						id: 'C1:1790000000.000100',
 						thread: 'C1:1789999999.000050',
 						text: 'fixed',
-						sentAt: '2026-09-21T14:13:20.000Z',
+						sent_at: '2026-09-21T14:13:20.000Z',
 						version: '2026-09-21T14:14:20.000Z'
 					}),
 					expect.objectContaining({
@@ -288,9 +288,9 @@ describe('Slack', () => {
 				(c) => (c.url === gone ? new Response('gone!!', { status: 404 }) : undefined)
 			]);
 			const h = yield* host(slack(), f);
-			yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+			yield* required(h.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
 			const pdf = { mimetype: 'application/pdf', size: 6, mode: 'hosted' };
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				signed(
 					event({
 						subtype: 'file_share',
@@ -409,8 +409,8 @@ describe('Slack', () => {
 						: undefined
 			]);
 			const h = yield* host(slack(), f);
-			yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
-			const page = yield* h.link.reconcile!('C1', since);
+			yield* required(h.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
+			const page = yield* required(h.link.reconcile)('C1', since);
 			expect(page.complete).toBe(true);
 			expect(page.bins).toBeUndefined();
 			expect(page.messages).toEqual([
@@ -430,13 +430,13 @@ describe('Slack', () => {
 			]);
 			const [history, replies, ...rest] = f.calls.slice(-2 - 0);
 			expect(rest).toEqual([]);
-			expect(Object.fromEntries(new URLSearchParams(history!.body))).toEqual({
+			expect(Object.fromEntries(new URLSearchParams(required(history).body))).toEqual({
 				channel: 'C1',
 				oldest,
 				inclusive: 'true',
 				limit: '999'
 			});
-			expect(Object.fromEntries(new URLSearchParams(replies!.body))).toMatchObject({
+			expect(Object.fromEntries(new URLSearchParams(required(replies).body))).toMatchObject({
 				channel: 'C1',
 				ts: '1790000000.000000'
 			});
@@ -461,7 +461,7 @@ describe('Slack', () => {
 				const open = (f: ReturnType<typeof fakeFetch>) =>
 					Effect.gen(function* () {
 						const h = yield* host(slack(), f);
-						yield* h.link.pair!({ botToken: 'xoxb-good', signingSecret: SECRET });
+						yield* required(h.link.pair)({ botToken: 'xoxb-good', signingSecret: SECRET });
 						return h;
 					});
 				const messages = [
@@ -469,7 +469,7 @@ describe('Slack', () => {
 					{ ...reply, ts: '1790000010.000000', text: 'ok' }
 				];
 				const thread = answering(() => ({ ok: true, has_more: false, messages }));
-				const whole = yield* (yield* open(thread)).link.reconcile!(`C1:${parent}`, since);
+				const whole = yield* required((yield* open(thread)).link.reconcile)(`C1:${parent}`, since);
 				expect(whole).toMatchObject({
 					complete: true,
 					messages: [
@@ -477,18 +477,18 @@ describe('Slack', () => {
 							id: 'C1:1790000010.000000',
 							thread: `C1:${parent}`,
 							invocation: 'reply',
-							replyTo: `C1:${parent}`
+							reply_to: `C1:${parent}`
 						}
 					]
 				});
 				expect(whole.messages).toHaveLength(1);
-				expect(Object.fromEntries(new URLSearchParams(thread.calls.at(-1)!.body))).toMatchObject({
+				expect(Object.fromEntries(new URLSearchParams(required(thread.calls.at(-1)).body))).toMatchObject({
 					channel: 'C1',
 					ts: parent
 				});
-				const dm = yield* (yield* open(
+				const dm = yield* required((yield* open(
 					answering(() => ({ ok: true, messages: [{ type: 'message', user: 'U7', ts: parent }] }))
-				)).link.reconcile!('D9', since);
+				)).link.reconcile)('D9', since);
 				expect(dm.messages).toEqual([
 					expect.objectContaining({ group: false, invocation: 'direct' })
 				]);
@@ -496,19 +496,19 @@ describe('Slack', () => {
 					{ has_more: true },
 					{ has_more: false, response_metadata: { next_cursor: 'bmV4dA==' } }
 				]) {
-					const partial = yield* (yield* open(answering(() => ({ ok: true, messages, ...more }))))
-						.link.reconcile!(`C1:${parent}`, since);
+					const partial = yield* required((yield* open(answering(() => ({ ok: true, messages, ...more }))))
+						.link.reconcile)(`C1:${parent}`, since);
 					expect(partial.complete).toBe(false);
 					expect(partial.messages).toHaveLength(1);
 				}
 				// a channel the bot left skips that thread: the engine would end its pass on a refusal
 				const left = answering(() => ({ ok: false, error: 'not_in_channel' }));
-				expect(yield* (yield* open(left)).link.reconcile!('C1', since)).toEqual({
+				expect(yield* required((yield* open(left)).link.reconcile)('C1', since)).toEqual({
 					messages: [],
 					complete: false
 				});
 				const busy = answering(() => ({ ok: false, error: 'internal_error' }));
-				expect(yield* Effect.flip((yield* open(busy)).link.reconcile!('C1', since))).toMatchObject({
+				expect(yield* Effect.flip(required((yield* open(busy)).link.reconcile)('C1', since))).toMatchObject({
 					_tag: 'ProviderUnavailable'
 				});
 			})
@@ -517,20 +517,20 @@ describe('Slack', () => {
 		Effect.gen(function* () {
 			yield* TestClock.setTime(NOW);
 			const { f, h } = yield* paired();
-			yield* h.link.send!({ to: 'C1:1790000000.000100', text: 'report' }, [
+			yield* required(h.link.send)({ to: 'C1:1790000000.000100', text: 'report' }, [
 				file('report.pdf', 'application/pdf', '%PDF r')
 			]);
 			const [url, bytes, done] = f.calls.slice(-3);
-			expect(Object.fromEntries(new URLSearchParams(url!.body))).toEqual({
+			expect(Object.fromEntries(new URLSearchParams(required(url).body))).toEqual({
 				filename: 'report.pdf',
 				length: '6'
 			});
-			expect([bytes!.url, bytes!.headers['content-type'], bytes!.body]).toEqual([
+			expect([required(bytes).url, required(bytes).headers['content-type'], required(bytes).body]).toEqual([
 				'https://files.slack.com/upload/v1/abc',
 				'application/pdf',
 				'%PDF r'
 			]);
-			expect(Object.fromEntries(new URLSearchParams(done!.body))).toEqual({
+			expect(Object.fromEntries(new URLSearchParams(required(done).body))).toEqual({
 				files: '[{"id":"F1","title":"report.pdf"}]',
 				channel_id: 'C1',
 				thread_ts: '1790000000.000100'
@@ -541,19 +541,19 @@ describe('Slack', () => {
 		Effect.gen(function* () {
 			yield* TestClock.setTime(NOW);
 			const { f, h } = yield* paired();
-			expect(yield* h.link.send!({ to: 'C1:1790000000.000100', text: 'on it' }, undefined)).toEqual(
-				{ providerId: 'C1:1790000001.000200' }
+			expect(yield* required(h.link.send)({ to: 'C1:1790000000.000100', text: 'on it' }, undefined)).toEqual(
+				{ provider_id: 'C1:1790000001.000200' }
 			);
-			const call = f.calls.at(-1)!;
+			const call = required(f.calls.at(-1));
 			expect(call.headers['authorization']).toBe('Bearer xoxb-good');
 			expect(JSON.parse(call.body)).toEqual({
 				channel: 'C1',
 				text: 'on it',
 				thread_ts: '1790000000.000100'
 			});
-			yield* h.link.unpair!();
+			yield* required(h.link.unpair)();
 			expect(
-				(yield* Effect.flip(h.link.send!({ to: 'C1', text: 'x' }, undefined))).message
+				(yield* Effect.flip(required(h.link.send)({ to: 'C1', text: 'x' }, undefined))).message
 			).toMatch(/not connected/);
 		})
 	);

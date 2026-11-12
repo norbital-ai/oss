@@ -1,8 +1,8 @@
 import { Predicate } from 'effect';
-import { formatValue as show, recordText } from '../kinds/kind.js';
+import { recordText } from '../kinds/kind.js';
 import type { ModelExposure } from '../kinds/context.js';
 import type { Row, Values } from '../model/types.js';
-import { READ_LIMIT, requestJson, type Layer, type Request } from '../read/request.js';
+import { READ_LIMIT, request_json, type Layer, type Request } from '../read/request.js';
 const HEAVY = new Set(['json', 'custom', 'file']);
 type Catalog = { readonly [model: string]: ModelExposure } | undefined;
 /** A many-relation's child: the model whose one-relation names `rel` as its inverse onto `of`. */
@@ -99,12 +99,12 @@ export function listRequest(
 }
 
 /** Read only the optional record label's own-field dependencies; missing labels read no extra fields. */
-export function labelRead(cat: Catalog, of: string, options: Layer & { output?: string } = {}) {
-	const fields = cat?.[of]?.labelPaths ?? cat?.[of]?.label ?? [];
+export function label_read(cat: Catalog, of: string, options: Layer & { output?: string } = {}) {
+	const fields = cat?.[of]?.label_paths ?? cat?.[of]?.label ?? [];
 	const request = listRequest(cat, of, options, fields);
 	// a nested path is a relation layer or a JSON member; the root reads its first segment
 	const roots = [...new Set(fields.map((path) => path.split('.')[0] ?? path))];
-	return requestJson({ ...request, [of]: { ...options, fields: roots } });
+	return request_json({ ...request, [of]: { ...options, fields: roots } });
 }
 /** A relation cell's link: the target model and its label text; a many-relation also lists each record (`more`: past `MANY_SHOWN`). */
 export type Ref = {
@@ -120,7 +120,6 @@ export function unref(
 	of: string,
 	refs: readonly string[],
 	rows: readonly Row[],
-	locale?: string,
 	all?: boolean
 ): readonly Row[];
 export function unref(
@@ -128,7 +127,6 @@ export function unref(
 	of: string,
 	refs: readonly string[],
 	rows: readonly Values[],
-	locale?: string,
 	all?: boolean
 ): readonly Values[];
 export function unref(
@@ -136,7 +134,6 @@ export function unref(
 	of: string,
 	refs: readonly string[],
 	rows: readonly Values[],
-	locale = 'en',
 	all = false
 ): readonly Values[] {
 	const rels = refs.filter(
@@ -146,17 +143,15 @@ export function unref(
 	const text = (rel: string, t: Values) => {
 		const target = cat?.[of]?.relations?.[rel]?.targets[0] ?? manyTarget(cat, of, rel);
 		const exposure = target === undefined ? undefined : cat?.[target];
-		return (
-			(exposure?.record_label !== undefined
-				? recordText(exposure, t, { locale })
-				: refLabel(cat, of, rel)
-						.map((l) => show(t[l] ?? null, locale))
-						.filter(Boolean)
-						.join(' · ')) || '—'
-		);
+		return recordText(exposure, t) || '—';
 	};
 	return rows.map((r) => {
 		const refs: { [rel: string]: Ref } = {};
+		if (Predicate.isObject(r['$refs']))
+			for (const rel of Object.keys(r['$refs'])) {
+				const known = refOf(r, rel);
+				if (known !== undefined) refs[rel] = known;
+			}
 		const out: { [f: string]: import('@norbital-ai/std/kind').Value } = { ...r };
 		for (const rel of rels) {
 			const t = r[rel],

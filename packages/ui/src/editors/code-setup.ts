@@ -9,10 +9,10 @@ import { codeHighlighter } from './highlight.js';
 /** Code in CodeMirror: `javascript` (also CEL and TypeScript expressions), `json`, or `plaintext`. */
 export type CodeEditorLanguage = 'javascript' | 'json' | 'plaintext';
 /** The language's parser and highlighting. */
-export const codeLanguage = (language: CodeEditorLanguage): Extension =>
+export const code_language = (language: CodeEditorLanguage): Extension =>
 	language === 'javascript' ? javascript() : language === 'json' ? json() : [];
 /** The kit's tokens over CodeMirror. StyleMod retains mounted rules for the document's lifetime: instances share this. */
-export const codeTheme = EditorView.theme({
+export const code_theme = EditorView.theme({
 	'&': {
 		height: '100%',
 		minHeight: 'inherit',
@@ -55,4 +55,4 @@ export const codeTheme = EditorView.theme({
 	}
 });
 /** The code colours as an extension. */
-export const codeHighlight = syntaxHighlighting(codeHighlighter);
+export const code_highlight = syntaxHighlighting(codeHighlighter);

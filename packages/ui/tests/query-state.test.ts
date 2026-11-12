@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { Deferred, Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { browser, streamSource } from './view-fixture.ts';
-const { mountEdge, runningFibers } = await import('../src/effect/index.ts');
+const { mount_edge, running_fibers } = await import('../src/effect/index.ts');
 const { flushSync, mount, tick, unmount } = await import('svelte');
 const { default: QueryHarness } = await import('./query-harness.svelte');
 const { default: LiveHarness } = await import('./query-live-harness.svelte');
@@ -16,7 +16,7 @@ const settle = async () => {
 };
 const edge = () =>
 	Effect.acquireRelease(
-		Effect.sync(() => mountEdge(ManagedRuntime.make(Layer.empty))),
+		Effect.sync(() => mount_edge(ManagedRuntime.make(Layer.empty))),
 		(dispose) => browser(dispose).pipe(Effect.orDie)
 	);
 const text = (target: HTMLElement, selector: string) => target.querySelector(selector)?.textContent;
@@ -76,7 +76,7 @@ it.live(
 	'query scope changes cannot publish a late uninterruptible answer or its initial seed',
 	() =>
 		Effect.gen(function* () {
-			const before = runningFibers();
+			const before = running_fibers();
 			yield* edge();
 			const old = yield* Deferred.make<string, Error>();
 			const next = yield* Deferred.make<string, Error>();
@@ -106,7 +106,7 @@ it.live(
 			yield* browser(settle);
 			assert.equal(text(target, 'output'), 'new');
 			assert.equal(text(target, '[data-loading]'), 'false');
-			assert.equal(runningFibers(), before);
+			assert.equal(running_fibers(), before);
 		}).pipe(Effect.scoped)
 );
 

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { navigationEvents, pageActions, pageConversationStarted } from '../src/shell/agent/navigation.ts';
-import { navigationPaths, type NavNode } from '../src/shell/nav.ts';
+import { navigation_paths, type NavNode } from '../src/shell/nav.ts';
 import type { AgentRow } from '../src/protocol/schema.ts';
 import { clientNavigationPath, systemUiIntent, systemUiPath } from '../src/protocol/system-ui.ts';
 
@@ -11,7 +11,7 @@ const row = (id: string, path: string, name = 'page'): AgentRow => ({
 	text: null,
 	state: null,
 	tag: null,
-	tool: { name, failed: false, navigation: path }
+	tool: { name, behavior: { page: true }, failed: false, navigation: path }
 });
 it('never replays history, another tool’s output or a repeated live result', () => {
 	const events = navigationEvents();
@@ -27,14 +27,14 @@ it('never replays history, another tool’s output or a repeated live result', (
 	expect(events('two', [row('other', '/inbox')])).toEqual([]);
 });
 it('never replays history, another tool’s output or a repeated live page action', () => {
-	const pageRow = (id: string, page: { click?: string; scroll?: number; go?: 'back' | 'forward' }) => ({
+	const pageRow = (id: string, page: { click?: string; scroll?: number; go?: 'back' | 'forward' }): AgentRow => ({
 		id,
 		seq: 1,
 		role: 'tool' as const,
 		text: null,
 		state: null,
 		tag: null,
-		tool: { name: 'page', failed: false, page }
+		tool: { name: 'page', behavior: { page: true }, failed: false, page }
 	});
 	const actions = pageActions();
 	expect(actions('one', [pageRow('old', { click: 'Old' })])).toEqual([]);
@@ -54,7 +54,7 @@ it('never replays history, another tool’s output or a repeated live page actio
 	expect(actions('two', [pageRow('other', { go: 'back' })])).toEqual([]);
 });
 it('shares one page-action ledger across Agent instances, so a confirmation is never repeated', () => {
-	const pageRow = (id: string, click: string, at?: string) => ({
+	const pageRow = (id: string, click: string, at?: string): AgentRow => ({
 		id,
 		seq: 2,
 		role: 'tool' as const,
@@ -62,7 +62,7 @@ it('shares one page-action ledger across Agent instances, so a confirmation is n
 		state: null,
 		tag: null,
 		...(at === undefined ? {} : { at }),
-		tool: { name: 'page', failed: false, page: { click } }
+		tool: { name: 'page', behavior: { page: true }, failed: false, page: { click } }
 	});
 	const userRow = {
 		id: 'shared-input',
@@ -81,14 +81,14 @@ it('shares one page-action ledger across Agent instances, so a confirmation is n
 });
 it('runs the first action of a conversation this panel started', () => {
 	const actions = pageActions();
-	const row = {
+	const row: AgentRow = {
 		id: 'started-action',
 		seq: 1,
 		role: 'tool' as const,
 		text: null,
 		state: null,
 		tag: null,
-		tool: { name: 'page' as const, failed: false, page: { click: 'Open' } }
+		tool: { name: 'page' as const, behavior: { page: true }, failed: false, page: { click: 'Open' } }
 	};
 	pageConversationStarted('started-here');
 	expect(actions('started-here', [row])).toHaveLength(1);
@@ -104,14 +104,14 @@ it('never replays an opened conversation’s history', () => {
 		state: null,
 		tag: null
 	};
-	const old = {
+	const old: AgentRow = {
 		id: 'old-action',
 		seq: 2,
 		role: 'tool' as const,
 		text: null,
 		state: null,
 		tag: null,
-		tool: { name: 'page' as const, failed: false, page: { click: 'Old' } }
+		tool: { name: 'page' as const, behavior: { page: true }, failed: false, page: { click: 'Old' } }
 	};
 	expect(actions('history', [user, old])).toEqual([]);
 	expect(actions('history', [user, old])).toEqual([]);
@@ -128,9 +128,9 @@ it('the navigation allowlist contains authorized pages and no API, external, sec
 			pages: [{ name: 'dashboard', title: 'Dashboard', href: '/app/ops/dashboard' }]
 		}
 	];
-	const member = navigationPaths(nodes, false);
+	const member = navigation_paths(nodes, false);
 	expect(member).toEqual(['/', '/inbox', '/app/ops/dashboard']);
-	expect(navigationPaths(nodes, true)).toContain('/settings/integrations');
+	expect(navigation_paths(nodes, true)).toContain('/settings/integrations');
 	for (const path of [
 		'https://example.com',
 		'//example.com',
@@ -143,7 +143,7 @@ it('the navigation allowlist contains authorized pages and no API, external, sec
 });
 
 it('opens only a typed configuration on its registered admin page, without accepting values or URL escapes', () => {
-	const paths = navigationPaths([], true);
+	const paths = navigation_paths([], true);
 	const path = systemUiPath('/settings/secrets', { capability: 'secret.set', record: 'TOKEN' });
 	expect(path).not.toBeNull();
 	if (path === null) throw new Error('Declared setup route missing');

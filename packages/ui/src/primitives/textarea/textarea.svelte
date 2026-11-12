@@ -5,7 +5,7 @@ field chrome; `disabled` keeps the box, muted.
 -->
 <script lang="ts">
 	import CopyText from '../copy-text/copy-text.svelte';
-	import { cn, useControls, uiText, type WithElementRef, type WithoutChildren } from '../utils.js';
+	import { cn, use_controls, ui_text, type WithElementRef, type WithoutChildren } from '../utils.js';
 	import type { HTMLTextareaAttributes } from 'svelte/elements';
 
 	let {
@@ -17,8 +17,8 @@ field chrome; `disabled` keeps the box, muted.
 		disabled,
 		...restProps
 	}: WithoutChildren<WithElementRef<HTMLTextareaAttributes>> = $props();
-	const controls = useControls();
-	const t = uiText();
+	const controls = use_controls();
+	const t = ui_text();
 	const text = $derived(value === undefined || value === null ? '' : String(value));
 </script>
 

@@ -6,8 +6,8 @@ authority, history or relational queries require one.
 
 ```ts
 // src/data/custom_field/rating/+definition.ts
-import { customField } from '@norbital-ai/bolt';
-export default customField('rating', {
+import { custom_field } from '@norbital-ai/bolt';
+export default custom_field({
 	description: 'A score from one to five.',
 	shape: { kind: 'int', min: 1, max: 5 }
 });
@@ -19,11 +19,11 @@ shape. A supplied `data/custom_field/rating/+renderer.svelte` takes
 `{ view }: { view: CustomFieldView<'rating'> }` from `@norbital-ai/bolt`.
 
 In show mode `view` supplies `value`, `dense`, `row` and `name`; edit mode also supplies
-`onChange(next)`, `disabled` and `error`. `address` is available beside an address field. Preserve
-nullability and write typed values through `onChange`, without round-tripping them through JSON.
+`on_change(next)`, `disabled` and `error`. `address` is available beside an address field. Preserve
+nullability and write typed values through `on_change`, without round-tripping them through JSON.
 
 The renderer is used automatically in Table cells (dense), Board cards, Form and RecordShell
-fields, history diffs, Matrix labels and bulk relation pickers. Built-in money, file, point and
+fields, history diffs and bulk relation pickers. Built-in money, file, point and
 phone renderers follow the same lookup and reserve their names. Renderers are statically bundled
 because cells render synchronously; keep them light and import heavier tools only on demand.
 
@@ -37,4 +37,4 @@ Schema's ISO meaning; numeric duration is native. Custom workspace values use `x
 
 Check/build validate explicit names and shapes in seeded schema rows and report the row, field
 and schema path on a mismatch. Implicit near-misses are not errors. Source: `DATATYPE_SHAPES` in
-std and `jsonSchemaKind` in UI.
+std and `json_schema_kind` in UI.

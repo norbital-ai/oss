@@ -8,10 +8,10 @@ import type { Id } from './values.ts';
  * The schema of one model's record id: decodes a non-empty string into `Id<C>`.
  *
  * ```ts
- * const id = Schema.decodeUnknownSync(idOf('employee'))(params.get('employee')); // Id<'employee'>
+ * const id = Schema.decodeUnknownSync(id_of('employee'))(params.get('employee')); // Id<'employee'>
  * ```
  */
-export const idOf = <C extends TargetName>(model: C): Schema.declare<Id<C>> =>
+export const id_of = <C extends TargetName>(model: C): Schema.declare<Id<C>> =>
 	Schema.declare((u: unknown): u is Id<C> => typeof u === 'string' && u.length > 0, {
 		identifier: `Id<${model}>`,
 		expected: `a ${model} id`

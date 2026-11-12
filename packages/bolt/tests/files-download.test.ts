@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { FacilityFailure } from '../src/decl/errors.ts';
-import { mediaType } from '../src/engine/files/media.ts';
-import { localFiles } from '../src/node/files.ts';
+import { media_type } from '../src/engine/files/media.ts';
+import { local_files } from '../src/node/files.ts';
 
 const MiB = 1024 * 1024;
 const png = Buffer.concat([
@@ -76,13 +76,13 @@ const origin = Effect.acquireRelease(
 );
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-describe('localFiles download', () => {
+describe('local_files download', () => {
 	it.live('streams media into the store by its bytes, through a redirect and in parts', () =>
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { base } = yield* origin,
 					dir = mkdtempSync(join(tmpdir(), 'bolt-download-'));
-				const files = localFiles(dir, { allowLoopback: true });
+				const files = local_files(dir, { allow_loopback: true });
 				const photo = yield* files.download(`${base}/photo`);
 				expect(photo).toEqual({
 					key: sha(png),
@@ -109,7 +109,7 @@ describe('localFiles download', () => {
 				Effect.gen(function* () {
 					const { base } = yield* origin,
 						dir = mkdtempSync(join(tmpdir(), 'bolt-download-'));
-					const files = localFiles(dir, { allowLoopback: true });
+					const files = local_files(dir, { allow_loopback: true });
 					const refused = (url: string, f = files) => Effect.flip(f.download(url));
 					expect(yield* refused(`${base}/elf-as-png`)).toMatchObject({
 						kind: 'invalid',
@@ -135,14 +135,14 @@ describe('localFiles download', () => {
 					expect(
 						yield* refused(
 							`${base}/clip.mp4`,
-							localFiles(dir, { allowLoopback: true, maxBytes: MiB })
+							local_files(dir, { allow_loopback: true, max_bytes: MiB })
 						)
 					).toMatchObject({ kind: 'invalid', message: expect.stringMatching(/over/) });
 					expect(
-						yield* refused(`${base}/stall`, localFiles(dir, { allowLoopback: true, idleMs: 200 }))
+						yield* refused(`${base}/stall`, local_files(dir, { allow_loopback: true, idle_ms: 200 }))
 					).toMatchObject({ kind: 'timeout' });
 					// without the development flag, this machine is a private network
-					expect(yield* refused(`${base}/photo`, localFiles(dir))).toMatchObject({
+					expect(yield* refused(`${base}/photo`, local_files(dir))).toMatchObject({
 						kind: 'invalid'
 					});
 					expect(readdirSync(dir)).toEqual([]);
@@ -153,21 +153,21 @@ describe('localFiles download', () => {
 
 describe('the media rule', () => {
 	it('reads the type from the bytes, never from a name or header', () => {
-		expect(mediaType(png)).toBe('image/png');
-		expect(mediaType(mp4)).toBe('video/mp4');
-		expect(mediaType(Buffer.from('%PDF-1.7\n'))).toBe('application/pdf');
-		expect(mediaType(page)).toBe('text/html');
-		expect(mediaType(Buffer.from('  <!doctype HTML>\n<html></html>'))).toBe('text/html');
-		expect(mediaType(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
-		expect(mediaType(Buffer.from('ID3\x04'))).toBe('audio/mpeg');
+		expect(media_type(png)).toBe('image/png');
+		expect(media_type(mp4)).toBe('video/mp4');
+		expect(media_type(Buffer.from('%PDF-1.7\n'))).toBe('application/pdf');
+		expect(media_type(page)).toBe('text/html');
+		expect(media_type(Buffer.from('  <!doctype HTML>\n<html></html>'))).toBe('text/html');
+		expect(media_type(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
+		expect(media_type(Buffer.from('ID3\x04'))).toBe('audio/mpeg');
 		// CAD models and drawings, each by its own signature
-		expect(mediaType(Buffer.from('ISO-10303-21;\nHEADER;'))).toBe('model/step');
-		expect(mediaType(Buffer.from('AC1032\0\0'))).toBe('image/vnd.dwg');
-		expect(mediaType(Buffer.from('  0\r\nSECTION\r\n  2\r\nHEADER'))).toBe('image/vnd.dxf');
-		expect(mediaType(Buffer.from('solid bracket\n  facet normal 0 0 1'))).toBe('model/stl');
-		expect(mediaType(Buffer.from(`${'Bracket model'.padEnd(72)}S      1\n`))).toBe('model/iges');
-		expect(mediaType(Buffer.from('glTF\x02\0\0\0'))).toBe('model/gltf-binary');
-		expect(mediaType(Buffer.from('II*\0\x08\0'))).toBe('image/tiff');
+		expect(media_type(Buffer.from('ISO-10303-21;\nHEADER;'))).toBe('model/step');
+		expect(media_type(Buffer.from('AC1032\0\0'))).toBe('image/vnd.dwg');
+		expect(media_type(Buffer.from('  0\r\nSECTION\r\n  2\r\nHEADER'))).toBe('image/vnd.dxf');
+		expect(media_type(Buffer.from('solid bracket\n  facet normal 0 0 1'))).toBe('model/stl');
+		expect(media_type(Buffer.from(`${'Bracket model'.padEnd(72)}S      1\n`))).toBe('model/iges');
+		expect(media_type(Buffer.from('glTF\x02\0\0\0'))).toBe('model/gltf-binary');
+		expect(media_type(Buffer.from('II*\0\x08\0'))).toBe('image/tiff');
 		for (const other of [
 			elf,
 			Buffer.from('MZ\x90\x00'),
@@ -180,6 +180,6 @@ describe('the media rule', () => {
 			Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
 			new Uint8Array()
 		])
-			expect(mediaType(other)).toBeUndefined();
+			expect(media_type(other)).toBeUndefined();
 	});
 });

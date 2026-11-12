@@ -1,4 +1,5 @@
 import { required, textOf } from './view-fixture.ts';
+import { admitted } from './act-envelope.ts';
 import { element } from './elements.ts';
 import { viewFixture, jsonRecord, type ViewScript, browser } from './view-fixture.ts';
 import { Deferred, Effect, Queue, Schema, Stream } from 'effect';
@@ -14,7 +15,7 @@ import type { Page } from '../src/model/types.ts';
 import type { TableSource, TableProps } from '../src/table/Table.svelte';
 import type { Toolbar, ToolbarItem } from '../src/model/ViewToolbar.svelte';
 import { ActRefused } from '../../bolt/build/decl/errors.js';
-import { runningFibers } from '../src/effect/index.ts';
+import { running_fibers } from '../src/effect/index.ts';
 import { it, afterEach } from '@effect/vitest';
 import { vi } from 'vitest';
 const { flushSync, mount, tick, unmount } = await import('svelte');
@@ -39,16 +40,22 @@ afterEach(async () => {
 
 async function fakeBolt(extra: Partial<ViewScript> = {}) {
 	const started: { automation: string; input: Value }[] = [];
+	const synced: { model: string; sync: string; input: Value }[] = [];
 	let serial = 0;
 	const fixture = await viewFixture({
 		aggregate: () => ({ count: 0 }),
 		start: (automation, input) => {
 			started.push({ automation, input });
 		},
+		sync_control: (body) => {
+			const { model, sync, input } = body;
+			synced.push({ model, sync, input });
+			return admitted(body);
+		},
 		uuid: () => `run-${++serial}`,
 		...extra
 	});
-	return { ...fixture, started };
+	return { ...fixture, started, synced };
 }
 async function show({
 	actions,
@@ -164,8 +171,23 @@ it.live(
 				const close = mounted.pop();
 				assert.ok(close);
 				yield* browser(close);
+				const catalog: NonNullable<KindsHost['catalog']> = {
+					jobs: {
+						record_label: 'record.name',
+						label: ['name'],
+						fields: { name: { kind: 'text' }, account: { kind: 'ref', to: 'accounts' } },
+						relations: { account: { targets: ['accounts'] } },
+						layers: ['account']
+					},
+					accounts: {
+						record_label: 'record.name',
+						label: ['name'],
+						fields: { name: { kind: 'text' } }
+					}
+				};
 				const { bolt } = yield* browser(() =>
 					fakeBolt({
+						catalog,
 						read: () => ({
 							rows: [{ id: 'j1', name: 'Record', account: { id: 'a1', name: 'Acme' } }],
 							next: null
@@ -173,20 +195,7 @@ it.live(
 					})
 				);
 				yield* browser(() =>
-					show({
-						bolt,
-						of: 'jobs',
-						columns: ['name', 'account'],
-						csv: true,
-						catalog: {
-							jobs: {
-								label: ['name'],
-								fields: { name: { kind: 'text' }, account: { kind: 'id', of: 'accounts' } },
-								relations: { account: { targets: ['accounts'] } }
-							},
-							accounts: { label: ['name'], fields: { name: { kind: 'text' } } }
-						}
-					})
+					show({ bolt, of: 'jobs', columns: ['name', 'account'], csv: true, catalog })
 				);
 				yield* browser(open);
 				yield* browser(() => press('export'));
@@ -303,26 +312,28 @@ it.live(
 	'a handler returning a run handle shows the run and closes the menu; sync starts the declared model sync by name',
 	() =>
 		Effect.gen(function* () {
-			const { bolt, started } = yield* browser(() => fakeBolt());
+			const { bolt, started, synced } = yield* browser(() => fakeBolt());
 			const target = yield* browser(() =>
 				show({
 					bolt,
 					of: 'appointments',
 					catalog: {
 						appointments: {
+							record_label: 'record.name',
 							label: ['name'],
 							fields: { name: { kind: 'text' } },
 							syncs: { events: { kind: 'remote', with: 'google_calendar' } }
 						}
 					},
 					actions: [
-						{ icon: 'lucide:refresh-cw', name: 'Refresh', run: () => bolt.start('refresh', {}) }
+						{ icon: 'lucide:refresh-cw', name: 'Refresh', run: () => bolt.run('refresh', {}) }
 					]
 				})
 			);
 			yield* browser(open);
 			yield* browser(() => press('sync:events'));
-			assert.deepEqual(started, [{ automation: 'appointments.sync.events', input: {} }]);
+			assert.deepEqual(synced, [{ model: 'appointments', sync: 'events', input: {} }]);
+			assert.deepEqual(started, []);
 			yield* browser(open);
 			yield* browser(() => press('item:Refresh'));
 			assert.deepEqual(started.at(-1), { automation: 'refresh', input: {} });
@@ -333,9 +344,10 @@ it.live(
 
 it.live("a model's import and export file syncs are rows of their own, run through the menu", () =>
 	Effect.gen(function* () {
-		const { bolt, started } = yield* browser(() => fakeBolt());
+		const { bolt, synced } = yield* browser(() => fakeBolt());
 		const catalog: NonNullable<KindsHost['catalog']> = {
 			jobs: {
+				record_label: 'record.name',
 				label: ['name'],
 				fields: { name: { kind: 'text' } },
 				syncs: { sheet: { kind: 'file', parser: ['json'], import: true, export: ['json'] } }
@@ -355,8 +367,8 @@ it.live("a model's import and export file syncs are rows of their own, run throu
 			'.json,application/json'
 		);
 		yield* browser(() => press('export:sheet:json'));
-		assert.deepEqual(started, [
-			{ automation: 'jobs.sync.sheet', input: { mode: 'export', to: 'json' } }
+		assert.deepEqual(synced, [
+			{ model: 'jobs', sync: 'sheet', input: { mode: 'export', to: 'json' } }
 		]);
 		const input = element<HTMLInputElement>(target, '[data-view-import]');
 		Object.defineProperty(input, 'files', {
@@ -366,8 +378,8 @@ it.live("a model's import and export file syncs are rows of their own, run throu
 		input.dispatchEvent(new Event('change', { bubbles: true }));
 		yield* browser(() => settle());
 		assert.deepEqual(uploads, ['jobs.$import.sheet']);
-		assert.deepEqual(started.at(-1), {
-			automation: 'jobs.sync.sheet',
+		assert.deepEqual(synced.at(-1), {
+			model: 'jobs', sync: 'sheet',
 			input: { mode: 'import', file: 'f1' }
 		});
 		assert.equal(target.querySelectorAll<HTMLElement>('[data-run]').length, 2);
@@ -405,14 +417,15 @@ it.live(
 					})
 				);
 			};
-			const { bolt, started } = yield* browser(() => fakeBolt({ runs }));
 			const catalog: NonNullable<KindsHost['catalog']> = {
 				jobs: {
+					record_label: 'record.name',
 					label: ['name'],
 					fields: { name: { kind: 'text' } },
 					syncs: { sheet: { kind: 'file', import: true } }
 				}
 			};
+			const { bolt, synced } = yield* browser(() => fakeBolt({ runs, catalog }));
 			const target = yield* browser(() =>
 				show({
 					bolt,
@@ -424,8 +437,8 @@ it.live(
 			yield* browser(() => open());
 			assert.ok(row('template:sheet'), 'the template row comes with the import');
 			yield* browser(() => press('template:sheet'));
-			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.sync.sheet',
+			assert.deepEqual(synced.at(-1), {
+				model: 'jobs', sync: 'sheet',
 				input: { mode: 'template' }
 			});
 			const input = element<HTMLInputElement>(target, '[data-view-import]');
@@ -435,11 +448,11 @@ it.live(
 			});
 			input.dispatchEvent(new Event('change', { bubbles: true }));
 			yield* browser(() => settle());
-			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.sync.sheet',
+			assert.deepEqual(synced.at(-1), {
+				model: 'jobs', sync: 'sheet',
 				input: { mode: 'import', file: 'f1' }
 			});
-			const first = `run-${started.length}`;
+			const first = `run-${synced.length}`;
 			set(first, { status: 'running' });
 			yield* browser(() => settle());
 			assert.equal(
@@ -458,7 +471,7 @@ it.live(
 			});
 			yield* browser(() => settle());
 			// one step: the import ran; its warnings come with its counts, and nothing is offered to accept
-			assert.equal(started.length, 2);
+			assert.equal(synced.length, 2);
 			assert.ok(element<HTMLElement>(document, '[data-view-menu]'), 'the menu opens on warnings');
 			assert.equal(row('import:sheet').dataset.status, 'done');
 			assert.match(
@@ -473,61 +486,60 @@ it.live(
 		})
 );
 
-it.live(
-	'an import whose findings refuse says nothing was imported and lists them',
-	() =>
-		Effect.gen(function* () {
-			const rows = new Map<string, RunRow>();
-			const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
-				const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
-				const row = rows.get(id);
-				return Stream.make({ rows: row === undefined ? [] : [row], next: null }).pipe(
-					Stream.concat(Stream.never)
-				);
-			};
-			rows.set('run-1', {
-				id: 'run-1',
-				automation: 'jobs.sync.sheet',
-				status: 'succeeded',
-				result: {
-					applied: false,
-					findings: [{ at: 2, field: 'hours', message: 'expected an integer', severity: 'refuse' }]
-				}
-			});
-			const { bolt } = yield* browser(() => fakeBolt({ runs }));
-			const catalog: NonNullable<KindsHost['catalog']> = {
-				jobs: {
-					label: ['name'],
-					fields: { name: { kind: 'text' } },
-					syncs: { sheet: { kind: 'file', import: true } }
-				}
-			};
-			const target = yield* browser(() =>
-				show({
-					bolt,
-					catalog,
-					of: 'jobs',
-					upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
-				})
+it.live('an import whose findings refuse says nothing was imported and lists them', () =>
+	Effect.gen(function* () {
+		const rows = new Map<string, RunRow>();
+		const runs: NonNullable<ViewBolt['runs']> = (_automation, { where }) => {
+			const id = Schema.decodeUnknownSync(Schema.String)(jsonRecord(jsonRecord(where).id).eq);
+			const row = rows.get(id);
+			return Stream.make({ rows: row === undefined ? [] : [row], next: null }).pipe(
+				Stream.concat(Stream.never)
 			);
-			const input = element<HTMLInputElement>(target, '[data-view-import]');
-			Object.defineProperty(input, 'files', {
-				value: [new File(['x'], 'jobs.xlsx')],
-				configurable: true
-			});
-			input.dispatchEvent(new Event('change', { bubbles: true }));
-			yield* browser(() => settle());
-			assert.equal(row('import:sheet').dataset.status, 'failed');
-			assert.match(
-				textOf(element<HTMLElement>(row('import:sheet'), '[data-menu-error]')),
-				/Nothing was imported/
-			);
-			assert.match(
-				textOf(element<HTMLElement>(document, '[data-import-findings]')),
-				/Row 2 · Hours: expected an integer/
-			);
-			assert.equal(required(toasts.at(-1)).tone, 'error');
-		})
+		};
+		rows.set('run-1', {
+			id: 'run-1',
+			automation: 'jobs.sync.sheet',
+			status: 'succeeded',
+			result: {
+				applied: false,
+				findings: [{ at: 2, field: 'hours', message: 'expected an integer', severity: 'refuse' }]
+			}
+		});
+		const catalog: NonNullable<KindsHost['catalog']> = {
+			jobs: {
+				record_label: 'record.name',
+				label: ['name'],
+				fields: { name: { kind: 'text' } },
+				syncs: { sheet: { kind: 'file', import: true } }
+			}
+		};
+		const { bolt } = yield* browser(() => fakeBolt({ runs, catalog }));
+		const target = yield* browser(() =>
+			show({
+				bolt,
+				catalog,
+				of: 'jobs',
+				upload: (file) => Effect.succeed({ id: 'f1', name: file.name, mime: file.type })
+			})
+		);
+		const input = element<HTMLInputElement>(target, '[data-view-import]');
+		Object.defineProperty(input, 'files', {
+			value: [new File(['x'], 'jobs.xlsx')],
+			configurable: true
+		});
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+		yield* browser(() => settle());
+		assert.equal(row('import:sheet').dataset.status, 'failed');
+		assert.match(
+			textOf(element<HTMLElement>(row('import:sheet'), '[data-menu-error]')),
+			/Nothing was imported/
+		);
+		assert.match(
+			textOf(element<HTMLElement>(document, '[data-import-findings]')),
+			/Row 2 · Hours: expected an integer/
+		);
+		assert.equal(required(toasts.at(-1)).tone, 'error');
+	})
 );
 
 // Custom record-header actions use the same feedback as generated forms and toolbar items.
@@ -539,7 +551,7 @@ it.live(
 			const bolt = { t: (key: string) => (key === 'Refused' ? key : 'Localized') };
 			const outcomes: Outcome[] = [
 				{ kind: 'committed', output: null, records: [] },
-				{ kind: 'pendingApproval', requestId: 'request', records: [] },
+				{ kind: 'pending_approval', request_id: 'request', records: [] },
 				{ kind: 'refused', code: 'rule', message: 'Refused' },
 				{ kind: 'conflict', records: [] },
 				{ kind: 'unknown', invocation: 'retry-key' }
@@ -580,13 +592,13 @@ it.live('a pending toolbar action is interrupted on teardown and releases every 
 		yield* browser(open);
 		yield* browser(() => press('item:Hold'));
 		assert.equal(row('item:Hold').dataset.status, 'pending');
-		assert.ok(runningFibers() > 0);
+		assert.ok(running_fibers() > 0);
 		const close = mounted.pop();
 		assert.ok(close);
 		yield* browser(close);
 		yield* browser(settle);
 		assert.equal(interrupted, 1);
-		assert.equal(runningFibers(), 0);
+		assert.equal(running_fibers(), 0);
 	})
 );
 
@@ -616,12 +628,13 @@ it.live(
 			) {
 				clicks.push(this.download);
 			});
-			const { bolt, started } = yield* browser(() => fakeBolt({ runs }));
+			const { bolt, synced } = yield* browser(() => fakeBolt({ runs }));
 			const target = yield* browser(() =>
 				show({
 					bolt,
 					catalog: {
 						jobs: {
+							record_label: 'record.name',
 							label: ['name'],
 							fields: { name: { kind: 'text' } },
 							syncs: { sheet: { kind: 'file', import: true } }
@@ -634,8 +647,8 @@ it.live(
 			);
 			yield* browser(() => open());
 			yield* browser(() => press('template:sheet'));
-			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.sync.sheet',
+			assert.deepEqual(synced.at(-1), {
+				model: 'jobs', sync: 'sheet',
 				input: { mode: 'template', context: { company_id: 'c1' } }
 			});
 			const succeed = () => {
@@ -666,8 +679,8 @@ it.live(
 			});
 			input.dispatchEvent(new Event('change', { bubbles: true }));
 			yield* browser(() => settle());
-			assert.deepEqual(started.at(-1), {
-				automation: 'jobs.sync.sheet',
+			assert.deepEqual(synced.at(-1), {
+				model: 'jobs', sync: 'sheet',
 				input: { mode: 'import', file: 'f1', context: { company_id: 'c1' } }
 			});
 		})

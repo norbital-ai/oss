@@ -48,16 +48,15 @@ function liveFixture(): Plugin {
 /** `@norbital-ai/bolt` and its subpaths as this source: one copy of every module for the suite and bolt-cli's source. */
 const SOURCE = Object.entries({
 	'': 'index',
-	'/artifact': 'engine/artifact/read',
+	'/declarations': 'declarations',
+	'/artifact': 'engine/artifact/index',
 	'/engine': 'engine/index',
 	'/errors': 'decl/errors',
 	'/facilities': 'facilities/index',
-	'/guest-hooks': 'node/guest-hooks',
-	'/host-api': 'protocol/host-api',
+	'/host-api': 'host-api',
 	'/node': 'node/index',
 	'/protocol': 'protocol/index',
-	'/tooling': 'tooling/index',
-	'/tooling/browser': 'tooling/browser'
+	'/tooling': 'tooling/index'
 }).map(([subpath, file]) => ({
 	find: new RegExp(`^@norbital-ai/bolt${subpath}$`),
 	replacement: fileURLToPath(new URL(`./src/${file}.ts`, import.meta.url))

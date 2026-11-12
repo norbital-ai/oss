@@ -9,34 +9,45 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Live } from '../src/engine/services.ts';
 import { ActReply } from '../src/protocol/schema.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
-		orders: { description: 'An order', label: 'title', fields: { title: { kind: 'text' } } },
-		notes: { description: 'A note', label: 'text', fields: { text: { kind: 'text' } } }
+		orders: {
+			description: 'An order',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		},
+		notes: {
+			description: 'A note',
+			record_label: 'record.text',
+			fields: { text: { kind: 'text' } }
+		}
 	},
 	relationships: { 'notes.order': { to: 'orders', inverse: 'notes' } },
 	exposures: {
 		orders: {
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: {
 				columns: { orders: ['title'], 'orders.notes': ['text'] }
 			}
 		},
-		notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['text', 'order'] } } }
+		notes: {
+			outputs: { default: { notes: { fields: 'all' } } },
+			create: { columns: { notes: ['text', 'order'] } }
+		}
 	},
 	policies: {
 		rep: {
 			description: 'Rep',
 			grants: {
-				orders: { read: true, create: true },
-				notes: { read: true, create: true }
+				orders: { outputs: { default: {} }, create: {} },
+				notes: { outputs: { default: {} }, create: {} }
 			},
-			automations: ['orders_place']
+			capabilities: { automations: ['orders_place'] }
 		}
 	},
 	integrations: {},
@@ -49,19 +60,20 @@ const manifest = {
 			policies: ['rep']
 		}
 	},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
 const guest = program(`export default { automation: { orders_place: { body: function* (input, ctx) {
-	const made = yield* ctx.act('orders.create', [{
+	const made = yield* ctx.act({ 'orders.create': [{
 		title: input.title, notes: [{ text: 'placed ' + input.title }],
-	}]);
-	return made.records.find((row) => row.model === 'orders').id;
+	}] });
+	if (made.kind !== 'committed') throw new Error('The order did not commit.');
+	const order = made.records.find((row) => row.model === 'orders');
+	if (order === undefined) throw new Error('The order result is missing.');
+	return order.id;
 } } } };`);
 const json = (response: Response) =>
 	Effect.tryPromise({
@@ -78,8 +90,8 @@ describe('a generated nested create over /__bolt/act', () => {
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
 				const t = Context.get(context, TestWorkspace),
 					live = Context.get(context, Live);
-				const rep = t.as(t.member(['rep'])).authority,
-					route = yield* routeFixture(context);
+				const rep = (yield* t.as(t.member(['rep']))).authority,
+					route = yield* route_fixture(context);
 				const post = () =>
 					route.handle(
 						rep,
@@ -87,9 +99,8 @@ describe('a generated nested create over /__bolt/act', () => {
 							method: 'POST',
 							headers: { 'Idempotency-Key': 'k1' },
 							body: JSON.stringify({
-								callable: 'orders.create',
-								input: [{ title: 'desk', notes: [{ text: 'placed desk' }] }],
-								issuedAt: t.clock.now()
+								acts: { 'orders.create': [{ title: 'desk', notes: [{ text: 'placed desk' }] }] },
+								issued_at: t.clock.now()
 							})
 						})
 					);
@@ -112,22 +123,25 @@ describe('a generated nested create over /__bolt/act', () => {
 			Effect.gen(function* () {
 				const context = yield* Layer.build(TestWorkspace.layer({ manifest, guest: yield* guest }));
 				const t = Context.get(context, TestWorkspace);
-				const queued = (yield* actReply(
-					yield* routeFixture(context),
-					t.as(t.member(['rep'])).authority,
+				const queued = (yield* act_reply(
+					yield* route_fixture(context),
+					(yield* t.as(t.member(['rep']))).authority,
 					{
-						callable: 'start',
+						callable: 'run',
 						input: {
 							automation: 'orders_place',
 							runs: [{ id: uuidv7(Date.parse(t.clock.now())), input: { title: 'desk' } }]
 						},
-						issuedAt: t.clock.now()
+						issued_at: t.clock.now()
 					}
 				)).outcome;
 				if (queued.kind !== 'committed') throw new Error('Order workflow did not enqueue');
-				const run = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(
-					queued.output
-				);
+				const run = yield* Schema.decodeUnknownEffect(Schema.Struct({
+					id: Schema.String,
+					ids: Schema.Array(Schema.String),
+					automation: Schema.String
+				}))(queued.output);
+				expect(run).toEqual({ id: run.id, ids: [run.id], automation: 'orders_place' });
 				expect(yield* count(t.db, 'orders')).toBe(0);
 				expect(
 					yield* t.db.rows(Schema.Struct({ state: Schema.String }), {
@@ -135,7 +149,7 @@ describe('a generated nested create over /__bolt/act', () => {
 						params: [run.id]
 					})
 				).toEqual([{ state: 'queued' }]);
-				yield* t.runDue();
+				yield* t.run_due();
 				const order = (yield* t.db.rows(Schema.Struct({ id: Schema.String }), {
 					text: 'SELECT id FROM orders',
 					params: []
@@ -160,7 +174,7 @@ describe('a read request (`bolt.query({ … })`)', () => {
 			...manifest.models,
 			orders: {
 				description: 'An order',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 			}
 		},
@@ -168,23 +182,25 @@ describe('a read request (`bolt.query({ … })`)', () => {
 			...manifest.exposures,
 			orders: {
 				...manifest.exposures.orders,
-				read: { orders: { fields: 'all' }, 'orders.notes': { fields: 'all' } }
+				outputs: { default: { orders: { fields: 'all' }, 'orders.notes': { fields: 'all' } } }
 			}
 		},
 		policies: {
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { read: { orders: { where: { status: { eq: 'open' } } } }, create: true },
-					notes: { read: true, create: true }
+					orders: {
+						outputs: { default: { scopes: { orders: { status: { eq: 'open' } } } } },
+						create: {}
+					},
+					notes: { outputs: { default: {} }, create: {} }
 				}
 			}
 		},
 		needs: []
 	} satisfies EngineManifest;
 	const request = {
-		orders: { fields: ['title'], orderBy: [{ title: 'asc' }] },
-		'orders.notes': { fields: ['text'] },
+		orders: { fields: ['title'], order_by: [{ title: 'asc' }], notes: { fields: ['text'] } },
 		notes: { where: { text: { eq: 'b' } } }
 	};
 
@@ -210,7 +226,7 @@ describe('a read request (`bolt.query({ … })`)', () => {
 					).pipe(Layer.provide(PgliteDb.layer()));
 					const context = yield* Layer.build(TestWorkspace.layer({ manifest: keyed, db }));
 					const t = Context.get(context, TestWorkspace),
-						route = yield* routeFixture(context);
+						route = yield* route_fixture(context);
 					const rows = [
 						['00000000-0000-4000-8000-000000000001', 'closed', 'closed'],
 						['00000000-0000-4000-8000-000000000002', 'open a', 'open'],
@@ -225,12 +241,12 @@ describe('a read request (`bolt.query({ … })`)', () => {
 						text: `INSERT INTO notes (id, text, "order") VALUES ('00000000-0000-4000-8000-000000000009', 'b', '00000000-0000-4000-8000-000000000002')`,
 						params: []
 					});
-					const rep = t.as(t.member(['rep']));
-					yield* qReply(route, rep.authority, { reads: [{ m: 'query', a: [request] }] });
+					const rep = yield* t.as(t.member(['rep']));
+					yield* q_reply(route, rep.authority, { reads: [{ m: 'query', a: [request] }] });
 					t.count.reset();
 					const s0 = statements;
 					expect(
-						(yield* qReply(route, rep.authority, { reads: [{ m: 'query', a: [request] }] }))
+						(yield* q_reply(route, rep.authority, { reads: [{ m: 'query', a: [request] }] }))
 							.answers[0]
 					).toMatchObject({
 						// the closed order is outside the root's scope; its layer follows the root

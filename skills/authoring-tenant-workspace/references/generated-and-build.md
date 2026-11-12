@@ -21,7 +21,7 @@ A workspace author writes `src/`, `seed/`, `tests/`, `assets/`. The compiler wri
 
 - `.norbital/` holds the names index, tsconfig, bundle, source, seed packs, `release.json` and cache. It is never edited or committed. The authored `tsconfig.json` only extends its config.
 - The names index stores declarations as type text with layer paths. A changed field reaches bodies on the next sync.
-- Representations import `$bolt` directly. Custom field renderers capture `useBolt()` during initialization when they need device or text. Type-only `$bolt` imports do not evaluate the SDK.
+- Representations and custom field renderers receive `ctx` as a prop.
 - Module initialization must not start mounted work: record components mount on open, but their modules load before the shell.
 - SSR pages have independent browser entries and private server files; server files are never browser assets.
 
@@ -32,8 +32,8 @@ Contract: Bolt `seeding.md`.
 - `seed/public/**/<model>.json[.gz]` (basename is the model) plus `assets.json` and `assets/**` form the `base` pack every release carries. `seed/test/**` in the same shape is the `test` pack. `seed/+seeder.ts` names the private bank tree, read only by `bolt seed`.
 - Rows restore through the model engine with no write callback or approval; a pack's `start` automations queue with its rows. Validate executable catalogue defaults at author time.
 - Keep `seed/` synthetic; never copy bank or customer rows into it.
-- Seed member identities and business records. Never seed teams, policy assignments, approval routes, envoys, credentials or API keys. Named instances come from `connections`.
-- A pack may carry unnamed `sys_integration` rows (`id, integration, name, owner, active, configuration`). Any other key, or a connection slot id, fails the seed.
+- Seed member identities and business records. Never seed teams, policy assignments, approval routes, envoys, credentials or API keys. Accounts are runtime records; source declares no connection slots.
+- A pack may carry unpaired `sys_integration` rows (`id, integration, name, owner, active, configuration`). Any other key fails the seed. Pairing and envoy deployment happen at runtime.
 
 ## Migrations
 

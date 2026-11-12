@@ -1,5 +1,5 @@
 // The runs area on PGlite (rules 48–56a, 70): the one queue, the deadlines port, buckets, model effects written in the
-// causing statement and run as its writer, re-queues, attempts, webhooks, visibility, restart recovery (a dropped run reruns from the start).
+// causing statement and run as its writer, re-queues, attempts, visibility, restart recovery (a dropped run reruns from the start).
 // One engine per mechanism group; each test's phases share it. Crons: runs-fire. Observed revisions: callables.
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from '@effect/vitest';
@@ -28,7 +28,7 @@ import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive, type EngineHost, type EngineServices } from '../src/engine/host.ts';
-import { bareHost, browserProbe } from './effect-engine.ts';
+import { bare_host, browser_probe } from './effect-engine.ts';
 import {
 	Agents,
 	Callables,
@@ -45,12 +45,14 @@ import {
 	type WritesShape
 } from '../src/engine/services.ts';
 import { DeadlinePort, Keys } from '../src/engine/ports.ts';
-import { keysPort } from '../src/node/keys.ts';
+import { keys_port } from '../src/node/keys.ts';
 import { Secrets, type SecretsShape } from '../src/engine/secrets.ts';
 import { RunsLive } from '../src/engine/runs/index.ts';
-import { parseCallable } from '../src/engine/callables/index.ts';
+import { AutomationsLive } from '../src/engine/runs/invoke.ts';
+import { decode_acts } from '../src/engine/callables/index.ts';
 import { Outcome } from '../src/protocol/schema.ts';
 import { canonical } from '@norbital-ai/store';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import type { Verb } from '../src/engine/write/act.ts';
 const base: EngineManifest = {
 	needs: [],
@@ -62,7 +64,7 @@ const base: EngineManifest = {
 	models: {
 		quotes: {
 			description: 'A quote',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				status: { kind: 'enum', values: ['draft', 'sent'], default: 'draft' }
@@ -72,57 +74,64 @@ const base: EngineManifest = {
 	relationships: {},
 	exposures: {
 		quotes: {
-			read: { quotes: { fields: 'all' } },
-			outputs: { titles: { quotes: { fields: ['title'] } } },
-			create: { columns: { quotes: ['title', 'status'] } },
-			update: { columns: { quotes: ['title', 'status'] } },
-			delete: {},
-			effect: { created: true, updated: true, deleted: true }
+			outputs: {
+				default: { quotes: { fields: 'all' } },
+				titles: { quotes: { fields: ['title'] } }
+			},
+			create: { columns: { quotes: ['title', 'status'] }, effect: true },
+			update: { columns: { quotes: ['title', 'status'] }, effect: true },
+			delete: { effect: true }
 		}
 	},
 	integrations: {},
-	teams: { ops: ['ops'], branch: { parent: 'ops', policies: [] }, nobody: [] },
-	connections: {},
-	envoys: {},
+	teams: { ops: { policies: ['ops'] }, branch: { parent: 'ops', policies: [] }, nobody: { policies: [] } },
+
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	policies: {
 		ops: {
 			description: 'Ops',
-			grants: { quotes: { read: true, create: true, update: true, delete: true } },
-			automations: ['classify']
+			grants: { quotes: { outputs: { default: {} }, create: {}, update: {}, delete: {} } },
+			capabilities: { automations: ['classify'] }
 		},
 		// a writer that reads the `titles` output only: its effects see the rows it wrote as that output
 		clerk: {
 			description: 'Write quotes, read their titles',
 			grants: {
 				quotes: {
-					outputs: { titles: true },
-					create: true,
-					update: true,
-					delete: true
+					outputs: { titles: {} },
+					create: {},
+					update: {},
+					delete: {}
 				}
 			}
 		},
 		limited: {
 			description: 'Read quote titles and start a manual review',
-			grants: { quotes: { outputs: { titles: true } } },
-			automations: ['review']
+			grants: { quotes: { outputs: { titles: {} } } },
+			capabilities: { automations: ['review'] }
 		},
 		writer: {
 			description: 'Write quotes; starts nothing',
-			grants: { quotes: { read: true, create: true } }
+			grants: { quotes: { outputs: { default: {} }, create: {} } }
 		},
-		starter: { description: 'Starts a retitle', grants: {}, automations: ['retitle'] },
+		starter: {
+			description: 'Starts a retitle',
+			grants: {},
+			capabilities: { automations: ['retitle'] }
+		},
 		// the requestor's own quotes: in a run the requestor is the system identity, which owns none
 		own: {
 			description: "Retitle the requestor's quotes",
 			grants: {
 				quotes: {
-					read: { quotes: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
-					update: true
+					outputs: {
+						default: { scopes: { quotes: { created_by: { eq: { var: 'requestor.id' } } } } }
+					},
+					update: {}
 				}
 			}
 		}
@@ -133,37 +142,31 @@ const base: EngineManifest = {
 			input: {
 				model: { kind: 'text' },
 				rows: {
-					kind: 'list',
-					of: {
-						kind: 'object',
-						fields: {
-							id: { kind: 'text' },
-							title: { kind: 'text' },
-							status: { kind: 'text' },
-							note: { kind: 'text' }
-						}
-					}
+					kind: 'object',
+					fields: {
+						id: { kind: 'text' },
+						title: { kind: 'text' },
+						status: { kind: 'text' },
+						note: { kind: 'text' }
+					},
+					many: true
 				}
 			},
 			policies: ['limited']
 		},
 		pair: { description: 'Two independent reviews', policies: ['ops'], concurrency: { max: 2 } },
 		wide: { description: 'A research batch', policies: ['ops'], concurrency: { max: 16 } },
-		classify: { description: 'Re-queues itself while work is left', policies: ['ops'] },
+		classify: { description: 'Re-queues itself while work is left', policies: ['ops'], output: { kind: 'json' } },
 		flaky: {
 			description: 'Fails transiently twice',
 			policies: ['ops'],
+			output: { kind: 'json' },
 			retry: { attempts: 3, backoff: '1min' }
 		},
 		retitle: {
 			description: "Retitle the requestor's quote",
-			input: { quote: { kind: 'text' } },
+			input: { quote: { kind: 'text' }, revision: { kind: 'int' } },
 			policies: ['own']
-		},
-		hook: {
-			description: 'A webhook',
-			on: { webhook: '/in', verify: { scheme: 'bearer', secret: 'HOOK' } },
-			policies: ['ops']
 		}
 	}
 };
@@ -172,10 +175,9 @@ const iso = (ms: number) => new Date(ms).toISOString();
 type Body = (
 	input: Json,
 	ctx: {
-		attempt: string;
+		attempt: number;
 		act(
-			callable: string,
-			input: Json,
+			acts: Readonly<Record<string, Json>>,
 			options?: Extract<
 				CrossCall,
 				{
@@ -224,7 +226,7 @@ function fakeGuest(
 					const [answer] = yield* bridge.cross([call]);
 					if (answer === undefined)
 						return yield* Effect.fail(
-							BoltError.make('badAnswer', 'guest', 'Missing crossing answer')
+							BoltError.make('bad_answer', 'guest', 'Missing crossing answer')
 						);
 					if (!answer.ok) {
 						const error = answer.error;
@@ -233,7 +235,7 @@ function fakeGuest(
 						);
 						return yield* Effect.fail(
 							BoltError.make(
-								Result.isSuccess(code) ? code.success : 'guestError',
+								Result.isSuccess(code) ? code.success : 'guest_error',
 								'guest',
 								'message' in error
 									? error.message
@@ -249,23 +251,16 @@ function fakeGuest(
 				if (body === undefined)
 					return {
 						kind: 'failed' as const,
-						error: BoltError.make('missingBody', 'guest', inv.target)
+						error: BoltError.make('missing_body', 'guest', inv.target)
 					};
 				return yield* body(inv.input, {
-					attempt: inv.id,
-					act: (name, input, options) =>
+					attempt: inv.ctx.attempt ?? 1,
+					act: (acts, options) =>
 						Effect.gen(function* () {
-							const parsed = parseCallable(name, manifest);
-							if (Result.isFailure(parsed)) return yield* Effect.fail(parsed.failure);
-							const callable = parsed.success;
-							const value = yield* cross({
-								_tag: 'act',
-								callable,
-								input,
-								...(options === undefined ? {} : { options })
-							});
+							const parsed = yield* decode_acts(manifest, acts, options ?? {});
+							const value = yield* cross({ _tag: 'act', ...parsed });
 							const outcome = yield* Schema.decodeUnknownEffect(Outcome)(value).pipe(
-								Effect.mapError(() => BoltError.make('badAnswer', 'guest', 'Malformed act result'))
+								Effect.mapError(() => BoltError.make('bad_answer', 'guest', 'Malformed act result'))
 							);
 							if (outcome.kind !== 'committed')
 								return yield* Effect.fail(
@@ -303,7 +298,7 @@ function fakeGuest(
 							error:
 								error._tag === 'BoltError'
 									? error
-									: BoltError.make('guestError', 'guest', error.message, error)
+									: BoltError.make('guest_error', 'guest', error.message, error)
 						})
 					)
 				);
@@ -336,12 +331,12 @@ type World = {
 };
 // One engine for the file over a forwarding database: each test acquires its own database at the checkpoint and its own
 // runs service and fake guest; only the engine graph (layers, caches) is shared.
-const shared = {
-	inner: undefined as TenantDbShape | undefined,
-	clock: { ms: T0 },
-	statements: [] as { at: number; text: string; params: readonly Json[] }[],
-	next: null as number | null
-};
+const shared: {
+	inner: TenantDbShape | undefined;
+	clock: { ms: number };
+	statements: { at: number; text: string; params: readonly Json[] }[];
+	next: number | null;
+} = { inner: undefined, clock: { ms: T0 }, statements: [], next: null };
 const current = () => {
 	if (shared.inner === undefined) throw new Error('no test database');
 	return shared.inner;
@@ -370,8 +365,7 @@ const sharedDb = TenantDb.typed({
 				...batch.statements.map((x) => ({ at: shared.clock.ms, text: x.text, params: x.params }))
 			);
 			return current().transaction(batch);
-		}),
-	session: () => Effect.suspend(() => current().session())
+		})
 });
 const fileScope = Effect.runSync(Scope.make());
 afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
@@ -393,8 +387,8 @@ const engineOnce = Effect.runSync(
 					})
 			};
 			const host = Layer.mergeAll(
-				bareHost(sharedDb),
-				Keys.fromAbi(keysPort(new Uint8Array(32).fill(7))),
+				bare_host(sharedDb),
+				Keys.fromAbi(keys_port(new Uint8Array(32).fill(7))),
 				Layer.succeed(DeadlinePort, deadlines)
 			);
 			// the engine reads its database while it builds: a checkpoint database for the build alone
@@ -436,7 +430,11 @@ const world = Effect.fn('TestRuns.world')(function* (
 	const runContext = yield* Layer.build(
 		RunsLive.pipe(
 			Layer.provide(
-				Layer.succeedContext(Context.add(context, Guest, fakeGuest(manifest, bodies, calls)))
+				AutomationsLive.pipe(
+					Layer.provideMerge(
+						Layer.succeedContext(Context.add(context, Guest, fakeGuest(manifest, bodies, calls)))
+					)
+				)
 			),
 			Layer.provide(ConfigProvider.layer(Context.get(context, Secrets).config))
 		)
@@ -455,7 +453,7 @@ const world = Effect.fn('TestRuns.world')(function* (
 			phone: null,
 			external: false,
 			teams: [],
-			teamPath: [],
+			team_path: [],
 			admin: true,
 			party: null
 		},
@@ -528,7 +526,7 @@ const member = (policies: string[]): Holder => ({
 		phone: null,
 		external: false,
 		teams: [],
-		teamPath: [],
+		team_path: [],
 		admin: false,
 		party: null
 	},
@@ -539,17 +537,17 @@ const member = (policies: string[]): Holder => ({
 describe('run browser scope', () => {
 	it.effect('gives a run its own browser profile and closes it when the run ends', () =>
 		Effect.gen(function* () {
-			browserProbe.calls.length = 0;
-			browserProbe.closes.length = 0;
+			browser_probe.calls.length = 0;
+			browser_probe.closes.length = 0;
 			const w = yield* world(base, {
 				classify: (_input, ctx) => ctx.browser.navigate('https://a.test/')
 			});
 			yield* queue(w, 'browse', 'classify', T0);
 			yield* w.r.tick;
-			expect(browserProbe.calls).toEqual([
+			expect(browser_probe.calls).toEqual([
 				{ profile: '\u0001run:classify\u0000browse', url: 'https://a.test/' }
 			]);
-			expect(browserProbe.closes).toEqual(['\u0001run:classify\u0000browse']);
+			expect(browser_probe.closes).toEqual(['\u0001run:classify\u0000browse']);
 			expect(yield* w.sql(`SELECT state FROM sys_run WHERE id = 'browse'`)).toEqual([
 				{ state: 'succeeded' }
 			]);
@@ -596,13 +594,13 @@ describe('run browser scope', () => {
 			const agents = Context.get(w.context, Agents),
 				owner = randomUUID(),
 				conversation = yield* agents.start({ owner });
-			yield* w.sql(
-				`INSERT INTO sys_message (id, conversation, role, content, text, seq)
-				VALUES ('claim-step', $1, 'tool', '{"result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
-				[conversation]
-			);
-			expect(yield* agents.claimPageAction('claim-step')).toBe(true);
-			expect(yield* agents.claimPageAction('claim-step')).toBe(false);
+			yield* w.db.write({
+				text: `INSERT INTO sys_message (id, conversation, role, content, text, seq)
+				VALUES ('claim-step', $1, 'tool', '{"id":"call-1","name":"page","assistant":"reply-1","result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
+				params: [conversation]
+			});
+			expect(yield* agents.claim_page_action('claim-step')).toBe(true);
+			expect(yield* agents.claim_page_action('claim-step')).toBe(false);
 		})
 	);
 	it.effect('a turn no run will finish says so in its conversation', () =>
@@ -625,15 +623,15 @@ describe('run browser scope', () => {
 			const agents = Context.get(w.context, Agents),
 				owner = randomUUID(),
 				conversation = yield* agents.start({ owner });
-			yield* w.sql(
-				`INSERT INTO sys_message (id, conversation, role, content, text, seq)
-				VALUES ('page-step', $1, 'tool', '{"result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
-				[conversation]
-			);
-			yield* agents.pageResult('page-step', { ok: true, note: 'Pressed “Open”.' });
+			yield* w.db.write({
+				text: `INSERT INTO sys_message (id, conversation, role, content, text, seq)
+				VALUES ('page-step', $1, 'tool', '{"id":"call-1","name":"page","assistant":"reply-1","result":{"page":{"click":"Open"}}}'::jsonb, 'Open', 1)`,
+				params: [conversation]
+			});
+			yield* agents.page_result('page-step', { ok: true, note: 'Pressed “Open”.' });
 			expect(
 				yield* w.sql(
-					`SELECT content->'result'->'pageResult' AS result FROM sys_message WHERE id = 'page-step'`
+					`SELECT content->'result'->'page_result' AS result FROM sys_message WHERE id = 'page-step'`
 				)
 			).toEqual([{ result: { ok: true, note: 'Pressed “Open”.' } }]);
 		})
@@ -641,7 +639,7 @@ describe('run browser scope', () => {
 });
 
 describe('lost leases (rules 52a, 70)', () => {
-	it.effect('a dropped run reruns from the start at most 3 times, then fails lostLease', () =>
+	it.effect('a dropped run reruns from the start at most 3 times, then fails lost_lease', () =>
 		Effect.gen(function* () {
 			let starts = 0,
 				entered = yield* Deferred.make<void>();
@@ -660,7 +658,10 @@ describe('lost leases (rules 52a, 70)', () => {
 				entered = yield* Deferred.make<void>();
 				// the process dies: its fiber ends, it writes nothing, and the next boot finds the run still running
 				yield* Fiber.interrupt(ticking);
-				yield* w.sql(`UPDATE sys_run SET error = NULL WHERE id = 'dropped'`);
+				yield* w.db.write({
+					text: `UPDATE sys_run SET error = NULL WHERE id = 'dropped'`,
+					params: []
+				});
 				yield* w.r.boot();
 				expect(starts).toBe(drop);
 			}
@@ -668,7 +669,7 @@ describe('lost leases (rules 52a, 70)', () => {
 				yield* w.sql(
 					`SELECT state, attempts, leases, error->>'code' AS code FROM sys_run WHERE id = 'dropped'`
 				)
-			).toEqual([{ state: 'failed', attempts: 4, leases: 4, code: 'lostLease' }]);
+			).toEqual([{ state: 'failed', attempts: 4, leases: 4, code: 'lost_lease' }]);
 		})
 	);
 	it.effect('a close that interrupts a run costs it no lease, however often it comes', () =>
@@ -721,25 +722,29 @@ describe('lost leases (rules 52a, 70)', () => {
 	);
 });
 
-/** The ids an effect body received: its rows', or its changes' `after` images'. */
-const EffectImages = Schema.Array(
-	Schema.Union([
-		Schema.Struct({ after: Schema.Struct({ id: Schema.String }) }),
-		Schema.Struct({ id: Schema.String })
-	])
-);
-const effectIds = (input: Json): string[] =>
-	Schema.decodeUnknownSync(EffectImages)(input).map((x) => ('after' in x ? x.after.id : x.id));
+/** The effect's selected writer-visible row is still a proper observed target. */
+const EffectRow = Schema.Struct({ id: Schema.String, revision: Schema.Number });
+const EffectImages = Schema.Array(Schema.Struct({
+	before: Schema.NullOr(EffectRow),
+	set: Schema.Record(Schema.String, Schema.Json),
+	after: Schema.NullOr(EffectRow)
+}));
+const effectTargets = (input: Json) => Schema.decodeUnknownSync(EffectImages)(input).map((change) => {
+	const row = change.after ?? change.before;
+	if (row === null) throw new Error('An effect must carry a stored row image.');
+	return row;
+});
 describe('model effects and starts (rules 49, 50, 51)', () => {
 	it.effect(
 		'each committed verb queues one effect run as its writer, due at its commit, its rows the writer’s view output; its schedule needs no start grant and records the effect as its trigger; a write that changes nothing queues none; a manual start keeps its rows',
 		() =>
 			Effect.gen(function* () {
 				const w = yield* world(base, {
-					'quotes.effect.created': (input) => Effect.succeed(input),
-					'quotes.effect.updated': (input) => Effect.succeed(input),
+					// an effect answers nothing: its images are read from the recorded call
+					'quotes.effect.create': () => Effect.void,
+					'quotes.effect.update': () => Effect.void,
 					// code schedules without a start grant: the clerk may not start `classify`, its effect may
-					'quotes.effect.deleted': (_, ctx) => ctx.schedule('classify', {}),
+					'quotes.effect.delete': (_, ctx) => Effect.asVoid(ctx.schedule('classify', {})),
 					classify: () => Effect.void,
 					review: (input) => Effect.succeed(input)
 				});
@@ -787,9 +792,9 @@ describe('model effects and starts (rules 49, 50, 51)', () => {
 				const at = T0 + 6 * 60000;
 				yield* setNow(w, at + 17000);
 				const created = yield* as('create', [{ title: 'a' }, { title: 'c' }]);
-				if (created.kind !== 'committed' || created.records[1] === undefined)
+				if (created.kind !== 'committed' || created.records[0] === undefined || created.records[1] === undefined)
 					throw new Error('Missing quotes');
-				const first = created.records[0]?.id ?? '',
+				const first = created.records[0].id,
 					second = created.records[1].id;
 				yield* setNow(w, at + 23000);
 				yield* as('update', [{ target: first, set: { title: 'b' } }]);
@@ -800,33 +805,41 @@ describe('model effects and starts (rules 49, 50, 51)', () => {
 				expect([...new Set(w.wakes.slice(woken))]).toEqual([at + 23000]);
 				const effects = w.calls.filter((c) => c.kind === 'effect');
 				expect(effects.map((c) => c.target).sort()).toEqual([
-					'quotes.effect.created',
-					'quotes.effect.deleted',
-					'quotes.effect.updated'
+					'quotes.effect.create',
+					'quotes.effect.delete',
+					'quotes.effect.update'
 				]);
 				const input = (verb: string) =>
 					effects.find((c) => c.target === `quotes.effect.${verb}`)?.input;
 				// one bulk run per committed batch, each image only the fields the clerk's `titles` output reads
-				expect(input('created')).toEqual(
+				expect(input('create')).toEqual(
 					[
 						{ id: first, revision: 1, title: 'a' },
 						{ id: second, revision: 1, title: 'c' }
-					].sort((x, y) => String(x.id).localeCompare(String(y.id)))
+					].sort((x, y) => x.id.localeCompare(y.id)).map((after) => ({
+						before: null, set: expect.objectContaining({ title: after.title }), after
+					}))
 				);
-				expect(input('updated')).toEqual([
-					{
-						before: { id: first, revision: 1, title: 'a' },
-						after: { id: first, revision: 2, title: 'b' }
-					}
-				]);
-				expect(input('deleted')).toEqual([{ id: first, revision: 2, title: 'b' }]);
+				expect(input('update')).toEqual([{
+					before: { id: first, revision: 1, title: 'a' },
+					set: expect.objectContaining({ title: 'b' }),
+					after: { id: first, revision: 2, title: 'b' }
+				}]);
+				expect(input('delete')).toEqual([{
+					before: { id: first, revision: 2, title: 'b' }, set: {}, after: null
+				}]);
+				for (const effect of effects) {
+					const changes = Schema.decodeUnknownSync(EffectImages)(effect.input);
+					expect(changes.flatMap((change) => Object.keys(change.set)).every((field) =>
+						['id', 'revision', 'title'].includes(field))).toBe(true);
+				}
 				expect(effects.every((c) => canonical(c.ctx.actor) === canonical(clerk.actor))).toBe(true);
 				expect(
 					yield* w.sql(
 						`SELECT automation, state, cause, depth, actor, starter->'policies' AS policies FROM sys_run WHERE cause = 'effect' ORDER BY due_at, automation`
 					)
 				).toEqual(
-					['quotes.effect.created', 'quotes.effect.deleted', 'quotes.effect.updated'].map(
+					['quotes.effect.create', 'quotes.effect.delete', 'quotes.effect.update'].map(
 						(automation) => ({
 							automation,
 							state: 'succeeded',
@@ -848,7 +861,7 @@ describe('model effects and starts (rules 49, 50, 51)', () => {
 					kind: 'system',
 					cause: 'effect',
 					model: 'quotes',
-					verb: 'deleted',
+					verb: 'delete',
 					records: [first]
 				});
 				expect(
@@ -862,31 +875,31 @@ describe('model effects and starts (rules 49, 50, 51)', () => {
 			Effect.gen(function* () {
 				let failures = 1;
 				const w = yield* world(base, {
-					'quotes.effect.created': (input, ctx) =>
+					'quotes.effect.create': (input, ctx) =>
 						Effect.gen(function* () {
 							if (failures-- > 0)
 								return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
-							for (const id of effectIds(input))
-								yield* ctx.act('quotes.update', [{ target: id, set: { title: 'loop 0' } }]);
+							for (const target of effectTargets(input))
+								yield* ctx.act({ 'quotes.update': [{ target, set: { title: 'loop 0' } }] });
 						}),
-					'quotes.effect.updated': (input, ctx) =>
+					'quotes.effect.update': (input, ctx) =>
 						Effect.gen(function* () {
-							for (const id of effectIds(input))
-								yield* ctx.act('quotes.update', [
-									{ target: id, set: { title: `loop ${randomUUID()}` } }
-								]);
+							for (const target of effectTargets(input))
+								yield* ctx.act({ 'quotes.update': [
+									{ target, set: { title: `loop ${randomUUID()}` } }
+								] });
 						}),
-					classify: (_, ctx) => ctx.act('quotes.create', [{ title: 'by a run' }])
+					classify: (_, ctx) => ctx.act({ 'quotes.create': [{ title: 'by a run' }] })
 				});
 				yield* w.act('quotes', 'create', [{ title: 'start' }]);
 				yield* w.until(T0 + 10 * 60000);
 				expect(
 					yield* w.sql(
-						`SELECT attempts, state FROM sys_run WHERE automation = 'quotes.effect.created'`
+						`SELECT attempts, state FROM sys_run WHERE automation = 'quotes.effect.create'`
 					)
 				).toEqual([{ attempts: 2, state: 'succeeded' }]);
 				const chain = yield* w.sql(
-					`SELECT depth, state, error->>'code' AS code FROM sys_run WHERE automation = 'quotes.effect.updated' ORDER BY depth`
+					`SELECT depth, state, error->>'code' AS code FROM sys_run WHERE automation = 'quotes.effect.update' ORDER BY depth`
 				);
 				expect(chain.map((r) => r['depth'])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 				expect(chain.slice(0, 8).every((r) => r['state'] === 'succeeded')).toBe(true);
@@ -900,7 +913,7 @@ describe('model effects and starts (rules 49, 50, 51)', () => {
 				yield* w.until(w.clock.ms + 60000);
 				expect(
 					yield* w.sql(
-						`SELECT depth, actor, starter->'actor'->'by' AS by, starter->'policies' AS policies FROM sys_run WHERE automation = 'quotes.effect.created' AND actor = 'system:classify-run'`
+						`SELECT depth, actor, starter->'actor'->'by' AS by, starter->'policies' AS policies FROM sys_run WHERE automation = 'quotes.effect.create' AND actor = 'system:classify-run'`
 					)
 				).toEqual([
 					{
@@ -919,15 +932,17 @@ describe('a run is the system holding its policies; its trigger records who star
 		'an effect-scheduled, a manual and an unattributed run record their trigger; none lends the run its starter, so a requestor-scoped grant matches nothing; code schedules without a start grant',
 		() =>
 			Effect.gen(function* () {
-				const quote = (input: Json) =>
-					Schema.decodeUnknownSync(Schema.Struct({ quote: Schema.String }))(input).quote;
+				const quote = (input: Json) => {
+					const selected = Schema.decodeUnknownSync(Schema.Struct({ quote: Schema.String, revision: Schema.Number }))(input);
+					return { id: selected.quote, revision: selected.revision };
+				};
 				const w = yield* world(base, {
 					// the writer holds no start grant: its effect's code schedules all the same
-					'quotes.effect.created': (input, ctx) =>
-						Effect.forEach(effectIds(input), (id) => ctx.schedule('retitle', { quote: id })),
-					'quotes.effect.updated': () => Effect.void,
+					'quotes.effect.create': (input, ctx) =>
+						Effect.forEach(effectTargets(input), (row) => ctx.schedule('retitle', { quote: row.id, revision: row.revision })),
+					'quotes.effect.update': () => Effect.void,
 					retitle: (input, ctx) =>
-						ctx.act('quotes.update', [{ target: quote(input), set: { title: 'retitled' } }])
+						ctx.act({ 'quotes.update': [{ target: quote(input), set: { title: 'retitled' } }] })
 				});
 				const writer = member(['writer']),
 					starter = member(['starter']);
@@ -944,13 +959,15 @@ describe('a run is the system holding its policies; its trigger records who star
 					invocationId: randomUUID()
 				});
 				if (created.outcome.kind !== 'committed') throw new Error('Missing quote');
-				const id = created.outcome.records[0]?.id ?? '';
+				const selected = created.outcome.records[0];
+				if (selected === undefined) throw new Error('Missing quote identity');
+				const id = selected.id, revision = selected.revision;
 				yield* w.until(T0 + 60000);
 				const start = (holder: Holder, run: string) =>
 					Effect.gen(function* () {
 						return yield* Context.get(w.context, Callables).start({
 							automation: 'retitle',
-							runs: [{ id: run, input: { quote: id } }],
+							runs: [{ id: run, input: { quote: id, revision } }],
 							authority: yield* w.e.authority(holder),
 							bindings,
 							agent: { conversation: 'c1' }
@@ -966,7 +983,7 @@ describe('a run is the system holding its policies; its trigger records who star
 				// a run queued before triggers were recorded reads as an unattributed schedule
 				yield* w.db.write({
 					text: `INSERT INTO sys_run (id, automation, input, due_at, cause, depth) VALUES ('orphan', 'retitle', $1::jsonb, $2::timestamptz, 'schedule', 0)`,
-					params: [{ quote: id }, iso(T0)]
+					params: [{ quote: id, revision }, iso(T0)]
 				});
 				yield* w.r.boot();
 				yield* w.until(T0 + 2 * 60000);
@@ -974,7 +991,7 @@ describe('a run is the system holding its policies; its trigger records who star
 				// every run is the system identity, whoever triggered it
 				expect(runs.map((c) => c.ctx.actor.kind)).toEqual(['system', 'system', 'system']);
 				expect(runs.map((c) => c.ctx.run?.trigger)).toEqual([
-					{ kind: 'system', cause: 'effect', model: 'quotes', verb: 'created', records: [id] },
+					{ kind: 'system', cause: 'effect', model: 'quotes', verb: 'create', records: [id] },
 					{ kind: 'person', actor: starter.actor, agent: { conversation: 'c1' } },
 					{ kind: 'system', cause: 'schedule' }
 				]);
@@ -983,9 +1000,9 @@ describe('a run is the system holding its policies; its trigger records who star
 						`SELECT cause, state, error->>'code' AS code, trigger->>'kind' AS kind FROM sys_run WHERE automation = 'retitle' ORDER BY cause DESC, id = 'orphan'`
 					)
 				).toEqual([
-					{ cause: 'start', state: 'failed', code: 'notFound', kind: 'person' },
-					{ cause: 'schedule', state: 'failed', code: 'notFound', kind: 'system' },
-					{ cause: 'schedule', state: 'failed', code: 'notFound', kind: null }
+					{ cause: 'start', state: 'failed', code: 'not_found', kind: 'person' },
+					{ cause: 'schedule', state: 'failed', code: 'not_found', kind: 'system' },
+					{ cause: 'schedule', state: 'failed', code: 'not_found', kind: null }
 				]);
 				expect(yield* w.sql('SELECT title FROM quotes')).toEqual([{ title: 'mine' }]);
 			})
@@ -1020,14 +1037,14 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 					flaky: (input, ctx) =>
 						Effect.gen(function* () {
 							if (Predicate.hasProperty(input, 'bug'))
-								return yield* Effect.fail(BoltError.make('guestError', 'guest', 'bug'));
-							yield* ctx.act('quotes.create', [{ title: 'once' }]);
+								return yield* Effect.fail(BoltError.make('guest_error', 'guest', 'bug'));
+							yield* ctx.act({ 'quotes.create': [{ title: 'once' }] });
 							yield* ctx.notify({
 								to: [{ policy: 'ops' }, { team: 'ops' }, { user: 'holder' }],
 								title: 'For ops',
 								once: 'source-policy-notice'
 							});
-							if (!ctx.attempt.endsWith(':3'))
+							if (ctx.attempt !== 3)
 								return yield* Effect.fail(BoltError.make('upstream', 'guest', '502'));
 							return 'done';
 						})
@@ -1060,7 +1077,7 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 						due: iso(ms).replace('T', ' ').replace('.000Z', '+00')
 					}))
 				);
-				expect(refused).toBe('invalidInput');
+				expect(refused).toBe('invalid_input');
 				expect(
 					yield* w.sql(
 						`SELECT results->0->'warnings' AS warnings FROM sys_run WHERE automation = 'classify' ORDER BY due_at LIMIT 1`
@@ -1075,7 +1092,7 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 					yield* w.sql(
 						`SELECT state, attempts, error->>'code' AS code FROM sys_run WHERE id = 'bug'`
 					)
-				).toEqual([{ state: 'failed', attempts: 1, code: 'guestError' }]);
+				).toEqual([{ state: 'failed', attempts: 1, code: 'guest_error' }]);
 				expect(yield* w.sql(`SELECT count(*)::int AS n FROM quotes WHERE title = 'once'`)).toEqual([
 					{ n: 3 }
 				]);
@@ -1086,47 +1103,21 @@ describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
 	);
 });
 
-describe('webhooks and visibility (rules 56, 56a)', () => {
+describe('run visibility and removed automation webhooks', () => {
+	it('rejects a webhook trigger on an automation', () => {
+		expect(Result.isFailure(decode_projected_manifest({
+			...base,
+			automations: { hook: { description: 'Retired trigger', policies: ['ops'],
+				on: [{ webhook: '/in', verify: { scheme: 'bearer', secret: 'HOOK' } }] } }
+		}))).toBe(true);
+	});
 	it.effect(
-		'a webhook verifies before reading, dedupes deliveries and acknowledges after its run commits; a run is readable in full by holders and admins, its causing actor sees status and error code only',
-		() =>
-			Effect.gen(function* () {
+		'a run is readable in full by holders and admins; its causing actor sees status and error code only',
+		() => Effect.gen(function* () {
 				const w = yield* world(base, {
-					hook: (input) => Effect.succeed(input),
-					'quotes.effect.updated': () =>
-						Effect.fail(BoltError.make('guestError', 'guest', 'secret detail'))
+					'quotes.effect.update': () =>
+						Effect.fail(BoltError.make('guest_error', 'guest', 'secret detail'))
 				});
-				yield* w.secrets.set('workspace', 'HOOK', 'tok');
-				const body = new TextEncoder().encode('{"order":1}');
-				const refused = {
-					method: 'POST',
-					headers: { authorization: 'Bearer nope' },
-					body
-				};
-				// a generation's first webhook reads the secret it verifies with, and nothing more
-				expect(yield* w.r.webhook('/in', refused)).toEqual({ status: 401 });
-				w.statements.length = 0;
-				expect(yield* w.r.webhook('/in', refused)).toEqual({ status: 401 });
-				expect(w.statements).toEqual([]);
-				const ok = { method: 'POST', headers: { authorization: 'Bearer tok' }, body };
-				expect(yield* w.r.webhook('/in', ok)).toEqual({ status: 200 });
-				expect(yield* w.r.webhook('/in', ok)).toEqual({ status: 200 });
-				expect(
-					yield* w.r.webhook('/in', { ...ok, body: new TextEncoder().encode('not json') })
-				).toEqual({ status: 400 });
-				yield* w.until(T0);
-				expect(w.calls.filter((c) => c.target === 'hook').map((c) => c.input)).toEqual([
-					{ order: 1 }
-				]);
-				expect(
-					yield* w.sql(
-						`SELECT state, count(*)::int AS n FROM sys_run WHERE automation = 'hook' GROUP BY state ORDER BY state`
-					)
-				).toEqual([
-					{ state: 'failed', n: 1 },
-					{ state: 'succeeded', n: 1 }
-				]);
-
 				const holder = member(['ops']);
 				if (holder.actor.kind !== 'member') throw new Error('Expected a member actor');
 				const as = (verb: Verb, input: Json) =>
@@ -1150,13 +1141,13 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 				yield* as('update', [{ target: id, set: { status: 'sent' } }]);
 				yield* w.until(T0);
 				const [run] = yield* w.sql(
-					`SELECT id FROM sys_run WHERE automation = 'quotes.effect.updated'`
+					`SELECT id FROM sys_run WHERE automation = 'quotes.effect.update'`
 				);
 				if (run === undefined) throw new Error('Missing updated effect run');
 				const runId = String(run['id']);
 				const seen = Option.getOrNull(yield* w.r.view(yield* w.e.authority(holder), runId));
 				expect(seen).toEqual(
-					expect.objectContaining({ status: 'failed', error: { code: 'guestError' } })
+					expect.objectContaining({ status: 'failed', error: { code: 'guest_error' } })
 				);
 				expect(seen).not.toHaveProperty('input');
 				const other = yield* w.e.authority({
@@ -1166,7 +1157,7 @@ describe('webhooks and visibility (rules 56, 56a)', () => {
 				expect(Option.getOrNull(yield* w.r.view(other, runId))).toBeNull();
 				const admin = yield* w.e.authority({ ...holder, admin: true });
 				expect(Option.getOrNull(yield* w.r.view(admin, runId))).toMatchObject({
-					error: { code: 'guestError', message: 'secret detail' },
+					error: { code: 'guest_error', message: 'secret detail' },
 					input: { ids: [id] }
 				});
 			})

@@ -12,18 +12,18 @@ export const filterMembers = (
 	return members.filter((member) => {
 		if (!`${member.name} ${member.email ?? ''} ${member.id}`.toLowerCase().includes(query))
 			return false;
-		const lastSeen = member.lastSeen === null ? NaN : Date.parse(member.lastSeen);
+		const last_seen = member.last_seen === null ? NaN : Date.parse(member.last_seen);
 		switch (status) {
 			case 'recent':
-				return member.active && lastSeen > cutoff;
+				return member.active && last_seen > cutoff;
 			case 'enabled':
 				return member.active;
 			case 'disabled':
 				return !member.active;
 			case 'offline':
-				return member.active && lastSeen <= cutoff;
+				return member.active && last_seen <= cutoff;
 			case 'unknown':
-				return !Number.isFinite(lastSeen);
+				return !Number.isFinite(last_seen);
 			default:
 				return true;
 		}
@@ -55,7 +55,7 @@ export const newestReleases = (releases: ReadonlyArray<ReleaseVersion>) =>
  * The time a release served, named by its publication instant (`at`): from it until the next publication. `null` is
  * every release (no bound).
  */
-export const releaseWindow = (
+export const release_window = (
 	releases: ReadonlyArray<ReleaseVersion>,
 	at: string | null
 ): { readonly since?: string; readonly until?: string } => {

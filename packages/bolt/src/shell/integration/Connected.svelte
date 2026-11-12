@@ -8,7 +8,7 @@
 <script lang="ts">
 	import { Effect } from 'effect';
 	import { fork } from '@norbital-ai/ui/effect';
-	import { Button, confirmAction, Input } from '@norbital-ai/ui';
+	import { Button, confirm_action, Input } from '@norbital-ai/ui';
 	import { Cluster, Stack } from '@norbital-ai/ui/layout';
 	import type { Json } from '../../decl/values.ts';
 	import type { ImportStartInput } from '../../protocol/instance-status.ts';
@@ -24,14 +24,14 @@
 		error,
 		unpair,
 		test,
-		importStart,
+		import_start,
 		reconnect,
 		controls = true,
 		t,
 		locale
 	}: Pick<
 		IntegrationSetupProps,
-		'status' | 'busy' | 'error' | 'unpair' | 'test' | 'importStart' | 't' | 'locale'
+		'status' | 'busy' | 'error' | 'unpair' | 'test' | 'import_start' | 't' | 'locale'
 	> & {
 		reconnect: () => void;
 		controls?: boolean | undefined;
@@ -52,14 +52,14 @@
 	let boundary = $state<ImportStartInput | undefined>(undefined);
 	let applied = $state(false);
 	const draft = $derived(
-		active === undefined ? undefined : (boundary ?? importStartDraft(c?.importStart, active))
+		active === undefined ? undefined : (boundary ?? importStartDraft(c?.import_start, active))
 	);
 	function apply(event: SubmitEvent): void {
 		event.preventDefault();
 		if (draft === undefined || active === undefined || !validImportStart(draft, active)) return;
 		applied = false;
 		fork(
-			importStart(draft).pipe(
+			import_start(draft).pipe(
 				Effect.tap((success) =>
 					Effect.sync(() => {
 						applied = success;
@@ -87,11 +87,11 @@
 
 <Stack gap="md" data-setup-view="connected">
 	<Facts {facts} {t} />
-	{#if active?.importStart !== undefined && draft !== undefined}
+	{#if active?.import_start !== undefined && draft !== undefined}
 		{#if controls}<p class="text-meta" data-import-start-active>
-				{t('Import start')}: {importStartLabel(c?.importStart, t, locale)}
+				{t('Import start')}: {importStartLabel(c?.import_start, t, locale)}
 			</p>{/if}
-		{#if controls && c?.importStart?.kind === 'since' && c.importStart.origin === 'now' && active.importStart.kind === 'timestamp' && active.importStart.precision === 'second'}
+		{#if controls && c?.import_start?.kind === 'since' && c.import_start.origin === 'now' && active.import_start.kind === 'timestamp' && active.import_start.precision === 'second'}
 			<p class="text-meta" data-import-start-precision>
 				{t('This source timestamps messages to the second; the whole starting second is included.')}
 			</p>
@@ -100,7 +100,7 @@
 			<ImportStart
 				provider={active}
 				value={draft}
-				onChange={(value) => {
+				on_change={(value) => {
 					boundary = value;
 					applied = false;
 				}}
@@ -152,14 +152,14 @@
 					data-disconnect
 					onclick={() =>
 						fork(
-							confirmAction({
+							confirm_action({
 								title: t('Disconnect {name}?').replace(
 									'{name}',
 									active === undefined ? (c?.account ?? '') : say(active.label)
 								),
 								body: t('This logs the account out and deletes its stored credentials.'),
-								confirmLabel: t('Disconnect'),
-								cancelLabel: t('Cancel'),
+								confirm_label: t('Disconnect'),
+								cancel_label: t('Cancel'),
 								destructive: true
 							}).pipe(Effect.flatMap((confirmed) => (confirmed ? unpair() : Effect.void)))
 						)}>{t('Disconnect')}</Button

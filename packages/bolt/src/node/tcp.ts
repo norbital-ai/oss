@@ -6,7 +6,7 @@ import { connect as netConnect, isIP, type Socket } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
 import { FacilityFailure } from '../decl/errors.ts';
 import type { TcpEndpoint, TcpPort, TcpSocket } from '../engine/contracts.ts';
-import { pinnedLookup, publicDestination, type Address } from './net.ts';
+import { pinned_lookup, public_destination, type Address } from './net.ts';
 
 const failed = (error: unknown) =>
 	new FacilityFailure({
@@ -95,7 +95,7 @@ const web = (socket: Socket, endpoint: TcpEndpoint): TcpSocket => {
 		readable,
 		writable,
 		close: () => Promise.resolve(void socket.destroy()),
-		startTls: (signal) => {
+		start_tls: (signal) => {
 			handedOver = true;
 			detach();
 			return secure(socket, endpoint, signal);
@@ -115,7 +115,7 @@ const tcpOver = (check: (host: string, port: number) => Destination): TcpPort =>
 					netConnect({
 						host: destination.hostname,
 						port: endpoint.port,
-						lookup: pinnedLookup(destination.addresses),
+						lookup: pinned_lookup(destination.addresses),
 						autoSelectFamily: true
 					}),
 					'connect',
@@ -126,7 +126,7 @@ const tcpOver = (check: (host: string, port: number) => Destination): TcpPort =>
 });
 
 /** Outbound TCP/TLS under the public guard: DNS resolved once, every address public, the checked set pinned. */
-export const tcpPort: TcpPort = tcpOver((host, port) => publicDestination(host, port));
+export const tcp_port: TcpPort = tcpOver((host, port) => public_destination(host, port));
 
 const LOOPBACK: Readonly<Record<string, Address>> = {
 	localhost: { address: '127.0.0.1', family: 4 },
@@ -134,7 +134,7 @@ const LOOPBACK: Readonly<Record<string, Address>> = {
 	'::1': { address: '::1', family: 6 }
 };
 /** Outbound TCP/TLS to this machine only (the test kit's fake servers); any other host is refused. */
-export const loopbackTcpPort: TcpPort = tcpOver((host) => {
+export const loopback_tcp_port: TcpPort = tcpOver((host) => {
 	const address = LOOPBACK[host];
 	return address === undefined
 		? Effect.fail(

@@ -6,9 +6,9 @@ and nothing server-side injects code into it.
 
 ```ts
 // norbital.app.ts (or norbital.app.json)
-import { defineApp } from '@norbital-ai/app-shell';
+import { define_app } from '@norbital-ai/app-shell';
 
-export default defineApp({
+export default define_app({
 	id: 'com.example.cleaner', // iOS bundle id and Android application id
 	name: 'Cleaner',
 	description: 'Jobs for cleaners.',
@@ -16,17 +16,17 @@ export default defineApp({
 	build: 1, // CFBundleVersion / versionCode, increase per upload
 	icon: './icon.png', // 1024×1024 PNG
 	splash: { color: '#FFFFFF' }, // optional `image`, defaults to the icon
-	themeColor: '#FFFFFF', // optional fallback for splash, background and offline colours
+	theme_color: '#FFFFFF', // optional fallback for splash, background and offline colours
 	host: 'https://norbital.example', // an origin; https, http only for localhost, 127.0.0.1, 10.0.2.2, *.localhost
 	workspace: 'https://t-abc.workspaces.norbital.example/apps/cleaner', // optional: pins the app (below)
-	allowNavigation: ['*.stripe.com'], // extra hosts that stay in the WebView
+	allow_navigation: ['*.stripe.com'], // extra hosts that stay in the WebView
 	capabilities: {
 		location: { background: true, purpose: '…' }, // usage strings, background mode, Android permissions
 		notifications: true, // APNs entitlement (iOS), notices service (Android)
 		camera: { purpose: '…' }
 	},
-	ios: { teamId: 'ABCDE12345', apsEnvironment: 'production' },
-	android: {} // optional `debugCa: './ca.pem'`: a local HTTPS host's CA, trusted by debug builds only
+	ios: { team_id: 'ABCDE12345', aps_environment: 'production' },
+	android: {} // optional `debug_ca: './ca.pem'`: a local HTTPS host's CA, trusted by debug builds only
 });
 ```
 
@@ -34,15 +34,15 @@ export default defineApp({
 | ----------------- | ----------------------------------------------------------------------------------------------------------- |
 | `host`            | Required. The server the app belongs to, as an origin (scheme, host, optional port; no path or slash).      |
 | `workspace`       | Optional. One workspace page, path included, on `host`'s origin or a subdomain of its hostname.             |
-| `allowNavigation` | Optional. Extra HTTPS hosts (`*.` for subdomains) that stay in the WebView; they never receive the runtime. |
+| `allow_navigation` | Optional. Extra HTTPS hosts (`*.` for subdomains) that stay in the WebView; they never receive the runtime. |
 
 **Pinned** (`workspace` set): the app opens `workspace` and is home on that workspace's origin only. The runtime sets
-`boltDevice.pinned: true`, so the Bolt shell hides its workspace switcher and the platform link.
+`bolt_device.pinned: true`, so the Bolt shell hides its workspace switcher and the platform link.
 
 **Unpinned** (`workspace` unset): the app opens `host` and is home on the host origin and every subdomain of the
 host's hostname, on the same scheme and port. On a Norbital platform the host's root answers with workspace selection
 and every workspace (`t-<hash>.<tenant base>`) is a subdomain, so the Bolt shell's own switcher moves between them
-inside the app; `boltDevice.pinned` is absent. A self-hosted `bolt-server` serves its one workspace at its root.
+inside the app; `bolt_device.pinned` is absent. A self-hosted `bolt-server` serves its one workspace at its root.
 
 Only home documents receive the device runtime and the native bridge; a store build (`build`, `upload`) needs an
 `https` host and, when set, an `https` workspace.
@@ -72,18 +72,18 @@ Credentials come from the environment:
 ## Device runtime
 
 The shell injects `build/runtime/norbital-shell.js` at document start into home-origin pages (iOS
-`WKUserScript`, Android `WebViewCompat.addDocumentStartJavaScript`). It installs `window.boltDeviceReady`
-synchronously and then `window.boltDevice`:
+`WKUserScript`, Android `WebViewCompat.addDocumentStartJavaScript`). It installs `window.bolt_device_ready`
+synchronously and then `window.bolt_device`:
 
 - `platform: 'ios' | 'android'`
 - `pinned: true` when the app is pinned to a `workspace`; absent when unpinned
 - `geolocation?` (with `capabilities.location`): `{ source: 'native', api: navigator.geolocation, background? }`;
-  `background` (with `location.background`) is `{ status(): Promise<{ enabled, always }>, openSettings() }`
-- `notifications?` (with `capabilities.notifications`): `status()`, `request()`, `openSettings()`,
-  `show({ id, title, body, path })`, `onOpen(listener): () => void`
-- `push?` (iOS, notifications): `register(): Promise<{ kind: 'apns', endpoint, keys: { topic, environment, teamId } }>`
+  `background` (with `location.background`) is `{ status(): Promise<{ enabled, always }>, open_settings() }`
+- `notifications?` (with `capabilities.notifications`): `status()`, `request()`, `open_settings()`,
+  `show({ id, title, body, path })`, `on_open(listener): () => void`
+- `push?` (iOS, notifications): `register(): Promise<{ kind: 'apns', endpoint, keys: { topic, environment, team_id } }>`
 - `notices?` (Android, notifications): `start({ url })`, `stop()` — the background notice stream
-- `navigation: { openExternal(url) }`
+- `navigation: { open_external(url) }`
 
 It never polls; the Bolt shell drives `notifications.show` from its live lane.
 
@@ -98,7 +98,10 @@ It never polls; the Bolt shell drives `notifications.show` from its live lane.
 | `startNotices({ url })`  | Android  | starts the notices foreground service on a home-origin URL              |
 | `stopNotices()`          | Android  | stops it                                                                |
 
-Navigation: home origins and `allowNavigation` hosts stay in the WebView; other `http(s)`, `tel`, `mailto` and `sms`
+These bridge names match the native Capacitor modules. The device runtime decodes their answers
+and exposes snake_case members, including APNs `keys.team_id`.
+
+Navigation: home origins and `allow_navigation` hosts stay in the WebView; other `http(s)`, `tel`, `mailto` and `sms`
 links open in the system. A tapped notices-service notification opens its `path` on the origin of the notices stream
 it came from; a tapped APNs push opens its `path` on the open workspace's origin (else `host`, or the pinned
 workspace). The native bridge only answers home-origin documents.

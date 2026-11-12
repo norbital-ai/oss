@@ -5,7 +5,10 @@
 		"allowImportingTsExtensions": true,
 		"noEmit": true,
 		"target": "ES2024",
-		"paths": { "@norbital-ai/bolt": ["../../../src/index.ts"] }
+		"paths": {
+			"@norbital-ai/bolt": ["../../../src/index.ts"],
+			"@norbital-ai/bolt/declarations": ["../../../src/declarations.ts"]
+		}
 	},
 	"include": ["src/**/*.ts", "src/**/*.svelte", ".norbital/names.ts"]
 }

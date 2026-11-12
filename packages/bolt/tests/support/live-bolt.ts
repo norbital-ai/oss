@@ -1,7 +1,6 @@
-// `$bolt` over a test fetch: its live stream is the handler's own SSE body, scoped like the client.
+// A page context over a test fetch: its live stream is the handler's own SSE body, scoped like the client.
 import { Cause, Effect, Fiber, FiberSet, type Scope, Stream } from 'effect';
 import { Sse } from 'effect/encoding';
-import { createBolt, type Bolt } from '../../src/page/bolt.ts';
 import type { EventSourceLike } from '../../src/page/stream.ts';
 import { ProtocolFailed } from '../../src/decl/errors.ts';
 
@@ -60,14 +59,3 @@ export const sse = <E>(
 		};
 	});
 
-/** The agent panel's `bolt` over the same browser fetch ABI as its `api`. */
-export const liveBolt = (fetch: typeof globalThis.fetch): Effect.Effect<Bolt, never, Scope.Scope> =>
-	Effect.gen(function* () {
-		const openStream = yield* sse((url) =>
-			Effect.tryPromise({
-				try: (signal) => fetch(url, { signal }),
-				catch: (error) => new ProtocolFailed({ message: String(error) })
-			})
-		);
-		return yield* createBolt({ actor: null, locale: 'en', fetch, openStream });
-	});

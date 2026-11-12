@@ -2,11 +2,11 @@
 import './setup-happy-dom.ts';
 import { expect, it, vi } from '@effect/vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import MadeFiles from '../src/shell/agent/MadeFiles.svelte';
+import Attachments from '../src/shell/agent/Attachments.svelte';
 
 it('requests image previews, preserves original downloads and recovers when an image fails', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
-	const view = mount(MadeFiles, {
+	const view = mount(Attachments, {
 		target,
 		props: {
 			rail: true,
@@ -19,7 +19,7 @@ it('requests image previews, preserves original downloads and recovers when an i
 				},
 				{ name: 'pending.txt', mime: 'text/plain' }
 			],
-			fileHref: (id: string) => `/files/${id}?token=fixture`,
+			file_href: (id: string) => `/files/${id}?token=fixture`,
 			t: (key: string) => key
 		}
 	});
@@ -34,17 +34,17 @@ it('requests image previews, preserves original downloads and recovers when an i
 		expect(target.querySelector('a[download="photo.png"]')?.getAttribute('href')).toBe(
 			'/files/image?token=fixture'
 		);
-		const doc = target.querySelector('[data-made-file="report.docx"]');
+		const doc = target.querySelector('[data-attachment="report.docx"]');
 		expect(doc?.textContent).toContain('report.docx');
 		expect(
 			target.querySelector(
-				'[data-made-file="pending.txt"] a, [data-made-file="pending.txt"] button'
+				'[data-attachment="pending.txt"] a, [data-attachment="pending.txt"] button'
 			)
 		).toBeNull();
 		image.dispatchEvent(new Event('error'));
 		flushSync();
-		expect(target.querySelector('[data-made-file="photo.png"] img')).toBeNull();
-		expect(target.querySelector('[data-made-file="photo.png"]')?.textContent).toContain(
+		expect(target.querySelector('[data-attachment="photo.png"] img')).toBeNull();
+		expect(target.querySelector('[data-attachment="photo.png"]')?.textContent).toContain(
 			'photo.png'
 		);
 		expect(target.querySelector('a[download="photo.png"]')?.getAttribute('href')).toBe(
@@ -58,28 +58,28 @@ it('requests image previews, preserves original downloads and recovers when an i
 
 it('opens a PDF viewer only on request and closes it with Escape', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
-	const view = mount(MadeFiles, {
+	const view = mount(Attachments, {
 		target,
 		props: {
 			rail: true,
 			files: [{ id: 'pdf', name: 'report.pdf', mime: 'application/pdf' }],
-			fileHref: () => 'about:blank',
+			file_href: () => 'about:blank',
 			t: (key: string) => key
 		}
 	});
 	try {
 		flushSync();
-		expect(document.querySelector('[data-made-pdf-full]')).toBeNull();
-		const preview = target.querySelector<HTMLButtonElement>('[data-made-preview]');
+		expect(document.querySelector('iframe[title="report.pdf"]')).toBeNull();
+		const preview = target.querySelector<HTMLButtonElement>('button[aria-label="Preview report.pdf"]');
 		if (preview === null) throw new Error('The PDF preview button did not render');
 		preview.click();
-		await vi.waitFor(() => expect(document.querySelector('[data-made-pdf-full]')).not.toBeNull());
-		const frame = document.querySelector<HTMLIFrameElement>('[data-made-pdf-full]');
+		await vi.waitFor(() => expect(document.querySelector('iframe[title="report.pdf"]')).not.toBeNull());
+		const frame = document.querySelector<HTMLIFrameElement>('iframe[title="report.pdf"]');
 		if (frame === null) throw new Error('The PDF viewer did not open');
 		expect(frame.title).toBe('report.pdf');
 		expect(frame.getAttribute('src')?.split('#')[0]).toBe('about:blank');
 		frame.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-		await vi.waitFor(() => expect(document.querySelector('[data-made-pdf-full]')).toBeNull());
+		await vi.waitFor(() => expect(document.querySelector('iframe[title="report.pdf"]')).toBeNull());
 	} finally {
 		await unmount(view);
 		target.remove();

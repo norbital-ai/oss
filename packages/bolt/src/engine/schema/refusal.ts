@@ -37,8 +37,9 @@ export function refusalOf(
 						`other records still refer to this one (${names || e.constraint})`,
 						{}
 					)
-				: refused('missingRef', `the referenced record does not exist (${names || e.constraint})`);
+				: refused('missing_ref', `the referenced record does not exist (${names || e.constraint})`);
 		case '23514': {
+			if (meta?.kind === 'locked') return refused('locked', 'This record is locked and cannot be changed.');
 			const rule = names || e.constraint;
 			return refused(
 				'check',

@@ -6,9 +6,10 @@ import { Effect, Schema } from 'effect';
 import { ActRefused } from '../../decl/errors.ts';
 import type { ActOutcome } from '../../engine/contracts.ts';
 import type { Component } from 'svelte';
+import type { ShellPageContext } from '../runtime.ts';
 import type { Json } from '../../decl/values.ts';
 import {
-	localText,
+	local_text,
 	type ImportStartInput,
 	type InstanceStatus,
 	type LocalText,
@@ -23,7 +24,7 @@ export type IntegrationSetupProps = {
 	/** Pairs with whatever the provider's setup collects; the host refuses a malformed body. */
 	pair: (input?: Json) => Effect.Effect<void>;
 	/** Changes the import boundary without replacing the account's credentials. */
-	importStart: (input: ImportStartInput) => Effect.Effect<boolean>;
+	import_start: (input: ImportStartInput) => Effect.Effect<boolean>;
 	/** Unpairs: the credentials are destroyed and the provider forgets this host. */
 	unpair: () => Effect.Effect<void>;
 	/** Tests the connected instance (`status.test` says whether a message goes out, and where to). */
@@ -42,12 +43,31 @@ export type IntegrationSetupProps = {
 export const sayOf =
 	(t: (key: string) => string, locale: string | undefined) =>
 	(x: LocalText): string =>
-		typeof x === 'string' ? t(x) : localText(x, locale ?? 'en');
+		typeof x === 'string' ? t(x) : local_text(x, locale ?? 'en');
 
-/** A definition can supply its own setup or add an administrator-only settings tab. */
+/**
+ * What a definition's `create` export is given under New connection, in place of the generic name and configuration
+ * form: it names the account, collects its configuration and makes the `sys_integration` row; the connection's sheet
+ * then opens on it and `default` pairs it.
+ */
+type IntegrationCreateProps = {
+	integration: string;
+	/** Makes the connection; a refusal arrives as `error`, so it never fails. */
+	create: (input: { name: string; configuration?: Json }) => Effect.Effect<void>;
+	busy: boolean;
+	error: string | null;
+	t: (key: string) => string;
+	locale?: string | undefined;
+};
+
+/** A definition can supply its own create and setup steps, or add an administrator-only settings tab. */
 export type IntegrationSetupLoader = () => Promise<
-	| { default: Component<IntegrationSetupProps>; configurationTab?: undefined }
-	| { default: Component; configurationTab: string }
+	| {
+			default: Component<IntegrationSetupProps>;
+			create?: Component<IntegrationCreateProps>;
+			configuration_tab?: undefined;
+	  }
+	| { default: Component<{ ctx: ShellPageContext }>; configuration_tab: string }
 >;
 /** The compiled registry's entry for a definition's `+integration.svelte`. */
 export type IntegrationSetupEntry = { load: IntegrationSetupLoader };

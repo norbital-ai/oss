@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider, type ChatHost } from '../../src/chat/adapter.ts';
 import { github } from '../../src/chat/github/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { token: 'ghp_token', webhookSecret: 'secret' };
@@ -46,7 +46,7 @@ const delivery = (body: string, event = 'issue_comment') =>
 const connection = () =>
 	github.connect(settings, {
 		fetch,
-		webhookUrl: 'https://hook.test/',
+		webhook_url: 'https://hook.test/',
 		receive: async () => {}
 	} satisfies ChatHost);
 
@@ -56,14 +56,14 @@ describe('GitHub', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(github, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'norbius' });
-			expect((yield* h.link.webhook!(delivery(hook('created')))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(hook('created')))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: '100',
 						thread: 'acme/web/issues/12',
-						sentAt: '2026-11-01T10:00:00Z',
+						sent_at: '2026-11-01T10:00:00Z',
 						from: { handle: '7', name: 'ada' },
 						text: 'hello',
 						title: 'Broken build',
@@ -83,7 +83,7 @@ describe('GitHub', () => {
 				'x-github-event': 'issue_comment',
 				'x-hub-signature-256': signature(body, 'guess')
 			});
-			expect((yield* h.link.webhook!(forged)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -93,7 +93,7 @@ describe('GitHub', () => {
 			const h = yield* connected(github, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(hook('created')))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(hook('created')))).status).toBe(500);
 		})
 	);
 	it.live('reads an edit, a delete, a mention and a pull request', () =>
@@ -101,9 +101,9 @@ describe('GitHub', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(github, settings);
 			const edited = comment(100, { body: 'hello!', updated_at: '2026-11-01T11:00:00Z' });
-			yield* h.link.webhook!(delivery(hook('edited', { comment: edited })));
-			yield* h.link.webhook!(delivery(hook('deleted')));
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(delivery(hook('edited', { comment: edited })));
+			yield* required(h.link.webhook)(delivery(hook('deleted')));
+			yield* required(h.link.webhook)(
 				delivery(
 					hook('created', {
 						comment: comment(101, { body: 'ping @Norbius please' }),
@@ -125,7 +125,7 @@ describe('GitHub', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(github, settings);
 			for (const body of ['`@norbius`', '> @norbius said', '@norbius-two', 'a@norbius'])
-				yield* h.link.webhook!(delivery(hook('created', { comment: comment(1, { body }) })));
+				yield* required(h.link.webhook)(delivery(hook('created', { comment: comment(1, { body }) })));
 			expect(h.events).toHaveLength(4);
 			for (const event of h.events)
 				expect(event).toMatchObject({ messages: [{ invocation: 'ambient' }] });
@@ -141,9 +141,9 @@ describe('GitHub', () => {
 				repository: { full_name: 'acme/web' },
 				pull_request: { number: 3, title: 'Fix' }
 			});
-			yield* h.link.webhook!(delivery(body, 'pull_request_review_comment'));
+			yield* required(h.link.webhook)(delivery(body, 'pull_request_review_comment'));
 			expect(h.events[0]).toMatchObject({
-				messages: [{ id: 'review:100', replyTo: 'review:99', thread: 'acme/web/pull/3' }]
+				messages: [{ id: 'review:100', reply_to: 'review:99', thread: 'acme/web/pull/3' }]
 			});
 		})
 	);
@@ -151,9 +151,9 @@ describe('GitHub', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(github, settings);
-			yield* h.link.webhook!(delivery(hook('created', { comment: comment(1, { user: me }) })));
-			yield* h.link.webhook!(delivery(hook('pinned')));
-			const ping = yield* h.link.webhook!(delivery('{"zen":"Keep it simple"}', 'ping'));
+			yield* required(h.link.webhook)(delivery(hook('created', { comment: comment(1, { user: me }) })));
+			yield* required(h.link.webhook)(delivery(hook('pinned')));
+			const ping = yield* required(h.link.webhook)(delivery('{"zen":"Keep it simple"}', 'ping'));
 			expect(ping.status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
@@ -162,8 +162,8 @@ describe('GitHub', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(github, settings);
-			const sent = yield* h.link.send!({ to: 'acme/web/issues/12', text: 'Done' }, []);
-			expect(sent).toMatchObject({ providerId: '900' });
+			const sent = yield* required(h.link.send)({ to: 'acme/web/issues/12', text: 'Done' }, []);
+			expect(sent).toMatchObject({ provider_id: '900' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://api.github.com/repos/acme/web/issues/12/comments');
 			expect(call?.headers.get('authorization')).toBe('token ghp_token');
@@ -177,15 +177,15 @@ describe('GitHub', () => {
 				new URL(url).pathname === '/user' ? json(me) : refusal.clone()
 			);
 			const h = yield* connected(github, settings);
-			const lost = yield* Effect.flip(h.link.send!({ to: 'acme/web/issues/12', text: 'x' }, []));
+			const lost = yield* Effect.flip(required(h.link.send)({ to: 'acme/web/issues/12', text: 'x' }, []));
 			expect(lost).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			refusal = new Response('{"message":"slow down"}', {
 				status: 403,
 				headers: { 'content-type': 'application/json', 'retry-after': '30' }
 			});
-			const held = yield* Effect.flip(h.link.send!({ to: 'acme/web/issues/12', text: 'x' }, []));
-			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retryAfterMs: 30_000 });
-			const wrong = yield* Effect.flip(h.link.send!({ to: 'acme/web', text: 'x' }, []));
+			const held = yield* Effect.flip(required(h.link.send)({ to: 'acme/web/issues/12', text: 'x' }, []));
+			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retry_after_ms: 30_000 });
+			const wrong = yield* Effect.flip(required(h.link.send)({ to: 'acme/web', text: 'x' }, []));
 			expect(wrong).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 		})
 	);
@@ -193,7 +193,7 @@ describe('GitHub', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'Bad credentials' }, 401));
 			const h = yield* host(chatProvider(github), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -205,7 +205,7 @@ describe('GitHub', () => {
 					: paged([comment(100), comment(101, { user: me })])
 			);
 			const page = yield* Effect.promise(async () =>
-				(await connection()).history!('acme/web/issues/12', '2026-11-01T09:00:00.500Z')
+				required((await connection()).history)('acme/web/issues/12', '2026-11-01T09:00:00.500Z')
 			);
 			expect(page.complete).toBe(true);
 			expect(page.messages.map(({ id }) => id)).toEqual(['100']);
@@ -225,7 +225,7 @@ describe('GitHub', () => {
 						);
 			});
 			const page = yield* Effect.promise(async () =>
-				(await connection()).history!('acme/web/pull/3', '2026-11-01T09:00:00Z')
+				required((await connection()).history)('acme/web/pull/3', '2026-11-01T09:00:00Z')
 			);
 			expect(page.complete).toBe(true);
 			expect(page.messages.map(({ id }) => id)).toEqual(['100', 'review:100']);
@@ -241,7 +241,7 @@ describe('GitHub', () => {
 					: paged([comment(100)], `${parsed.origin}${parsed.pathname}?page=2`);
 			});
 			const page = yield* Effect.promise(async () =>
-				(await connection()).history!('acme/web/issues/12', '2026-11-01T09:00:00Z')
+				required((await connection()).history)('acme/web/issues/12', '2026-11-01T09:00:00Z')
 			);
 			expect(page.complete).toBe(false);
 			expect(page.messages.map(({ id }) => id)).toEqual(['100', '101']);

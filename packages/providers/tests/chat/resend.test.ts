@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { resend } from '../../src/chat/resend/index.ts';
 import { hmac } from '../../src/chat/verify.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const key = Buffer.from('a webhook signing key').toString('base64');
@@ -62,7 +62,7 @@ const signature = (body: string) => {
 const open = Effect.promise(() =>
 	resend.connect(settings, {
 		fetch,
-		webhookUrl: 'https://hook.test/',
+		webhook_url: 'https://hook.test/',
 		receive: () => Promise.resolve()
 	})
 );
@@ -74,7 +74,7 @@ describe('Resend', () => {
 			const h = yield* connected(resend, settings),
 				body = event();
 			expect(h.status).toMatchObject({ state: 'connected', account: 'desk@acme.test' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toMatchObject([
 				{
 					kind: 'messages',
@@ -82,7 +82,7 @@ describe('Resend', () => {
 						{
 							id: 'e1',
 							thread: 't1',
-							sentAt: '2026-11-05T10:00:00.123Z',
+							sent_at: '2026-11-05T10:00:00.123Z',
 							from: { handle: 'ada@example.com', name: 'Ada Lovelace' },
 							text: 'Hello',
 							group: false,
@@ -99,7 +99,7 @@ describe('Resend', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(resend, settings),
 				body = event();
-			const refused = yield* h.link.webhook!(
+			const refused = yield* required(h.link.webhook)(
 				webhook(body, { ...signature(body), 'svix-signature': 'v1,forged' })
 			);
 			expect(refused.status).toBe(401);
@@ -113,7 +113,7 @@ describe('Resend', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = event();
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('ignores other inboxes, other events and its own mail', () =>
@@ -125,7 +125,7 @@ describe('Resend', () => {
 				JSON.stringify({ type: 'email.sent', created_at: 'x', data: {} }),
 				event()
 			])
-				expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -144,7 +144,7 @@ describe('Resend', () => {
 			);
 			const h = yield* connected(resend, settings),
 				body = event();
-			yield* h.link.webhook!(webhook(body, signature(body)));
+			yield* required(h.link.webhook)(webhook(body, signature(body)));
 			expect(h.events).toMatchObject([
 				{
 					messages: [
@@ -165,7 +165,7 @@ describe('Resend', () => {
 				answer([email(), email({ id: 'e0', direction: 'outbound', from: 'desk@acme.test' })])
 			);
 			const h = yield* connected(resend, settings);
-			const sent = yield* h.link.send!({ id: 'r1', to: 't1', text: 'Paid' }, [
+			const sent = yield* required(h.link.send)({ id: 'r1', to: 't1', text: 'Paid' }, [
 				{
 					id: 'f1',
 					name: 'a.txt',
@@ -174,7 +174,7 @@ describe('Resend', () => {
 					url: () => Promise.reject(new Error('no link'))
 				}
 			]);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(new URL(call?.url ?? '').pathname).toBe(`${thread}/e1/reply`);
 			expect(call?.headers.get('idempotency-key')).toBe('r1');
@@ -194,7 +194,7 @@ describe('Resend', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer());
 			const h = yield* connected(resend, settings);
-			yield* h.link.send!({ id: 'r2', to: 'ada@example.com', text: 'Hello\nmore' }, []);
+			yield* required(h.link.send)({ id: 'r2', to: 'ada@example.com', text: 'Hello\nmore' }, []);
 			const call = api.calls.at(-1);
 			expect(new URL(call?.url ?? '').pathname).toBe('/emails');
 			expect(call?.headers.get('idempotency-key')).toBe('r2');
@@ -210,7 +210,7 @@ describe('Resend', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer([]));
 			const h = yield* connected(resend, settings);
-			const refused = yield* Effect.flip(h.link.send!({ id: 'r3', to: 't1', text: 'Paid' }, []));
+			const refused = yield* Effect.flip(required(h.link.send)({ id: 'r3', to: 't1', text: 'Paid' }, []));
 			expect(refused).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 		})
 	);
@@ -263,7 +263,7 @@ describe('Resend', () => {
 				json({ statusCode: 401, name: 'invalid_api_key', message: 'API key is invalid' }, 401)
 			);
 			const h = yield* host(chatProvider(resend), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

@@ -8,9 +8,10 @@ import { Context, Effect, Exit, Layer, Option, Result, Schema, Scope, Stream } f
 import { Ai } from '../src/engine/ports.ts';
 import { MODEL_FILES } from '../src/engine/agent/ai.ts';
 import { Port } from '../src/engine/port.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
-import { ActRefused, actFailure } from '../src/decl/errors.ts';
+import { ActRefused } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import type {
 	AiRequest,
@@ -18,21 +19,21 @@ import type {
 	Authority,
 	ActOutcome as Outcome
 } from '../src/engine/contracts.ts';
-import type { System1Request } from '../src/engine/decisions/index.ts';
+import type { System1Request } from '../src/engine/decision.ts';
 import { upload } from '../src/engine/callables/upload.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { KitInvalid, TestWorkspace, type Kit } from '../../bolt-cli/src/test/index.ts';
-import { actReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, route_fixture } from './support/route-fixture.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
 // One workspace: triage on (the in-app default), a model whose records carry a file.
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			photos: {
 				description: 'A photo',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					file: { kind: 'file', accept: ['image/*'], max: '1MiB' }
@@ -42,20 +43,21 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			photos: {
-				read: { photos: { fields: 'all' } },
+				outputs: { default: { photos: { fields: 'all' } } },
 				create: { columns: { photos: ['title', 'file'] } }
 			}
 		},
-		policies: { inspector: { description: 'Inspectors', grants: { photos: { read: true } } } },
-		teams: { Inspectors: ['inspector'] },
+		policies: {
+			inspector: { description: 'Inspectors', grants: { photos: { outputs: { default: {} } } } }
+		},
+		teams: { Inspectors: { policies: ['inspector'] } },
 		agent: { internal: 'Staff brief.', skills: {} },
 		integrations: {},
 		automations: {},
-		connections: {},
-		envoys: {},
+
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 const fileOf = (value: unknown) =>
@@ -74,7 +76,7 @@ const act = (t: Kit, as: string, callable: string, input: Json) =>
 					'content-type': 'application/json',
 					'Idempotency-Key': randomUUID()
 				},
-				body: JSON.stringify({ callable, input, issuedAt: t.clock.now() })
+				body: JSON.stringify({ callable, input, issued_at: t.clock.now() })
 			})
 		);
 		const raw = yield* Effect.tryPromise({
@@ -91,7 +93,7 @@ const act = (t: Kit, as: string, callable: string, input: Json) =>
 			return yield* Effect.fail(new ActRefused(failure.error));
 		}
 		const outcome = (yield* Schema.decodeUnknownEffect(ActReply)(raw)).outcome;
-		const failure = actFailure(outcome);
+		const failure = act_failure(outcome);
 		return Option.isSome(failure) ? yield* Effect.fail(failure.value) : outcome;
 	});
 const conversation = (effect: Effect.Effect<Outcome, unknown>) =>
@@ -134,7 +136,7 @@ const setup = Effect.gen(function* () {
 							legend: {}
 						}
 					},
-					costUsd: 0,
+					cost_usd: 0,
 					provider: 'scripted'
 				};
 			}),
@@ -154,7 +156,7 @@ const setup = Effect.gen(function* () {
 						last?.role !== 'tool' && id !== ''
 							? {
 									content: '',
-									toolCalls: [
+									tool_calls: [
 										{
 											id: 'r1',
 											name: 'read_file',
@@ -166,7 +168,7 @@ const setup = Effect.gen(function* () {
 								}
 							: {
 									content: 'A pump.',
-									toolCalls: [],
+									tool_calls: [],
 									finish: 'stop',
 									usage: { input: 1, output: 1 }
 								};
@@ -183,7 +185,7 @@ const setup = Effect.gen(function* () {
 	const authorities = new Authorities(t.manifest, 'test');
 	const who = (id: string) =>
 		authorities
-			.member(t.db, id)
+			.member(t.db, 'bootstrap', id)
 			.pipe(
 				Effect.flatMap((a) => (a === null ? Effect.die(new Error('no member')) : Effect.succeed(a)))
 			);
@@ -203,7 +205,7 @@ const setup = Effect.gen(function* () {
 		Effect.gen(function* () {
 			const outcome = yield* act(t, as, 'sys_message.post', input);
 			t.clock.advance('2s');
-			yield* t.runDue();
+			yield* t.run_due();
 			yield* t.settled();
 			return outcome;
 		});
@@ -225,94 +227,98 @@ afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const plain = Effect.runSync(Effect.cached(setup.pipe(Scope.provide(fileScope))));
 
 describe('in-app attachments', () => {
+	it.live('an invalid image retains its reference and remains readable by read_file', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { t, post, put, who, requests, states, conversation } = yield* plain;
+				const ann = yield* who('ann'),
+					c = yield* conversation();
+				const ref = yield* put(ann, 'pump.png', 'image/png', PNG);
+				expect(ref).toMatchObject({
+					kind: 'committed',
+					output: { name: 'pump.png', mime: 'image/png', bytes: PNG.length }
+				});
+				const file = fileOf(ref),
+					asked = requests.length,
+					decided = states.length;
+				const digest = createHash('sha256').update(PNG).digest('hex');
+				const reference = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file);
+				expect(
+					yield* post('ann', {
+						conversation: c,
+						text: 'what is this?',
+						attachments: [{ ...reference, sha256: 'MOCKED untrusted digest' }]
+					})
+				).toMatchObject({ kind: 'committed' });
+				// the panel sends a file and its words as one message: nothing asks whether more is coming
+				expect(states).toHaveLength(decided);
+				const row = yield* t.db.one(Schema.Struct({ id: Schema.String, files: Schema.Array(Schema.Json) }), {
+					text: `SELECT id, ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND role = 'user'`,
+					params: [c]
+				});
+				if (Option.isNone(row)) throw new Error('posted message is missing');
+				const id = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id;
+				expect(row.value.files).toEqual([
+					{ id, name: 'pump.png', mime: 'image/png', bytes: PNG.length, sha256: digest }
+				]);
+				// the message names it by the id read_file takes
+				const [first, second] = requests.slice(asked);
+				if (first === undefined || second === undefined) throw new Error('attachment did not produce two model steps');
+				const firstMessage = first.messages[0],
+					attachment = second.files?.[0];
+				if (firstMessage === undefined || attachment === undefined) throw new Error('attachment was not passed to the model');
+				expect(String(firstMessage.content)).toContain(
+					`file reference ${JSON.stringify({ id, name: 'pump.png', mime: 'image/png', sha256: digest })}`
+				);
+				expect([...attachment.bytes]).toEqual([...PNG]);
+				expect(attachment.mime).toBe('image/png');
+				// the posted file is one of the conversation's inputs
+				const held = yield* t.db.one(Schema.Struct({ inputs: Schema.Array(Schema.Json), outputs: Schema.Array(Schema.Json) }), {
+					text: `SELECT inputs, outputs FROM sys_conversation WHERE id = $1`, params: [c]
+				});
+				if (Option.isNone(held)) throw new Error('conversation is missing');
+				expect(held.value.outputs).toEqual([]);
+				expect(held.value.inputs).toEqual([
+					{ id, name: 'pump.png', mime: 'image/png', bytes: PNG.length, sha256: digest, message: row.value.id }
+				]);
+			})
+		)
+	);
+
 	it.live(
-		'an invalid image retains its reference and remains readable by read_file',
+		"only the member's own uploads attach, within the model's file count, of the envoy media types",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
-					const { t, post, put, who, requests, states, conversation } = yield* plain;
+					const { act, put, who, conversation } = yield* plain;
 					const ann = yield* who('ann'),
+						bob = yield* who('bob'),
 						c = yield* conversation();
-					const ref = yield* put(ann, 'pump.png', 'image/png', PNG);
-					expect(ref).toMatchObject({
-						kind: 'committed',
-						output: { name: 'pump.png', mime: 'image/png', bytes: PNG.length }
+					expect(yield* put(ann, 'a.mp4', 'video/mp4', PNG)).toMatchObject({
+						kind: 'refused',
+						code: 'invalid_input'
 					});
-					const file = fileOf(ref),
-						asked = requests.length,
-						decided = states.length;
-					const digest = createHash('sha256').update(PNG).digest('hex');
-					const reference = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file);
+					const bobs = fileOf(yield* put(bob, 'b.png', 'image/png', PNG));
 					expect(
-						yield* post('ann', {
-							conversation: c,
-							text: 'what is this?',
-							attachments: [{ ...reference, sha256: 'MOCKED untrusted digest' }]
-						})
-					).toMatchObject({ kind: 'committed' });
-					// the panel sends a file and its words as one message: nothing asks whether more is coming
-					expect(states).toHaveLength(decided);
-					const [row] = (yield* t.db.read([
-						{
-							text: `SELECT ${filesOf('m')} AS files FROM sys_message m WHERE conversation = $1 AND role = 'user'`,
-							params: [c]
-						}
-					]))[0]!.rows;
-					const id = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(file).id;
-					expect(row!['files']).toEqual([
-						{ id, name: 'pump.png', mime: 'image/png', bytes: PNG.length, sha256: digest }
-					]);
-					// the message names it by the id read_file takes
-					const [first, second] = requests.slice(asked);
-					expect(String(first!.messages[0]!.content)).toContain(
-						`file reference ${JSON.stringify({ id, name: 'pump.png', mime: 'image/png', sha256: digest })}`
-					);
-					expect([...second!.files![0]!.bytes]).toEqual([...PNG]);
-					expect(second!.files![0]!.mime).toBe('image/png');
-					// the posted file is one of the conversation's inputs
-					const [held] = (yield* t.db.read([
-						{ text: `SELECT inputs, outputs FROM sys_conversation WHERE id = $1`, params: [c] }
-					]))[0]!.rows;
-					expect(held).toMatchObject({ inputs: row!['files'], outputs: [] });
-					expect(held!['inputs']).toEqual([
-						expect.objectContaining({ name: 'pump.png', message: expect.any(String) })
-					]);
+						yield* Effect.flip(
+							act('ann', 'sys_message.post', { conversation: c, text: 'x', attachments: [bobs] })
+						)
+					).toMatchObject({ _tag: 'ActRefused', code: 'invalid_input' });
+					const own = fileOf(yield* put(ann, 'a.png', 'image/png', PNG));
+					expect(
+						yield* Effect.flip(
+							act('ann', 'sys_message.post', {
+								conversation: c,
+								text: 'x',
+								attachments: Array(MODEL_FILES.count + 1).fill(own)
+							})
+						)
+					).toMatchObject({
+						_tag: 'ActRefused',
+						message: `Attach at most ${MODEL_FILES.count} files.`
+					});
 				})
 			)
-	);
-
-	it.live("only the member's own uploads attach, within the model's file count, of the envoy media types", () =>
-		Effect.scoped(
-			Effect.gen(function* () {
-				const { act, put, who, conversation } = yield* plain;
-				const ann = yield* who('ann'),
-					bob = yield* who('bob'),
-					c = yield* conversation();
-				expect(yield* put(ann, 'a.mp4', 'video/mp4', PNG)).toMatchObject({
-					kind: 'refused',
-					code: 'invalidInput'
-				});
-				const bobs = fileOf(yield* put(bob, 'b.png', 'image/png', PNG));
-				expect(
-					yield* Effect.flip(
-						act('ann', 'sys_message.post', { conversation: c, text: 'x', attachments: [bobs] })
-					)
-				).toMatchObject({ _tag: 'ActRefused', code: 'invalidInput' });
-				const own = fileOf(yield* put(ann, 'a.png', 'image/png', PNG));
-				expect(
-					yield* Effect.flip(
-						act('ann', 'sys_message.post', {
-							conversation: c,
-							text: 'x',
-							attachments: Array(MODEL_FILES.count + 1).fill(own)
-						})
-					)
-				).toMatchObject({
-					_tag: 'ActRefused',
-					message: `Attach at most ${MODEL_FILES.count} files.`
-				});
-			})
-		)
 	);
 });
 
@@ -324,7 +330,7 @@ describe('read_file', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { t, context, post, requests, conversation } = yield* plain;
-					const admin = t.as(t.admin);
+					const admin = yield* t.as(t.admin);
 					const up = yield* admin.upload('photos.file', {
 						name: 'sheet.png',
 						mime: 'image/png',
@@ -332,15 +338,14 @@ describe('read_file', () => {
 					});
 					if (up.kind !== 'committed') throw new Error(up.kind);
 					recordFile = up.output.id;
-					yield* actReply(yield* routeFixture(context), admin.authority, {
-						callable: 'photos.create',
-						input: [
+					yield* act_reply(yield* route_fixture(context), admin.authority, {
+						acts: { 'photos.create': [
 							{
 								title: 'Site sheet',
 								file: { id: up.output.id, name: up.output.name, mime: up.output.mime }
 							}
-						],
-						issuedAt: t.clock.now()
+						] },
+						issued_at: t.clock.now()
 					});
 					const ask = (who: string) =>
 						Effect.gen(function* () {
@@ -353,10 +358,14 @@ describe('read_file', () => {
 							return request;
 						});
 					const read = yield* ask('ann');
-					expect([...read.files![0]!.bytes]).toEqual([...PNG]);
+					const readable = read.files?.[0];
+					if (readable === undefined) throw new Error('record file was not supplied to its reader');
+					expect([...readable.bytes]).toEqual([...PNG]);
 					const refused = yield* ask('bob');
 					expect(refused.files ?? []).toHaveLength(0);
-					expect(JSON.stringify(refused.messages)).toContain('No file you can read has this id; a truncated result is read with call, not id.');
+					expect(JSON.stringify(refused.messages)).toContain(
+						'No file you can read has this id; a truncated result is read with call, not id.'
+					);
 				})
 			)
 	);

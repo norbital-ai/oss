@@ -36,7 +36,9 @@ export const connected = (
 ) =>
 	Effect.gen(function* () {
 		const h = yield* host(chatProvider(platform), fetch, undefined, options);
-		yield* h.link.pair!(settings);
+		if (h.link.pair === undefined)
+			return yield* Effect.fail(new Error('The chat provider does not support pairing.'));
+		yield* h.link.pair(settings);
 		return h;
 	});
 export const webhook = (body: string, headers: Record<string, string>) =>

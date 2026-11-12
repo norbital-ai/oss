@@ -4,6 +4,7 @@ Files already uploaded share one preview control. Pending uploads have their own
 The add control sits at the end.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { FileRef } from './kind.js';
 
 	/** An upload in flight (`error` absent) or failed (retry or dismiss). */
@@ -14,29 +15,31 @@ The add control sits at the end.
 	import Icon from '@iconify/svelte';
 	import type { Snippet } from 'svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 	import FileCollection from './file-collection.svelte';
 
 	let {
+		ctx,
 		refs,
 		pending = [],
-		onRemove,
-		onRetry,
-		onDismiss,
+		on_remove,
+		on_retry,
+		on_dismiss,
 		disabled = false,
 		class: className,
 		children
 	}: {
+		ctx: UiContext;
 		refs: readonly FileRef[];
 		pending?: readonly PendingFile[];
-		onRemove?(ref: FileRef): void;
-		onRetry?(p: PendingFile): void;
-		onDismiss?(p: PendingFile): void;
+		on_remove?(ref: FileRef): void;
+		on_retry?(p: PendingFile): void;
+		on_dismiss?(p: PendingFile): void;
 		disabled?: boolean;
 		class?: string;
 		children?: Snippet;
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	const CHIP =
 		'inline-flex h-7 max-w-48 min-w-0 items-center gap-1.5 rounded-sm border border-border bg-muted/50 px-2 text-xs font-medium';
 	const ICON_BUTTON =
@@ -55,24 +58,24 @@ The add control sits at the end.
 				/>{/if}
 			<span class="truncate">{p.file.name}</span>
 			{#if p.error !== undefined}
-				{#if onRetry}<button
+				{#if on_retry}<button
 						type="button"
 						class={ICON_BUTTON}
 						aria-label={`${t('retry')} ${p.file.name}`}
 						title={t('retry')}
 						{disabled}
-						onclick={() => onRetry(p)}><Icon icon="lucide:refresh-cw" class="size-3" /></button
+						onclick={() => on_retry(p)}><Icon icon="lucide:refresh-cw" class="size-3" /></button
 					>{/if}
-				{#if onDismiss}<button
+				{#if on_dismiss}<button
 						type="button"
 						class={ICON_BUTTON}
 						aria-label={`${t('remove')} ${p.file.name}`}
 						title={t('remove')}
-						onclick={() => onDismiss(p)}><Icon icon="lucide:x" class="size-3" /></button
+						onclick={() => on_dismiss(p)}><Icon icon="lucide:x" class="size-3" /></button
 					>{/if}
 			{/if}
 		</span>
 	{/each}
-	{#if refs.length}<FileCollection {refs} onRemove={disabled ? undefined : onRemove} />{/if}
+	{#if refs.length}<FileCollection {ctx} {refs} on_remove={disabled ? undefined : on_remove} />{/if}
 	{@render children?.()}
 </span>

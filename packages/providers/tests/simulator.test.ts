@@ -3,7 +3,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { simulatedProviders, startSimulator } from '../src/simulator/index.ts';
-import { hookServer, host, until, type Host } from './kit.ts';
+import { required, hookServer, host, until, type Host } from './kit.ts';
 
 const simulator = Effect.acquireRelease(
 	Effect.promise(() => startSimulator()),
@@ -30,7 +30,7 @@ describe('the channel simulator', () => {
 		Effect.gen(function* () {
 			const running = yield* simulator,
 				h = yield* host(provider(running.url, 'simulated-whatsapp'), fetch);
-			yield* h.link.pair!({});
+			yield* required(h.link.pair)({});
 			yield* connected(h);
 			expect(h.values.size).toBeGreaterThan(0);
 			const account = accountOf(h).account;
@@ -58,7 +58,7 @@ describe('the channel simulator', () => {
 					}
 				]
 			});
-			yield* h.link.send!(
+			yield* required(h.link.send)(
 				{ id: 'm1', to: '6591234567@s.whatsapp.net', text: 'Yes, it ships today' },
 				[]
 			);
@@ -75,11 +75,11 @@ describe('the channel simulator', () => {
 			const running = yield* simulator;
 			const hook = yield* hookServer,
 				h = yield* host(provider(running.url, 'simulated-telegram'), fetch, undefined, {
-					webhookUrl: hook.url
+					webhook_url: hook.url
 				}),
 				run = yield* Effect.context<never>();
-			hook.route.to = (request) => Effect.runPromiseWith(run)(h.link.webhook!(request));
-			yield* h.link.pair!({ token: '123456:simulated' });
+			hook.route.to = (request) => Effect.runPromiseWith(run)(required(h.link.webhook)(request));
+			yield* required(h.link.pair)({ token: '123456:simulated' });
 			expect(accountOf(h).account).toBe('@simulated_123456_bot');
 			expect(
 				(yield* inbound(running.url, {
@@ -94,7 +94,7 @@ describe('the channel simulator', () => {
 				kind: 'messages',
 				messages: [{ text: 'Hello bot', from: { handle: '555', name: 'Ana' }, group: false }]
 			});
-			yield* h.link.send!({ id: 'm1', to: '555', text: 'Hello Ana' }, []);
+			yield* required(h.link.send)({ id: 'm1', to: '555', text: 'Hello Ana' }, []);
 			expect(running.messages().at(-1)).toMatchObject({
 				channel: 'telegram',
 				direction: 'out',
@@ -108,16 +108,16 @@ describe('the channel simulator', () => {
 			const running = yield* simulator;
 			const hook = yield* hookServer,
 				h = yield* host(provider(running.url, 'simulated-chat'), fetch, undefined, {
-					webhookUrl: hook.url
+					webhook_url: hook.url
 				}),
 				run = yield* Effect.context<never>();
-			hook.route.to = (request) => Effect.runPromiseWith(run)(h.link.webhook!(request));
-			yield* h.link.pair!({});
+			hook.route.to = (request) => Effect.runPromiseWith(run)(required(h.link.webhook)(request));
+			yield* required(h.link.pair)({});
 			const account = accountOf(h).account,
 				sent = (body: object) =>
 					inbound(running.url, { channel: 'chat', account, from: '555', ...body }).pipe(
 						Effect.flatMap((response) =>
-							Effect.promise(() => response.json() as Promise<{ id: string }>)
+							Effect.promise(() => response.json()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))))
 						)
 					);
 			const kept = yield* sent({ text: 'stays' }),
@@ -132,12 +132,12 @@ describe('the channel simulator', () => {
 				})
 			);
 			expect(h.events).toHaveLength(2);
-			const page = yield* h.link.reconcile!('555', '2020-01-01T00:00:00.000Z');
+			const page = yield* required(h.link.reconcile)('555', '2020-01-01T00:00:00.000Z');
 			expect(page.complete).toBe(true);
 			expect(page.messages).toHaveLength(2);
 			expect(page.messages[0]).toMatchObject({ id: kept.id, text: 'stays' });
 			expect(page.messages[1]).toMatchObject({ text: 'lost on the way' });
-			yield* h.link.send!({ to: '555', text: 'Answered' }, []);
+			yield* required(h.link.send)({ to: '555', text: 'Answered' }, []);
 			expect(running.messages().at(-1)).toMatchObject({ direction: 'out', text: 'Answered' });
 		})
 	);

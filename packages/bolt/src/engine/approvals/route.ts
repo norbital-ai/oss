@@ -1,7 +1,9 @@
+import { actor_ref } from '../access/actor.ts';
 // A request's flow snapshot (spec §8) and who may act on it: a step is decided by its teams' members or its users.
+import { equal_json } from '@norbital-ai/std/json';
 import type { Authority, EngineActor } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
-import { actorRef } from '../write/commit.ts';
+
 import { OPEN, type ApprovalRole, type ApprovalState } from './machine.ts';
 import type { Snapshot } from './snapshot.ts';
 
@@ -12,7 +14,7 @@ export const unknownTeam = (m: Pick<EngineManifest, 'teams'>, s: Snapshot): stri
 	);
 /** Two snapshots route alike: the same steps (names and approvers). */
 export const sameFlow = (a: Snapshot, b: Snapshot): boolean =>
-	JSON.stringify(a.steps) === JSON.stringify(b.steps);
+	equal_json(a.steps, b.steps);
 
 /** The durable request as a decision reads it. */
 export type Request = {
@@ -26,14 +28,14 @@ export type Request = {
 /** A member's own team (`teams[0]`): eligibility never walks the team tree; static identities have none. */
 const member = (a: EngineActor) =>
 	a.kind === 'member' ? { id: a.id, team: a.teams[0] } : undefined;
-const requestedBy = (r: Request, id: string): boolean =>
+const requested_by = (r: Request, id: string): boolean =>
 	r.requestor === `member:${id}` || r.user === id;
 /** The requester cannot review their own request, including through a member preview or an override. */
 const reviewer = (r: Request, auth: Authority) => {
 	const m = member(auth.actor);
 	return m === undefined ||
-		requestedBy(r, m.id) ||
-		(auth.preview !== undefined && requestedBy(r, auth.preview.by))
+		requested_by(r, m.id) ||
+		(auth.preview !== undefined && requested_by(r, auth.preview.by))
 		? undefined
 		: m;
 };
@@ -59,7 +61,7 @@ export const canSupersede = (r: Request, auth: Authority): boolean => {
 export const rolesOf = (r: Request, auth: Authority): ReadonlySet<ApprovalRole> =>
 	new Set<ApprovalRole>([
 		...(canApprove(r, auth) ? (['approver'] as const) : []),
-		...(r.requestor === actorRef(auth.actor) ? (['requester'] as const) : []),
+		...(r.requestor === actor_ref(auth.actor) ? (['requester'] as const) : []),
 		...(canSupersede(r, auth) ? (['superseder'] as const) : [])
 	]);
 /** Who participates in an open request: requestor, current approver, superseder. */

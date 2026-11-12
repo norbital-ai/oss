@@ -1,5 +1,5 @@
 // The driver ABI, the providers' side (D10b). A provider is written as Effects (`ProviderDef`); the engine is another
-// module graph and calls it through the Promise + AbortSignal contract (`Provider`, `Link`, `DriverOpen`). `toDrivers`
+// module graph and calls it through the Promise + AbortSignal contract (`Provider`, `Link`, `DriverOpen`). `to_drivers`
 // is the one adapter: every call runs on the host's runner, an aborted signal interrupts it, a refusal crosses as the
 // engine's `SendRefused` and any other failure as itself; a link's resources live in its own scope, closed by `close`.
 import { Context, Effect, Exit, FiberSet, Layer, Scope, Semaphore } from 'effect';
@@ -12,7 +12,8 @@ import {
 	type LocalText,
 	type OutboundAttachment,
 	type Provider,
-	type ReconcilePage
+	type ReconcilePage,
+	type SendReceipt
 } from '@norbital-ai/bolt/engine';
 import type { ProviderFailure } from './errors.ts';
 
@@ -41,7 +42,7 @@ export type LinkDef = {
 		| ((
 				message: Json,
 				attachments: readonly OutboundAttachment[] | undefined
-		  ) => Effect.Effect<{ providerId: string; presumeAfterMs?: number }, ProviderFailure>)
+		  ) => Effect.Effect<SendReceipt, ProviderFailure>)
 		| undefined;
 	readonly typing?:
 		((to: string, on: boolean) => Effect.Effect<void, ProviderFailure>) | undefined;
@@ -143,7 +144,7 @@ const promised = (
 });
 
 /** The providers a host registers, as the engine calls them; `run` is the host's runner. */
-export const toDrivers = (
+export const to_drivers = (
 	defs: readonly ProviderDef[],
 	run: Run
 ): Effect.Effect<readonly Provider[]> =>

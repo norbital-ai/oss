@@ -1,13 +1,13 @@
 // A sign-in session (§5.11.2): the token is stored only as its SHA-256. Engine only: not exposed.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_session', {
+export default bind_system_model('sys_session')({
 	description: 'A signed-in session of a member.',
-	label: 'via',
+	record_label: 'record.via',
 	fields: {
-		token_hash: { kind: 'text', unique: true },
+		token_hash: { kind: 'text' },
 		/** The member signed in; the session is deleted with them. */
-		user: { kind: 'ref', to: 'sys_user', onDelete: 'cascade' },
+		user: { kind: 'ref', to: 'sys_user', on_delete: 'cascade' },
 		/** The administrator previewing as `user`. */
 		impersonated_by: { kind: 'ref', to: 'sys_user', optional: true },
 		/** How it began; `anonymous`: a visitor's anonymous user, held by the visitor cookie (30 days unused). */
@@ -18,5 +18,6 @@ export default model('sys_session', {
 		/** Minted for the agent's browser: the conversation it acts in (`Authority.agent`). */
 		agent: { kind: 'text', optional: true }
 	},
+	constraints: { token_hash: { unique: ['token_hash'] } },
 	table: { primary: 'text' }
 });

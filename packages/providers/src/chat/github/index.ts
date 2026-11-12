@@ -1,29 +1,41 @@
 // GitHub, through its REST API with Octokit. A thread is an issue or a pull request, named as on github.com:
 // `owner/repo/issues/1` or `owner/repo/pull/1`. Files are links in a comment's markdown, so none are parsed. GitHub
 // reports a deleted comment by webhook; a missed one shows only as an id gone from `history`.
+import { parse as parseJson } from '../http.ts';
+import { Schema } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
 
-type Comment = {
-	readonly id: number;
-	readonly body?: string | undefined;
-	readonly user: { readonly id: number; readonly login: string } | null;
-	readonly created_at: string;
-	readonly updated_at: string;
-	readonly in_reply_to_id?: number | undefined;
-};
-type Hook = {
-	readonly action: string;
-	readonly comment: Comment;
-	readonly repository: { readonly full_name: string };
-	readonly issue?: {
-		readonly number: number;
-		readonly title: string;
-		readonly pull_request?: object;
-	};
-	readonly pull_request?: { readonly number: number; readonly title: string };
-};
+const Comment = Schema.Struct({
+	id: Schema.Number,
+	body: Schema.optionalKey(Schema.Union([Schema.String, Schema.Undefined])),
+	user: Schema.Union([
+		Schema.Struct({
+			id: Schema.Number,
+			login: Schema.String
+		}),
+		Schema.Null
+	]),
+	created_at: Schema.String,
+	updated_at: Schema.String,
+	in_reply_to_id: Schema.optionalKey(Schema.Union([Schema.Number, Schema.Undefined]))
+});
+type Comment = typeof Comment.Type;
+const Hook = Schema.Struct({
+	action: Schema.String,
+	comment: Comment,
+	repository: Schema.Struct({ full_name: Schema.String }),
+	issue: Schema.optionalKey(
+		Schema.Struct({
+			number: Schema.Number,
+			title: Schema.String,
+			pull_request: Schema.optionalKey(Schema.Struct({}))
+		})
+	),
+	pull_request: Schema.optionalKey(Schema.Struct({ number: Schema.Number, title: Schema.String }))
+});
 type Failed = Error & {
 	readonly status?: number;
 	readonly response?: { readonly headers: { readonly 'retry-after'?: string } };
@@ -38,10 +50,10 @@ const parts = (thread: string) => {
 /** A refusal naming when to return is a rate limit, whatever its status says: GitHub answers 403 to some. */
 const refused = (error: Failed): never => {
 	if (error.status === undefined) throw error;
-	const wait = error.response?.headers['retry-after'];
+	const wait = retry_after_ms(error.response?.headers['retry-after']);
 	throw wait === undefined
 		? new PlatformError(error.message, error.status)
-		: new PlatformError(error.message, 429, Number(wait) * 1000);
+		: new PlatformError(error.message, 429, wait);
 };
 /** What a person wrote themselves: a mention in code or a quote invokes nobody. */
 const prose = (text: string) => text.replace(/```[\s\S]*?```|`[^`\n]*`|^>.*$/gm, '');
@@ -67,14 +79,14 @@ export const github: ChatPlatform = {
 		const parse = (comment: Comment, thread: string, review: boolean): Incoming => ({
 			id: review ? `review:${comment.id}` : String(comment.id),
 			thread,
-			sentAt: comment.created_at,
+			sent_at: comment.created_at,
 			from: { handle: String(comment.user?.id ?? ''), name: comment.user?.login ?? null },
 			text: comment.body ?? '',
 			group: true,
 			mentioned: named.test(prose(comment.body ?? '')),
 			...(comment.in_reply_to_id === undefined
 				? {}
-				: { replyTo: `review:${comment.in_reply_to_id}` }),
+				: { reply_to: `review:${comment.in_reply_to_id}` }),
 			...(comment.updated_at === comment.created_at ? {} : { version: comment.updated_at })
 		});
 		const others = (comment: Comment) => comment.user?.id !== me.id;
@@ -87,7 +99,7 @@ export const github: ChatPlatform = {
 				);
 				const event = request.headers.get('x-github-event');
 				if (event !== 'issue_comment' && event !== 'pull_request_review_comment') return nothing();
-				const { action, comment, issue, pull_request, repository } = JSON.parse(body) as Hook;
+				const { action, comment, issue, pull_request, repository } = await parseJson(Hook, body);
 				const on = issue ?? pull_request;
 				if (!['created', 'edited', 'deleted'].includes(action) || on === undefined)
 					return nothing();

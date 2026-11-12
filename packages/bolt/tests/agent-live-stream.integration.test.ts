@@ -3,16 +3,16 @@
 import { describe, expect, layer } from '@effect/vitest';
 import { Deferred, Effect, Fiber, Layer, Result, Stream } from 'effect';
 import { TestClock } from 'effect/testing';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Agents } from '../src/engine/services.ts';
 import { Ai, type AiEvent } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { STREAM_FLUSH_MS } from '../src/engine/agent/index.ts';
 import type { MessageRow } from '../src/engine/agent/schema.ts';
-import { respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 		models: {},
 		relationships: {},
@@ -22,11 +22,10 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
+
 		mcp: {},
 		apps: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 const usage = { input: 1, output: 1 };
@@ -35,10 +34,10 @@ const usage = { input: 1, output: 1 };
 const script = {
 	emitted: Deferred.makeUnsafe<void>(),
 	gate: Deferred.makeUnsafe<void>(),
-	rest: [] as AiEvent[]
+	rest: new Array<AiEvent>()
 };
 const ports = Layer.succeed(Ai, {
-	ask: respondSystem1,
+	ask: respond_system_1,
 	maxChoices: undefined,
 	models: ['default'],
 	catalog: Port.unavailable('ai.catalog'),
@@ -105,7 +104,7 @@ layer(TestWorkspace.layer({ manifest, ports }))('agent streaming', (it) => {
 						{ _tag: 'Delta', text: 'done.' },
 						{
 							_tag: 'Response',
-							response: { content: 'Half done.', toolCalls: [], finish: 'stop', usage }
+							response: { content: 'Half done.', tool_calls: [], finish: 'stop', usage }
 						}
 					]);
 					const { replies, streamed, turn } = yield* start;

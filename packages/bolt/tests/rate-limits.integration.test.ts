@@ -4,37 +4,44 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it, layer } from '@effect/vitest';
 import { Effect, Layer, Result, Schema } from 'effect';
 import { RateWindows } from '../src/engine/access/rate.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { RATE_LIMITED, uuidv7 } from '../src/protocol/wire.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { SHELL } from '../src/shell/nav.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			notes: { description: 'A note', label: 'title', fields: { title: { kind: 'text' } } }
+			notes: {
+				description: 'A note',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {
-			notes: { read: { notes: { fields: 'all' } }, create: { columns: { notes: ['title'] } } }
+			notes: {
+				outputs: { default: { notes: { fields: 'all' } } },
+				create: { columns: { notes: ['title'] } }
+			}
 		},
 		integrations: {},
 		policies: {
 			writer: {
 				description: 'Writes notes, two a minute',
-				grants: { notes: { read: true, create: true } },
+				grants: { notes: { outputs: { default: {} }, create: {} } },
 				limits: { act: '2/min', read: '2/min' }
 			},
 			chatter: {
 				description: 'Two agent posts a minute',
-				grants: { notes: { read: true } },
+				grants: { notes: { outputs: { default: {} } } },
 				limits: { agent: [{ rate: '2/min', per: 'actor' }] }
 			},
 			reader: {
 				description: 'Public reads, two a minute per IP',
-				grants: { notes: { read: true } },
+				grants: { notes: { outputs: { default: {} } } },
 				limits: { read: { rate: '2/min', per: 'ip' } }
 			}
 		},
@@ -43,8 +50,6 @@ const manifest = Result.getOrThrow(
 			Chatters: { name: 'Chatters', policies: ['chatter'] }
 		},
 		automations: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {
 			site: {
@@ -55,15 +60,14 @@ const manifest = Result.getOrThrow(
 				pages: { home: { title: 'Home' } }
 			}
 		},
-		kiosks: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
 );
 
 const ORIGIN = 'https://acme.example';
-const workspace = TestWorkspace.layer({ manifest, host: { publicUrl: ORIGIN } });
-type Answer = { status: number; body: unknown; retryAfter: string | null };
+const workspace = TestWorkspace.layer({ manifest, host: { public_url: ORIGIN } });
+type Answer = { status: number; body: unknown; retry_after: string | null };
 const send = (
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: unknown }
@@ -85,16 +89,25 @@ const send = (
 		const answer: Answer = {
 			status: res.status,
 			body: text === '' ? null : JSON.parse(text),
-			retryAfter: res.headers.get('retry-after')
+			retry_after: res.headers.get('retry-after')
 		};
-		return { answer, cookies: res.headers.getSetCookie().map((c) => c.split(';')[0]!) };
+		return {
+			answer,
+			cookies: res.headers.getSetCookie().map((cookie) => {
+				const end = cookie.indexOf(';');
+				return end < 0 ? cookie : cookie.slice(0, end);
+			})
+		};
 	});
 const act = (cookie: string, callable: string, input: unknown) =>
 	Effect.gen(function* () {
 		const t = yield* TestWorkspace;
 		return (yield* send('/__bolt/act', {
 			headers: { cookie, 'Idempotency-Key': randomUUID() },
-			body: { callable, input, issuedAt: t.clock.now() }
+			body: {
+				...(callable === 'notes.create' ? { acts: { [callable]: input } } : { callable, input }),
+				issued_at: t.clock.now()
+			}
 		})).answer;
 	});
 const statuses = (answers: readonly Answer[]) => answers.map((a) => a.status);
@@ -116,12 +129,12 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 						body: {
 							outcome: {
 								kind: 'refused',
-								code: 'rateLimited',
+								code: 'rate_limited',
 								message: RATE_LIMITED
 							},
 							v: expect.any(Number)
 						},
-						retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+						retry_after: expect.stringMatching(/^[1-9]\d*$/)
 					});
 					const [rows] = yield* t.db.read([
 						{ text: `SELECT rule, n FROM bolt_rate WHERE rule LIKE 'act:%'`, params: [] }
@@ -146,8 +159,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				expect(statuses(answers)).toEqual([200, 200, 429]);
 				expect(answers[2]).toEqual({
 					status: 429,
-					body: { error: { code: 'rateLimited', message: RATE_LIMITED } },
-					retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+					body: { error: { code: 'rate_limited', message: RATE_LIMITED } },
+					retry_after: expect.stringMatching(/^[1-9]\d*$/)
 				});
 				// a live registration is a read on the same bucket
 				expect(
@@ -175,10 +188,10 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 					expect(yield* act(cookie, 'notes.create', [{ title: 'x' }])).toEqual({
 						status: 429,
 						body: {
-							outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
+							outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED },
 							v: expect.any(Number)
 						},
-						retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+						retry_after: expect.stringMatching(/^[1-9]\d*$/)
 					});
 				})
 		);
@@ -189,7 +202,7 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace;
 					const cookie = yield* t.session(t.member(['chatter'], { teams: ['Chatters'] }).id);
-					// an unknown conversation: the post is charged, then refused notFound; no turn starts
+					// an unknown conversation: the post is charged, then refused not_found; no turn starts
 					const post = act(cookie, 'sys_message.post', { conversation: randomUUID(), text: 'hi' });
 					const answers = [yield* post, yield* post, yield* post];
 					expect(statuses(answers)).toEqual([404, 404, 429]);
@@ -198,12 +211,12 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 						body: {
 							outcome: {
 								kind: 'refused',
-								code: 'rateLimited',
+								code: 'rate_limited',
 								message: RATE_LIMITED
 							},
 							v: expect.any(Number)
 						},
-						retryAfter: expect.stringMatching(/^[1-9]\d*$/)
+						retry_after: expect.stringMatching(/^[1-9]\d*$/)
 					});
 					// filter.describe draws on the same agent bucket
 					expect(
@@ -228,8 +241,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				expect(statuses(answers)).toEqual([200, 200, 429]);
 				expect(answers[2]).toEqual({
 					status: 429,
-					body: { error: { code: 'rateLimited', message: RATE_LIMITED } },
-					retryAfter: expect.stringMatching(/^\d+$/)
+					body: { error: { code: 'rate_limited', message: RATE_LIMITED } },
+					retry_after: expect.stringMatching(/^\d+$/)
 				});
 			})
 		);
@@ -247,8 +260,8 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 				expect(statuses(answers)).toEqual([200, 200, 200, 200, 200, 429]);
 				expect(answers[5]).toEqual({
 					status: 429,
-					body: { error: { code: 'rateLimited', message: RATE_LIMITED } },
-					retryAfter: expect.stringMatching(/^\d+$/)
+					body: { error: { code: 'rate_limited', message: RATE_LIMITED } },
+					retry_after: expect.stringMatching(/^\d+$/)
 				});
 			})
 		);
@@ -293,108 +306,113 @@ describe('RateWindows (rule 72)', () => {
 	});
 });
 
-// Automations (rule 38): only a manual start counts, against the automation's own `limit` per starter. Cron and
+// Automations (rule 38): only a manual start counts, against the per-automation quota for the starter. Cron and
 // model effect runs, and the acts any run's body performs, are never limited.
 const runs = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
-			notes: { description: 'A note', label: 'title', fields: { title: { kind: 'text' } } },
-			logs: { description: 'A log line', label: 'title', fields: { title: { kind: 'text' } } }
+			notes: {
+				description: 'A note',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			},
+			logs: {
+				description: 'A log line',
+				record_label: 'record.title',
+				fields: { title: { kind: 'text' } }
+			}
 		},
 		relationships: {},
 		exposures: {
 			notes: {
-				read: { notes: { fields: 'all' } },
-				create: { columns: { notes: ['title'] } },
-				effect: { created: true }
+				outputs: { default: { notes: { fields: 'all' } } },
+				create: { columns: { notes: ['title'] }, effect: true }
 			},
-			logs: { read: { logs: { fields: 'all' } }, create: { columns: { logs: ['title'] } } }
+			logs: {
+				outputs: { default: { logs: { fields: 'all' } } },
+				create: { columns: { logs: ['title'] } }
+			}
 		},
 		integrations: {},
 		policies: {
 			worker: {
 				description: 'Writes notes and logs, starts the manual automation',
-				grants: { notes: { read: true, create: true }, logs: { read: true, create: true } },
-				automations: ['manual'],
+				grants: {
+					notes: { outputs: { default: {} }, create: {} },
+					logs: { outputs: { default: {} }, create: {} }
+				},
+				capabilities: { automations: ['manual'] },
 				limits: { act: '1000/min' }
 			}
 		},
 		teams: { Workers: { name: 'Workers', policies: ['worker'] } },
 		automations: {
-			manual: { description: 'Logs three lines', policies: ['worker'], limit: '2/min' },
+			manual: { description: 'Logs three lines', policies: ['worker'] },
 			tick: {
 				description: 'Logs three lines',
-				on: { cron: '* * * * *' },
-				policies: ['worker'],
-				limit: '1/h'
+				on: [{ cron: '* * * * *' }],
+				policies: ['worker']
 			}
 		},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		kiosks: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { internal: 'You help.', skills: {} }
 	})
 );
 const lines = (tag: string) =>
-	`function* (_, ctx) { for (const i of [1, 2, 3]) yield* ctx.act('logs.create', [{ title: '${tag}' + i }]); }`;
+	`function* (_, ctx) { for (const i of [1, 2, 3]) yield* ctx.act({ 'logs.create': [{ title: '${tag}' + i }] }); }`;
 const automations = Effect.gen(function* () {
 	return TestWorkspace.layer({
 		manifest: runs,
 		guest: yield* program(
-			`export default { model: { notes: { bodies: { effect: { created: ${lines('r')} } } } }, automation: { manual: { body: ${lines('m')} }, tick: { body: ${lines('t')} } } };`
+			`export default { model: { notes: { bodies: { effect: { create: ${lines('r')} } } } }, automation: { manual: { body: ${lines('m')} }, tick: { body: ${lines('t')} } } };`
 		),
-		host: { publicUrl: ORIGIN },
+		host: { public_url: ORIGIN },
 		now: '2026-10-29T08:00:30.000Z'
 	});
 });
 
 layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
 	it.effect(
-		'a manual start beyond its limit is a 429 with Retry-After; cron and effect runs and run bodies are unaffected',
+		'a manual start beyond the quota is a 429 with Retry-After; cron and effect runs and run bodies are unaffected',
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
 				const cookie = yield* t.session(t.member(['worker'], { teams: ['Workers'] }).id);
 				const start = () =>
-					act(cookie, 'start', {
+					act(cookie, 'run', {
 						automation: 'manual',
 						id: uuidv7(Date.parse(t.clock.now())),
 						input: {}
 					});
-				const answers = [yield* start(), yield* start(), yield* start()];
-				expect(
-					statuses(answers)
-						.slice(0, 2)
-						.every((s) => s < 400)
-				).toBe(true);
-				expect(answers[2]).toEqual({
+				const answers = yield* Effect.forEach(Array.from({ length: 30 }), start);
+				expect(statuses(answers).every((status) => status < 400)).toBe(true);
+				expect(yield* start()).toEqual({
 					status: 429,
 					body: {
-						outcome: { kind: 'refused', code: 'rateLimited', message: RATE_LIMITED },
+						outcome: { kind: 'refused', code: 'rate_limited', message: RATE_LIMITED },
 						v: expect.any(Number)
 					},
-					retryAfter: '30'
+					retry_after: '30'
 				});
-				// two notes run the created effect; the cron fires `tick` (`limit: 1/h`, never applied to it) each minute
+				// Two notes run the created effect. The cron fires tick each minute.
 				expect((yield* act(cookie, 'notes.create', [{ title: 'a' }, { title: 'b' }])).status).toBe(
 					200
 				);
-				yield* t.runDue();
+				yield* t.run_due();
 				t.clock.advance('1min');
-				yield* t.runDue();
+				yield* t.run_due();
 				t.clock.advance('1min');
-				yield* t.runDue();
+				yield* t.run_due();
 				const count = (prefix: string) =>
 					t.db.value(Schema.Number, {
 						text: `SELECT count(*)::int FROM logs WHERE title LIKE $1`,
 						params: [`${prefix}%`]
 					});
-				// every body act committed: two manual runs, at least two cron ticks, the effect run
-				expect(yield* count('m')).toBe(6);
+				// Every body act committed, including the cron ticks and the effect.
+				expect(yield* count('m')).toBe(90);
 				expect(yield* count('t')).toBeGreaterThanOrEqual(6);
 				expect(yield* count('r')).toBeGreaterThanOrEqual(3);
 			})

@@ -12,8 +12,8 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		/** Oldest first; new events append. */
 		rows: readonly LogLine[];
 		/** Loads the next older page (the caller holds the cursor) and prepends it to `rows`. */
-		loadOlder?: () => Effect.Effect<unknown, Error>;
-		hasOlder?: boolean;
+		load_older?: () => Effect.Effect<unknown, Error>;
+		has_older?: boolean;
 		/** Keep the newest line in view; scrolling up pauses it. */
 		follow?: boolean;
 		locale?: string;
@@ -22,14 +22,14 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		leading?: Snippet;
 		/** More filter controls in the filter popover (a run picker), and how many of them are active. */
 		filters?: Snippet;
-		filterCount?: number;
+		filter_count?: number;
 		/** Before Follow (an Auto-refresh toggle). */
 		trailing?: Snippet | undefined;
 	};
 </script>
 
 <script lang="ts">
-	import { observeOnce } from '../effect/index.js';
+	import { observe_once } from '../effect/index.js';
 	import { tick } from 'svelte';
 	import { watch } from 'runed';
 	import Overflow from '../cell/Overflow.svelte';
@@ -41,7 +41,7 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		LOG_LEVELS,
 		ROW_HEIGHT,
 		atBottom,
-		filterLogs,
+		filter_logs,
 		logPreview,
 		wantsOlder,
 		type LogLevel
@@ -49,14 +49,14 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 
 	let {
 		rows,
-		loadOlder,
-		hasOlder = false,
+		load_older,
+		has_older = false,
 		follow = $bindable(true),
 		locale,
 		class: className,
 		leading,
 		filters,
-		filterCount = 0,
+		filter_count = 0,
 		trailing
 	}: LogViewProps = $props();
 
@@ -66,13 +66,13 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 	let scrollTop = $state(0);
 	let viewport = $state(0);
 	let olderRequest = $state.raw<{
-		load: NonNullable<LogViewProps['loadOlder']>;
+		load: NonNullable<LogViewProps['load_older']>;
 		port: HTMLDivElement;
 		before: number;
 	} | null>(null);
-	const olderPage = observeOnce(() => {
+	const olderPage = observe_once(() => {
 		const request = olderRequest;
-		return request === null || request.load !== loadOlder
+		return request === null || request.load !== load_older
 			? null
 			: request.load().pipe(
 					Effect.andThen(Effect.tryPromise(tick)),
@@ -86,7 +86,7 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 	const loading = $derived(olderPage.loading);
 	const notice = $derived(olderPage.error?.message ?? null);
 
-	const shown = $derived(filterLogs(rows, hidden, q));
+	const shown = $derived(filter_logs(rows, hidden, q));
 	const offs = $derived(offsets(shown.map(() => ROW_HEIGHT)));
 	const total = $derived(offs[offs.length - 1]);
 	const win = $derived(windowOf(offs, scrollTop, viewport));
@@ -113,15 +113,15 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 	});
 
 	function older() {
-		if (port === undefined || loadOlder === undefined || loading) return;
-		olderRequest = { load: loadOlder, port, before: total };
+		if (port === undefined || load_older === undefined || loading) return;
+		olderRequest = { load: load_older, port, before: total };
 	}
 
 	function onscroll() {
 		if (!port) return;
 		scrollTop = port.scrollTop;
 		follow = atBottom(port);
-		if (wantsOlder(scrollTop, hasOlder && !!loadOlder, loading)) void older();
+		if (wantsOlder(scrollTop, has_older && !!load_older, loading)) void older();
 	}
 </script>
 
@@ -133,9 +133,9 @@ A dense, filterable log: one fixed-height line per event (a JSON payload preview
 		{@render leading?.()}
 		<ToolbarSearch bind:value={q} label="Search log messages" />
 		<ToolbarFilter
-			count={LOG_LEVELS.filter((level) => hidden[level]).length + filterCount}
+			count={LOG_LEVELS.filter((level) => hidden[level]).length + filter_count}
 			label="Filter log levels"
-			panelClass="w-64"
+			panel_class="w-64"
 		>
 			{@render filters?.()}
 			<h3 class="text-sm font-medium">Log levels</h3>

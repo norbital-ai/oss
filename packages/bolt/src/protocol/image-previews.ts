@@ -2,7 +2,8 @@ import { Cache, Context, Data, Effect, Layer, Option, Schema, Semaphore } from '
 import { LIMITS, type ImagePreview, type ImagePreviewSize } from '../engine/contracts.ts';
 import { Files, Images } from '../engine/ports.ts';
 import type { PortFailure } from '../engine/port.ts';
-import { imagePreview, ImagePreviewMime } from '../engine/files/image.ts';
+import { imagePreview } from '../engine/files/image.ts';
+import { ImagePreviewMimeSchema } from '../engine/media.ts';
 
 class PreviewKey extends Data.Class<{
 	key: string;
@@ -31,7 +32,7 @@ export const ImagePreviewsLive = Layer.effect(
 		const conversion = yield* Semaphore.make(1);
 		const lookup = Effect.fn('ImagePreviews.derive')(function* (request: PreviewKey) {
 			const bytes = yield* files.get(request.key, LIMITS.storedFileBytes);
-			const mime = Schema.decodeUnknownOption(ImagePreviewMime)(request.mime);
+			const mime = Schema.decodeUnknownOption(ImagePreviewMimeSchema)(request.mime);
 			return Option.isSome(mime)
 				? yield* imagePreview(bytes, mime.value, request.edge).pipe(
 						Effect.provideService(Images, images)

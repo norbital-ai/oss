@@ -5,6 +5,11 @@ import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
 import { coalescing } from '../src/engine/query/engine.ts';
 
+const present = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing fixture value');
+	return value;
+};
+
 const sql = (n: number): Sql => ({ text: 'SELECT $1 AS n', params: [n] });
 const unused = () => Effect.die(new Error('unused'));
 const macrotask = Effect.callback<void>((resume) => {
@@ -17,11 +22,9 @@ const fixture = () => {
 		read: (statements) =>
 			Effect.sync(() => {
 				calls.push(statements);
-				return statements.map((s) => ({ rows: [{ n: s.params[0]! }], affected: 1 }));
+				return statements.map((s) => ({ rows: [{ n: present(s.params[0]) }], affected: 1 }));
 			}),
 		write: unused,
-		session: () =>
-			Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 		transaction: unused
 	});
 	return { calls, db };
@@ -92,8 +95,6 @@ it.effect('a failed wave fails every waiter with the same error and a later wave
 						: Effect.succeed(statements.map(() => ({ rows: [], affected: 0 })))
 				),
 			write: unused,
-			session: () =>
-				Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 			transaction: unused
 		});
 		const reader = yield* coalescing(db, 2);

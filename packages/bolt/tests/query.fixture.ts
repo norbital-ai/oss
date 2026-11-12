@@ -2,16 +2,17 @@
 // read output of accounts and orders (no `secret`, no `total`).
 import type { Authority, Bindings, ModelAuthority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { searchFunctions } from '@norbital-ai/store';
+import { search_functions } from '@norbital-ai/store';
 import type { Pred } from '@norbital-ai/store';
 
-const sys = { description: 'x', label: 'name' } as const;
+const sys = { description: 'x' };
 export const manifest: EngineManifest = {
 	needs: [],
 	workspace: { tz: 'Asia/Kuala_Lumpur', locale: 'en' },
 	models: {
 		accounts: {
 			...sys,
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				region: { kind: 'text', optional: true },
@@ -22,7 +23,8 @@ export const manifest: EngineManifest = {
 		},
 		orders: {
 			...sys,
-			label: [],
+			record_label: 'record.status',
+
 			fields: {
 				status: { kind: 'enum', values: ['open', 'closed', 'held'] },
 				total: { kind: 'decimal', scale: 2 },
@@ -54,10 +56,9 @@ export const manifest: EngineManifest = {
 		},
 		lines: {
 			...sys,
-			label: 'sku',
 			fields: { sku: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } }
 		},
-		notes: { ...sys, label: 'body', fields: { body: { kind: 'text' } } }
+		notes: { ...sys, record_label: 'record.body', fields: { body: { kind: 'text' } } }
 	},
 	relationships: {
 		'orders.account': { to: 'accounts', inverse: 'orders' },
@@ -66,61 +67,64 @@ export const manifest: EngineManifest = {
 	},
 	exposures: {
 		accounts: {
-			read: {
-				accounts: { fields: 'all' },
-				'accounts.orders': { fields: 'all' },
-				'accounts.orders.lines': { fields: 'all' }
-			},
-			outputs: { brief: { accounts: { fields: ['name', 'region'] } } }
+			outputs: {
+				default: {
+					accounts: { fields: 'all' },
+					'accounts.orders': { fields: 'all' },
+					'accounts.orders.lines': { fields: 'all' }
+				},
+				brief: { accounts: { fields: ['name', 'region'] } }
+			}
 		},
 		orders: {
-			read: {
-				orders: { fields: 'all' },
-				'orders.account': { fields: 'all' },
-				'orders.lines': { fields: 'all' }
-			},
 			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.account': { fields: 'all' },
+					'orders.lines': { fields: 'all' }
+				},
 				brief: {
 					orders: { fields: ['status', 'qty', 'placed', 'account'] },
 					'orders.account': { fields: ['name', 'region'] }
 				}
 			}
 		},
-		lines: { read: { lines: { fields: 'all' }, 'lines.order': { fields: 'all' } } },
-		notes: { read: { notes: { fields: ['body', 'about'] } } }
+		lines: { outputs: { default: { lines: { fields: 'all' }, 'lines.order': { fields: 'all' } } } },
+		notes: { outputs: { default: { notes: { fields: ['body', 'about'] } } } }
 	},
 	integrations: {},
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 
 /** The DDL the schema area emits for this manifest, reduced to what reads touch. */
 export const DDL = `
 create extension if not exists vector;
-${searchFunctions()
+${search_functions()
 	.map((f) => `${f.sql};`)
 	.join('\n')}
 create table accounts (id uuid primary key, revision int not null default 1, created_at timestamptz not null default now(),
 	created_by text, updated_at timestamptz not null default now(), updated_by text,
 	name text not null, region text, secret text, shout text generated always as (upper(name)) stored,
+	bolt_record_label text generated always as (name) stored,
 	bolt_search tsvector generated always as (bolt_search_document(coalesce(name::text, ''))) stored);
 create table orders (id uuid primary key, revision int not null default 1, created_at timestamptz not null default now(),
 	created_by text, updated_at timestamptz not null default now(), updated_by text,
 	account uuid not null references accounts, status text not null, total numeric not null, qty int not null, email text, placed date not null,
-	at timestamptz not null, tags text[] not null default '{}', note text, span daterange, doc jsonb, color vector(3), spot point);
+	at timestamptz not null, tags text[] not null default '{}', note text, span daterange, doc jsonb, color vector(3), spot point,
+	bolt_record_label text generated always as (status) stored);
 create table lines (id uuid primary key, revision int not null default 1, created_at timestamptz not null default now(),
 	created_by text, updated_at timestamptz not null default now(), updated_by text,
 	"order" uuid not null references orders, sku text not null, amount numeric not null);
 create table notes (id uuid primary key, revision int not null default 1, created_at timestamptz not null default now(),
 	created_by text, updated_at timestamptz not null default now(), updated_by text,
-	about__accounts uuid references accounts, about__orders uuid references orders, body text not null);
+	about__accounts uuid references accounts, about__orders uuid references orders, body text not null,
+	bolt_record_label text generated always as (body) stored);
 `;
 
 export const bindings: Bindings = {
@@ -147,7 +151,6 @@ const arm = (
 			Object.entries(read).map(([path, where]) => [path, [{ policy, where }]])
 		)
 	},
-	history: [],
 	create: [],
 	update: [],
 	delete: [],
@@ -169,7 +172,7 @@ export const rep: Authority = {
 		phone: null,
 		external: false,
 		teams: ['t1'],
-		teamPath: ['t1'],
+		team_path: ['t1'],
 		admin: false,
 		party: null
 	},
@@ -184,7 +187,7 @@ export const rep: Authority = {
 		notes: arm({ notes: TRUE })
 	},
 	automations: [],
-	capabilities: { apps: [], tools: [], mcp: [] },
+	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	limits: [],
 	teamTree: ['t1', 't2'],
 	scopes: {}

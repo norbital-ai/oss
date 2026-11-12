@@ -1,3 +1,4 @@
+import { uuid } from '../port.ts';
 // Syncs (spec §3): a model's rows exchanged with another system through an integration instance. A remote sync's
 // author writes at most two guest bodies — `read` (their rows → the model's) and `write` (one committed change → a call
 // to them) — and the engine owns the rest in the tenant's own Postgres: the read run (`read.ts`: one act per page with
@@ -5,12 +6,13 @@
 // stored once, then a debounced read), and the outbox (`write.ts`: queued in the statement that wrote the record,
 // delivered FIFO per record with retries, dead letter, rollback on refusal). File syncs are `file.ts`'s.
 //
-// Which instance: a model's ref to `sys_integration` pinned to the sync's integration (`where: { integration: { eq } }`)
-// picks it per row (a write follows the row's FK; a read stamps it); otherwise a read runs for every active instance and a
-// write goes through the one `+workspace.ts` connection of that integration.
-import { Clock, Context, Crypto, Effect, Layer, Predicate, Schema } from 'effect';
+// Every active connection of the integration reads independently and receives committed changes. The id map and
+// outbox carry the connection per replica; an inbound change fans out to peers. Its own connection receives only a
+// correction when an older uncertain outbound delivery could overwrite that inbound image.
+import { Clock, Context, Crypto, Effect, Layer, Schema } from 'effect';
 import { bindingsAt } from '../query/reader.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { Drivers } from '../ports.ts';
 import {
 	Activation,
@@ -29,7 +31,7 @@ import {
 	type ReadsShape,
 	type WritesShape
 } from '../services.ts';
-import { relations, type EngineManifest } from '../manifest.ts';
+import type { EngineManifest } from '../manifest.ts';
 import type { SyncEntry } from '../../decl/model.ts';
 import type { Json } from '../../decl/values.ts';
 import type { WebhookDelivery } from '../../decl/runtime/integration.ts';
@@ -39,11 +41,14 @@ import { BoltError } from '../../protocol/errors.ts';
 import { duration, iso } from '../runs/time.ts';
 import { instancesOf, integrationBody, writeStatus } from '../integrations/instances.ts';
 import { makeRead } from './read.ts';
-import { makeDeliver, SYNC_DELIVER } from './write.ts';
+import { makeDeliver } from './write.ts';
+import { SYNC_DELIVER } from './outbox.ts';
 import { Chain } from '../write/sql.ts';
-import { enqueue } from '../runs/queue.ts';
+import { enqueueDrain } from '../runs/queue.ts';
 import { deliverRun } from '../integrations/outbound.ts';
+import { msg as messagePiece } from '../conversations/store.ts';
 import { makeHint } from './hint.ts';
+import { failedBackfills, makeBackfill, replayBackfills, SYNC_BACKFILL } from './backfill.ts';
 
 /** One remote sync of a model, as the engine runs it. */
 export type RemoteSync = {
@@ -57,10 +62,6 @@ export type RemoteSync = {
 	readonly definition: string;
 	readonly read: boolean;
 	readonly write: boolean;
-	/** The model's ref to `sys_integration` pinned to `definition`: it picks the instance per row. */
-	readonly fk: string | undefined;
-	/** Without `fk`, the `+workspace.ts` connection of `definition` a write goes through. */
-	readonly connection: string | undefined;
 	/** How often its read runs (`every`, default `'15min'`). */
 	readonly every: string;
 	/** The configuration field whose values partition its read (one cursor each). */
@@ -70,26 +71,13 @@ export type RemoteSync = {
 export const EVERY = '15min';
 const memo = new WeakMap<EngineManifest, ReadonlyMap<string, RemoteSync>>();
 /** Every remote sync by its run name `'<model>.sync.<sync>'`. */
-export const syncsOf = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
+export const syncs_of = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
 	let x = memo.get(m);
 	if (x === undefined) {
-		const rels = relations(m);
 		x = new Map(
 			Object.entries(m.exposures).flatMap(([model, c]) =>
 				Object.entries(c.syncs ?? {}).flatMap(([sync, entry]): [string, RemoteSync][] => {
 					if (entry.with === 'file') return [];
-					const pinned = (rels.from.get(model) ?? []).find((r) => {
-						const where = r.spec.where;
-						return (
-							r.targets.length === 1 &&
-							r.targets[0] === 'sys_integration' &&
-							Predicate.isObject(where) &&
-							Predicate.hasProperty(where, 'integration') &&
-							Predicate.isObject(where.integration) &&
-							Predicate.hasProperty(where.integration, 'eq') &&
-							where.integration.eq === entry.with
-						);
-					});
 					const name = `${model}.sync.${sync}`;
 					return [
 						[
@@ -102,10 +90,6 @@ export const syncsOf = (m: EngineManifest): ReadonlyMap<string, RemoteSync> => {
 								definition: entry.with,
 								read: entry.read === true,
 								write: entry.write === true,
-								fk: pinned?.fk,
-								connection: Object.entries(m.connections).find(
-									([, slot]) => slot.integration === entry.with
-								)?.[0],
 								every: entry.every ?? EVERY,
 								partitions: entry.partitions,
 								entry
@@ -140,7 +124,7 @@ export const everyCron = (every: string): string => {
 };
 /** H6: each remote read's periodic run, fired by the host's clock in the workspace's zone as an automation's cron is. */
 export const syncTriggers = (m: EngineManifest): readonly CronEntry[] =>
-	[...syncsOf(m).values()]
+	[...syncs_of(m).values()]
 		.filter((s) => s.read)
 		.map((s) => ({ id: s.name, cron: everyCron(s.every), zone: m.workspace.tz }));
 
@@ -167,7 +151,7 @@ export type SyncsShape = {
 		instance: string,
 		ids?: readonly string[]
 	) => Effect.Effect<{ readonly replayed: number }, EngineError>;
-	readonly deadLetters: (instance: string) => Effect.Effect<readonly SyncDeadLetter[], EngineError>;
+	readonly dead_letters: (instance: string) => Effect.Effect<readonly SyncDeadLetter[], EngineError>;
 	readonly retire: (
 		instance: string,
 		id: string,
@@ -175,6 +159,11 @@ export type SyncsShape = {
 	) => Effect.Effect<{ readonly retired: number }, EngineError>;
 	/** The definition's `test` body for a paired instance: fails with the body's failure; no body passes. */
 	readonly test: (instance: string) => Effect.Effect<void, EngineError>;
+	/**
+	 * One page of read rows (`$id`, `$version`, `$deleted` and fields) committed for `instance` as a read run commits
+	 * one, without the read body; a refused page fails with the act's outcome as its cause.
+	 */
+	readonly page: (sync: string, instance: string, rows: readonly Json[]) => Effect.Effect<void, EngineError>;
 };
 export class Syncs extends Context.Service<Syncs, SyncsShape>()('bolt/Syncs') {}
 
@@ -234,8 +223,9 @@ export const SyncsLive = Layer.effect(
 		};
 		const reading = makeRead(e),
 			delivering = makeDeliver(e),
+			backfilling = makeBackfill(e),
 			hinting = makeHint(e);
-		const syncs = [...syncsOf(manifest).values()];
+		const syncs = [...syncs_of(manifest).values()];
 		yield* registry.register(
 			{
 				...Object.fromEntries(
@@ -246,11 +236,13 @@ export const SyncsLive = Layer.effect(
 							(input: Json, run: Parameters<RunHandler>[1]) => reading.run(s, input, run)
 						])
 				),
-				[SYNC_DELIVER]: () => delivering.deliver
+				[SYNC_DELIVER]: () => delivering.deliver,
+				[SYNC_BACKFILL]: (input) => backfilling(input)
 			},
-			Object.fromEntries(
-				syncs.filter((s) => s.read).map((s) => [s.name, { attempts: 3, backoff: '10s' }])
-			),
+			{
+				...Object.fromEntries(syncs.filter((s) => s.read).map((s) => [s.name, { attempts: 3, backoff: '10s' }])),
+				[SYNC_BACKFILL]: { attempts: 3, backoff: '10s' }
+			},
 			Object.fromEntries(
 				syncs.filter((s) => s.read).map((s) => [s.name, (now: number) => reading.rests(s, now)])
 			)
@@ -259,33 +251,37 @@ export const SyncsLive = Layer.effect(
 			health: Effect.fn('Syncs.health')(function* (instance: string) {
 				const ms = yield* Clock.currentTimeMillis,
 					now = iso(ms);
-				const health = yield* db.value(SyncHealth, {
-					text: `SELECT jsonb_build_object(
-						'pending', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status IN ('queued','sending')),
-						'dead', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status = 'dead'),
-						'failed', (SELECT count(*)::int FROM sys_outbox WHERE instance = $1 AND status = 'failed'),
-						'last_read_at', max(last_read_at)::text, 'last_change_at', max(last_change_at)::text, 'last_hint_at', greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox WHERE instance = $1 AND body ->> 'kind' = 'webhook'))::text,
-						'lag_seconds', extract(epoch FROM ($2::timestamptz - max(last_read_at)))::float,
-						'webhooks_quiet', EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = $1 AND i.integration IN
-							(SELECT jsonb_array_elements_text($3::jsonb))) AND coalesce(max(last_change_at) > coalesce(greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox WHERE instance = $1 AND body ->> 'kind' = 'webhook')), min(started_at)) + interval '30 minutes', false)
-					) AS health FROM sys_sync WHERE instance = $1`,
-					params: [
-						instance,
-						now,
-						JSON.stringify(
-							Object.entries(manifest.integrations).flatMap(([name, definition]) =>
-								definition.webhook === undefined ? [] : [name]
-							)
-						)
-					]
-				});
+				const c = new Chain(), selected = c.p(instance), at = c.p(now);
+				const failed = c.cte('initialization_failures', failedBackfills(manifest, c, instance));
+				const definitions = c.p(JSON.stringify(Object.entries(manifest.integrations).flatMap(([name, definition]) =>
+					definition.webhook === undefined ? [] : [name])));
+				// `Chain.sql` also answers its `guarded` count: the health is the one named column
+				const [answer] = yield* db.rows(Schema.Struct({ health: SyncHealth }), c.sql(`(SELECT jsonb_build_object(
+					'pending', (SELECT count(*)::int FROM sys_outbox WHERE instance = ${selected} AND status IN ('queued','sending')),
+					'dead', (SELECT count(*)::int FROM sys_outbox WHERE instance = ${selected} AND status = 'dead'),
+					'failed', (SELECT count(*)::int FROM sys_outbox WHERE instance = ${selected} AND status = 'failed'),
+					'initialization', (SELECT CASE WHEN count(*) = 0 THEN NULL ELSE jsonb_build_object(
+						'failed', count(*)::int, 'message', (SELECT coalesce(error ->> 'message', error ->> 'code')
+						FROM ${failed} ORDER BY finished_at DESC NULLS LAST, id LIMIT 1)) END FROM ${failed}),
+					'last_read_at', max(last_read_at)::text, 'last_change_at', max(last_change_at)::text,
+					'last_hint_at', greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox
+						WHERE instance = ${selected} AND body ->> 'kind' = 'webhook'))::text,
+					'lag_seconds', extract(epoch FROM (${at}::timestamptz - max(last_read_at)))::float,
+					'webhooks_quiet', EXISTS (SELECT 1 FROM sys_integration i WHERE i.id = ${selected} AND i.integration IN
+						(SELECT jsonb_array_elements_text(${definitions}::jsonb))) AND coalesce(max(last_change_at) > coalesce(
+						greatest(max(last_hint_at), (SELECT max(received_at) FROM sys_inbox WHERE instance = ${selected}
+						AND body ->> 'kind' = 'webhook')), min(started_at)) + interval '30 minutes', false)
+				) FROM sys_sync WHERE instance = ${selected}) AS health`));
+				if (answer === undefined)
+					return yield* BoltError.make('corrupt', 'decode', 'the sync health read returned no row');
+				const health = answer.health;
 				// a read that found nothing commits nothing, so this generation's memory may be the newer
 				const read = reading.lastReadOf(instance);
 				return read > Date.parse(health.last_read_at ?? '1970-01-01')
 					? { ...health, last_read_at: iso(read), lag_seconds: (ms - read) / 1000 }
 					: health;
 			}),
-			deadLetters: (instance: string) =>
+			dead_letters: (instance: string) =>
 				db.rows(SyncDeadLetter, {
 					text: `SELECT id::text, model, record, record_revision AS revision, op, at::text,
 						error ->> 'message' AS message FROM sys_outbox
@@ -295,85 +291,61 @@ export const SyncsLive = Layer.effect(
 			retire: Effect.fn('Syncs.retire')(function* (instance: string, id: string, actor: string) {
 				const now = iso(yield* Clock.currentTimeMillis),
 					c = new Chain();
-				c.cte(
+				capturePiece(c,
 					'retired',
+					'sys_outbox',
 					`UPDATE sys_outbox SET status = 'skipped',
 					error = coalesce(error, '{}'::jsonb) || jsonb_build_object('retired', jsonb_build_object(
 						'at', ${c.p(now)}::text, 'by', ${c.p(actor)}::text))
-					WHERE instance = ${c.p(instance)} AND id::text = ${c.p(id)} AND status = 'dead'
-					RETURNING id, model, record, key`
+					WHERE instance = ${c.p(instance)} AND id::text = ${c.p(id)} AND status = 'dead'`,
+					{ returning: 'sys_outbox.id, sys_outbox.key' }
 				);
-				c.cte(
-					'sends_skipped',
-					`UPDATE sys_message SET status = 'skipped', error = 'The source write was retired.'
-					WHERE meta ->> 'sync_write' IN (SELECT key FROM retired) AND status = 'queued' RETURNING id`
-				);
+				c.cte('sends_skipped', `SELECT * FROM ${messagePiece(c, `UPDATE sys_message SET status = 'skipped', error = 'The source write was retired.'
+					WHERE meta ->> 'sync_write' IN (SELECT key FROM retired) AND status = 'queued'`, 'sys_message.id')}`);
 				deliverRun(c, 'sends_skipped', now);
-				enqueue(
-					c,
-					[{ automation: SYNC_DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }],
-					{ when: 'EXISTS (SELECT 1 FROM retired)' }
+				// a later change of the record was waiting behind the retired write
+				enqueueDrain(c, SYNC_DELIVER, c.p(now), 'EXISTS (SELECT 1 FROM retired)');
+				const answer = yield* nativeCommit(db.write, live.publish, c,
+					Schema.Struct({ ...CapturedResult.fields, retired: Schema.Number }),
+					'(SELECT count(*)::int FROM retired) AS retired'
 				);
-				const [row] = yield* db.returning(
-					Schema.Struct({
-						model: Schema.NullOr(Schema.String),
-						record: Schema.NullOr(Schema.String)
-					}),
-					c.sql('(SELECT model FROM retired) AS model, (SELECT record FROM retired) AS record')
-				);
-				if (row?.model && row.record) {
-					live.syncChanged('sys_integration', [instance]);
-					live.syncChanged(row.model, [row.record]);
-					yield* wake.at(now);
-				}
-				return { retired: row?.model ? 1 : 0 };
+				if (answer.retired > 0) yield* wake.at(now);
+				return { retired: answer.retired };
 			}),
 			replay: Effect.fn('Syncs.replay')(function* (instance: string, ids?: readonly string[]) {
 				const now = iso(yield* Clock.currentTimeMillis),
 					c = new Chain();
-				c.cte(
+				capturePiece(c,
 					'replayed',
+					'sys_outbox',
 					`UPDATE sys_outbox SET status = 'sending', attempts = 0,
-					claimed_at = ${c.p(now)}::timestamptz - interval '6 minutes', next_attempt_at = ${c.p(now)}::timestamptz, error = NULL
+					claimed_at = ${c.p(now)}::timestamptz - interval '6 minutes', next_attempt_at = ${c.p(now)}::timestamptz,
+					error = CASE WHEN error ->> 'code' = 'identity_conflict' THEN error ELSE NULL END
 					WHERE instance = ${c.p(instance)} AND status = 'dead'
-					${ids === undefined ? '' : `AND id::text IN (SELECT jsonb_array_elements_text(${c.p(ids)}::jsonb))`} RETURNING id, model, record`
+					${ids === undefined ? '' : `AND id::text IN (SELECT jsonb_array_elements_text(${c.p(ids)}::jsonb))`}`
 				);
-				enqueue(
-					c,
-					[{ automation: SYNC_DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }],
-					{ when: 'EXISTS (SELECT 1 FROM replayed)' }
+				enqueueDrain(c, SYNC_DELIVER, c.p(now), 'EXISTS (SELECT 1 FROM replayed)');
+				const initialized = ids === undefined ? replayBackfills(manifest, c, instance, now) : null;
+				const answer = yield* nativeCommit(db.write, live.publish, c,
+					Schema.Struct({ ...CapturedResult.fields, replayed: Schema.Number }),
+					`((SELECT count(*)::int FROM replayed) + ${initialized === null ? '0' : `(SELECT count(*)::int FROM ${initialized})`}) AS replayed`
 				);
-				const [answer] = yield* db.returning(
-					Schema.Struct({ replayed: Schema.Number }),
-					c.sql('(SELECT count(*)::int FROM replayed) AS replayed')
-				);
-				if ((answer?.replayed ?? 0) > 0) {
-					live.syncChanged('sys_integration', [instance]);
+				if (answer.replayed > 0) {
 					yield* wake.at(now);
 				}
-				return answer ?? { replayed: 0 };
+				return { replayed: answer.replayed };
 			}),
 			invalidate: reading.invalidate,
+			page: reading.page,
 			hint: hinting.hint,
 			test: Effect.fn('Syncs.test')(function* (instance: string) {
 				const [inst] = yield* instancesOf(manifest, db, { ids: [instance] });
 				if (inst === undefined)
 					return yield* Effect.fail(
-						BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
+						BoltError.make('not_found', 'decode', `No integration instance '${instance}'.`)
 					);
 				if (manifest.integrations[inst.integration]?.test !== true) return;
-				const id = yield* e.crypto
-					.randomUUIDv4()
-					.pipe(
-						Effect.mapError((error) =>
-							BoltError.make(
-								'unavailable',
-								'facility',
-								'Secure random UUID generation failed.',
-								error
-							)
-						)
-					);
+				const id = yield* uuid(e.crypto);
 				yield* integrationBody(e, {
 					id,
 					actor: { kind: 'system', run: id, by: { platform: `${inst.integration}.test` } },

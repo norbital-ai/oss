@@ -10,7 +10,7 @@ import { Effect, FileSystem, Option, Schema } from 'effect';
 import type { InlineConfig, Plugin, Rolldown } from 'vite';
 import { EDITOR_SINGLETONS } from '../editor-dependencies.ts';
 import { tree } from '@norbital-ai/bolt/artifact';
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 import { cachedSvelte } from './svelte-cache.ts';
 import { BOLT, BOLT_PACKAGE, EXT } from '../bolt.ts';
 
@@ -19,20 +19,18 @@ const MOUNT = join(SHELL, `mount${EXT}`);
 /** Where the layer's chunks sit in a client build, beside the workspace's own `assets/*`. */
 export const PLATFORM = 'assets/platform';
 
-/** Bolt's browser entries: the shell, `@norbital-ai/bolt` (and `$bolt`'s page module) and its client subpaths. */
+/** Bolt's browser entries: the shell, `@norbital-ai/bolt` and its client subpaths. */
 const ENTRIES = [
 	'shell/mount',
 	'index',
 	'page/index',
-	'page/integration',
 	'decl/errors',
-	'protocol/cursor'
+	'protocol/index'
 ];
 /** Bare specifiers the layer exposes, resolved as the shell resolves them, else as ui does; one a release lacks is left out. */
 const SPECIFIERS = [
-	...['', '/layout', '/brand', '/capture', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
+	...['', '/layout', '/brand', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
 	...[
-		'calendar',
 		'csv',
 		'date',
 		'decimal',
@@ -154,11 +152,12 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 	yield* fs.copy(join(out, PLATFORM), files);
 	const digests: [string, string][] = [];
 	for (const file of yield* tree(files))
-		if (!file.endsWith('.map')) digests.push([file, sha256Hex(yield* fs.readFile(join(files, file)))]);
+		if (!file.endsWith('.map'))
+			digests.push([file, sha256_hex(yield* fs.readFile(join(files, file)))]);
 	const temporary = `${metadata}.${process.pid}`;
 	yield* fs.writeFileString(
 		temporary,
-		Schema.encodeSync(CachedPlatform)({
+		yield* Schema.encodeEffect(CachedPlatform)({
 			key,
 			modules: [...layer.modules],
 			chunks: [...layer.chunks.values()],

@@ -5,11 +5,38 @@
 // component CSS the virtual style module reads from `meta`), so the output is unchanged.
 import type { Options } from '@sveltejs/vite-plugin-svelte';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Schema } from 'effect';
 import type { Plugin } from 'vite';
 
 const COMPILE = 'vite-plugin-svelte:compile';
+const Strings = Schema.mutable(Schema.Array(Schema.NullOr(Schema.String)));
+/** A stored compile result; one that does not decode is a miss. */
+const cached = Schema.decodeUnknownOption(
+	Schema.fromJsonString(
+		Schema.Struct({
+			code: Schema.String,
+			map: Schema.optionalKey(
+				Schema.NullOr(
+					Schema.Struct({
+						file: Schema.optionalKey(Schema.NullOr(Schema.String)),
+						mappings: Schema.String,
+						names: Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
+						sources: Schema.optionalKey(Strings),
+						sourcesContent: Schema.optionalKey(Strings),
+						sourceRoot: Schema.optionalKey(Schema.String),
+						version: Schema.optionalKey(Schema.Number),
+						ignoreList: Schema.optionalKey(Schema.mutable(Schema.Array(Schema.Number))),
+						x_google_ignoreList: Schema.optionalKey(Schema.mutable(Schema.Array(Schema.Number)))
+					})
+				)
+			),
+			moduleType: Schema.optionalKey(Schema.String),
+			meta: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+		})
+	)
+);
 /** Versioned store paths: a different compiler or plugin is a different key. */
 const TOOLCHAIN = [
 	import.meta.resolve('svelte/compiler'),
@@ -46,18 +73,16 @@ export async function cachedSvelte(options: Partial<Options>, dir: string): Prom
 				)
 				.digest('hex');
 			const file = join(dir, `${key}.json`);
-			try {
-				return JSON.parse(readFileSync(file, 'utf8'));
-			} catch {
-				const result = await compile.call(this, code, id, meta);
-				if (result !== undefined && result !== null && typeof result === 'object') {
-					// written whole, then renamed: a concurrent build never reads half an entry
-					const temporary = `${file}.${process.pid}`;
-					writeFileSync(temporary, JSON.stringify(result));
-					renameSync(temporary, file);
-				}
-				return result;
+			const hit = existsSync(file) ? cached(readFileSync(file, 'utf8')) : undefined;
+			if (hit?._tag === 'Some') return hit.value;
+			const result = await compile.call(this, code, id, meta);
+			if (result !== undefined && result !== null && typeof result === 'object') {
+				// written whole, then renamed: a concurrent build never reads half an entry
+				const temporary = `${file}.${process.pid}`;
+				writeFileSync(temporary, JSON.stringify(result));
+				renameSync(temporary, file);
 			}
+			return result;
 		};
 	}
 	return plugins;

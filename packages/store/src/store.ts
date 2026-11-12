@@ -3,18 +3,19 @@
 // connection (Bolt's engine, a host's control store). A statement's rows decode once, by Effect Schema codecs built
 // from the declaration (std's kind codecs: Decimal, PlainDate, Instant, periods, points, inline values), and the
 // decoded value is checked against that codec's own type side before it is handed back as `Row<S, T, Q>`.
+import { item_kind } from '@norbital-ai/std/kind';
 import { Array as EffectArray, Effect, Predicate, Schema } from 'effect';
-import { inputSchema, type Kind } from '@norbital-ai/std/kind';
+import { input_schema, type Kind } from '@norbital-ai/std/kind';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { encodeWire, type Wired } from '@norbital-ai/std/wire';
-import { catalogOf, exposureOf, q, type Catalog } from './catalog.ts';
+import { encode_wire, type Wired } from '@norbital-ai/std/wire';
+import { catalog_of, exposure_of, q, type Catalog } from './catalog.ts';
 import {
 	aggregate as decodeAggregate,
 	read as decodeRead,
 	where as decodeWhere
 } from './decode.ts';
 import { StoreError } from './errors.ts';
-import { sha256Hex } from '@norbital-ai/std/hash';
+import { sha256_hex } from '@norbital-ai/std/hash';
 import type { ListRead, Pred, SelectIR } from './ir.ts';
 import { budgeted, Build, compile, items, OVER, pred, RAW, wire, type Sql } from './read/sql.ts';
 import { STORE_LIMITS } from './limits.ts';
@@ -52,7 +53,7 @@ import type {
 	With
 } from './types.ts';
 import type { Json } from './values.ts';
-import { compileWrite, type WireRow, type WriteIR } from './write/sql.ts';
+import { compile_write, type WireRow, type WriteIR } from './write/sql.ts';
 
 /** One row as a driver answers it: column → its JSON value. */
 export type ResultRow = { readonly [column: string]: Json };
@@ -72,7 +73,7 @@ class PreparedStatement<A> {
 		batchable: boolean
 	) {
 		this.sql = sql;
-		this.shape = sha256Hex(sql.text).slice(0, 32);
+		this.shape = sha256_hex(sql.text).slice(0, 32);
 		this.decode = decode;
 		this.batchable = batchable;
 	}
@@ -91,12 +92,7 @@ type RefTargets<Tables> = {
 		: unknown;
 };
 /** A table: its fields (std's kind language; relations are `ref` fields), its key, and its constraints and indexes. */
-export const table = <const T extends TableSpec>(
-	spec: T
-): Omit<T, 'nativeRules'> & { readonly nativeRules: 2 } => ({
-	...spec,
-	nativeRules: 2
-});
+export const table = <const T extends TableSpec>(spec: T): T => spec;
 /**
  * A schema: its tables by name. Each ref names a declared table (a type error otherwise); `tz` is the zone of
  * `{ today }` defaults and date buckets (UTC), `currency` what a `money` field without its own is checked against.
@@ -105,16 +101,7 @@ export const schema = <const Tables extends { readonly [name: string]: TableSpec
 	tables: Tables & RefTargets<Tables>,
 	options: { readonly tz?: string; readonly currency?: string } = {}
 ): { readonly tables: Tables; readonly tz: string; readonly currency: string | null } => ({
-	tables: Object.assign(
-		{},
-		tables,
-		Object.fromEntries(
-			Object.entries(tables).map(([name, spec]): [string, TableSpec] => {
-				const currentSpec: TableSpec = spec;
-				return [name, { ...currentSpec, nativeRules: currentSpec.nativeRules ?? 2 }];
-			})
-		)
-	),
+	tables,
 	tz: options.tz ?? 'UTC',
 	currency: options.currency ?? null
 });
@@ -148,7 +135,7 @@ const kindOf = (t: TableSpec, name: string): Kind | undefined => {
 };
 /** Ref values use their target's actual single key, including natural text and identity keys. */
 function fieldCodec(s: SchemaSpec, cat: Catalog, k: Kind): Codec {
-	if (k.kind !== 'ref') return inputSchema(k);
+	if (k.kind !== 'ref' || k.many === true) return input_schema(k);
 	const targetCodec = (name: string): Codec => {
 		const target = s.tables[name];
 		const key = cat.models.get(name)?.key[0] ?? 'id';
@@ -157,7 +144,7 @@ function fieldCodec(s: SchemaSpec, cat: Catalog, k: Kind): Codec {
 			? target?.key === 'identity'
 				? Schema.Number
 				: Schema.String
-			: inputSchema(kind);
+			: input_schema(kind);
 	};
 	const targets = typeof k.to === 'string' ? [k.to] : k.to;
 	const [first] = targets;
@@ -272,7 +259,7 @@ const invalid = (message: string) => Effect.fail(StoreError.of('invalid', 'decod
 function patchCodec(k: Kind): Codec {
 	if (k.kind === 'json' && k.shape !== undefined) return patchCodec(k.shape);
 	if (k.kind === 'record') return Schema.Record(Schema.String, patchCodec(k.of));
-	if (k.kind !== 'object') return inputSchema(k);
+	if (k.kind !== 'object') return input_schema(k);
 	const fields = Object.fromEntries(
 		Object.entries(k.fields).map(([name, child]): [string, Codec] => {
 			const codec = patchCodec(child);
@@ -330,7 +317,7 @@ type Arms<S extends AnySchema, T, W> = {
 								? Only<W[R][K], With<S, Target<S, T, R>>> & Arms<S, Target<S, T, R>, W[R][K]>
 								: never;
 				}
-			: Arm<S, Target<S, T, R>, W[R], 'select' | 'with' | 'where' | 'orderBy' | 'limit' | 'all'>;
+			: Arm<S, Target<S, T, R>, W[R], 'select' | 'with' | 'where' | 'order_by' | 'limit' | 'all'>;
 };
 type Projection<S extends AnySchema, T, Sel, W> = {
 	readonly select?: Only<Sel, Select<S, T>>;
@@ -342,7 +329,7 @@ type Target2<S extends AnySchema, T> =
 
 /** The store over `s`: its catalog built once, every call a statement. */
 export function store<const S extends SchemaSpec & AnySchema>(s: S) {
-	const cat = catalogOf(s);
+	const cat = catalog_of(s);
 	const NONE: SelectIR = { fields: null, relations: {} };
 	const keyOf = (table: string): readonly string[] => cat.models.get(table)?.key ?? ['id'];
 	/** A key object → `key = …` on each of its fields. */
@@ -388,7 +375,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 						if (!changes)
 							return yield* invalid(`'${table}.${name}': atomic changes require update`);
 						const [op, payload] = change;
-						const shape = k.kind === 'json' ? k.shape : k;
+						const shape = k.kind === 'json' && k.many !== true ? k.shape : k;
 						if (
 							op === '$patch' &&
 							(shape?.kind === 'object' || shape?.kind === 'record') &&
@@ -402,15 +389,15 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 							Predicate.isObject(payload)
 						)
 							codec = Schema.Record(Schema.String, Schema.Json);
-						else if ((op === '$append' || op === '$remove') && shape?.kind === 'list')
-							codec = Schema.Array(inputSchema(shape.of));
+						else if ((op === '$append' || op === '$remove') && shape?.many === true)
+							codec = Schema.Array(input_schema(item_kind(shape)));
 						else return yield* invalid(`'${table}.${name}' does not take ${op}`);
 						input = payload;
 					}
 					if (!isWired(input))
 						return yield* invalid(`'${table}.${name}' does not encode as a wire value`);
 					const wire = yield* Schema.decodeUnknownEffect(codec, { onExcessProperty: 'error' })(
-						encodeWire(input)
+						encode_wire(input)
 					).pipe(
 						Effect.flatMap((v) => Schema.encodeEffect(codec)(v)),
 						Effect.mapError((e) =>
@@ -469,11 +456,11 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		decode: (j: Json) => Effect.Effect<A, StoreError>
 	) =>
 		Effect.flatMap(
-			Schema.decodeUnknownEffect(SchemaSpec)(s).pipe(
-				Effect.mapError((error) => StoreError.of('schemaInvalid', 'decode', error.message))
+			Schema.decodeUnknownEffect(SchemaSpec, { onExcessProperty: 'error' })(s).pipe(
+				Effect.mapError((error) => StoreError.of('schema_invalid', 'decode', error.message))
 			),
 			() =>
-				Effect.map(compileWrite(cat, w, { actor }), (c) =>
+				Effect.map(compile_write(cat, w, { actor }), (c) =>
 					statement(
 						c.sql,
 						(answered) =>
@@ -511,7 +498,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 	type T = TableName<S>;
 	/**
 	 * One page of `table`: `where` filters, `select` names fields (the key always comes), `with` adds relations (each
-	 * a correlated subquery bounded by its own order and limit: one statement at any depth), `orderBy` sorts (the key
+	 * a correlated subquery bounded by its own order and limit: one statement at any depth), `order_by` sorts (the key
 	 * ends every order, so cursors are exact), and a `limit` (with the `next` a page gave back) or `all` bounds it.
 	 */
 	function read<
@@ -522,9 +509,9 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		table: Tb,
 		query: Projection<S, NoInfer<Tb>, Sel, W> & {
 			readonly where?: NoInfer<Where<S, Tb>>;
-			readonly orderBy?: NoInfer<OrderBy<S, Tb>>;
-			/** One row per group, chosen by `orderBy` then primary key. Group keys lead the result order. */
-			readonly firstPer?: readonly NoInfer<Sortable<S, Tb>>[];
+			readonly order_by?: NoInfer<OrderBy<S, Tb>>;
+			/** One row per group, chosen by `order_by` then primary key. Group keys lead the result order. */
+			readonly first_per?: readonly NoInfer<Sortable<S, Tb>>[];
 		} & Paged
 	): Effect.Effect<Statement<Page<Row<S, Tb, { select: Sel; with: W }>>>, StoreError> {
 		return Effect.fn('Store.read')(() =>
@@ -566,8 +553,8 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		}
 	): Effect.Effect<Statement<readonly Row<S, To, { select: Sel }>[]>, StoreError> {
 		return Effect.gen(function* () {
-			const source = yield* exposureOf(cat, from),
-				target = yield* exposureOf(cat, query.to);
+			const source = yield* exposure_of(cat, from),
+				target = yield* exposure_of(cat, query.to);
 			const ir = yield* listRead(query.to, { select: query.select, limit: query.limit });
 			const b = new Build(cat),
 				a = b.alias(),
@@ -593,7 +580,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 					const last = values.at(-1);
 					if (Predicate.isObject(last) && last[OVER] === true)
 						return Effect.fail(
-							StoreError.of('tooLarge', 'deliver', 'the related read exceeds its byte budget')
+							StoreError.of('too_large', 'deliver', 'the related read exceeds its byte budget')
 						);
 					return decode(values);
 				})
@@ -611,7 +598,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 				codecs: Codec[] = [];
 			const parts = yield* Effect.forEach(choices, (source) =>
 				Effect.gen(function* () {
-					const c = yield* exposureOf(cat, source.table),
+					const c = yield* exposure_of(cat, source.table),
 						a = b.alias();
 					const f = c.model.fields.get(source.field),
 						spec = s.tables[source.table];
@@ -638,7 +625,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 					answered.some((row) => Predicate.isObject(row['j']) && row['j'][OVER] === true)
 				)
 					return Effect.fail(
-						StoreError.of('tooLarge', 'deliver', 'the union exceeds the all-read budget')
+						StoreError.of('too_large', 'deliver', 'the union exceeds the all-read budget')
 					);
 				return decode(answered.map((row) => row['j'] ?? null));
 			});
@@ -670,7 +657,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 					Schema.Struct({
 						key: Schema.Struct(fields),
 						at:
-							query.stepMillis !== undefined || query.carry !== undefined
+							query.step_millis !== undefined || query.carry !== undefined
 								? Schema.Number
 								: Schema.Null,
 						peak: Schema.Number,
@@ -686,7 +673,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 					answered.some((row) => Predicate.isObject(row['j']) && row['j'][OVER] === true)
 				)
 					return Effect.fail(
-						StoreError.of('tooLarge', 'deliver', 'the rollup exceeds the all-read budget')
+						StoreError.of('too_large', 'deliver', 'the rollup exceeds the all-read budget')
 					);
 				return decode(answered.map((row) => row['j'] ?? null));
 			});
@@ -708,7 +695,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 					target = cat.models.get(target)?.one.get(name)?.targets[0] ?? '';
 				const t = s.tables[target];
 				const kind = t === undefined ? undefined : kindOf(t, steps.at(-1) ?? path);
-				return kind === undefined ? Schema.NullOr(Schema.String) : Schema.NullOr(inputSchema(kind));
+				return kind === undefined ? Schema.NullOr(Schema.String) : Schema.NullOr(input_schema(kind));
 			};
 			if (ir.count === true) fields['count'] = Schema.Number;
 			for (const fn of ['sum', 'avg', 'min', 'max'] as const) {
@@ -719,7 +706,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 							names.map((name): [string, Codec] => [
 								name,
 								fn === 'sum' || fn === 'avg'
-									? inputSchema({ kind: 'decimal', scale: 0, optional: true })
+									? input_schema({ kind: 'decimal', scale: 0, optional: true })
 									: codecOf(name)
 							])
 						)
@@ -732,7 +719,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 							bucket.field,
 							bucket.unit === undefined
 								? codecOf(bucket.field)
-								: inputSchema({ kind: 'date', optional: true })
+								: input_schema({ kind: 'date', optional: true })
 						])
 					)
 				);
@@ -802,7 +789,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		})();
 	}
 	/** The rows `key` or `where` finds, deleted (an `observed` revision as for `update`); their keys answered. */
-	function updateMany<Tb extends T, const Sel extends Select<S, Tb> = {}>(
+	function update_many<Tb extends T, const Sel extends Select<S, Tb> = {}>(
 		table: Tb,
 		changes: readonly {
 			readonly key: NoInfer<Key<S, Tb>>;
@@ -835,7 +822,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		table: Tb,
 		t: Target2<S, Tb> & {
 			readonly observed?: number;
-			readonly keep?: { readonly orderBy: NoInfer<ColumnOrder<S, Tb>>; readonly limit: number };
+			readonly keep?: { readonly order_by: NoInfer<ColumnOrder<S, Tb>>; readonly limit: number };
 			readonly absent?: NoInfer<Absent<S, Tb>>;
 		}
 	): Effect.Effect<Statement<readonly Key<S, Tb>[]>, StoreError> {
@@ -846,7 +833,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 			const kept =
 				t.keep === undefined
 					? undefined
-					: yield* listRead(table, { orderBy: t.keep.orderBy, limit: t.keep.limit });
+					: yield* listRead(table, { order_by: t.keep.order_by, limit: t.keep.limit });
 			const absent =
 				t.absent === undefined
 					? undefined
@@ -937,7 +924,7 @@ export function store<const S extends SchemaSpec & AnySchema>(s: S) {
 		aggregate,
 		create,
 		update,
-		updateMany,
+		update_many,
 		delete: remove,
 		upsert
 	};

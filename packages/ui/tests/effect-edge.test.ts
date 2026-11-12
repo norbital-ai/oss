@@ -5,9 +5,9 @@ import assert from 'node:assert/strict';
 import { it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { browser } from './view-fixture.ts';
-import { Effect, Layer, ManagedRuntime, Schema, Stream, SubscriptionRef } from 'effect';
+import { Effect, Layer, ManagedRuntime, Result, Schema, Stream, SubscriptionRef } from 'effect';
 // after `./dom.ts`: the edge's `runed` and the harness share svelte's client runtime
-const { attach, fork, mountEdge, reactiveQuery, run, runningFibers } =
+const { attach, fork, mount_edge, reactive_query, run, running_fibers } =
 	await import('../src/effect/index.ts');
 const { flushSync, mount, unmount } = await import('svelte');
 const { default: Harness } = await import('./effect-live-harness.svelte');
@@ -17,7 +17,7 @@ const { default: ClockHarness } = await import('./reactive-clock-harness.svelte'
 const { default: AsyncQueryHarness } = await import('./reactive-query-async-harness.svelte');
 
 class Nope extends Schema.TaggedError<Nope>()('Nope', { why: Schema.String }) {}
-const edge = () => mountEdge(ManagedRuntime.make(Layer.empty));
+const edge = () => mount_edge(ManagedRuntime.make(Layer.empty));
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 it.live('attachments track factory inputs and do not track reads inside their Effect', () =>
@@ -83,9 +83,9 @@ it.live('fork hands a failure to onFailure, and requires it when the effect can 
 			fork(Effect.fail(new Nope({ why: 'y' })), (e) => seen.push(e.why));
 			await settle();
 			assert.deepEqual(seen, ['y']);
-			// @ts-expect-error a failing effect without `onFailure`
-			const unhandled = () => fork(Effect.fail(new Nope({ why: 'z' })));
-			void unhandled;
+			const requires_handler: typeof fork extends
+				(effect: Effect.Effect<never, Nope>) => void ? false : true = true;
+			assert.equal(requires_handler, true);
 		} finally {
 			await unmountEdge();
 		}
@@ -94,7 +94,7 @@ it.live('fork hands a failure to onFailure, and requires it when the effect can 
 
 it.live('unmounting the edge interrupts its forked and attached fibers', () =>
 	browser(async () => {
-		const before = runningFibers();
+		const before = running_fibers();
 		const unmountEdge = edge();
 		let interrupted = 0;
 		const stop = Effect.onInterrupt(() =>
@@ -104,10 +104,10 @@ it.live('unmounting the edge interrupts its forked and attached fibers', () =>
 		);
 		fork(Effect.never.pipe(stop));
 		attach(() => Effect.never.pipe(stop))(document.createElement('div'));
-		assert.equal(runningFibers(), before + 2);
+		assert.equal(running_fibers(), before + 2);
 		await unmountEdge();
 		assert.equal(interrupted, 2);
-		assert.equal(runningFibers(), before);
+		assert.equal(running_fibers(), before);
 	})
 );
 
@@ -161,7 +161,7 @@ it.live('Query awaits and yields one read without starting a live subscription',
 		const dispose = edge();
 		let reads = 0,
 			subscriptions = 0;
-		const query = reactiveQuery(
+		const query = reactive_query(
 			Effect.sync(() => ++reads),
 			Stream.suspend(() => {
 				subscriptions++;
@@ -178,6 +178,10 @@ it.live('Query awaits and yields one read without starting a live subscription',
 				),
 				2
 			);
+			const failed = reactive_query(Effect.fail(new Nope({ why: 'read failed' })), Stream.never);
+			const isReadFailure = (error: unknown) => error instanceof Nope && error.why === 'read failed';
+			await assert.rejects(Promise.resolve(failed), isReadFailure);
+			await assert.rejects(run(failed), isReadFailure);
 			assert.equal(subscriptions, 0);
 		} finally {
 			await dispose();
@@ -186,26 +190,30 @@ it.live('Query awaits and yields one read without starting a live subscription',
 );
 
 it.live(
-	'Query component reads receive live answers and release their subscription on teardown',
+	'Query component reads recover from a live failure on the same subscription and release it on teardown',
 	() =>
 		browser(async () => {
 			const dispose = edge();
-			const values = await run(SubscriptionRef.make(1));
+			const values = await run(SubscriptionRef.make<Result.Result<number, Error>>(Result.succeed(1)));
 			let released = false,
-				reads = 0;
+				reads = 0,
+				subscriptions = 0;
 			const target = document.createElement('div');
 			document.body.append(target);
 			const app = mount(QueryHarness, {
 				target,
 				props: {
 					once: Effect.sync(() => ++reads),
-					stream: SubscriptionRef.changes(values).pipe(
-						Stream.ensuring(
-							Effect.sync(() => {
-								released = true;
-							})
-						)
-					)
+					stream: Stream.suspend(() => {
+						subscriptions++;
+						return SubscriptionRef.changes(values).pipe(
+							Stream.ensuring(
+								Effect.sync(() => {
+									released = true;
+								})
+							)
+						);
+					})
 				}
 			});
 			try {
@@ -213,12 +221,23 @@ it.live(
 				await settle();
 				flushSync();
 				assert.equal(target.querySelector('output')?.textContent, '1');
-				await run(SubscriptionRef.set(values, 2));
+				await run(SubscriptionRef.set(values, Result.fail(new Error('Live read unavailable'))));
+				flushSync();
+				await settle();
+				flushSync();
+				assert.equal(target.querySelector('output')?.textContent, '1');
+				assert.equal(target.querySelector('[data-error]')?.textContent, 'Live read unavailable');
+				assert.equal(target.querySelector('[data-loading]')?.textContent, 'false');
+				assert.equal(released, false);
+				assert.equal(subscriptions, 1);
+				await run(SubscriptionRef.set(values, Result.succeed(2)));
 				flushSync();
 				await settle();
 				flushSync();
 				assert.equal(target.querySelector('output')?.textContent, '2');
+				assert.equal(target.querySelector('[data-error]')?.textContent, '');
 				assert.equal(reads, 0);
+				assert.equal(subscriptions, 1);
 			} finally {
 				await unmount(app);
 				target.remove();
@@ -273,6 +292,7 @@ it.live('Query awaited in a derived and markup follows live answers through one 
 		const stream = Stream.suspend(() => {
 			subscriptions++;
 			return SubscriptionRef.changes(values).pipe(
+				Stream.map(Result.succeed),
 				Stream.ensuring(
 					Effect.sync(() => {
 						released++;

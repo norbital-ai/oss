@@ -67,7 +67,7 @@ it.effect('fences each row of a set update and resolves native joins and unions'
 			])
 		);
 		const written = yield* execute(
-			yield* db.updateMany('lease', [
+			yield* db.update_many('lease', [
 				{ key: { tenant: 'acme' }, match: { host: 'a', gen: 2 }, set: { host: 'b' } },
 				{ key: { tenant: 'preview' }, match: { host: 'a', gen: 2 }, set: { host: 'b' } }
 			])
@@ -112,7 +112,7 @@ it.effect(
 			yield* execute(
 				yield* db.delete('artifact', {
 					where: { tenant: { eq: 'acme' } },
-					keep: { orderBy: [{ at: 'desc' }, 'commit'], limit: 1 }
+					keep: { order_by: [{ at: 'desc' }, 'commit'], limit: 1 }
 				})
 			);
 			yield* execute(yield* db.create('pin', { tenant: 'acme', commit: '3' }));
@@ -183,7 +183,7 @@ it.effect(
 						by: ['metric'],
 						time: 'at',
 						value: 'value',
-						stepMillis: step * 2,
+						step_millis: step * 2,
 						where: { metric: { eq: 'memory' } }
 					})
 				)
@@ -194,7 +194,7 @@ it.effect(
 						by: ['metric'],
 						time: 'at',
 						value: 'value',
-						stepMillis: step * 2,
+						step_millis: step * 2,
 						combine: 'max',
 						where: { metric: { eq: 'memory' } }
 					})
@@ -204,7 +204,7 @@ it.effect(
 				by: ['metric'],
 				time: 'at',
 				value: 'value',
-				latestPer: ['source'],
+				latest_per: ['source'],
 				where: { metric: { eq: 'files' } }
 			} as const;
 			expect(yield* execute(yield* db.rollup('measurement', gauges))).toEqual([
@@ -214,7 +214,7 @@ it.effect(
 				(yield* execute(
 					yield* db.rollup('measurement', {
 						...gauges,
-						carry: { from: at(0), until: at(2), stepMillis: step }
+						carry: { from: at(0), until: at(2), step_millis: step }
 					})
 				)).map((row) => [row.at, row.peak])
 			).toEqual([

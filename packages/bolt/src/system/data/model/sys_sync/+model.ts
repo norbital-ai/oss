@@ -1,15 +1,15 @@
 // A remote sync's read state per instance and partition (spec §3): its cursor, compared and set in the statement that
 // writes a page; the snapshot cycle and phase; its health; and when it last read, found a change, or got a webhook hint.
 // `digest` is the sync declaration's: a changed declaration starts the cursor over. Engine only: not exposed.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_sync', {
+export default bind_system_model('sys_sync')({
 	description: "A remote sync's read cursor and health for one integration instance and partition.",
-	label: 'sync',
+	record_label: 'record.sync',
 	fields: {
 		/** `'<model>.sync.<sync>'`. */
 		sync: { kind: 'text' },
-		instance: { kind: 'ref', to: 'sys_integration', onDelete: 'cascade' },
+		instance: { kind: 'ref', to: 'sys_integration', on_delete: 'cascade' },
 		/** The partition (a calendar of the account), `''` when the sync declares none. */
 		partition: { kind: 'text', default: '' },
 		cursor: { kind: 'json', optional: true },
@@ -26,6 +26,6 @@ export default model('sys_sync', {
 		last_change_at: { kind: 'instant', optional: true },
 		last_hint_at: { kind: 'instant', optional: true }
 	},
-	unique: [{ fields: ['sync', 'instance', 'partition'] }],
+	constraints: { one_partition: { unique: ['sync', 'instance', 'partition'] } },
 	table: { primary: 'uuid' }
 });

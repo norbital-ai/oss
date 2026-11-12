@@ -43,9 +43,8 @@ it('sounds only for new approvals and new turn endings, never history, chat swit
 
 it('a turn ends finished, asking the person, or failed', () => {
 	expect(endingSound([asked, reply('r', 'Built change !2 and verified it.')])).toBe('complete');
-	expect(endingSound([asked, reply('r', 'Which do you want: the upload or the token?')])).toBe(
-		'input'
-	);
+	expect(endingSound([asked, reply('r', 'Which do you want: the upload or the token?')])).toBe('complete');
+	expect(endingSound([asked, { ...reply('r', 'Choose a source'), asked: true, question: { question: 'Choose a source', options: ['Upload', 'Token'] } }])).toBe('input');
 	expect(endingSound([asked, reply('r', 'Use `a ? b : c` here.')])).toBe('complete');
 	expect(endingSound([asked, { ...held, turn: 't1' }, reply('r', 'Waiting on you.')])).toBe(
 		'input'
@@ -60,13 +59,13 @@ it('a turn ends finished, asking the person, or failed', () => {
 		state: null,
 		tag: null,
 		turn: 't1',
-		tool: { name: 'page', failed: false, page: { click: 'New' } }
+		tool: { behavior: {}, name: 'page', failed: false, page: { click: 'New' } }
 	};
 	expect(endingSound([asked, click, reply('r', 'Asked your page to click New.')])).toBe('input');
 	expect(
 		endingSound([
 			asked,
-			{ ...click, tool: { ...click.tool!, pageResult: { ok: true } } },
+			{ ...click, tool: { name: 'page', behavior: { page: true }, failed: false, page: { click: 'New' }, page_result: { ok: true } } },
 			reply('r', 'Opened it.')
 		])
 	).toBe('complete');

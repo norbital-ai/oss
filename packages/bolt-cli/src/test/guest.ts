@@ -21,20 +21,20 @@ class GuestFixtureFailed extends Schema.TaggedError<GuestFixtureFailed>()('Guest
 }) {}
 const entry = (sourceFile: string) => `import '${INSTALL}';
 import value from ${JSON.stringify(sourceFile)};
-import { attached } from ${JSON.stringify(bodies)};
-const gen = (fn, at) => typeof fn === 'function' && Object.prototype.toString.call(fn) === '[object GeneratorFunction]' ? attached(fn, at) : fn;
+import { attached, attached_verdict } from ${JSON.stringify(bodies)};
+const gen = (fn, at, attach = attached) => typeof fn === 'function' && Object.prototype.toString.call(fn) === '[object GeneratorFunction]' ? attach(fn, at) : fn;
 for (const c of Object.values(value.model ?? {})) {
 	if (!c?.bodies) continue;
-	for (const key of ['create','update','delete','notify']) c.bodies[key] = gen(c.bodies[key], 1);
-	for (const verb of ['created','updated','deleted']) if (c.bodies.effect?.[verb]) c.bodies.effect[verb] = gen(c.bodies.effect[verb], 1);
+	for (const key of ['create','update']) c.bodies[key] = gen(c.bodies[key], 1);
+	for (const verb of ['create','update','delete']) if (c.bodies.effect?.[verb]) c.bodies.effect[verb] = gen(c.bodies.effect[verb], 1);
 	for (const sync of Object.values(c.bodies.syncs ?? {})) {
 		for (const key of ['read','write']) sync[key] = gen(sync[key],1);
 		for (const [type, body] of Object.entries(sync.parse ?? {})) sync.parse[type] = gen(body,1);
 	}
 }
-// a policy's write checks, as the compiler's \`__checks\` attaches them (\`policy.<p>.grants.<model>.<op>.check\`)
+// a policy's write checks, as the compiler's \`__verdicts\` attaches them (\`policy.<p>.grants.<model>.<op>.verdict\`)
 for (const p of Object.values(value.policy ?? {})) for (const grant of Object.values(p.grants ?? {}))
-	for (const op of ['create','update','delete']) if (grant?.[op]?.check) grant[op].check = gen(grant[op].check, 1);
+	for (const op of ['create','update','delete']) if (grant?.[op]?.verdict) grant[op].verdict = gen(grant[op].verdict, 1, attached_verdict);
 for (const a of Object.values(value.automation ?? {})) a.body = gen(a.body,1);
 for (const page of Object.values(value.page ?? {})) page.body = gen(page.body,1);
 for (const i of Object.values(value.integration_definition ?? {})) if(i?.bodies) i.bodies.test = gen(i.bodies.test,0);
@@ -105,7 +105,7 @@ const compileProgram = (source: string): Effect.Effect<GuestProgram> =>
 								...(chunk.map === null
 									? {}
 									: {
-											sourceMap: JSON.stringify({
+											source_map: JSON.stringify({
 												...chunk.map,
 												sources: chunk.map.sources.map((mapped) =>
 													mapped === sourceFile || mapped.endsWith(mappedSource)
@@ -123,7 +123,7 @@ const compileProgram = (source: string): Effect.Effect<GuestProgram> =>
 
 const Compiled = Schema.Struct({
 	source: Schema.String,
-	sourceMap: Schema.optionalKey(Schema.String)
+	source_map: Schema.optionalKey(Schema.String)
 });
 /**
  * Compiled guests kept on this machine: more than every suite's fixtures (a whole realm run compiles about 90), so a

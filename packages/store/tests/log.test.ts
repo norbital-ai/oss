@@ -1,6 +1,6 @@
 import { it, expect } from '@effect/vitest';
 import { Effect } from 'effect';
-import { logDdl, logStatements, type AppendOnlyLogSpec, type Json } from '../src/index.ts';
+import { log_ddl, log_statements, type AppendOnlyLogSpec, type Json } from '../src/index.ts';
 import { database, exec, script } from './support.ts';
 
 const declaration: AppendOnlyLogSpec = {
@@ -40,8 +40,8 @@ it.live(
 	() =>
 		Effect.gen(function* () {
 			const pg = yield* database;
-			for (const text of yield* logDdl(declaration)) yield* script(pg, `${text};`);
-			const commands = yield* logStatements(declaration),
+			for (const text of yield* log_ddl(declaration)) yield* script(pg, `${text};`);
+			const commands = yield* log_statements(declaration),
 				execute = exec(pg),
 				scope = ['p', 't', 'live'];
 			for (const tenant of ['a', 'b'])
@@ -94,12 +94,12 @@ it.live(
 			expect((yield* execute(yield* commands.expire('p')))[0]?.['removed']).toBe(2);
 			expect((yield* execute(yield* commands.expire('p')))[0]?.['removed']).toBe(1);
 			yield* execute(yield* commands.retire(['p', 't']));
-			expect((yield* execute(yield* commands.isRetired(['p', 't'])))[0]?.['retired']).toBe(true);
+			expect((yield* execute(yield* commands.is_retired(['p', 't'])))[0]?.['retired']).toBe(true);
 			expect(
 				(yield* Effect.exit(execute(yield* commands.append(scope, [event('late', 'committed')]))))
 					._tag
 			).toBe('Failure');
 			expect((yield* execute(yield* commands.purge(['p', 't'])))[0]?.['removed']).toBe(2);
-			expect((yield* execute(yield* commands.isRetired(['p', 't'])))[0]?.['retired']).toBe(true);
+			expect((yield* execute(yield* commands.is_retired(['p', 't'])))[0]?.['retired']).toBe(true);
 		})
 );

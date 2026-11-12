@@ -3,7 +3,7 @@
 // sent to one environment of a host as signed operations: each asset (`seed.asset`, kept once by its digest), then
 // the rows (`seed`), which the host restores over a reset of the environment. Nothing is written to either disk.
 import { Effect, FileSystem, Schema } from 'effect';
-import { signOp } from '@norbital-ai/std/host-op';
+import { sign_op } from '@norbital-ai/std/host-op';
 import { compile } from '../compiler/check/index.ts';
 import { seedRows, type Seeding } from '../compiler/artifact/seed.ts';
 import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
@@ -31,7 +31,7 @@ const call = (target: SeedTarget, op: string, input: object) =>
 					method: 'POST',
 					headers: {
 						'content-type': 'application/json',
-						...signOp(target, new URL(target.url).host, op, body, now)
+						...sign_op(target, new URL(target.url).host, op, body, now)
 					},
 					body,
 					signal

@@ -5,7 +5,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { weixin } from '../../src/chat/weixin/index.ts';
-import { host, until } from '../kit.ts';
+import { required, host, until } from '../kit.ts';
 import { connected, json, webhook, type Call } from './kit.ts';
 
 const settings = { accountId: 'bot@im', token: 'token' };
@@ -74,11 +74,11 @@ describe('Weixin', () => {
 						{
 							id: '1',
 							thread: 'wx-user',
-							sentAt: '2026-09-21T14:13:20.000Z',
+							sent_at: '2026-09-21T14:13:20.000Z',
 							from: { handle: 'wx-user', name: null },
 							text: '你好',
 							group: false,
-							replyTo: null,
+							reply_to: null,
 							attachments: [],
 							invocation: 'direct'
 						}
@@ -89,7 +89,7 @@ describe('Weixin', () => {
 			expect(poll?.url).toBe(`${BASE}/getupdates`);
 			expect(poll?.headers.get('authorization')).toBe('Bearer token');
 			expect(poll?.headers.get('authorizationtype')).toBe('ilink_bot_token');
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('stores what the proving poll brought', () =>
@@ -99,7 +99,7 @@ describe('Weixin', () => {
 			yield* until(() => api.cursors().length === 2);
 			expect(api.cursors()).toEqual(['', 'c1']);
 			expect(h.events).toMatchObject([{ messages: [{ id: '1' }] }]);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a batch the engine refused moves no cursor, and comes again', () =>
@@ -112,7 +112,7 @@ describe('Weixin', () => {
 			yield* until(() => api.cursors().length === 4);
 			expect(api.cursors()).toEqual(['', '', '', 'c1']);
 			expect(h.events).toMatchObject([{ messages: [{ id: '1' }] }]);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('backs off a failed poll and carries on', () =>
@@ -125,7 +125,7 @@ describe('Weixin', () => {
 			const h = yield* connected(weixin, settings);
 			yield* until(() => api.cursors().length === 4);
 			expect(h.events).toMatchObject([{ messages: [{ id: '1' }] }]);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a poll that holds proves the token, and close ends it at once', () =>
@@ -134,7 +134,7 @@ describe('Weixin', () => {
 			const h = yield* connected(weixin, settings);
 			expect(h.status).toMatchObject({ state: 'connected' });
 			yield* until(() => api.cursors().length === 2);
-			yield* h.link.close!;
+			yield* required(h.link.close);
 			const polled = api.calls.length;
 			yield* Effect.promise(() => new Promise((done) => setTimeout(done, 0)));
 			expect(api.calls.length).toBe(polled);
@@ -181,26 +181,26 @@ describe('Weixin', () => {
 				bins: [new Uint8Array(Buffer.from('bytes'))]
 			});
 			expect(h.events[1]).toMatchObject({ messages: [{ id: '2', text: '说的话', attachments: [] }] });
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('sends a finished bot message', () =>
 		Effect.gen(function* () {
 			const api = yield* ilink([idle]);
 			const h = yield* connected(weixin, settings);
-			const sent = yield* h.link.send!({ to: 'wx-user', text: 'Hello' }, []);
+			const sent = yield* required(h.link.send)({ to: 'wx-user', text: 'Hello' }, []);
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe(`${BASE}/sendmessage`);
 			const { msg } = JSON.parse(call?.body ?? '');
 			expect(msg).toEqual({
 				from_user_id: '',
 				to_user_id: 'wx-user',
-				client_id: sent.providerId,
+				client_id: sent.provider_id,
 				message_type: 2,
 				message_state: 2,
 				item_list: [{ type: 1, text_item: { text: 'Hello' } }]
 			});
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a reply carries the context of the person it answers', () =>
@@ -208,34 +208,34 @@ describe('Weixin', () => {
 			const api = yield* ilink([batch('c1', message(1, { context_token: 'ctx-1' })), idle]);
 			const h = yield* connected(weixin, settings);
 			yield* until(() => h.events.length > 0);
-			yield* h.link.send!({ id: 'm1', to: 'wx-user', text: 'Hello' }, []);
+			yield* required(h.link.send)({ id: 'm1', to: 'wx-user', text: 'Hello' }, []);
 			const sent = api.calls.findLast((call) => call.url.endsWith('/sendmessage'));
 			const { msg } = JSON.parse(sent?.body ?? '');
 			expect(msg).toMatchObject({ context_token: 'ctx-1', client_id: 'm1' });
-			yield* h.link.close!;
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a send iLink refuses with a 200 fails', () =>
 		Effect.gen(function* () {
 			yield* ilink([idle], () => json({ ret: -2, errmsg: 'no' }));
 			const h = yield* connected(weixin, settings);
-			yield* Effect.flip(h.link.send!({ to: 'wx-user', text: 'Hello' }, []));
-			yield* h.link.close!;
+			yield* Effect.flip(required(h.link.send)({ to: 'wx-user', text: 'Hello' }, []));
+			yield* required(h.link.close);
 		})
 	);
 	it.live('refuses a webhook: everything arrives over the poll', () =>
 		Effect.gen(function* () {
 			yield* ilink([idle]);
 			const h = yield* connected(weixin, settings);
-			expect((yield* h.link.webhook!(webhook('{}', {}))).status).toBe(401);
-			yield* h.link.close!;
+			expect((yield* required(h.link.webhook)(webhook('{}', {}))).status).toBe(401);
+			yield* required(h.link.close);
 		})
 	);
 	it.live('a token iLink refuses keeps nothing and leaves no poll behind', () =>
 		Effect.gen(function* () {
 			const api = yield* ilink([() => json({ ret: -14, errmsg: 'session expired' })]);
 			const h = yield* host(chatProvider(weixin), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 			expect(api.calls.length).toBe(1);
 		})

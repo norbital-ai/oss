@@ -2,13 +2,12 @@
 // held at a time, and deletes, live under QRESYNC and by reconcile everywhere.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber, Option, Schema } from 'effect';
-import { loopbackTcpPort } from '@norbital-ai/bolt/node';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { mailboxWatch, type Reconcile } from '../src/imap-smtp/mailbox-watch.ts';
 import { Cursor, Mailbox } from '../src/imap-smtp/model.ts';
 import { readMail } from '../src/imap-smtp/reports.ts';
-import { fakeFetch, host, messagesOf, until, type Host } from './kit.ts';
+import { required, fakeFetch, host, loopback_tcp, messagesOf, until, type Host } from './kit.ts';
 import { fakeImap } from './mail-servers.ts';
 
 const DAY = 86_400_000;
@@ -49,7 +48,7 @@ const fixture = Effect.fn('MailboxReliability.fixture')(function* (qresync = fal
 		personal = false,
 		settings: { readonly authServer?: string } = {}
 	) {
-		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+		const provider = required(mailbox({ plain: true }).find((p) => p.id === 'imap'));
 		const h = yield* host(
 			provider,
 			fakeFetch([]),
@@ -114,7 +113,7 @@ describe('a new UIDVALIDITY', () => {
 				const f = yield* fixture();
 				f.server.deliver(message('unread'), ago(DAY));
 				f.server.refuseSearches();
-				const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+				const provider = required(mailbox({ plain: true }).find((p) => p.id === 'imap'));
 				const h = yield* host(provider, fakeFetch([]), {
 					credential: box(f.server.port),
 					state: { validity: '6', uid: 999 }
@@ -202,7 +201,7 @@ describe('mail that cannot be read whole', () => {
 					true,
 					'2026-11-01T00:00:00.000Z'
 				)
-			).toMatchObject({ message: { sentAt: '2026-11-01T00:00:00.000Z' } });
+			).toMatchObject({ message: { sent_at: '2026-11-01T00:00:00.000Z' } });
 		})
 	);
 });
@@ -223,11 +222,11 @@ describe('deletes', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const { h, server } = yield* seeded();
-				const before = yield* h.link.reconcile!(thread, since());
+				const before = yield* required(h.link.reconcile)(thread, since());
 				expect(ids(before.messages)).toEqual([thread, '<reply@example.test>']);
 				expect(before.complete).toBe(true);
 				server.expunge(2);
-				const after = yield* h.link.reconcile!(thread, since());
+				const after = yield* required(h.link.reconcile)(thread, since());
 				expect(ids(after.messages)).toEqual([thread]);
 				expect(after.complete).toBe(true);
 				// one fetch of the window's headers, then only what is new: a pass of many threads does not read it again
@@ -245,7 +244,7 @@ describe('deletes', () => {
 					'(("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "7BIT" 10 1)("APPLICATION" "PDF" ("NAME" "scan.pdf") NIL NIL "BASE64" 4000) "MIXED")'
 				);
 				const h = yield* f.open({ validity: '7', uid: 1 });
-				const page = yield* h.link.reconcile!('<files@example.test>', since());
+				const page = yield* required(h.link.reconcile)('<files@example.test>', since());
 				expect(page.messages).toMatchObject([
 					{ attachments: [{ name: 'scan.pdf', mime: 'application/pdf', bytes: 4000 }] }
 				]);
@@ -267,7 +266,7 @@ describe('deletes', () => {
 					mailboxWatch({
 						box: mailbox_,
 						personal: false,
-						net: { tcp: loopbackTcpPort, plain: true },
+						net: { tcp: loopback_tcp, plain: true },
 						login: () => Effect.succeed({ user: mailbox_.user, pass: 'pw' }),
 						// the cursor stays put: UID 2 is not stored yet
 						cursor: () => state,
@@ -286,7 +285,7 @@ describe('deletes', () => {
 					})
 				);
 				yield* until(() => served !== null);
-				const page = yield* served!(thread, since());
+				const page = yield* required<Reconcile>(served)(thread, since());
 				expect(ids(page.messages)).toEqual([thread]);
 				expect(page.complete).toBe(false);
 				yield* Fiber.interrupt(watching);
@@ -300,7 +299,7 @@ describe('deletes', () => {
 				f.server.deliver(message('root'), ago(DAY));
 				const began = ago(1000).toISOString();
 				const h = yield* f.open({ validity: '7', uid: 1, began });
-				expect(yield* h.link.reconcile!(thread, since())).toMatchObject({ since: began });
+				expect(yield* required(h.link.reconcile)(thread, since())).toMatchObject({ since: began });
 			})
 		)
 	);
@@ -308,11 +307,11 @@ describe('deletes', () => {
 		Effect.scoped(
 			Effect.gen(function* () {
 				const f = yield* fixture();
-				const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+				const provider = required(mailbox({ plain: true }).find((p) => p.id === 'imap'));
 				const h = yield* host(provider, fakeFetch([]), { credential: box(f.server.port) });
 				yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
 				yield* until(() => h.status?.state === 'connected');
-				const page = yield* h.link.reconcile!(thread, since());
+				const page = yield* required(h.link.reconcile)(thread, since());
 				expect(page.since).toBe(cursor(h)?.began);
 				expect(page.since).toEqual(expect.any(String));
 			})
@@ -323,7 +322,7 @@ describe('deletes', () => {
 			Effect.gen(function* () {
 				const { h, server } = yield* seeded();
 				server.refuseSearches();
-				expect(yield* Effect.flip(h.link.reconcile!(thread, since()))).toMatchObject({
+				expect(yield* Effect.flip(required(h.link.reconcile)(thread, since()))).toMatchObject({
 					_tag: 'ProviderUnavailable',
 					message: expect.stringMatching(/refused the window search/)
 				});
@@ -336,7 +335,7 @@ describe('deletes', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const live = yield* seeded(true);
-					yield* live.h.link.reconcile!(thread, since());
+					yield* required(live.h.link.reconcile)(thread, since());
 					live.server.expunge(2);
 					yield* until(() => live.h.events.length === 1);
 					expect(messagesOf(live.h.events)).toEqual([
@@ -351,7 +350,7 @@ describe('deletes', () => {
 						deleted: true
 					});
 					const plain = yield* seeded();
-					yield* plain.h.link.reconcile!(thread, since());
+					yield* required(plain.h.link.reconcile)(thread, since());
 					plain.server.expunge(2);
 					plain.server.deliver(message('next'));
 					yield* until(() => plain.h.events.length === 1);

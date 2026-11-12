@@ -18,7 +18,7 @@ export const FileRefSchema: Schema.Codec<FileRef> = Schema.declare(
 );
 
 /** Stored files keep the caller's public surface when fetched directly by the browser. */
-export function storedFileUrl(
+export function stored_file_url(
 	base: string,
 	id: string,
 	options: FileUrlOptions = {},
@@ -35,7 +35,7 @@ export function storedFileUrl(
 }
 
 /** A stored-file handle from upload or a row read, as bolt's branded `FileRef` for writes and acts. */
-export function fileRef(file: {
+export function file_ref(file: {
 	readonly id: string;
 	readonly name: string;
 	readonly mime: string;

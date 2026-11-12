@@ -8,7 +8,7 @@ import type {
 	OutboundAttachment
 } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { ProviderUnavailable, answerFailure } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import {
 	field,
 	hostCall,
@@ -102,7 +102,7 @@ export function twilioWhatsapp(): ProviderDef {
 						en: 'On the sender, set "Webhook URL for incoming messages" to this URL (HTTP POST).',
 						zh: '在该发送方上，将 “Webhook URL for incoming messages” 设为此 URL（HTTP POST）。'
 					},
-					copy: 'webhookUrl'
+					copy: 'webhook_url'
 				},
 				{
 					text: {
@@ -181,7 +181,7 @@ export function twilioWhatsapp(): ProviderDef {
 				) {
 					if (cred === null)
 						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the WhatsApp (Twilio) account is not connected' })
+							notConnected('the WhatsApp (Twilio) account')
 						);
 					const value = cred;
 					const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
@@ -198,19 +198,19 @@ export function twilioWhatsapp(): ProviderDef {
 								From: `whatsapp:${value.from}`,
 								To: to,
 								...body,
-								StatusCallback: ctx.webhookUrl
+								StatusCallback: ctx.webhook_url
 							})
 						);
 					const sent = yield* post({ Body: m.text });
 					for (const MediaUrl of links) yield* post({ MediaUrl });
-					return { providerId: sent.sid };
+					return { provider_id: sent.sid };
 				}),
 				// Twilio does not retry a 5xx by default, so a delivery it failed to make is read back here. `complete` stays
 				// false: a WhatsApp revoke never leaves this list, and a row can be absent for reasons of Twilio's own.
 				reconcile: Effect.fn('TwilioWhatsApp.reconcile')(function* (thread: string, since: string) {
 					if (cred === null)
 						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the WhatsApp (Twilio) account is not connected' })
+							notConnected('the WhatsApp (Twilio) account')
 						);
 					const value = cred,
 						account = `${API}/Accounts/${value.accountSid}`,
@@ -262,7 +262,7 @@ export function twilioWhatsapp(): ProviderDef {
 					const params = yield* Schema.decodeUnknownEffect(Webhook)(
 						Object.fromEntries(new URLSearchParams(body))
 					).pipe(Effect.mapError(() => answerFailure('Twilio callback is malformed', 400)));
-					const url = ctx.webhookUrl + new URL(request.url).search;
+					const url = ctx.webhook_url + new URL(request.url).search;
 					if (
 						!same(
 							request.headers.get('x-twilio-signature') ?? '',
@@ -274,10 +274,10 @@ export function twilioWhatsapp(): ProviderDef {
 						status = params['MessageStatus'];
 					if (status !== undefined && params['Body'] === undefined) {
 						const kind = STATUS[status],
-							providerId = params['MessageSid'];
-						if (kind !== undefined && providerId !== undefined)
+							provider_id = params['MessageSid'];
+						if (kind !== undefined && provider_id !== undefined)
 							yield* hostCall('store Twilio report', () =>
-								ctx.emit({ kind: 'delivery', providerId, report: twilioReport(kind, params, now) })
+								ctx.emit({ kind: 'delivery', provider_id, report: twilioReport(kind, params, now) })
 							);
 						return TWIML();
 					}
@@ -350,7 +350,7 @@ export function twilioWhatsapp(): ProviderDef {
 							messages: [
 								{
 									...message,
-									...(Number.isNaN(sent) ? {} : { sentAt: new Date(sent).toISOString() }),
+									...(Number.isNaN(sent) ? {} : { sent_at: new Date(sent).toISOString() }),
 									attachments
 								}
 							],
@@ -419,11 +419,11 @@ function twilioInbound(p: { readonly [k: string]: string }, now: number): Obj | 
 	return {
 		id,
 		thread: from,
-		sentAt: new Date(now).toISOString(),
+		sent_at: new Date(now).toISOString(),
 		from: { handle: from, name: str(p['ProfileName']) },
 		text: p['Body'] || placeOf(p),
 		group: false,
 		invocation: 'direct',
-		replyTo: str(p['OriginalRepliedMessageSid'])
+		reply_to: str(p['OriginalRepliedMessageSid'])
 	};
 }

@@ -5,21 +5,21 @@ import { cpSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, expect } from 'vitest';
 import {
-	artifactHash,
+	artifact_hash,
 	CONTRACT,
-	readArtifact,
-	treeHash,
-	publicPageKeys,
+	read_artifact,
+	tree_hash,
+	public_page_keys,
 	type ArtifactJson
 } from '../../bolt/src/engine/artifact/read.ts';
 import { Port } from '../../bolt/src/engine/port.ts';
-import { readLock, readSnapshot, sha256Hex, snapshotOf } from '@norbital-ai/store';
-import { artifactPort } from '../../bolt/src/node/artifact.ts';
-import { prepareMigrations } from '../src/compiler/migrations.ts';
+import { read_lock, read_snapshot, sha256_hex, snapshot_of } from '@norbital-ai/store';
+import { artifact_port } from '../../bolt/src/node/artifact.ts';
+import { prepare_migrations } from '../src/compiler/migrations.ts';
 import { writeSource } from '../src/compiler/artifact/index.ts';
 import { Pristine } from '../../bolt/src/node/db/pglite.ts';
 import type { EngineManifest } from '../../bolt/src/engine/manifest.ts';
-import { fingerprint, schemaSlice } from '../../bolt/src/engine/schema/plan.ts';
+import { fingerprint, schema_slice } from '../../bolt/src/engine/schema/plan.ts';
 import { TestWorkspace } from '../src/test/index.ts';
 
 const manifest: EngineManifest = {
@@ -32,11 +32,9 @@ const manifest: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 
@@ -49,20 +47,18 @@ it.effect('selects public SSR routes by audience, independently of portal chrome
 			pages: { home: { title: 'Home' } }
 		};
 		expect(
-			publicPageKeys({
+			public_page_keys({
 				...manifest,
 				apps: {
 					internal: { ...app, pages: { home: { title: 'Home', portal: true } } },
 					site: { ...app, audience: { public: ['visitors'] } },
 					portal: { ...app, audience: 'external' },
 					shared: { ...app, audience: 'all' },
-					'kiosk/clock': { ...app, audience: 'external' }
-				},
-				kiosks: {
-					private: { ...app, policies: ['kiosk'] },
-					clock: { ...app, auth: 'none', policies: ['kiosk'] },
-					portal: { ...app, auth: 'external', policies: ['kiosk'] },
-					shared: { ...app, auth: 'all', policies: ['kiosk'] }
+					'kiosk/clock': { ...app, audience: 'external' },
+					private: { ...app, shell: 'kiosk', policies: ['kiosk'] },
+					clock: { ...app, shell: 'kiosk', audience: { public: ['kiosk'] } },
+					account: { ...app, shell: 'kiosk', audience: 'external', policies: ['kiosk'] },
+					common: { ...app, shell: 'kiosk', audience: 'all', policies: ['kiosk'] }
 				}
 			})
 		).toEqual([
@@ -70,9 +66,9 @@ it.effect('selects public SSR routes by audience, independently of portal chrome
 			'app/portal/home',
 			'app/shared/home',
 			'app/site/home',
+			'kiosk/account/home',
 			'kiosk/clock/home',
-			'kiosk/portal/home',
-			'kiosk/shared/home'
+			'kiosk/common/home'
 		]);
 	})
 );
@@ -96,7 +92,7 @@ const prepared = await Effect.runPromise(
 		const generate = (m: EngineManifest) =>
 			Effect.gen(function* () {
 				const dir = yield* fs.makeTempDirectory({ prefix: 'bolt-artifact-migrations-' });
-				yield* prepareMigrations(dir, m, 'generate');
+				yield* prepare_migrations(dir, m, 'generate');
 				return join(dir, 'migrations');
 			});
 		return { plain: yield* generate(manifest), public: yield* generate(publicManifest) };
@@ -113,7 +109,7 @@ const publicFixture = Effect.fnUntraced(function* () {
 	const text = `${JSON.stringify(publicManifest)}\n`;
 	const source = 'export default {};';
 	const pageSource =
-		'export default { page: { "app/site/home": { body: () => ({ body: "<h1>Site</h1>", head: "", data: {} }) } } };';
+		'export default { page: { "app/site/home": { body: () => ({ body: "<h1>Site</h1>", head: "", reads: {}, messages: {} }) } } };';
 	yield* fs.makeDirectory(path.join(dir, 'client', 'assets'), { recursive: true });
 	yield* fs.makeDirectory(path.join(dir, 'client', 'public', 'app', 'site', 'home'), {
 		recursive: true
@@ -134,26 +130,26 @@ const publicFixture = Effect.fnUntraced(function* () {
 		contract: CONTRACT,
 		handle: 'norbital_public',
 		name: 'Public fixture',
-		schema: fingerprint(schemaSlice(publicManifest)),
+		schema: fingerprint(schema_slice(publicManifest)),
 		client: { entry: '', css: [] },
 		pages: {
 			'app/site/home': {
 				entry: 'assets/site.js',
 				css: ['assets/site.css'],
-				server: { file: 'server/app/site/home.mjs', sha256: sha256Hex(pageSource) }
+				server: { file: 'server/app/site/home.mjs', sha256: sha256_hex(pageSource) }
 			}
 		},
 		hashes: {
-			manifest: sha256Hex(text),
-			guest: sha256Hex(source),
-			client: yield* treeHash(path.join(dir, 'client')),
-			server: yield* treeHash(path.join(dir, 'server'))
+			manifest: sha256_hex(text),
+			guest: sha256_hex(source),
+			client: yield* tree_hash(path.join(dir, 'client')),
+			server: yield* tree_hash(path.join(dir, 'server'))
 		}
 	};
 	const save = Effect.fnUntraced(function* (value: Omit<ArtifactJson, 'hash'>) {
 		yield* fs.writeFileString(
 			path.join(dir, 'artifact.json'),
-			JSON.stringify({ ...value, hash: yield* artifactHash(dir, value) })
+			JSON.stringify({ ...value, hash: yield* artifact_hash(dir, value) })
 		);
 	});
 	yield* save(body);
@@ -165,7 +161,7 @@ it.live('verifies private public-page programs and refuses server-tree tampering
 		const fs = yield* FileSystem.FileSystem;
 		const path = yield* Path.Path;
 		const fixture = yield* publicFixture();
-		const artifact = yield* readArtifact(fixture.dir);
+		const artifact = yield* read_artifact(fixture.dir);
 		expect(artifact.pages['app/site/home']).toEqual({
 			program: { source: fixture.pageSource },
 			entry: 'assets/site.js',
@@ -175,19 +171,19 @@ it.live('verifies private public-page programs and refuses server-tree tampering
 			path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs'),
 			`${fixture.pageSource}\n// changed`
 		);
-		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-			code: 'artifactDigest'
+		expect(yield* read_artifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+			code: 'artifact_digest'
 		});
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
 it.live('a page that needs sign-in sends a signed-out document request to sign in, and back', () =>
 	Effect.gen(function* () {
-		const artifact = yield* readArtifact((yield* publicFixture()).dir);
+		const artifact = yield* read_artifact((yield* publicFixture()).dir);
 		const res = yield* Effect.flatMap(TestWorkspace, (t) =>
 			t.handle(new Request('https://acme.example/app/site/home?x=1', { redirect: 'manual' }))
 		).pipe(
-			Effect.provide(TestWorkspace.layer({ artifact, host: { publicUrl: 'https://acme.example' } }))
+			Effect.provide(TestWorkspace.layer({ artifact, host: { public_url: 'https://acme.example' } }))
 		);
 		expect(res.status).toBe(303);
 		expect(res.headers.get('location')).toBe(
@@ -205,15 +201,15 @@ it.live('a release its host admitted is checked again only for what runs in the 
 			path.join(fixture.dir, 'client', 'assets', 'site.js'),
 			'/* changed */'
 		);
-		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-			code: 'artifactDigest'
+		expect(yield* read_artifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+			code: 'artifact_digest'
 		});
 		expect(
-			(yield* readArtifact(fixture.dir, undefined, 'executed')).pages['app/site/home']?.entry
+			(yield* read_artifact(fixture.dir, undefined, 'executed')).pages['app/site/home']?.entry
 		).toBe('assets/site.js');
 		yield* fs.writeFileString(path.join(fixture.dir, 'guest.mjs'), '// changed');
-		expect(yield* readArtifact(fixture.dir, undefined, 'executed').pipe(Effect.flip)).toMatchObject(
-			{ code: 'artifactDigest' }
+		expect(yield* read_artifact(fixture.dir, undefined, 'executed').pipe(Effect.flip)).toMatchObject(
+			{ code: 'artifact_digest' }
 		);
 	}).pipe(Effect.provide(NodeServices.layer))
 );
@@ -222,8 +218,8 @@ it.live('requires exact public routes and validates each program digest independ
 	Effect.gen(function* () {
 		const fixture = yield* publicFixture();
 		yield* fixture.save({ ...fixture.body, pages: {} });
-		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-			code: 'artifactDigest'
+		expect(yield* read_artifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+			code: 'artifact_digest'
 		});
 		yield* fixture.save({
 			...fixture.body,
@@ -231,12 +227,12 @@ it.live('requires exact public routes and validates each program digest independ
 				'app/site/home': {
 					entry: 'assets/site.js',
 					css: ['assets/site.css'],
-					server: { file: 'server/app/site/home.mjs', sha256: sha256Hex('different program') }
+					server: { file: 'server/app/site/home.mjs', sha256: sha256_hex('different program') }
 				}
 			}
 		});
-		expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-			code: 'artifactDigest'
+		expect(yield* read_artifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+			code: 'artifact_digest'
 		});
 	}).pipe(Effect.provide(NodeServices.layer))
 );
@@ -254,12 +250,12 @@ it.live(
 					'app/site/home': {
 						entry: '../guest.mjs',
 						css: [],
-						server: { file: 'server/app/site/home.mjs', sha256: sha256Hex(fixture.pageSource) }
+						server: { file: 'server/app/site/home.mjs', sha256: sha256_hex(fixture.pageSource) }
 					}
 				}
 			});
-			expect(yield* readArtifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
-				code: 'artifactDigest'
+			expect(yield* read_artifact(fixture.dir).pipe(Effect.flip)).toMatchObject({
+				code: 'artifact_digest'
 			});
 			const outside = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-public-outside-' });
 			yield* fs.writeFileString(path.join(outside, 'page.mjs'), fixture.pageSource);
@@ -268,7 +264,7 @@ it.live(
 				path.join(outside, 'page.mjs'),
 				path.join(fixture.dir, 'server', 'app', 'site', 'home.mjs')
 			);
-			const release = artifactPort(fixture.dir);
+			const release = artifact_port(fixture.dir);
 			expect(
 				yield* Effect.flip(
 					Port.attempt('artifact', (signal) => release.read('server/app/site/home.mjs', signal))
@@ -300,7 +296,7 @@ it.live(
 				'src',
 				'src/+workspace.ts'
 			]);
-			expect(digest).toBe(yield* treeHash(out));
+			expect(digest).toBe(yield* tree_hash(out));
 		}).pipe(Effect.provide(NodeServices.layer))
 );
 it.live('artifact digests depend on bytes and sorted paths, never mtimes', () =>
@@ -310,16 +306,16 @@ it.live('artifact digests depend on bytes and sorted paths, never mtimes', () =>
 		const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-artifact-hash-' });
 		yield* fs.writeFileString(path.join(root, 'b'), 'second');
 		yield* fs.writeFileString(path.join(root, 'a'), 'first');
-		const hash = yield* treeHash(root);
-		expect(hash).toBe(sha256Hex(`a\0${sha256Hex('first')}\nb\0${sha256Hex('second')}`));
+		const hash = yield* tree_hash(root);
+		expect(hash).toBe(sha256_hex(`a\0${sha256_hex('first')}\nb\0${sha256_hex('second')}`));
 		yield* fs.utimes(
 			path.join(root, 'a'),
 			new Date('2000-01-01T00:00:00Z'),
 			new Date('2020-01-01T00:00:00Z')
 		);
-		expect(yield* treeHash(root)).toBe(hash);
+		expect(yield* tree_hash(root)).toBe(hash);
 		yield* fs.writeFileString(path.join(root, 'a'), 'changed');
-		expect(yield* treeHash(root)).not.toBe(hash);
+		expect(yield* tree_hash(root)).not.toBe(hash);
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
@@ -328,7 +324,7 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 		const fs = yield* FileSystem.FileSystem;
 		const path = yield* Path.Path;
 		const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-artifact-read-' });
-		const pending = readArtifact(dir);
+		const pending = read_artifact(dir);
 		const text = `${JSON.stringify(manifest)}\n`;
 		const source = 'export default {};';
 		yield* fs.writeFileString(path.join(dir, 'manifest.json'), text);
@@ -339,26 +335,26 @@ it.live('reads lazily, decodes artifact files once and refuses a changed digest'
 			contract: CONTRACT,
 			handle: 'norbital_fixture',
 			name: 'Fixture',
-			schema: fingerprint(schemaSlice(manifest)),
+			schema: fingerprint(schema_slice(manifest)),
 			client: { entry: '', css: [] },
 			pages: {},
 			hashes: {
-				manifest: sha256Hex(text),
-				guest: sha256Hex(source),
-				client: yield* treeHash(path.join(dir, 'client')),
-				server: yield* treeHash(path.join(dir, 'server'))
+				manifest: sha256_hex(text),
+				guest: sha256_hex(source),
+				client: yield* tree_hash(path.join(dir, 'client')),
+				server: yield* tree_hash(path.join(dir, 'server'))
 			}
 		};
-		const artifact: ArtifactJson = { ...body, hash: yield* artifactHash(dir, body) };
+		const artifact: ArtifactJson = { ...body, hash: yield* artifact_hash(dir, body) };
 		yield* fs.writeFileString(path.join(dir, 'artifact.json'), JSON.stringify(artifact));
 		expect((yield* pending).manifest).toEqual(manifest);
 		yield* fs.writeFileString(path.join(dir, 'guest.mjs'), `${source}\n// tampered`);
-		expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({
+		expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({
 			_tag: 'BoltError',
-			code: 'artifactDigest'
+			code: 'artifact_digest'
 		});
 		yield* fs.writeFileString(path.join(dir, 'artifact.json'), '{}');
-		expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ _tag: 'ManifestInvalid' });
+		expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ _tag: 'ManifestInvalid' });
 	}).pipe(Effect.provide(NodeServices.layer))
 );
 
@@ -382,48 +378,48 @@ it.live(
 						handle: 'pinned',
 						name: 'Pinned',
 						// an older engine's system layer fingerprints the same manifest differently
-						schema: sha256Hex('an older system layer'),
+						schema: sha256_hex('an older system layer'),
 						client: { entry: '', css: [] },
 						pages: {},
 						hashes: {
-							manifest: sha256Hex(text),
-							guest: sha256Hex(source),
-							client: yield* treeHash(path.join(dir, 'client')),
-							server: yield* treeHash(path.join(dir, 'server'))
+							manifest: sha256_hex(text),
+							guest: sha256_hex(source),
+							client: yield* tree_hash(path.join(dir, 'client')),
+							server: yield* tree_hash(path.join(dir, 'server'))
 						}
 					};
 					yield* fs.writeFileString(
 						path.join(dir, 'artifact.json'),
-						JSON.stringify({ ...body, hash: yield* artifactHash(dir, body) })
+						JSON.stringify({ ...body, hash: yield* artifact_hash(dir, body) })
 					);
 				});
-			const older = sha256Hex('@norbital-ai/bolt@0.0.0-older');
+			const older = sha256_hex('@norbital-ai/bolt@0.0.0-older');
 			yield* write(older);
-			expect((yield* readArtifact(dir, [older])).manifest).toEqual(manifest);
+			expect((yield* read_artifact(dir, [older])).manifest).toEqual(manifest);
 			yield* write(CONTRACT);
-			expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schemaMismatch' });
+			expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schema_mismatch' });
 			const snapshotPath = path.join(dir, 'migrations', 'snapshot.json');
 			const lockPath = path.join(dir, 'migrations', 'migrations.lock.json');
-			const snapshot = yield* readSnapshot(yield* fs.readFileString(snapshotPath));
+			const { schema: snapshot } = yield* read_snapshot(yield* fs.readFileString(snapshotPath));
 			const user = snapshot.tables['sys_user'];
 			if (user === undefined) throw new Error('fixture has no sys_user');
 			// The older system layer did not declare the user search index.
 			const olderUser = { ...user };
 			delete olderUser.search;
-			const olderSnapshot = snapshotOf({
+			const olderSnapshot = snapshot_of({
 				...snapshot,
 				tables: { ...snapshot.tables, sys_user: olderUser }
 			});
-			const lock = yield* readLock(yield* fs.readFileString(lockPath));
+			const lock = yield* read_lock(yield* fs.readFileString(lockPath));
 			yield* fs.writeFileString(snapshotPath, olderSnapshot);
 			yield* fs.writeFileString(
 				lockPath,
-				JSON.stringify({ ...lock, snapshot: sha256Hex(olderSnapshot) })
+				JSON.stringify({ ...lock, snapshot: sha256_hex(olderSnapshot) })
 			);
 			yield* write(older);
-			expect((yield* readArtifact(dir, [older])).manifest).toEqual(manifest);
+			expect((yield* read_artifact(dir, [older])).manifest).toEqual(manifest);
 			yield* write(CONTRACT);
-			expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schemaMoved' });
+			expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'schema_moved' });
 		}).pipe(Effect.provide(NodeServices.layer))
 );
 
@@ -446,18 +442,18 @@ it.live(
 				contract: CONTRACT,
 				handle: 'untrusted',
 				name: 'Untrusted snapshot',
-				schema: fingerprint(schemaSlice(manifest)),
+				schema: fingerprint(schema_slice(manifest)),
 				client: { entry: '', css: [] },
 				pages: {},
 				hashes: {
-					manifest: sha256Hex(text),
-					guest: sha256Hex(source),
-					client: yield* treeHash(path.join(dir, 'client')),
-					server: yield* treeHash(path.join(dir, 'server'))
+					manifest: sha256_hex(text),
+					guest: sha256_hex(source),
+					client: yield* tree_hash(path.join(dir, 'client')),
+					server: yield* tree_hash(path.join(dir, 'server'))
 				},
-				snapshot: { key: 'tenant-authored native bytes', sha: sha256Hex(bytes) }
+				snapshot: { key: 'tenant-authored native bytes', sha: sha256_hex(bytes) }
 			};
-			const artifact: ArtifactJson = { ...body, hash: yield* artifactHash(dir, body) };
+			const artifact: ArtifactJson = { ...body, hash: yield* artifact_hash(dir, body) };
 			yield* fs.writeFileString(path.join(dir, 'artifact.json'), JSON.stringify(artifact));
 			const controlled: FileSystem.FileSystem = {
 				...fs,
@@ -466,21 +462,21 @@ it.live(
 						? Effect.die(new Error('native snapshot bytes must never be read'))
 						: fs.readFile(file)
 			};
-			const loaded = yield* readArtifact(dir).pipe(
+			const loaded = yield* read_artifact(dir).pipe(
 				Effect.provideService(FileSystem.FileSystem, controlled)
 			);
 			expect(loaded.artifact.snapshot).toEqual(body.snapshot);
 			expect(loaded.guest.source).toBe(source);
 			expect('snapshot' in loaded.guest).toBe(false);
 			yield* fs.remove(path.join(dir, 'guest.snapshot'));
-			expect((yield* readArtifact(dir)).guest.source).toBe(source);
+			expect((yield* read_artifact(dir)).guest.source).toBe(source);
 			yield* fs.writeFileString(
 				path.join(dir, 'artifact.json'),
 				JSON.stringify({
 					...artifact,
-					snapshot: { ...body.snapshot, sha: sha256Hex('rewritten metadata') }
+					snapshot: { ...body.snapshot, sha: sha256_hex('rewritten metadata') }
 				})
 			);
-			expect(yield* readArtifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'artifactDigest' });
+			expect(yield* read_artifact(dir).pipe(Effect.flip)).toMatchObject({ code: 'artifact_digest' });
 		}).pipe(Effect.provide(NodeServices.layer))
 );

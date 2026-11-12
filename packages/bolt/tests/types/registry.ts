@@ -11,7 +11,7 @@ declare module '../../src/index.ts' {
 			orders_submit: {
 				spec: {
 					description: 'Submit this order';
-					input: { target: { kind: 'id'; of: 'orders' } };
+					input: { target: { kind: 'ref'; to: 'orders' } };
 					policies: readonly ['sales_rep'];
 				};
 			};
@@ -19,7 +19,7 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Set a note on many orders';
 					input: {
-						ids: { kind: 'list'; of: { kind: 'id'; of: 'orders' } };
+						ids: { kind: 'ref'; to: 'orders'; readonly many: true };
 						note: { kind: 'text' };
 					};
 					output: { kind: 'int' };
@@ -61,9 +61,11 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Nightly order digest';
 					policies: readonly ['sales_rep'];
-					on: {
-						cron: '0 2 * * *';
-					};
+					on: readonly [
+						{
+							cron: '0 2 * * *';
+						}
+					];
 					output: {
 						kind: 'int';
 					};
@@ -74,10 +76,7 @@ declare module '../../src/index.ts' {
 					description: 'Chase an order three days after it is placed';
 					policies: readonly ['sales_rep'];
 					input: {
-						ids: {
-							kind: 'list';
-							of: { kind: 'id'; of: 'orders' };
-						};
+						ids: { kind: 'ref'; to: 'orders'; readonly many: true };
 					};
 					retry: {
 						attempts: 3;
@@ -94,8 +93,8 @@ declare module '../../src/index.ts' {
 					policies: readonly ['sales_rep'];
 					input: {
 						order: {
-							kind: 'id';
-							of: 'orders';
+							kind: 'ref';
+							to: 'orders';
 						};
 					};
 					output: {
@@ -109,13 +108,6 @@ declare module '../../src/index.ts' {
 				spec: {
 					description: 'Payment provider callback';
 					policies: readonly ['sales_rep'];
-					on: {
-						webhook: '/payments';
-						verify: {
-							scheme: 'stripe';
-							secret: 'HOOK_SECRET';
-						};
-					};
 					input: {
 						order: {
 							kind: 'text';
@@ -146,10 +138,10 @@ declare module '../../src/index.ts' {
 		};
 		exposures: {
 			customers: {
-				read: {
-					customers: { fields: 'all' };
-				};
 				outputs: {
+					default: {
+						customers: { fields: 'all' };
+					};
 					directory: { customers: { fields: readonly ['name', 'tier'] } };
 				};
 				create: {
@@ -160,7 +152,7 @@ declare module '../../src/index.ts' {
 				update: {
 					columns: { customers: readonly ['name', 'email', 'tier', 'tags'] };
 				};
-				delete: { check: true };
+				delete: {};
 				syncs: {
 					crm: {
 						with: 'erp';
@@ -171,12 +163,12 @@ declare module '../../src/index.ts' {
 				};
 			};
 			orders: {
-				read: {
-					orders: { fields: 'all' };
-					'orders.customer': { fields: readonly ['name', 'tier'] };
-					'orders.lines': { fields: 'all' };
-				};
 				outputs: {
+					default: {
+						orders: { fields: 'all' };
+						'orders.customer': { fields: readonly ['name', 'tier'] };
+						'orders.lines': { fields: 'all' };
+					};
 					logistics: {
 						orders: { fields: readonly ['number', 'status', 'customer'] };
 						'orders.lines': { fields: readonly ['item', 'qty'] };
@@ -189,6 +181,7 @@ declare module '../../src/index.ts' {
 					};
 					filled: { orders: readonly ['note'] };
 					transform: true;
+					effect: true;
 				};
 				update: {
 					columns: {
@@ -196,11 +189,9 @@ declare module '../../src/index.ts' {
 						'orders.lines': readonly ['item', 'qty', 'price'];
 					};
 					transform: true;
+					effect: true;
 				};
-				delete: {
-					check: true;
-				};
-				notify: true;
+				delete: { effect: true };
 				syncs: {
 					ledger: {
 						with: 'kingdee';
@@ -219,7 +210,6 @@ declare module '../../src/index.ts' {
 						schema: {
 							customer: {
 								kind: 'text';
-								label: 'Customer';
 							};
 							note: {
 								kind: 'text';
@@ -237,13 +227,17 @@ declare module '../../src/index.ts' {
 				};
 			};
 			order_lines: {
-				read: {
-					order_lines: { fields: 'all' };
+				outputs: {
+					default: {
+						order_lines: { fields: 'all' };
+					};
 				};
 			};
 			notices: {
-				read: {
-					notices: { fields: 'all' };
+				outputs: {
+					default: {
+						notices: { fields: 'all' };
+					};
 				};
 				syncs: {
 					mail: {
@@ -253,8 +247,10 @@ declare module '../../src/index.ts' {
 				};
 			};
 			notice_notes: {
-				read: {
-					notice_notes: { fields: 'all' };
+				outputs: {
+					default: {
+						notice_notes: { fields: 'all' };
+					};
 				};
 				create: {
 					columns: { notice_notes: readonly ['notice', 'note'] };
@@ -276,8 +272,8 @@ declare module '../../src/index.ts' {
 						};
 						context: {
 							notice: {
-								kind: 'id';
-								of: 'notices';
+								kind: 'ref';
+								to: 'notices';
 							};
 						};
 						read: true;
@@ -286,12 +282,12 @@ declare module '../../src/index.ts' {
 				};
 			};
 			sites: {
-				read: {
-					sites: {
-						fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
-					};
-				};
 				outputs: {
+					default: {
+						sites: {
+							fields: readonly ['name', 'location', 'customer', 'open', 'rating', 'checklist'];
+						};
+					};
 					summary: { sites: { fields: readonly ['name', 'open'] } };
 				};
 				update: {
@@ -299,8 +295,10 @@ declare module '../../src/index.ts' {
 				};
 			};
 			products: {
-				read: {
-					products: { fields: 'all' };
+				outputs: {
+					default: {
+						products: { fields: 'all' };
+					};
 				};
 				update: {
 					columns: { products: readonly ['commission_factor'] };
@@ -313,8 +311,10 @@ declare module '../../src/index.ts' {
 				};
 			};
 			entries: {
-				read: {
-					entries: { fields: 'all' };
+				outputs: {
+					default: {
+						entries: { fields: 'all' };
+					};
 				};
 				update: {
 					columns: { entries: readonly ['filed'] };
@@ -328,7 +328,7 @@ declare module '../../src/index.ts' {
 				};
 			};
 		};
-		customFields: {
+		custom_fields: {
 			rating: {
 				spec: {
 					description: 'A score with an optional note';
@@ -394,17 +394,7 @@ declare module '../../src/index.ts' {
 				};
 			};
 		};
-		envoys: {
-			desk: {
-				name: 'Norbius';
-				audience: 'private';
-				policies: readonly ['sales_rep'];
-				groupMessages: 'mention_or_reply';
-				delegation: 'disabled';
-				task: 'Keep orders up to date from what people report.';
-			};
-		};
-		hostTools: {
+		host_tools: {
 			browser: true;
 		};
 		integrations: {
@@ -413,7 +403,7 @@ declare module '../../src/index.ts' {
 					description: 'The ERP API.';
 					driver: 'http';
 					configuration: {
-						baseUrl: {
+						base_url: {
 							kind: 'text';
 							format: 'url';
 						};
@@ -434,15 +424,13 @@ declare module '../../src/index.ts' {
 					credential: {
 						token: {
 							kind: 'text';
-							label: 'API token';
 						};
-						signingSecret: {
+						signing_secret: {
 							kind: 'text';
-							label: 'Webhook signing secret';
 						};
 					};
 					http: {
-						baseUrl: 'baseUrl';
+						base_url: 'base_url';
 						auth: {
 							bearer: 'token';
 						};
@@ -450,7 +438,7 @@ declare module '../../src/index.ts' {
 					webhook: {
 						verify: {
 							scheme: 'standard';
-							secret: 'signingSecret';
+							secret: 'signing_secret';
 						};
 					};
 					rate: '10/s';
@@ -463,11 +451,10 @@ declare module '../../src/index.ts' {
 					credential: {
 						connection: {
 							kind: 'text';
-							label: 'Connection string';
 						};
 					};
 					configuration: {
-						maxLagMinutes: {
+						max_lag_minutes: {
 							kind: 'int';
 							min: 1;
 							default: 15;
@@ -517,7 +504,7 @@ declare module '../../src/index.ts' {
 		models: {
 			customers: {
 				description: 'Buyers';
-				label: 'name';
+				record_label: 'record.name';
 				computed: {
 					name_upper: {
 						kind: 'text';
@@ -596,13 +583,13 @@ declare module '../../src/index.ts' {
 			};
 			orders: {
 				description: 'Sales orders';
-				label: readonly ['number', 'customer'];
-				index: readonly ['customer', 'due'];
+				record_label: "[record.number, record.customer].filter(x, x != null && x != '').join(' · ')";
+				indexes: readonly [{ on: readonly ['customer'] }, { on: readonly ['due'] }];
 				computed: {
 					due_soon: {
 						kind: 'date';
 						expr: {
-							plusDays: readonly [
+							plus_days: readonly [
 								{
 									field: 'due';
 								},
@@ -614,7 +601,7 @@ declare module '../../src/index.ts' {
 				check: {
 					has_customer: {
 						customer: {
-							isNull: false;
+							is_null: false;
 						};
 					};
 				};
@@ -632,10 +619,8 @@ declare module '../../src/index.ts' {
 							};
 							submitted: {
 								to: readonly ['ordered', 'draft'];
-								edit: readonly ['status', 'note', 'lines'];
 							};
 							ordered: {
-								edit: 'none';
 							};
 						};
 					};
@@ -694,7 +679,7 @@ declare module '../../src/index.ts' {
 			};
 			order_lines: {
 				description: 'Lines of an order';
-				label: 'item';
+				record_label: 'record.item';
 				computed: {
 					amount: {
 						kind: 'money';
@@ -730,7 +715,7 @@ declare module '../../src/index.ts' {
 			};
 			notices: {
 				description: 'Supplier notices mirrored from the inbox';
-				label: 'subject';
+				record_label: 'record.subject';
 				key: readonly ['inbox', 'message_id'];
 				fields: {
 					message_id: {
@@ -754,12 +739,8 @@ declare module '../../src/index.ts' {
 			};
 			notice_notes: {
 				description: 'What we add about a notice';
-				label: 'notice';
-				unique: readonly [
-					{
-						fields: readonly ['notice'];
-					}
-				];
+				record_label: 'record.notice';
+				key: readonly ['notice'];
 				fields: {
 					note: {
 						kind: 'text';
@@ -768,8 +749,8 @@ declare module '../../src/index.ts' {
 			};
 			sites: {
 				description: 'Customer sites';
-				label: 'name';
-				noOverlap: readonly [
+				record_label: 'record.name';
+				no_overlap: readonly [
 					{
 						key: readonly ['name'];
 						period: 'open';
@@ -802,31 +783,29 @@ declare module '../../src/index.ts' {
 						optional: true;
 					};
 					slot: {
-						kind: 'duration';
-						default: '30min';
+						kind: 'int';
+						default: 1800;
 					};
 					photos: {
 						kind: 'file';
 						accept: readonly ['image/*'];
 						max: '5MiB';
-						multiple: true;
+						many: true;
 						optional: true;
 					};
 					checklist: {
 						kind: 'json';
 						shape: {
-							kind: 'list';
-							of: {
-								kind: 'object';
-								fields: {
-									item: {
-										kind: 'text';
-									};
-									done: {
-										kind: 'bool';
-									};
+							kind: 'object';
+							fields: {
+								item: {
+									kind: 'text';
+								};
+								done: {
+									kind: 'bool';
 								};
 							};
+							readonly many: true;
 						};
 					};
 					rating: {
@@ -843,7 +822,7 @@ declare module '../../src/index.ts' {
 			};
 			products: {
 				description: 'Products from the ledger';
-				label: 'name';
+				record_label: 'record.name';
 				key: readonly ['source', 'external_code'];
 				fields: {
 					external_code: {
@@ -870,7 +849,7 @@ declare module '../../src/index.ts' {
 			};
 			entries: {
 				description: "Calendar entries mirrored from members' calendars";
-				label: 'subject';
+				record_label: 'record.subject';
 				key: readonly ['account', 'calendar_id', 'external_id'];
 				fields: {
 					calendar_id: {
@@ -898,45 +877,49 @@ declare module '../../src/index.ts' {
 				description: 'Sell to our customers';
 				grants: {
 					orders: {
-						read: { orders: { where: { owner: { eq: { var: 'requestor.id' } } } } };
-						history: true;
+						outputs: {
+							default: { history: true; where: { owner: { eq: { var: 'requestor.id' } } } };
+						};
 						create: {
 							columns: {
 								orders: readonly ['customer', 'note'];
 								'orders.lines': readonly ['item', 'qty'];
 							};
-							check: true;
+							verdict: true;
 						};
-						update: { columns: { orders: readonly ['status', 'note'] }; check: true };
-						delete: { check: true };
-						moves: {
-							status: readonly ['draft->submitted', 'submitted->draft'];
+						update: {
+							columns: { orders: readonly ['status', 'note'] };
+							verdict: true;
+							moves: { status: readonly ['draft->submitted', 'submitted->draft'] };
 						};
+						delete: { verdict: true };
 					};
 					customers: {
 						outputs: {
-							directory: { customers: { where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } } } };
+							directory: {
+								where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
+							};
 						};
-						update: true;
+						update: {};
 					};
-					notices: {
-						read: true;
-					};
+					notices: { outputs: { default: {} } };
 					sites: {
 						outputs: {
-							summary: { sites: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } };
+							summary: {
+								where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } };
+							};
 						};
 					};
 					sys_user: {
-						outputs: { directory: { team: { in: { var: 'requestor.teamTree' } } } };
+						outputs: { directory: { where: { team: { in: { var: 'requestor.team_tree' } } } } };
 					};
 				};
-				automations: readonly ['nightly', 'products.sync.ledger', 'orders_submit', 'orders_renote'];
 				capabilities: {
 					apps: readonly ['sales'];
 					tools: readonly ['browser'];
 					mcp: readonly ['erp'];
-					skills: readonly ['quoting'];
+					automations: readonly ['nightly', 'orders_submit', 'orders_renote'];
+					syncs: readonly ['products.ledger'];
 				};
 				limits: {
 					act: '600/min';
@@ -972,7 +955,7 @@ declare module '../../src/index.ts' {
 			auditor: {
 				description: 'Audit orders';
 				grants: {
-					orders: { outputs: { logistics: true } };
+					orders: { outputs: { logistics: {} } };
 				};
 			};
 		};
@@ -1031,7 +1014,7 @@ declare module '../../src/index.ts' {
 			'sites.customer': {
 				to: 'customers';
 				optional: true;
-				onDelete: 'setNull';
+				on_delete: 'set_null';
 				inverse: 'sites';
 				where: {
 					tier: {
@@ -1077,12 +1060,16 @@ declare module '../../src/index.ts' {
 				label: 'Calendar OAuth secret';
 			};
 		};
+		messages: {
+			'errors.refused': 'This change is not allowed.';
+			'errors.short': 'Only {have} of {need} {item} are in stock.';
+		};
 		skills: {
 			quoting: true;
 		};
 		teams: {
-			finance: readonly [];
-			sales: readonly ['sales_rep'];
+			finance: { policies: readonly [] };
+			sales: { policies: readonly ['sales_rep'] };
 		};
 		workspace: {
 			tz: 'Asia/Singapore';
@@ -1090,8 +1077,6 @@ declare module '../../src/index.ts' {
 			currency: 'SGD';
 			apps: readonly ['sales', 'portal'];
 			ai: {
-				models: readonly ['default', 'fast', 'strong'];
-				default: 'default';
 				embeddings: readonly ['text_small'];
 			};
 			convert: {
@@ -1099,21 +1084,6 @@ declare module '../../src/index.ts' {
 			};
 			csp: {
 				connect: readonly ['https://huggingface.co'];
-			};
-			connections: {
-				erp: {
-					integration: 'erp';
-				};
-				ledger_main: {
-					integration: 'kingdee';
-				};
-				support: {
-					integration: 'support_mail';
-				};
-				whatsapp: {
-					integration: 'whatsapp';
-					envoy: 'desk';
-				};
 			};
 		};
 		pages: { sales: 'overview' | 'orders'; portal: 'tickets' };

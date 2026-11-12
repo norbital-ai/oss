@@ -3,8 +3,13 @@ install();
 import { Effect, Result } from 'effect';
 // The runtime roles of the type corpus workspace: what a template puts in +workspace.ts, +secrets.ts, src/integration,
 // src/automation and src/agent. Every body sits in its literal, typed from `../registry.ts` by its name.
-import { automation, envoy, integration, mcp, secrets, workspace } from '../../../src/index.ts';
-import { Refusal } from '../../../src/decl/errors.ts';
+import { automation, mcp, secrets, workspace } from '../../../src/index.ts';
+import { bind_integration } from '../../../src/declarations.ts';
+import type { InstanceId } from '../../../src/index.ts';
+
+// runtime instances (a body reads its `sys_integration` row; never evaluated here)
+declare const erp_account: InstanceId<'erp'>;
+declare const whatsapp_account: InstanceId<'whatsapp'>;
 
 export const secretNames = secrets({
 	ERP_URL: { label: 'ERP base URL' },
@@ -20,42 +25,27 @@ export const ws = workspace({
 	locale: 'en-SG',
 	currency: 'SGD',
 	apps: ['sales', 'portal'],
-	ai: { models: ['default', 'fast', 'strong'], default: 'default', embeddings: ['text_small'] },
+	ai: { embeddings: ['text_small'] },
 	convert: { to: ['pdf', 'docx'] },
-	csp: { connect: ['https://huggingface.co'] },
-	connections: {
-		erp: { integration: 'erp' },
-		ledger_main: { integration: 'kingdee' },
-		support: { integration: 'support_mail' },
-		whatsapp: { integration: 'whatsapp', envoy: 'desk' }
-	}
-});
-
-export const desk = envoy({
-	name: 'Norbius',
-	audience: 'private',
-	policies: ['sales_rep'],
-	groupMessages: 'mention_or_reply',
-	delegation: 'disabled',
-	task: 'Keep orders up to date from what people report.'
+	csp: { connect: ['https://huggingface.co'] }
 });
 
 // HTTP: a configured base URL, a credential sealed at pairing, Standard Webhooks, a request rate and a pairing test
-export const erp = integration('erp', {
+export const erp = bind_integration('erp')({
 	description: 'The ERP API.',
 	driver: 'http',
 	configuration: {
-		baseUrl: { kind: 'text', format: 'url' },
+		base_url: { kind: 'text', format: 'url' },
 		room: { kind: 'text', default: 'general' },
 		topic: { kind: 'text', optional: true },
 		mute: { kind: 'bool', optional: true, default: false }
 	},
 	credential: {
-		token: { kind: 'text', label: 'API token' },
-		signingSecret: { kind: 'text', label: 'Webhook signing secret' }
+		token: { kind: 'text' },
+		signing_secret: { kind: 'text' }
 	},
-	http: { baseUrl: 'baseUrl', auth: { bearer: 'token' } },
-	webhook: { verify: { scheme: 'standard', secret: 'signingSecret' } },
+	http: { base_url: 'base_url', auth: { bearer: 'token' } },
+	webhook: { verify: { scheme: 'standard', secret: 'signing_secret' } },
 	rate: '10/s',
 	test: function* (ctx) {
 		yield* ctx.request({ method: 'GET', path: 'me', output: { kind: 'json' } });
@@ -63,12 +53,12 @@ export const erp = integration('erp', {
 });
 
 // a database: products are read from it, ordered orders written to it (`model(…).syncs`)
-export const kingdee = integration('kingdee', {
+export const kingdee = bind_integration('kingdee')({
 	description: 'An accounting database.',
 	driver: 'sqlserver',
-	credential: { connection: { kind: 'text', label: 'Connection string' } },
+	credential: { connection: { kind: 'text' } },
 	configuration: {
-		maxLagMinutes: { kind: 'int', min: 1, default: 15 },
+		max_lag_minutes: { kind: 'int', min: 1, default: 15 },
 		databases: { kind: 'text', many: true, default: [] }
 	},
 	test: function* (ctx) {
@@ -77,13 +67,13 @@ export const kingdee = integration('kingdee', {
 });
 
 // a mailbox: its messages reach `notices` as deliveries
-export const support_mail = integration('support_mail', {
+export const support_mail = bind_integration('support_mail')({
 	description: 'The support mailbox.',
 	driver: 'email'
 });
 
 // a member's calendar: the driver pushes events, one cursor per chosen calendar
-export const calendar = integration('calendar', {
+export const calendar = bind_integration('calendar')({
 	description: "A member's calendar.",
 	driver: 'calendar',
 	oauth: { client: 'CALENDAR_CLIENT', secret: 'CALENDAR_SECRET' },
@@ -96,10 +86,10 @@ export const erp_mcp = mcp({
 	tools: ['search_docs']
 });
 
-export const nightly = automation('nightly', {
+export const nightly = automation({
 	description: 'Nightly order digest',
 	policies: ['sales_rep'],
-	on: { cron: '0 2 * * *' },
+	on: [{ cron: '0 2 * * *' }],
 	output: { kind: 'int' },
 	run: function* (_, ctx) {
 		const open = yield* ctx.query({
@@ -112,10 +102,10 @@ export const nightly = automation('nightly', {
 	}
 });
 
-export const follow_up = automation('follow_up', {
+export const follow_up = automation({
 	description: 'Chase an order three days after it is placed',
 	policies: ['sales_rep'],
-	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } } },
+	input: { ids: { kind: 'ref', to: 'orders', many: true } },
 	retry: { attempts: 3, backoff: '1min' },
 	concurrency: { max: 1 },
 	run: function* ({ ids }, ctx) {
@@ -136,10 +126,10 @@ export const follow_up = automation('follow_up', {
 	}
 });
 
-export const render = automation('render', {
+export const render = automation({
 	description: 'Render an order confirmation',
 	policies: ['sales_rep'],
-	input: { order: { kind: 'id', of: 'orders' } },
+	input: { order: { kind: 'ref', to: 'orders' } },
 	output: { kind: 'file', accept: ['application/pdf'], max: '5MiB' },
 	run: function* ({ order }, ctx) {
 		const { orders } = yield* ctx.query({
@@ -152,14 +142,13 @@ export const render = automation('render', {
 	}
 });
 
-export const inbound_hook = automation('inbound_hook', {
+export const inbound_hook = automation({
 	description: 'Payment provider callback',
 	policies: ['sales_rep'],
-	on: { webhook: '/payments', verify: { scheme: 'stripe', secret: 'HOOK_SECRET' } },
 	input: { order: { kind: 'text' } },
 	run: function* ({ order }, ctx) {
 		const answer = yield* Effect.result(
-			ctx.request('erp', {
+			ctx.request(erp_account, {
 				method: 'GET',
 				path: 'orders',
 				query: { order },
@@ -168,28 +157,25 @@ export const inbound_hook = automation('inbound_hook', {
 		);
 		if (Result.isFailure(answer)) return;
 		if (answer.success.paid)
-			yield* ctx.send('whatsapp', { to: '+6590000000', text: `Order ${order} is paid` });
+			yield* ctx.send(whatsapp_account, { to: '+6590000000', text: `Order ${order} is paid` });
 	}
 });
 
-export const orders_submit = automation('orders_submit', {
+export const orders_submit = automation({
 	description: 'Submit this order',
-	input: { target: { kind: 'id', of: 'orders' } },
+	input: { target: { kind: 'ref', to: 'orders' } },
 	policies: ['sales_rep'],
 	run: function* ({ target }, ctx) {
 		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
 			.rows[0];
-		if (order === undefined)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing order.' }));
-		yield* ctx.act('orders.update', [{ target: order.id, set: { status: 'submitted' } }], {
-			observed: { [order.id]: order.revision }
-		});
+		if (order === undefined) return yield* ctx.refuse('errors.refused');
+		yield* ctx.act({ 'orders.update': [{ target: order, set: { status: 'submitted' } }] });
 	}
 });
 
-export const orders_renote = automation('orders_renote', {
+export const orders_renote = automation({
 	description: 'Set a note on many orders',
-	input: { ids: { kind: 'list', of: { kind: 'id', of: 'orders' } }, note: { kind: 'text' } },
+	input: { ids: { kind: 'ref', to: 'orders', many: true }, note: { kind: 'text' } },
 	output: { kind: 'int' },
 	policies: ['sales_rep'],
 	run: function* ({ ids, note }, ctx) {
@@ -199,15 +185,9 @@ export const orders_renote = automation('orders_renote', {
 				fields: ['id', 'revision']
 			}
 		});
-		yield* ctx.act(
-			'orders.update',
-			ids.map((id) => ({ target: id, set: { note } })),
-			{
-				observed: Object.fromEntries(
-					orders.orders.rows.map((order): [string, number] => [order.id, order.revision])
-				)
-			}
-		);
+		yield* ctx.act({
+			'orders.update': orders.orders.rows.map((order) => ({ target: order, set: { note } }))
+		});
 		const { customers } = yield* ctx.query({
 			customers: { where: { tier: { eq: 'gold' } }, fields: ['name'] }
 		});
@@ -215,7 +195,7 @@ export const orders_renote = automation('orders_renote', {
 	}
 });
 
-export const order_lines_pay = automation('order_lines_pay', {
+export const order_lines_pay = automation({
 	description: 'Pay',
 	input: {
 		p: {
@@ -232,7 +212,7 @@ export const order_lines_pay = automation('order_lines_pay', {
 	}
 });
 
-export const order_lines_chase = automation('order_lines_chase', {
+export const order_lines_chase = automation({
 	description: 'Chase the lines',
 	input: {},
 	policies: ['sales_rep'],
@@ -242,7 +222,7 @@ export const order_lines_chase = automation('order_lines_chase', {
 	}
 });
 
-export const customers_return_row = automation('customers_return_row', {
+export const customers_return_row = automation({
 	description: 'One native row',
 	input: {},
 	output: { kind: 'row', of: 'customers' },
@@ -250,8 +230,7 @@ export const customers_return_row = automation('customers_return_row', {
 	run: function* (_, ctx) {
 		const page = yield* ctx.query({ customers: { limit: 1 } });
 		const customer = page.customers.rows[0];
-		if (customer === undefined)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing customer.' }));
+		if (customer === undefined) return yield* ctx.refuse('errors.refused');
 		return customer;
 	}
 });

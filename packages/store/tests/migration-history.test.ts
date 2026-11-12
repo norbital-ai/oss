@@ -1,32 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
 import { database, exec, script } from './support.ts';
-import {
-	INTROSPECT,
-	IntrospectRow,
-	archiveOf,
-	checkFile,
-	checkSquashSources,
-	checksumOf,
-	comparePhysical,
-	generate,
-	generateSquash,
-	lockOf,
-	migrationStatus,
-	pending,
-	physicalHash,
-	physicalDefinitionsOf,
-	readLock,
-	readPhysicalDefinitions,
-	schema,
-	snapshotOf,
-	table,
-	verify,
-	verifySquash,
-	type Applied,
-	type MigrationFile,
-	type StoreError
-} from '../src/index.ts';
+import { INTROSPECT, IntrospectRow, archive_of, check_file, check_squash_sources, checksum_of, generate, generate_squash, lock_of, migration_status, pending, physical_hash, physical_definitions_of, read_lock, read_physical_definitions, read_snapshot, schema, schema_snapshot, snapshot_of, table, verify, verify_squash, type Applied, type MigrationFile, type StoreError } from '../src/index.ts';
+import { compare_physical } from '../src/migrate.ts';
 
 const originals: readonly MigrationFile[] = [
 	{ name: '0001_entry.sql', sql: 'create table entry (id uuid primary key, value text);' },
@@ -50,28 +26,28 @@ const prefix2 = [
 const prefix3 = [...prefix2, 'index entry_label CREATE INDEX ON entry USING btree (label)'];
 const prefix4 = [...prefix3, 'column entry.count integer'];
 const applied = (files: readonly MigrationFile[]): Applied[] =>
-	files.map((file) => ({ name: file.name, checksum: checksumOf(file) }));
+	files.map((file) => ({ name: file.name, checksum: checksum_of(file) }));
 const failure = <A>(effect: Effect.Effect<A, StoreError>) =>
 	Effect.map(Effect.exit(effect), (exit) => (Exit.isFailure(exit) ? String(exit.cause) : 'ok'));
 const fixture = Effect.fn('migrationHistoryFixture')(function* () {
-	const oldReceipt = yield* verifySquash(
+	const oldReceipt = yield* verify_squash(
 		originals.slice(0, 2),
 		first,
 		prefix2,
 		[...prefix2].reverse()
 	);
-	const newReceipt = yield* verifySquash(originals.slice(0, 3), second, prefix3, prefix3);
-	const lock = yield* readLock(
-		lockOf('snapshot', originals, {
+	const newReceipt = yield* verify_squash(originals.slice(0, 3), second, prefix3, prefix3);
+	const lock = yield* read_lock(
+		lock_of('snapshot', originals, {
 			squashes: [oldReceipt, newReceipt],
 			physical: {
-				'': physicalHash([]),
+				'': physical_hash([]),
 				[first.name]: oldReceipt.proof,
 				[second.name]: newReceipt.proof,
-				'0001_entry.sql': physicalHash(prefix2.slice(0, 2)),
-				'0002_label.sql': physicalHash(prefix2),
-				'0003_label_index.sql': physicalHash(prefix3),
-				'0004_count.sql': physicalHash(prefix4)
+				'0001_entry.sql': physical_hash(prefix2.slice(0, 2)),
+				'0002_label.sql': physical_hash(prefix2),
+				'0003_label_index.sql': physical_hash(prefix3),
+				'0004_count.sql': physical_hash(prefix4)
 			}
 		})
 	);
@@ -225,7 +201,7 @@ describe('immutable squash branches', () => {
 
 	it.effect('retains the four-argument workflow when no squash is committed', () =>
 		Effect.gen(function* () {
-			const lock = yield* readLock(lockOf('snapshot', originals));
+			const lock = yield* read_lock(lock_of('snapshot', originals));
 			expect(yield* pending(originals, lock, applied(originals.slice(0, 1)), 'snapshot')).toEqual(
 				originals.slice(1)
 			);
@@ -254,7 +230,7 @@ describe('replay proofs and planning status', () => {
 					yield* failure(
 						verify(
 							[file],
-							snapshotOf(declaration),
+							snapshot_of(declaration),
 							declaration,
 							[column, changed],
 							[column, sequence]
@@ -271,13 +247,13 @@ describe('replay proofs and planning status', () => {
 		'proves the exact archive and edited baseline, rejecting a missing column or changed trigger',
 		() =>
 			Effect.gen(function* () {
-				expect(archiveOf(originals.slice(0, 2))).not.toBe(archiveOf(originals.slice(0, 1)));
+				expect(archive_of(originals.slice(0, 2))).not.toBe(archive_of(originals.slice(0, 1)));
 				expect(
-					yield* failure(verifySquash(originals.slice(0, 2), first, prefix2, prefix2.slice(0, 2)))
+					yield* failure(verify_squash(originals.slice(0, 2), first, prefix2, prefix2.slice(0, 2)))
 				).toContain('does not reproduce');
 				expect(
 					yield* failure(
-						verifySquash(
+						verify_squash(
 							originals.slice(0, 2),
 							first,
 							[...prefix2, 'trigger entry.audit BEFORE UPDATE'],
@@ -287,7 +263,7 @@ describe('replay proofs and planning status', () => {
 				).toContain('does not reproduce');
 				expect(
 					yield* failure(
-						verifySquash(
+						verify_squash(
 							originals.slice(0, 2),
 							{ ...first, name: '0001_squash_wrong.sql' },
 							prefix2,
@@ -295,29 +271,29 @@ describe('replay proofs and planning status', () => {
 						)
 					)
 				).toContain('numbered at the end');
-				expect(physicalHash(prefix2)).toBe(physicalHash([...prefix2].reverse()));
+				expect(physical_hash(prefix2)).toBe(physical_hash([...prefix2].reverse()));
 				const definitions = { '': [], [first.name]: prefix2, [second.name]: prefix3 };
-				expect(yield* readPhysicalDefinitions(physicalDefinitionsOf(definitions))).toEqual(
+				expect(yield* read_physical_definitions(physical_definitions_of(definitions))).toEqual(
 					definitions
 				);
-				expect(yield* readPhysicalDefinitions(JSON.stringify(definitions))).toEqual(definitions);
+				expect(yield* read_physical_definitions(JSON.stringify(definitions))).toEqual(definitions);
 				expect(
 					yield* failure(
-						readPhysicalDefinitions(JSON.stringify({ format: 1, lines: [], prefixes: { '': [0] } }))
+						read_physical_definitions(JSON.stringify({ format: 1, lines: [], prefixes: { '': [0] } }))
 					)
 				).toContain('physical definition 0 is missing');
 				const large = `function lookup() ${'multilingual lookup '.repeat(1000)}`;
-				const packed = physicalDefinitionsOf({ '0001_initial.sql': [large] });
+				const packed = physical_definitions_of({ '0001_initial.sql': [large] });
 				expect(packed.length).toBeLessThan(large.length / 10);
-				expect(yield* readPhysicalDefinitions(packed)).toEqual({ '0001_initial.sql': [large] });
+				expect(yield* read_physical_definitions(packed)).toEqual({ '0001_initial.sql': [large] });
 				expect(
 					yield* failure(
-						readPhysicalDefinitions(
+						read_physical_definitions(
 							JSON.stringify({ format: 2, lines: [{ deflate: 'broken' }], prefixes: { '': [0] } })
 						)
 					)
 				).toContain('invalid compressed physical definition');
-				expect(yield* failure(comparePhysical(prefix2.slice(1), physicalHash(prefix2)))).toContain(
+				expect(yield* failure(compare_physical(prefix2.slice(1), physical_hash(prefix2)))).toContain(
 					'live schema differs'
 				);
 				expect(INTROSPECT).toContain('not t.tgisinternal');
@@ -331,7 +307,7 @@ describe('replay proofs and planning status', () => {
 		() =>
 			Effect.gen(function* () {
 				const { lock, squashes } = yield* fixture();
-				const fresh = yield* migrationStatus(originals, lock, [], { squashes, physical: [] });
+				const fresh = yield* migration_status(originals, lock, [], { squashes, physical: [] });
 				expect(fresh).toMatchObject({
 					source: 'verified',
 					ledger: 'empty',
@@ -339,7 +315,7 @@ describe('replay proofs and planning status', () => {
 					strategy: 'squash',
 					physical: 'prefix'
 				});
-				const partial = yield* migrationStatus(originals, lock, applied([first]), {
+				const partial = yield* migration_status(originals, lock, applied([first]), {
 					squashes,
 					physical: prefix2
 				});
@@ -347,9 +323,9 @@ describe('replay proofs and planning status', () => {
 					ledger: 'prefix',
 					covered: 2,
 					physical: 'prefix',
-					expectedPhysical: physicalHash(prefix2)
+					expectedPhysical: physical_hash(prefix2)
 				});
-				const current = yield* migrationStatus(
+				const current = yield* migration_status(
 					originals,
 					lock,
 					applied([first, ...originals.slice(2)]),
@@ -362,14 +338,14 @@ describe('replay proofs and planning status', () => {
 					pending: []
 				});
 				expect(
-					(yield* migrationStatus(originals, lock, [], { squashes, physical: prefix2 })).physical
+					(yield* migration_status(originals, lock, [], { squashes, physical: prefix2 })).physical
 				).toBe('drift');
 				expect(
-					(yield* migrationStatus(originals, lock, applied([first]), { squashes })).physical
+					(yield* migration_status(originals, lock, applied([first]), { squashes })).physical
 				).toBe('unchecked');
-				const unproved = yield* readLock(lockOf('snapshot', originals));
+				const unproved = yield* read_lock(lock_of('snapshot', originals));
 				expect(
-					(yield* migrationStatus(originals, unproved, applied(originals.slice(0, 1)), {
+					(yield* migration_status(originals, unproved, applied(originals.slice(0, 1)), {
 						physical: prefix2.slice(0, 2)
 					})).physical
 				).toBe('unverified');
@@ -386,13 +362,13 @@ describe('safe baseline authoring', () => {
 				})
 			});
 			const checksums = applied(originals.slice(0, 2));
-			const generated = yield* generateSquash(originals.slice(0, 2), declaration, {
+			const generated = yield* generate_squash(originals.slice(0, 2), declaration, {
 				name: 'release'
 			});
 			expect(generated.file.name).toMatch(/^0002_squash_release_[a-f0-9]{12}\.sql$/);
 			expect(generated.file.sql).toContain('create table');
 			expect(generated.replaces).toEqual(checksums);
-			expect(generated.archive).toBe(archiveOf(originals.slice(0, 2)));
+			expect(generated.archive).toBe(archive_of(originals.slice(0, 2)));
 			expect(applied(originals.slice(0, 2))).toEqual(checksums);
 		})
 	);
@@ -421,14 +397,14 @@ describe('safe baseline authoring', () => {
 					'-- step transform (data)\n-- unresolved row transformation'
 				]) {
 					const data = [{ name: '0001_data.sql', sql }];
-					expect(yield* failure(checkSquashSources(data))).not.toBe('ok');
+					expect(yield* failure(check_squash_sources(data))).not.toBe('ok');
 				}
 				const changed = {
 					...first,
 					sql: `${first.sql}\ninsert into entry (value) values ('seed')`
 				};
 				expect(
-					yield* failure(verifySquash(originals.slice(0, 2), changed, prefix2, prefix2))
+					yield* failure(verify_squash(originals.slice(0, 2), changed, prefix2, prefix2))
 				).toContain('data-affecting');
 			})
 	);
@@ -441,11 +417,14 @@ describe('safe baseline authoring', () => {
 					entry: table({ audit: true, fields: { value: { kind: 'text' } } })
 				});
 				const after = schema({
-					entry: table({ audit: true, fields: { value: { kind: 'text', unique: true } } })
+					entry: table({ audit: true, unique: [{ fields: ['value'] }], fields: { value: { kind: 'text' } } })
 				});
 				const initial = yield* generate(null, before, { number: 1, name: 'initial' });
-				const unique = yield* generate(before, after, { number: 2, name: 'unique' });
-				expect(yield* checkSquashSources([initial.file, unique.file])).toEqual([
+				const unique = yield* generate(yield* read_snapshot(initial.snapshot), after, {
+					number: 2,
+					name: 'unique'
+				});
+				expect(yield* check_squash_sources([initial.file, unique.file])).toEqual([
 					initial.file,
 					unique.file
 				]);
@@ -459,7 +438,7 @@ describe('safe baseline authoring', () => {
 					name: '0001_extension.sql',
 					sql: `create extension if not exists ${extension};`
 				};
-				expect(yield* checkSquashSources([file])).toEqual([file]);
+				expect(yield* check_squash_sources([file])).toEqual([file]);
 			}
 			for (const sql of [
 				'create extension custom',
@@ -467,8 +446,8 @@ describe('safe baseline authoring', () => {
 				'create extension if not exists vector schema other'
 			])
 				expect(
-					(yield* Effect.flip(checkSquashSources([{ name: '0001_extension.sql', sql }]))).code
-				).toBe('migrationInvalid');
+					(yield* Effect.flip(check_squash_sources([{ name: '0001_extension.sql', sql }]))).code
+				).toBe('migration_invalid');
 		})
 	);
 
@@ -506,8 +485,8 @@ describe('safe baseline authoring', () => {
 					"do $$begin execute 'reset idle_in_transaction_session_timeout'; end$$",
 					'reset all'
 				]) {
-					const error = yield* Effect.flip(checkFile({ name: '0001_escape.sql', sql }));
-					expect(error).toMatchObject({ code: 'migrationInvalid', phase: 'admission' });
+					const error = yield* Effect.flip(check_file({ name: '0001_escape.sql', sql }));
+					expect(error).toMatchObject({ code: 'migration_invalid', phase: 'admission' });
 					expect(error.message).toContain(
 						sql.includes('timeout') || sql === 'reset all'
 							? 'belong to the host'
@@ -518,7 +497,7 @@ describe('safe baseline authoring', () => {
 					name: '0001_body.sql',
 					sql: "-- commit; reset lock_timeout\ncreate function retained() returns text language sql as $$ select 'commit; set lock_timeout = 0' $$;"
 				};
-				expect(yield* checkFile(safe)).toEqual(safe);
+				expect(yield* check_file(safe)).toEqual(safe);
 			})
 	);
 
@@ -531,15 +510,38 @@ describe('safe baseline authoring', () => {
 					'drop index concurrently entry_value',
 					'reindex table concurrently entry'
 				])
-					expect(yield* failure(checkFile({ name: '0001_index.sql', sql }))).toContain(
+					expect(yield* failure(check_file({ name: '0001_index.sql', sql }))).toContain(
 						'CONCURRENTLY cannot run'
 					);
 				const safe = {
 					name: '0001_literal.sql',
 					sql: '-- create index concurrently is unsupported\ncreate table "concurrently" (note text default \'create index concurrently\'); /* drop index concurrently */'
 				};
-				expect(yield* checkFile(safe)).toEqual(safe);
+				expect(yield* check_file(safe)).toEqual(safe);
 			})
+	);
+
+	it.live('preserves function owners longer than a PostgreSQL identifier', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const pg = yield* database;
+				const owner =
+					'history_owner(metadata jsonb, original_model text, current_model text, columns text[])';
+				yield* script(
+					pg,
+					`create function ${owner} returns boolean language sql as $$ select true $$`
+				);
+				const rows = yield* exec(pg)({ text: INTROSPECT, params: [] }).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(IntrospectRow)))
+				);
+				expect(owner.length).toBeGreaterThan(63);
+				expect(
+					rows.find(
+						(row) => row.kind === 'function' && row.line.startsWith('function history_owner ')
+					)?.owner
+				).toBe(owner);
+			})
+		)
 	);
 
 	it.live('introspects empty tables, view definitions and identity sequence configuration', () =>
@@ -563,7 +565,7 @@ describe('safe baseline authoring', () => {
 						(line) => line.startsWith('table orphan_view v ') && line.includes('definition')
 					)
 				).toBe(true);
-				expect(yield* failure(comparePhysical(before, physicalHash(empty)))).toContain('differs');
+				expect(yield* failure(compare_physical(before, physical_hash(empty)))).toContain('differs');
 				yield* script(pg, 'alter sequence counter_id_seq increment by 7');
 				const after = yield* inspect();
 				expect(after.filter((line) => line.startsWith('column counter.id '))).toEqual(
@@ -572,7 +574,7 @@ describe('safe baseline authoring', () => {
 				expect(after.find((line) => line.startsWith('sequence counter.id '))).toContain(
 					'increment 7'
 				);
-				expect(yield* failure(comparePhysical(after, physicalHash(before)))).toContain('differs');
+				expect(yield* failure(compare_physical(after, physical_hash(before)))).toContain('differs');
 			})
 		)
 	);
@@ -588,7 +590,10 @@ describe('safe baseline authoring', () => {
 						indexes: [{ on: ['count'] }]
 					})
 				});
-				const generated = yield* generate(before, after, { number: 1, name: 'widen' });
+				const generated = yield* generate(yield* schema_snapshot(before), after, {
+					number: 1,
+					name: 'widen'
+				});
 				expect(generated.file.sql).not.toContain('nothing existing changes');
 				expect(generated.file.sql).toContain('access-exclusive-lock');
 				expect(generated.file.sql).toContain('table-rewrite');

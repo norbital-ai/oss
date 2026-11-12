@@ -1,22 +1,29 @@
 /// <reference types="node" />
 import { Effect, Predicate, Schema } from 'effect';
 import { realpathSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, loadavg } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Plugin, PluginOption, UserConfig } from 'vite';
 import type {} from 'vitest/config';
 import { EDITOR_SINGLETONS } from '../compiler/editor-dependencies.ts';
-import { BOLT, EXT } from '../compiler/bolt.ts';
+import { EXT } from '../compiler/bolt.ts';
 import { lintTests } from '../test/lint.ts';
 import { writeTypeSetup } from '../compiler/names.ts';
 import { AuthorErrors, ToolFailure } from './build.ts';
 
-/** This copy of the kit (src or build), so `/test` and `/test/browser` share one shell and one page SDK with `$bolt`. */
+/** This copy of the kit (src or build). */
 const own = (path: string) => join(dirname(fileURLToPath(import.meta.url)), '..', `${path}${EXT}`);
-/** One worker per core but one: the realm runner passes its share with `--maxWorkers`. */
+/** The machine's workers, one per core but one: `bolt templates test` shares them with `--maxWorkers`. */
 export const workers = Math.max(1, availableParallelism() - 1);
+/**
+ * One suite's default workers at the machine's load: the cores left free, at least 4. A worker's cold start (module
+ * graph, PGlite and its checkpoint, the guest compile: ~4 s of CPU) outweighs most files' own work, so on a busy machine
+ * more workers only add cold starts to the load that starves every test past the hang guard.
+ */
+export const suiteWorkers = (load: number) =>
+	Math.min(workers, Math.max(4, Math.floor(workers - load)));
 
 type Runner = Pick<typeof import('vitest/node'), 'parseCLI' | 'startVitest'>;
 const Runner = Schema.declare<Runner>(
@@ -88,7 +95,7 @@ const plugins = (svelte: Svelte): Plugin[] => {
 			setup.fsModuleCachePath ??= join(process.cwd(), 'node_modules', '.vitest-cache');
 			// a template with no mechanisms of its own (blank) has nothing to prove
 			setup.passWithNoTests = true;
-			setup.maxWorkers ??= workers;
+			setup.maxWorkers ??= suiteWorkers(loadavg()[0] ?? 0);
 			setup.pool = 'forks';
 			setup.isolate = false;
 			setup.setupFiles = [...new Set([own('test/dom'), ...[setup.setupFiles ?? []].flat()])];
@@ -113,12 +120,7 @@ const plugins = (svelte: Svelte): Plugin[] => {
 						...EDITOR_SINGLETONS
 					],
 					alias: [
-						{
-							find: /^@norbital-ai\/bolt-cli\/test\/browser$/,
-							replacement: own('test/browser')
-						},
-						{ find: /^@norbital-ai\/bolt-cli\/test$/, replacement: own('test/index') },
-						{ find: /^\$bolt$/, replacement: join(BOLT, 'page', `index${EXT}`) }
+						{ find: /^@norbital-ai\/bolt-cli\/test$/, replacement: own('test/index') }
 					],
 					conditions: ['svelte', 'browser']
 				}
@@ -129,7 +131,7 @@ const plugins = (svelte: Svelte): Plugin[] => {
 };
 /**
  * `bolt test`: the workspace's vitest, in process, with the kit preconfigured: the type setup written, svelte compiled,
- * `@norbital-ai/bolt-cli/test(/browser)` on the kit's copy and `$bolt` on its Bolt's, DOM environments resolving the browser builds, and
+ * `@norbital-ai/bolt-cli/test(/browser)` on the kit's copy, DOM environments resolving the browser builds, and
  * the realm's pool, hang guard and test lint. The workspace's own vitest config still loads, and wins
  * elsewhere. No real browser: those tests live only in Bolt's own suite.
  */

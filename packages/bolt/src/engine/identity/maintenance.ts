@@ -1,30 +1,35 @@
 import { Effect, Schema } from 'effect';
+import { q } from '@norbital-ai/std/sql';
 import {
 	answer,
-	catalogOf,
+	catalog_of,
 	compile,
 	read as decodeRead,
 	schema,
 	type Row,
 	type store
 } from '@norbital-ai/store';
-import { catalog, tableOf } from '../../protocol/catalog.ts';
-import { BoltError, fromStore } from '../../protocol/errors.ts';
-import { splitModel } from '../../decl/model.ts';
+import { catalog, table_of } from '../../protocol/catalog.ts';
+import { BoltError, from_store } from '../../protocol/errors.ts';
+import { split_system_model } from '../../decl/model-data.ts';
 import user from '../../system/data/model/sys_user/+model.ts';
 import type { Rows } from '../contracts.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { EngineManifest } from '../manifest.ts';
 
+const { party_id, phone_key, ...storedFields } = user.spec.fields;
 const declaration = schema({
 	sys_user: {
-		...tableOf(splitModel(user.name, user.spec).model),
-		fields: user.spec.fields,
-		computed: user.spec.computed,
+		...table_of(split_system_model(user.name, user.spec).model),
+		fields: storedFields,
+		computed: {
+			party_id: { kind: party_id.kind, expr: party_id.computed },
+			phone_key: { kind: phone_key.kind, expr: phone_key.computed }
+		},
 		key: user.spec.table.primary
 	}
 });
-const contacts = catalogOf(declaration);
+const contacts = catalog_of(declaration);
 type User = Row<typeof declaration, 'sys_user'>;
 export type DirectoryPerson = Pick<User, 'email' | 'phone'>;
 export type DirectoryMember = Pick<User, 'email' | 'phone' | 'team'> & { readonly user: string };
@@ -52,7 +57,7 @@ const prepare = (query: Query) =>
 		Effect.flatMap((ir) =>
 			compile(contacts, ir).pipe(Effect.map((compiled) => ({ ir, compiled })))
 		),
-		Effect.mapError(fromStore)
+		Effect.mapError(from_store)
 	);
 const decode = <A>(
 	schema: Schema.Decoder<A>,
@@ -60,7 +65,7 @@ const decode = <A>(
 	rows: Rows | undefined
 ) =>
 	answer(prepared.ir, prepared.compiled, rows?.rows.map((row) => row['j'] ?? null) ?? []).pipe(
-		Effect.mapError(fromStore),
+		Effect.mapError(from_store),
 		Effect.flatMap((page) =>
 			Schema.decodeUnknownEffect(Schema.Struct({ rows: Schema.Array(schema) }))(page).pipe(
 				Effect.mapError((cause) => BoltError.make('internal', 'decode', cause.message)),
@@ -70,7 +75,7 @@ const decode = <A>(
 	);
 
 /** Host identity reads compile from the system model's source declaration, including its indexed contact keys. */
-export const directory = (db: TenantDbShape) => {
+export const member_directory = (db: TenantDbShape) => {
 	const read = <A>(schema: Schema.Decoder<A>, query: Query) =>
 		Effect.gen(function* () {
 			const prepared = yield* prepare(query);
@@ -107,7 +112,7 @@ export const directory = (db: TenantDbShape) => {
 		members: read(Member, {
 			where: {
 				active: { eq: true },
-				or: [{ email: { isNull: false } }, { phone: { isNull: false } }]
+				or: [{ email: { is_null: false } }, { phone: { is_null: false } }]
 			},
 			select: { id: true, email: true, phone: true, team: true },
 			all: true
@@ -125,7 +130,7 @@ export const directory = (db: TenantDbShape) => {
 				});
 				const members = yield* prepare({
 					select: { id: true, name: true, email: true, active: true },
-					orderBy: ['name', 'id'],
+					order_by: ['name', 'id'],
 					all: true
 				});
 				// Authorization and its projection share one read snapshot.
@@ -143,7 +148,6 @@ export const captureIdentity = (db: TenantDbShape) =>
 		params: []
 	});
 
-const q = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const restoreIdentity = (db: TenantDbShape, manifest: EngineManifest, snapshot: string) => {
 	const models = catalog(manifest).models;
 	const columns = (table: string) =>

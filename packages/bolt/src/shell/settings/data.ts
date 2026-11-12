@@ -1,4 +1,5 @@
 // Administrator settings reads and decoded identity/secret operations.
+import { sql } from '../../engine/db/sql.ts';
 import { Effect, Schema } from 'effect';
 import type { EngineError } from '../../engine/errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -14,8 +15,6 @@ import * as members from '../../engine/identity/members.ts';
 import { requireAdmin, SIGNUP_KEY, type IdentityHost } from '../../engine/identity/session.ts';
 import { AgentSettings, saveAgentSettings } from '../../engine/agent/settings.ts';
 import { AuditRow, InvitationRow, KeyRow, Member } from '../api-types.ts';
-
-const q = (text: string, ...params: Json[]) => ({ text, params });
 
 const nullableText = Schema.NullOr(Schema.String);
 const DeliveryRow = Schema.Struct({
@@ -33,11 +32,11 @@ const InstanceRow = Schema.Struct({
 	name: Schema.String,
 	integration: Schema.String,
 	owner: nullableText,
-	named: Schema.Boolean,
 	envoy: nullableText,
 	active: Schema.Boolean,
 	status: Schema.Json,
-	configuration: Schema.Json
+	configuration: Schema.Json,
+	revision: Schema.Number
 });
 const EnvoyRow = Schema.Struct({
 	id: Schema.String,
@@ -69,27 +68,26 @@ export type Settings = {
 		audience: 'public' | 'private';
 		task: string;
 		policies: readonly string[];
-		groupMessages: 'disabled' | 'mention_or_reply' | 'all';
+		group_messages: 'disabled' | 'mention_or_reply' | 'all';
 		delegation: 'enabled' | 'disabled';
 		triage: boolean;
 		dm: 'union' | 'envoy';
 		active: boolean;
-		created: boolean;
 	}[];
 	/**
-	 * Every integration instance (`sys_integration`): `named` is a connection of `+workspace.ts`, `status` the host's last
-	 * durable transition, `delivery` its last day of outbound deliveries.
+	 * Every durable runtime integration account: `status` is the host's last transition, `delivery` its last day of outbound deliveries.
 	 */
 	instances: {
 		id: string;
 		name: string;
 		integration: string;
 		owner: string | null;
-		named: boolean;
 		envoy: string | null;
 		active: boolean;
 		status: Json;
 		configuration: Json;
+		/** The row's revision as read: a delete is guarded by it. */
+		revision: number;
 		delivery: Delivery;
 	}[];
 	mcp: { name: string; url: Json; secrets?: readonly string[] }[];
@@ -138,24 +136,23 @@ export const settings = Effect.fn('shell.settings')(function* (
 	secrets?: SecretsShape
 ) {
 	const now = yield* h.now;
-	const refusal = requireAdmin(auth);
-	if (refusal !== null) return yield* Effect.fail(refusal);
+	yield* requireAdmin(auth);
 	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
 		[
 			// administrators first, then staff, then external members; by name, else address (L-BOLT-516). Anonymous visitors are no members.
-			q(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
+			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
 			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
-			q(
+			sql(
 				`SELECT id, email, phone, team, external, CASE WHEN accepted_at IS NOT NULL THEN 'accepted' WHEN revoked_at IS NOT NULL THEN 'revoked'
 			WHEN expires_at <= $1::timestamptz THEN 'expired' ELSE 'open' END AS status, expires_at::text AS expires_at FROM sys_invitation ORDER BY expires_at DESC`,
 				now.toISOString()
 			),
-			q(
+			sql(
 				'SELECT id, name, prefix, team, created_by, created_at::text AS created_at, revoked_at::text AS revoked_at, last_used_at::text AS last_used_at FROM sys_api_key ORDER BY name, id'
 			),
-			q(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
+			sql(`SELECT collection AS model, record::text AS record, revision, at::text AS at, actor, op, changes FROM bolt_history
 			WHERE collection IN ('sys_user', 'sys_invitation') ORDER BY at DESC, revision DESC LIMIT ${AUDIT_LIMIT}`),
-			q(
+			sql(
 				`SELECT integration, count(*) FILTER (WHERE status IN ('sent', 'deferred', 'delivered', 'read', 'opened', 'replied'))::int AS sent, count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts = 0)::int AS pending,
 			count(*) FILTER (WHERE status IN ('queued', 'sending') AND attempts > 0)::int AS retrying, count(*) FILTER (WHERE status IN ('failed', 'uncertain', 'bounced', 'complained'))::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
 			min(next_attempt_at) FILTER (WHERE status = 'queued' AND attempts > 0)::text AS next_retry,
@@ -163,11 +160,11 @@ export const settings = Effect.fn('shell.settings')(function* (
 			FROM sys_message WHERE direction = 'outbound' AND created_at > $1::timestamptz - interval '1 day' GROUP BY integration`,
 				now.toISOString()
 			),
-			q(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
-			q(
-				'SELECT id, name, integration, owner, named, envoy, active, status, configuration FROM sys_integration ORDER BY name, id'
+			sql(`SELECT value FROM sys_config WHERE key = '${SIGNUP_KEY}'`),
+			sql(
+				'SELECT id, name, integration, owner, envoy, active, status, configuration, revision::int AS revision FROM sys_integration ORDER BY name, id'
 			),
-			q(
+			sql(
 				'SELECT id, name, audience, task, policies, group_messages, delegation, triage, dm, active FROM sys_envoy ORDER BY name, id'
 			)
 		]
@@ -213,37 +210,21 @@ export const settings = Effect.fn('shell.settings')(function* (
 			label: d.label,
 			set: status === null ? null : status[name] === true
 		})),
-		envoys: [
-			...Object.entries(m.envoys).map(([id, e]) => ({
-				id,
-				name: e.name,
-				audience: e.audience ?? 'private',
-				task: e.task,
-				policies: e.policies,
-				groupMessages: e.groupMessages ?? 'mention_or_reply',
-				delegation: e.delegation ?? 'disabled',
-				triage: e.triage !== false && e.triage !== undefined,
-				dm: e.dm ?? 'union',
-				active: true,
-				created: false
-			})),
-			...runtimeEnvoys.map((e) => ({
-				id: e.id,
-				name: e.name,
-				audience: e.audience === 'public' ? ('public' as const) : ('private' as const),
-				task: e.task,
-				policies: e.policies,
-				groupMessages:
-					e.group_messages === 'disabled' || e.group_messages === 'all'
-						? e.group_messages
-						: ('mention_or_reply' as const),
-				delegation: e.delegation === 'enabled' ? ('enabled' as const) : ('disabled' as const),
-				triage: e.triage,
-				dm: e.dm === 'envoy' ? ('envoy' as const) : ('union' as const),
-				active: e.active,
-				created: true
-			}))
-		],
+		envoys: runtimeEnvoys.map((e) => ({
+			id: e.id,
+			name: e.name,
+			audience: e.audience === 'public' ? ('public' as const) : ('private' as const),
+			task: e.task,
+			policies: e.policies,
+			group_messages:
+				e.group_messages === 'disabled' || e.group_messages === 'all'
+					? e.group_messages
+					: ('mention_or_reply' as const),
+			delegation: e.delegation === 'enabled' ? ('enabled' as const) : ('disabled' as const),
+			triage: e.triage,
+			dm: e.dm === 'envoy' ? ('envoy' as const) : ('union' as const),
+			active: e.active
+		})),
 		instances: (yield* decode(InstanceRow, instances?.rows ?? [])).map((i) => ({
 			...i,
 			configuration: i.configuration ?? {},
@@ -261,8 +242,8 @@ export const settings = Effect.fn('shell.settings')(function* (
 						: 'bearer' in s.auth
 							? [s.auth.bearer]
 							: [
-									s.auth.oauth.clientId,
-									...(s.auth.oauth.clientSecret === undefined ? [] : [s.auth.oauth.clientSecret])
+									s.auth.oauth.client_id,
+									...(s.auth.oauth.client_secret === undefined ? [] : [s.auth.oauth.client_secret])
 								])
 				])
 			]
@@ -325,7 +306,7 @@ export const SettingsOp = Schema.Union([
 		input: Schema.Struct({ ...id, admin: Schema.Boolean })
 	}),
 	Schema.Struct({
-		op: Schema.Literal('assignTeam'),
+		op: Schema.Literal('assign_team'),
 		input: Schema.Struct({ ...id, team: Schema.NullOr(Schema.NonEmptyString) })
 	}),
 	Schema.Struct({
@@ -353,24 +334,23 @@ export const SettingsOp = Schema.Union([
 		op: Schema.Literal('clearSecret'),
 		input: Schema.Struct({ name: Schema.NonEmptyString })
 	}),
-	Schema.Struct({ op: Schema.Literal('setAgent'), input: AgentSettings })
+	Schema.Struct({ op: Schema.Literal('set_agent'), input: AgentSettings })
 ]);
 export type SettingsOp = typeof SettingsOp.Type;
 /** Settings dispatch uses the decoded union; identity owns authorization and database errors. */
-export const applySettings = Effect.fn('shell.settingsOp')(function* (
+export const applySettings = Effect.fn('shell.settings_op')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
 	auth: Authority,
 	op: SettingsOp,
 	secrets: SecretsShape
 ) {
-	const refusal = requireAdmin(auth);
-	if (refusal !== null) return yield* Effect.fail(refusal);
+	yield* requireAdmin(auth);
 	const secret = (name: string, effect: Effect.Effect<void, EngineError>) =>
 		Effect.gen(function* () {
 			if (m.workspace.secrets?.[name] === undefined)
 				return yield* Effect.fail(
-					BoltError.make('notFound', 'decode', `'${name}' is no declared secret.`)
+					BoltError.make('not_found', 'decode', `'${name}' is no declared secret.`)
 				);
 			yield* effect;
 			return null;
@@ -392,8 +372,8 @@ export const applySettings = Effect.fn('shell.settingsOp')(function* (
 			return yield* members.deactivate(h, auth, op.input.id);
 		case 'reactivate':
 			return yield* members.reactivate(h, auth, op.input.id);
-		case 'assignTeam':
-			return yield* members.assignTeam(h, m, auth, op.input.id, op.input.team);
+		case 'assign_team':
+			return yield* members.assign_team(h, m, auth, op.input.id, op.input.team);
 		case 'setHandles':
 			return yield* members.setHandles(h, auth, op.input.id, op.input);
 		case 'issueKey':
@@ -406,7 +386,7 @@ export const applySettings = Effect.fn('shell.settingsOp')(function* (
 			return yield* secret(op.input.name, secrets.set('workspace', op.input.name, op.input.value));
 		case 'clearSecret':
 			return yield* secret(op.input.name, secrets.clear('workspace', op.input.name));
-		case 'setAgent': {
+		case 'set_agent': {
 			const unknown = Object.keys(op.input.policies).filter((p) => m.policies[p] === undefined);
 			if (unknown.length > 0)
 				return yield* Effect.fail(

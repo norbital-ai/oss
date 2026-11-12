@@ -1,27 +1,15 @@
 <script lang="ts">
-	import { setContext, untrack, type Snippet } from 'svelte';
-	import { provideBolt, provideKinds, setUiText } from '@norbital-ai/ui';
-	import { bolt } from './client.ts';
+	import { untrack, type Snippet } from 'svelte';
+	import { set_ui_text, ui_text_for } from '@norbital-ai/ui';
+	import type { PublicClient } from './client.ts';
 	import type { PublicBoot } from '../../protocol/public-page.ts';
-	import { PUBLIC_PAGE_CONTEXT } from './context.ts';
-	import { uiTextFor } from '../i18n.ts';
 
-	let { boot, children }: { boot: PublicBoot; children: Snippet } = $props();
+	// `ctx` carries the views' `ui` (`public_ui`); the page receives that same `ctx`
+	let { boot, children }: { boot: PublicBoot; ctx: PublicClient; children: Snippet } =
+		$props();
 	const pageBoot = untrack(() => boot);
-	setContext(PUBLIC_PAGE_CONTEXT, pageBoot);
-	provideBolt(bolt);
-	provideKinds({
-		catalog: pageBoot.catalog,
-		automations: pageBoot.automations,
-		locale: pageBoot.workspace.locale,
-		zone: pageBoot.workspace.tz,
-		currency: pageBoot.workspace.currency,
-		query: (request) => bolt.query(request),
-		upload: (file, field) => bolt.upload(file, field),
-		fileUrl: (ref, options) => bolt.fileUrl(ref, options)
-	});
-	setUiText(uiTextFor(pageBoot.workspace.locale));
+	set_ui_text(ui_text_for(pageBoot.workspace.locale));
 </script>
 
 {@render children()}
-{#if pageBoot.visitor?.siteKey !== undefined}<div id="bolt-public-challenge"></div>{/if}
+{#if pageBoot.visitor?.site_key !== undefined}<div id="bolt-public-challenge"></div>{/if}

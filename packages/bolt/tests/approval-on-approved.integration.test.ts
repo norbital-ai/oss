@@ -1,4 +1,4 @@
-// A write's `onApproved` rows follow its approval: at once when no approval holds it, in the approving decision's one
+// A write's `on_approved` rows follow its approval: at once when no approval holds it, in the approving decision's one
 // commit when one does (the decision asks the callback again), never when it is rejected. `with` rows are held with it.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';
@@ -6,7 +6,7 @@ import { Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, EngineActor, Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { compileAuthority } from '../src/engine/access/authority.ts';
+import { compile_authority } from '../src/engine/access/authority.ts';
 import { Approvals, Writes } from '../src/engine/services.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -19,65 +19,81 @@ const manifest: EngineManifest = {
 	models: {
 		leaves: {
 			description: 'Leaves',
-			label: 'name',
+			record_label: 'record.name',
 			fields: { name: { kind: 'text' }, note: { kind: 'text', optional: true } }
 		},
-		steps: { description: 'A step', label: 'label', fields: { label: { kind: 'text' } } },
-		holds: { description: 'Holds', label: 'name', fields: { name: { kind: 'text' } } },
+		steps: {
+			description: 'A step',
+			record_label: 'record.label',
+			fields: { label: { kind: 'text' } }
+		},
+		holds: {
+			description: 'Holds',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
 		postings: {
 			description: 'Postings',
-			label: 'source',
+			record_label: 'record.source',
 			fields: { source: { kind: 'text' }, carrier: { kind: 'text', optional: true } }
 		}
 	},
 	relationships: { 'steps.leaf': { to: 'leaves', inverse: 'steps', owned: true } },
 	exposures: {
 		leaves: {
-			read: { leaves: { fields: 'all' } },
+			outputs: { default: { leaves: { fields: 'all' } } },
 			create: { columns: { leaves: ['name'], 'leaves.steps': ['label'] }, transform: true },
 			update: { columns: { leaves: ['note'] }, transform: true }
 		},
-		holds: { read: { holds: { fields: 'all' } }, create: { columns: { holds: ['name'] } } },
+		holds: {
+			outputs: { default: { holds: { fields: 'all' } } },
+			create: { columns: { holds: ['name'] } }
+		},
 		postings: {
-			read: { postings: { fields: 'all' } },
+			outputs: { default: { postings: { fields: 'all' } } },
 			create: { columns: { postings: ['source', 'carrier'] }, transform: true }
 		}
 	},
 	policies: {
 		requester: {
 			description: 'Requests',
-			grants: { leaves: { read: true, create: { check: true } } }
+			grants: { leaves: { outputs: { default: {} }, create: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews',
-			grants: { leaves: { read: true, update: {} }, approval_request: { read: true } }
+			grants: {
+				leaves: { outputs: { default: {} }, update: {} },
+				approval_request: { outputs: { default: {} } }
+			}
 		}
 	},
-	teams: { requesters: ['requester'], managers: ['reviewer'] }
+	teams: { requesters: { policies: ['requester'] }, managers: { policies: ['reviewer'] } }
 };
 const source = `export default { model: {
 	leaves: { bodies: {
-		create: function* (rows, ctx) {
+		create: function* (changes, ctx) {
+            const rows = changes.map(({ after }) => after);
 			if (ctx.approving && rows.some((row) => row.name === 'refused on approval')) return yield* ctx.refuse('Not on approval.');
 			if (rows.some((row) => row.name === 'stepped') && rows.some((row) => (row.steps ?? []).length !== 2)) return yield* ctx.refuse('Steps went missing.');
 			return {
-				rows,
+				sets: changes.map(({ set }) => set),
 				with: { holds: { create: rows.map((row) => ({ name: 'hold ' + row.name })) } },
-				onApproved: { postings: { create: rows.map((row) => ({ source: row.name })) } }
+				on_approved: { postings: { create: rows.map((row) => ({ source: row.name })) } }
 			};
 		},
 		update: function* (changes) {
-			return { rows: changes.map(({ set }) => set), onApproved: { postings: { create: [{ source: 'edit' }] } } };
+			return { sets: changes.map(({ set }) => set), on_approved: { postings: { create: [{ source: 'edit' }] } } };
 		}
 	} },
 	postings: { bodies: {
-		create: function* (rows, ctx) {
+		create: function* (changes, ctx) {
+            const rows = changes.map(({ set }) => set);
 			if (rows.some((row) => row.source === 'posting refused')) return yield* ctx.refuse('This posting refuses.');
-			return rows.map((row) => ({ ...row, carrier: ctx.carriedBy }));
+			return rows.map((row) => ({ ...row, carrier: ctx.carried_by }));
 		}
 	} }
-}, policy: { requester: { grants: { leaves: { create: { check: function* (_rows, ctx) {
-	return ctx.approve((flow) => flow.step('Manager', { teams: ['managers'] }));
+}, policy: { requester: { grants: { leaves: { create: { verdict: function* (_rows, ctx) {
+	return ctx.approve({ steps: [{ name: 'Manager', teams: ['managers'] }] });
 } } } } } } };`;
 const member = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
@@ -86,7 +102,7 @@ const member = (id: string, team: string): Extract<EngineActor, { kind: 'member'
 	phone: null,
 	external: false,
 	teams: [team],
-	teamPath: [team],
+	team_path: [team],
 	admin: false,
 	party: null
 });
@@ -103,12 +119,12 @@ const fixture = Effect.gen(function* () {
 		text: "INSERT INTO sys_user (id,name,kind,team) VALUES ($1,'Requester','staff','requesters'),($2,'Manager','staff','managers') ON CONFLICT (id) DO NOTHING",
 		params: [requesterId, managerId]
 	});
-	const requester: Authority = compileAuthority(
+	const requester: Authority = yield* compile_authority(
 			manifest,
 			{ actor: member(requesterId, 'requesters'), policies: ['requester'], admin: false },
 			requesterId
 		),
-		manager: Authority = compileAuthority(
+		manager: Authority = yield* compile_authority(
 			manifest,
 			{ actor: member(managerId, 'managers'), policies: ['reviewer'], admin: false },
 			managerId
@@ -131,13 +147,13 @@ const fixture = Effect.gen(function* () {
 			.pipe(Effect.map((result) => result.outcome));
 	};
 	const decide = (
-		requestId: string,
+		request_id: string,
 		decision: 'approve' | 'reject' | 'withdraw',
 		reason?: string,
 		authority = manager
 	) =>
 		approvals.decide({
-			requestId,
+			request_id,
 			decision,
 			authority,
 			now: t.clock.now(),
@@ -155,10 +171,10 @@ const fixture = Effect.gen(function* () {
 			text: 'SELECT source, carrier FROM postings WHERE source IN (SELECT jsonb_array_elements_text($1::jsonb)) ORDER BY source',
 			params: [sources]
 		});
-	const state = (requestId: string) =>
+	const state = (request_id: string) =>
 		t.db.value(Schema.String, {
 			text: 'SELECT state FROM bolt_approvals WHERE id = $1::uuid',
-			params: [requestId]
+			params: [request_id]
 		});
 	const idOf = (name: string) =>
 		t.db.value(Schema.String, {
@@ -168,16 +184,16 @@ const fixture = Effect.gen(function* () {
 	return { requester, manager, act, decide, names, postings, state, idOf };
 });
 const held = (outcome: Outcome) => {
-	if (outcome.kind !== 'pendingApproval') throw new Error(JSON.stringify(outcome));
-	return outcome.requestId;
+	if (outcome.kind !== 'pending_approval') throw new Error(JSON.stringify(outcome));
+	return outcome.request_id;
 };
 
-layer(workspace, { excludeTestServices: true })('onApproved', (it) => {
+layer(workspace, { excludeTestServices: true })('on_approved', (it) => {
 	it.effect('waits while the write is held, then commits in the approving decision', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture;
 			const request = held(yield* f.act('create', [{ name: 'annual' }]));
-			// `with` is part of the held write; `onApproved` is not written yet
+			// `with` is part of the held write; `on_approved` is not written yet
 			expect(yield* f.names('holds', 'hold annual')).toEqual(['hold annual']);
 			expect(yield* f.postings('annual')).toEqual([]);
 			expect(yield* f.decide(request, 'approve')).toMatchObject({ status: 'Approved' });

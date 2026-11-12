@@ -3,24 +3,24 @@
 // `{ view: CustomFieldView }` contract). The stored kinds `money`, `file`, `point` and `text` `format: 'phone'` render
 // through them by default; a model may also store one as `{ kind: 'custom', of: '<name>' }`, typed by its shape like any
 // custom field. A workspace custom field may not take one of these names (`discover/reserved-name`).
-import { customField } from './custom-field.ts';
+import { custom_field } from './custom-field.ts';
 
-const money = customField('money', {
+const money = custom_field({
 	description: 'An exact amount in the workspace currency, kept as a decimal.',
 	shape: { kind: 'money' },
 	label: 'Money'
 });
-const file = customField('file', {
+const file = custom_field({
 	description: 'A stored file: its id, name, MIME type and size.',
 	shape: { kind: 'file', accept: ['*/*'], max: '1024GiB' },
 	label: 'File'
 });
-const point = customField('point', {
+const point = custom_field({
 	description: 'A latitude and longitude, picked on a map or found by address.',
 	shape: { kind: 'point' },
 	label: 'Location'
 });
-const phone = customField('phone', {
+const phone = custom_field({
 	description: 'A phone number in E.164 (+6591234567), typed with its country calling code.',
 	shape: { kind: 'text', format: 'phone' },
 	label: 'Phone'
@@ -28,7 +28,7 @@ const phone = customField('phone', {
 
 /**
  * The built-ins as the generated names index prints a workspace's custom field (its literal's data), written out:
- * `customField()` types `validate` from every custom field's shape, so `typeof` of the declarations would be circular.
+ * `custom_field()` types `validate` from every custom field's shape, so `typeof` of the declarations would be circular.
  */
 export type BuiltinFields = {
 	money: { spec: { shape: { readonly kind: 'money' } } };

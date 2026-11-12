@@ -13,7 +13,7 @@ import {
 } from '../src/cli/templates.ts';
 
 const metadata = {
-	schemaVersion: 1,
+	schema_version: 1,
 	key: 'norbital_fixture',
 	name: 'Fixture',
 	industry: 'Operations',

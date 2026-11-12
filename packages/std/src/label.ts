@@ -1,43 +1,21 @@
-// std/label (§3.7): a record's title from its model's optional CEL `record_label`, or legacy field paths. Each legacy path is shown per kind (`show`, the
+// Record titles from CEL and caller-specified display fields. Each display field is shown per kind (`show`, the
 // ui's formatter where one is at hand; else a locale-free default for dates, instants, decimals and relations), empty
 // terms are dropped and the rest joined with ' · '. Without a usable label, the record's id is its identifier.
-import { parseJsonResult } from './json.ts';
+import { parse_json_result } from './json.ts';
 import { Decimal } from './decimal.ts';
 import type { Value } from './kind.ts';
 import { Result } from 'effect';
-import { labelExpression } from './label-expression.ts';
-export { labelExpression } from './label-expression.ts';
+import { label_expression } from './label-expression.ts';
+import { UUID_PATTERN } from './id.ts';
+export { label_expression, label_text_sql } from './label-expression.ts';
 
-/** The canonical CEL identifier on a model; `label` is the pre-record_label declaration retained for compatibility. */
-export const recordLabelSpec = (model: {
-	record_label?: string;
-	label?: string | readonly string[];
-}): string | readonly string[] => model.record_label ?? model.label ?? [];
-
-/** Normalize workspace declarations to CEL. Kernel tables opt in explicitly; legacy workspace labels remain compatible. */
-export function recordLabelExpression(model: {
-	record_label?: string;
-	label?: string | readonly string[];
-	table?: unknown;
-}): string | undefined {
-	if (model.record_label !== undefined) return model.record_label;
-	if (model.table !== undefined || model.label === undefined) return undefined;
-	if (typeof model.label === 'string')
-		return /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(model.label)
-			? `record.${model.label}`
-			: model.label;
-	if (model.label.length === 0) return undefined;
-	return `[${model.label.map((field) => `record.${field} != null ? string(record.${field}) : ''`).join(', ')}].filter(part, part != '').join(' · ')`;
-}
-
-/** The record fields a CEL label reads; legacy field lists keep their existing projection. */
-export function labelPaths(spec: string | readonly string[]): readonly string[] {
-	if (typeof spec !== 'string') return spec;
-	const compiled = labelExpression(spec);
+/** The fields a record-label expression reads. */
+export function label_paths(expression: string | undefined): readonly string[] {
+	if (expression === undefined) return [];
+	const compiled = label_expression(expression);
 	return 'error' in compiled ? [] : compiled.paths;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /** The locale-free text of one value: an instant as `YYYY-MM-DD HH:mm` UTC (a UTC midnight as its day), a `Decimal` as its exact text, a relation as its own `label`; anything structured is no title. */
@@ -49,7 +27,7 @@ function text(v: Value | undefined): string | null {
 		return typeof own === 'string' ? text(own) : null;
 	}
 	const s = String(v).trim();
-	if (s === '' || UUID.test(s) || (/^[{[]/.test(s) && isJsonContainer(s))) return null;
+	if (s === '' || UUID_PATTERN.test(s) || (/^[{[]/.test(s) && isJsonContainer(s))) return null;
 	if (INSTANT.test(s)) {
 		const iso = new Date(s).toISOString();
 		return iso.endsWith('T00:00:00.000Z')
@@ -60,7 +38,7 @@ function text(v: Value | undefined): string | null {
 }
 
 const isJsonContainer = (s: string) => {
-	const result = parseJsonResult(s);
+	const result = parse_json_result(s);
 	return result._tag === 'Success' && typeof result.success === 'object';
 };
 
@@ -76,7 +54,7 @@ const at = (row: Value, path: string): Value | undefined =>
 	path.split('.').reduce<Value | undefined>((v, k) => members(v)?.[k], row);
 
 /**
- * A record's title from its model's CEL label, or legacy paths shown per kind (through `show` when given), empty terms dropped,
+ * A record's title from a CEL expression or caller-selected display fields shown per kind (through `show` when given), empty terms dropped,
  * the rest joined with ` · `; the record's id is the fallback when no usable label is declared.
  * @example
  * label({ name: 'Ann', team: { name: 'Ops' } }, ['name', 'team.name']) // 'Ann · Ops'
@@ -88,7 +66,7 @@ export function label(
 ): string | null {
 	const fallback = typeof row['id'] === 'string' ? row['id'] : null;
 	if (typeof paths === 'string') {
-		const compiled = labelExpression(paths);
+		const compiled = label_expression(paths);
 		if ('error' in compiled) return fallback;
 		const result = Result.try(() => compiled.evaluate(row));
 		if (Result.isFailure(result)) return fallback;

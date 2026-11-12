@@ -2,8 +2,8 @@
 // fresh context. It runs as an `evalClosure` body, so the host hooks ($0 log, $1 random, $2 digest, $3 asset) stay in its closure
 // and never become globals; it returns `{ start, take, give }` for the host to call.
 // Kept as `String.raw` so regex escapes survive; its text holds no backtick and no `${` but the one splice: std's
-// `reviveWire`, stringified (D6), which therefore closes over nothing but globals.
-import { reviveWire } from '@norbital-ai/std/wire';
+// `revive_wire`, stringified (D6), which therefore closes over nothing but globals.
+import { revive_wire } from '@norbital-ai/std/wire';
 
 export const PRELUDE = String.raw`
 'use strict';
@@ -317,7 +317,7 @@ Object.defineProperty(G, Symbol.for('norbital.bolt.asset'), { value: (sha) => {
 	if (!(bytes instanceof Uint8Array)) throw named('BoltError', 'the artifact has no server asset ' + String(sha));
 	return bytes;
 } });
-define('fileRef', function fileRef(file) {
+define('file_ref', function file_ref(file) {
 	return { id: file.id, name: file.name, mime: file.mime };
 });
 
@@ -358,37 +358,43 @@ const settle = (c, answer) => answer.ok ? c.resolve(answer.value) : c.reject(ans
 
 // an error's 'kind' (a facility failure's) rides the tuple for the host's transient judgement
 const failure = (e) => {
-	if (isObject(e) && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
+	if (isObject(e) && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', key: e.key, values: e.values, rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
 	const kind = isObject(e) && typeof e.kind === 'string' ? [e.kind] : [];
 	if (e instanceof Error) return ['error', e.name, e.message, String(e.stack || ''), ...kind];
 	return ['error', 'Error', show(e), '', ...kind];
 };
 
 // ── values (D6): the wire's one tag, { $dec }, becomes std/decimal's Decimal; dates and instants are their ISO text ──
-const reviveWire = ${String(reviveWire)};
+const revive_wire = ${String(revive_wire)};
 
-function start(kind, path, inputJson, ctxJson, invocationId) {
+function start(kind, path, inputJson, ctxJson, invocation_id) {
 	const ns = G.__boltGuest; delete G.__boltGuest;
 	let body = ns && ns.default;
 	for (const p of path) body = isObject(body) && Object.hasOwn(body, p) ? body[p] : undefined;
 	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
-	const input = JSON.parse(inputJson, reviveWire);
+	const input = JSON.parse(inputJson, revive_wire);
 	let ctx;
-	if (['create', 'update', 'delete', 'policy', 'notify', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
-		const raw = JSON.parse(ctxJson, reviveWire);
+	if (['create', 'update', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
+		const raw = JSON.parse(ctxJson, revive_wire);
 		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
 		delete raw.$secrets;
 		ctx = Object.defineProperty(kind === 'page'
-			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocationId }
-			: { ...raw, invocationId }, Symbol.for('norbital.bolt.ctx'), { value: kind });
+			? { actor: raw.actor, now: raw.now, today: raw.today, tz: raw.tz, invocation_id }
+			: { ...raw, invocation_id }, Symbol.for('norbital.bolt.ctx'), { value: kind });
 	}
 	const args = kind === 'tool' || kind === 'integration'
 		? (Array.isArray(input) ? input : [input]).map((a) => isObject(a) && a.$ctx === true ? ctx : a)
 		: ctx === undefined ? [input] : [input, ctx];
+	const invoke = () => {
+		const prepare = body[Symbol.for('norbital.bolt.prepare')];
+		const prepared = typeof prepare === 'function' ? prepare(args) : args;
+		if (!Array.isArray(prepared)) throw new TypeError('a declaration body returned invalid invocation arguments');
+		return body(...prepared);
+	};
 	// pure bodies run once per element of one invocation's batch: a rerank over the candidate page (input [query, rows],
 	// one score per row); a validation over every value of its kind (one message or undefined each); an index's vector
 	// over a chunk of rows (one vector or null each).
-	Promise.resolve().then(() => kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' || kind === 'vector' ? input.map((v) => body(v)) : body(...args)).then(
+	Promise.resolve().then(() => kind === 'rerank' ? input[1].map((row) => body(input[0], row)) : kind === 'validation' || kind === 'vector' ? input.map((v) => body(v)) : invoke()).then(
 		(v) => { state = ['ok', JSON.stringify(v === undefined ? null : v)]; },
 		(e) => { state = failure(e); });
 }
@@ -415,7 +421,7 @@ function give(callIds, texts, bins) {
 	callIds.forEach((id, i) => {
 		const c = inflight.get(id);
 		inflight.delete(id);
-		settle(c, JSON.parse(texts[i], (k, v) => isObject(v) && typeof v.$bin === 'number' ? bins[i][v.$bin] : reviveWire(k, v)));
+		settle(c, JSON.parse(texts[i], (k, v) => isObject(v) && typeof v.$bin === 'number' ? bins[i][v.$bin] : revive_wire(k, v)));
 	});
 }
 return { start, take, give };

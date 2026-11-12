@@ -3,29 +3,29 @@ import { describe, expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Queue, Result, Schema, Stream } from 'effect';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { lowerRead } from '../src/engine/query/engine.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { lower_read } from '../src/engine/query/engine.ts';
 import { embedRun } from '../src/engine/integrations/embed.ts';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Live, Reads, Writes } from '../src/engine/services.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
-import { uuidv7, uuidv7Within, type Frame } from '../src/protocol/wire.ts';
+import { uuidv7, uuidv7_within, type Frame } from '../src/protocol/wire.ts';
 import {
-	respondSystem1,
+	respond_system_1,
 	TestWorkspace,
 	type Kit,
 	type WorkspaceServices
 } from '../../bolt-cli/src/test/index.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			docs: {
 				description: 'A doc',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, body: { kind: 'text', optional: true } },
 				search: { text: ['title'], semantic: { fields: ['title'], model: 'small', dim: 3 } }
 			}
@@ -33,7 +33,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			docs: {
-				read: { docs: { fields: 'all' } },
+				outputs: { default: { docs: { fields: 'all' } } },
 				create: { columns: { docs: ['title', 'body'] } },
 				update: { columns: { docs: ['title', 'body'] } }
 			}
@@ -41,18 +41,16 @@ const manifest = Result.getOrThrow(
 		policies: {
 			p: {
 				description: 'P',
-				grants: { docs: { read: true, create: true, update: true } },
-				automations: ['tidy']
+				grants: { docs: { outputs: { default: {} }, create: {}, update: {} } },
+				capabilities: { automations: ['tidy'] }
 			}
 		},
 		automations: { tidy: { description: 'Tidy', policies: ['p'] } },
 		integrations: {},
 		teams: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -85,7 +83,7 @@ let answer: Ai['Service']['embed'] = () => Port.unavailable('ai.embed');
 const workspace = TestWorkspace.layer({
 	manifest,
 	ports: Layer.succeed(Ai, {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['small'],
 		catalog: Effect.succeed({ models: [{ id: 'small', label: 'Small' }], default: 'small' }),
@@ -98,11 +96,11 @@ const setup = (embed: Ai['Service']['embed'] = () => Port.unavailable('ai.embed'
 		answer = embed;
 		const context = yield* Effect.context<TestWorkspace | WorkspaceServices>();
 		const t = Context.get(context, TestWorkspace),
-			route = yield* routeFixture(context),
-			authority = t.as(t.admin).authority;
+			route = yield* route_fixture(context),
+			authority = (yield* t.as(t.admin)).authority;
 		yield* t.db.write({ text: 'TRUNCATE docs, sys_run, bolt_history CASCADE', params: [] });
 		const act = (callable: string, input: Json) =>
-			actReply(route, authority, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, authority, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 				Effect.map((reply) => reply.outcome)
 			);
 		const read = (
@@ -110,9 +108,12 @@ const setup = (embed: Ai['Service']['embed'] = () => Port.unavailable('ai.embed'
 			args: readonly Json[],
 			bindings = { now: t.clock.now(), today: t.clock.now().slice(0, 10), tz: 'UTC' }
 		) =>
-			Context.get(context, Reads)
-				.run([lowerRead(manifest, member, args)], { as: 'workspace' }, bindings)
-				.pipe(Effect.map((answers) => required(answers[0])));
+			lower_read(manifest, member, args).pipe(
+				Effect.flatMap((ir) =>
+					Context.get(context, Reads).run([ir], { as: 'workspace' }, bindings)
+				),
+				Effect.map((answers) => required(answers[0]))
+			);
 		const run = Effect.gen(function* () {
 			const handler = yield* embedRun.pipe(Effect.provide(context));
 			return yield* handler({}, { id: crypto.randomUUID(), starter: null }).pipe(
@@ -137,7 +138,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 								return texts.map((text) => [text.length, 0, 1]);
 							})
 						);
-					const { t, act, run } = yield* setup(embed);
+					const { t, act, read, run } = yield* setup(embed);
 					const id = created(yield* act('docs.create', [{ title: 'desk', body: 'oak' }]));
 					expect(yield* queued(t)).toBe(1);
 					expect(
@@ -148,10 +149,14 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 					expect(yield* run).toEqual({ embedded: 1 });
 					expect(calls).toEqual([['small', 'desk']]);
 					expect(yield* embedded(t, id)).toBe('[4,0,1]');
-					yield* act('docs.update', [{ target: id, set: { body: 'pine' } }]);
+					yield* act('docs.update', [
+						{ target: yield* read('get', ['docs', id]), set: { body: 'pine' } }
+					]);
 					expect(yield* embedded(t, id)).toBe('[4,0,1]');
 					expect(yield* queued(t)).toBe(1);
-					yield* act('docs.update', [{ target: id, set: { title: 'chair' } }]);
+					yield* act('docs.update', [
+						{ target: yield* read('get', ['docs', id]), set: { title: 'chair' } }
+					]);
 					expect(yield* embedded(t, id)).toBeNull();
 					expect(yield* queued(t)).toBe(2);
 					expect(JSON.stringify(yield* sql(t, 'SELECT changes FROM bolt_history'))).not.toContain(
@@ -166,7 +171,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 				Effect.gen(function* () {
 					const { t, act } = yield* setup();
 					const id = created(yield* act('docs.create', [{ title: 'desk' }]));
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(
 						yield* sql(
 							t,
@@ -225,9 +230,11 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 					);
 					expect(hybrid.rows.map((row) => row.title)[0]).toBe('lamp');
 					expect(hybrid.rows).toHaveLength(3);
-					expect(() =>
-						lowerRead(t.manifest, 'query', [{ docs: { search: { semantic: '' }, limit: 1 } }])
-					).toThrow(/to: text/);
+					expect(
+						(yield* Effect.flip(
+							lower_read(t.manifest, 'query', [{ docs: { search: { semantic: '' }, limit: 1 } }])
+						)).message
+					).toMatch(/to: text/);
 				})
 		);
 
@@ -258,7 +265,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 						/'small' answered a 4-wide vector, not the 3 it was asked for/
 					);
 					expect(yield* probe().pipe(Effect.flip)).toMatchObject({
-						code: 'badAnswer',
+						code: 'bad_answer',
 						phase: 'facility',
 						message: 'The embedding width differs from its declared dimension.'
 					});
@@ -277,7 +284,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 			Effect.gen(function* () {
 				const { context, t, act } = yield* setup();
 				const id = created(yield* act('docs.create', [{ title: 'desk' }]));
-				const admin = t.as(t.admin).authority,
+				const admin = (yield* t.as(t.admin)).authority,
 					live = Context.get(context, Live),
 					queue = yield* Queue.unbounded<Frame>();
 				yield* live.connect(admin).pipe(
@@ -289,7 +296,10 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 				if (hello.t !== 'hello') throw new Error('live connection did not begin with hello');
 				yield* live
 					.register(hello.conn, 'v', {
-						read: lowerRead(manifest, 'read', ['docs', { all: true, select: { title: true } }])
+						read: yield* lower_read(manifest, 'read', [
+							'docs',
+							{ all: true, select: { title: true } }
+						])
 					})
 					.pipe(Effect.provide(context));
 				expect(yield* Queue.take(queue)).toMatchObject({ t: 'answer', view: 'v' });
@@ -324,11 +334,11 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 
 	describe('start over /__bolt/act (rules 24, 31)', () => {
 		it.effect(
-			'takes a uuidv7 minted within 24 h; a v4 or a stale id is invalidInput; a resend is the same run',
+			'takes a uuidv7 minted within 24 h; a v4 or a stale id is invalid_input; a resend is the same run',
 			() =>
 				Effect.gen(function* () {
 					const { t, route } = yield* setup();
-					const rep = t.as(t.member(['p'])).authority;
+					const rep = (yield* t.as(t.member(['p']))).authority;
 					const start = (id: string) =>
 						Effect.gen(function* () {
 							const response = yield* route.handle(
@@ -337,9 +347,9 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 									method: 'POST',
 									headers: { 'Idempotency-Key': id },
 									body: JSON.stringify({
-										callable: 'start',
+										callable: 'run',
 										input: { automation: 'tidy', input: {}, id },
-										issuedAt: t.clock.now()
+										issued_at: t.clock.now()
 									})
 								})
 							);
@@ -352,11 +362,11 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 						});
 					const now = Date.parse(t.clock.now()),
 						id = uuidv7(now);
-					expect(uuidv7Within(id, now)).toBe(true);
-					expect(uuidv7Within(uuidv7(now - 25 * 3_600_000), now)).toBe(false);
+					expect(uuidv7_within(id, now)).toBe(true);
+					expect(uuidv7_within(uuidv7(now - 25 * 3_600_000), now)).toBe(false);
 					expect(yield* start(crypto.randomUUID())).toMatchObject({
 						status: 400,
-						reply: { outcome: { code: 'invalidInput', field: 'id' } }
+						reply: { outcome: { code: 'invalid_input', field: 'id' } }
 					});
 					expect(yield* start(uuidv7(now - 25 * 3_600_000))).toMatchObject({ status: 400 });
 					expect(yield* start(id)).toMatchObject({

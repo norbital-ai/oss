@@ -10,7 +10,7 @@ import type { Attachment } from 'svelte/attachments';
 import { offsets, windowOf } from './virtual.js';
 
 /**
- * What `virtualList` windows: the item count, each item's stable key, the estimated height, the threshold and the overscan.
+ * What `virtual_list` windows: the item count, each item's stable key, the estimated height, the threshold and the overscan.
  */
 export type VirtualOptions = {
 	count: () => number;
@@ -22,16 +22,18 @@ export type VirtualOptions = {
 	threshold?: number;
 	/** Items rendered beyond each edge of the visible band (default 8). */
 	overscan?: number;
+	/** Window the last visible rows while a bottom-origin viewport is latched to its tail. */
+	tail?: () => boolean;
 };
 /** A windowed list: the `slice` of items to render, the spacers around it and the `measure` attachment. */
-export type Virtual = ReturnType<typeof virtualList>;
+export type Virtual = ReturnType<typeof virtual_list>;
 
 const CLIPS = /auto|scroll|hidden|clip|overlay/;
 
 /**
  * Windows a long list to the rows in view (measuring each row's height), so a page renders only what is visible; a short list renders whole.
  */
-export function virtualList(o: VirtualOptions) {
+export function virtual_list(o: VirtualOptions) {
 	const threshold = o.threshold ?? 60,
 		overscan = o.overscan ?? 8;
 	const sizes = new Map<string, number>();
@@ -46,7 +48,7 @@ export function virtualList(o: VirtualOptions) {
 		clips: Element[] = [];
 
 	const on = $derived(o.count() > threshold);
-	const offs = $derived.by(() => {
+	const offs = $derived.by((): [number, ...number[]] => {
 		void version;
 		if (!on) return [0];
 		const n = o.count(),
@@ -54,7 +56,20 @@ export function virtualList(o: VirtualOptions) {
 		for (let i = 0; i < n; i++) hs[i] = sizes.get(o.key(i)) ?? o.estimate;
 		return offsets(hs);
 	});
-	const win = $derived(on ? windowOf(offs, top, band, overscan) : { start: 0, end: o.count() });
+	const total = $derived.by(() => {
+		const value = offs.at(-1);
+		if (value === undefined) throw new RangeError('The virtual list has no total offset.');
+		return value;
+	});
+	const window_top = $derived(o.tail?.() === true ? Math.max(0, total - band) : top);
+	const win = $derived(on ? windowOf(offs, window_top, band, overscan) : { start: 0, end: o.count() });
+	const spacers = $derived.by(() => {
+		if (!on) return { before: 0, after: 0 };
+		const before = offs[win.start], end = offs[win.end];
+		if (before === undefined || end === undefined)
+			throw new RangeError('The virtual window is outside its offsets.');
+		return { before, after: total - end };
+	});
 
 	function sync() {
 		if (anchorEl === null) return;
@@ -79,8 +94,11 @@ export function virtualList(o: VirtualOptions) {
 						const k = keys.get(e.target);
 						if (k === undefined) continue;
 						const cs = getComputedStyle(e.target);
+						const height = e.borderBoxSize?.[0]?.blockSize ??
+							(e.target instanceof HTMLElement ? e.target.offsetHeight : undefined);
+						if (height === undefined) continue;
 						const h =
-							(e.borderBoxSize?.[0]?.blockSize ?? (e.target as HTMLElement).offsetHeight) +
+							height +
 							(parseFloat(cs.marginTop) || 0) +
 							(parseFloat(cs.marginBottom) || 0);
 						// a hidden list (the other layout of a Table) measures 0: keep the estimate
@@ -104,11 +122,11 @@ export function virtualList(o: VirtualOptions) {
 		},
 		/** The top spacer's height. */
 		get before() {
-			return on ? offs[win.start]! : 0;
+			return spacers.before;
 		},
 		/** The bottom spacer's height. */
 		get after() {
-			return on ? offs[offs.length - 1]! - offs[win.end]! : 0;
+			return spacers.after;
 		},
 		/** The rendered items; index `j` of the slice is item `start + j`. */
 		slice<T>(items: readonly T[]): readonly T[] {
@@ -152,9 +170,11 @@ export function virtualList(o: VirtualOptions) {
 		/** Scrolls the nearest scrolling ancestor (else the window) so item `index` shows; for keyboard focus on an unmounted row. */
 		reveal(index: number): void {
 			if (!on || anchorEl === null || index < 0 || index >= offs.length - 1) return;
+			const start = offs[index], end = offs[index + 1];
+			if (start === undefined || end === undefined) return;
 			const port = clips.find((c) => c.scrollHeight > c.clientHeight) ?? null;
 			const at = anchorEl.getBoundingClientRect().top;
-			const [a, b] = [at + offs[index]!, at + offs[index + 1]!];
+			const [a, b] = [at + start, at + end];
 			const box = port === null ? { top: 0, bottom: innerHeight } : port.getBoundingClientRect();
 			const by = a < box.top ? a - box.top : b > box.bottom ? b - box.bottom : 0;
 			if (by !== 0) (port ?? document.scrollingElement)?.scrollBy({ top: by });

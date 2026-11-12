@@ -1,4 +1,5 @@
 /// <reference types="@vitest/browser-playwright" />
+import { required } from './support/required.ts';
 import { expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import { mount, tick, unmount } from 'svelte';
@@ -15,14 +16,14 @@ test('a phone sheet is dragged by its grabber and takes the whole screen', async
 		target,
 		props: { part: 'sheet', sheetOpen: true }
 	});
-	const panel = () => document.querySelector<HTMLElement>('[data-sheet-side]')!;
-	const grabber = () => document.querySelector<HTMLElement>('[data-sheet-grabber]')!;
+	const panel = () => required(document.querySelector<HTMLElement>('[data-sheet-side]'));
+	const grabber = () => required(document.querySelector<HTMLElement>('[data-sheet-grabber]'));
 	const pointer = (type: string, clientY: number) =>
 		new PointerEvent(type, { bubbles: true, button: 0, clientX: 196, clientY });
 	try {
 		await tick();
 		expect(getComputedStyle(grabber()).touchAction).toBe('none');
-		const scrim = document.querySelector<HTMLElement>('[data-sheet-scrim]')!;
+		const scrim = required(document.querySelector<HTMLElement>('[data-sheet-scrim]'));
 		expect(getComputedStyle(scrim).touchAction).toBe('none');
 
 		const height = panel().offsetHeight;

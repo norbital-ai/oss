@@ -1,16 +1,16 @@
 import { expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import { catalogOf, read } from '@norbital-ai/store';
+import { catalog_of, read } from '@norbital-ai/store';
 import { readTargets, selectTargets } from '../src/engine/query/engine.ts';
 
 it.effect('tracks a live label reference so target edits refresh approval results', () =>
 	Effect.gen(function* () {
-		const cat = catalogOf({
+		const cat = catalog_of({
 			tables: {
-				people: { fields: { name: { kind: 'text' } }, recordLabel: 'record.name' },
+				people: { fields: { name: { kind: 'text' } }, record_label: 'record.name' },
 				requests: {
 					fields: { model: { kind: 'text' }, record: { kind: 'text' } },
-					labelLink: { model: 'model', record: 'record', targets: ['people'] }
+					label_link: { model: 'model', record: 'record', targets: ['people'] }
 				}
 			}
 		});
@@ -21,7 +21,7 @@ it.effect('tracks a live label reference so target edits refresh approval result
 
 it.effect('tracks every polymorphic projection arm and its nested relations', () =>
 	Effect.gen(function* () {
-		const cat = catalogOf({
+		const cat = catalog_of({
 			tables: {
 				account: { fields: { name: { kind: 'text' } } },
 				order: {

@@ -1,20 +1,26 @@
 // What Messenger, Instagram and WhatsApp share: Meta's webhook (a GET handshake, then `x-hub-signature-256`, an HMAC of
 // the raw body with the app secret), the Graph API's answers, and fitting text into a message.
+import { Schema } from 'effect';
 import type { ChatField, ChatHost, Delivery, IncomingFile } from './adapter.ts';
 import { nothing, PlatformError, Unverified } from './adapter.ts';
+import { download, json, parse } from './http.ts';
 import { hmac, signed } from './verify.ts';
 
 type Fetch = ChatHost['fetch'];
-export type Attachment = {
-	readonly type: string;
-	readonly payload?: { readonly url?: string };
-};
+export const Attachment = Schema.Struct({
+	type: Schema.String,
+	payload: Schema.optionalKey(Schema.Struct({ url: Schema.optionalKey(Schema.String) }))
+});
 /** Graph error codes for "too many calls", whatever HTTP status they arrive with. */
 const LIMITED = new Set([4, 32, 613]);
 
 export const appFields: readonly ChatField[] = [
 	{ name: 'appSecret', label: { en: 'App secret', zh: '应用密钥' }, secret: true },
-	{ name: 'verifyToken', label: { en: 'Webhook verify token', zh: 'Webhook 验证令牌' }, secret: true }
+	{
+		name: 'verifyToken',
+		label: { en: 'Webhook verify token', zh: 'Webhook 验证令牌' },
+		secret: true
+	}
 ];
 /** Proves a delivery is Meta's: the answer to its GET handshake, or `null` for a signed POST, ready to parse. */
 export const verified = (
@@ -33,15 +39,25 @@ export const verified = (
 	return nothing(new Response(query.get('hub.challenge') ?? ''));
 };
 /** The `messaging` events of a delivery for `object`, the form Messenger and Instagram both arrive in. */
-export const messaging = <Event>(body: string, object: string): readonly Event[] => {
-	const hook = JSON.parse(body) as {
-		readonly object?: string;
-		readonly entry?: readonly { readonly messaging?: readonly Event[] }[];
-	};
+export const messaging = async <Event>(
+	schema: Schema.Codec<Event>,
+	body: string,
+	object: string
+): Promise<readonly Event[]> => {
+	const hook = await parse(
+		Schema.Struct({
+			object: Schema.optionalKey(Schema.String),
+			entry: Schema.optionalKey(
+				Schema.Array(Schema.Struct({ messaging: Schema.optionalKey(Schema.Array(schema)) }))
+			)
+		}),
+		body
+	);
 	return hook.object === object ? (hook.entry ?? []).flatMap((one) => one.messaging ?? []) : [];
 };
 /** One Graph API call, a POST when it has a `body`. */
 export const graph = async <A>(
+	schema: Schema.Decoder<A>,
 	fetch: Fetch,
 	url: string,
 	headers: Readonly<Record<string, string>>,
@@ -52,27 +68,26 @@ export const graph = async <A>(
 		headers: body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
 		...(body === undefined ? {} : { body: JSON.stringify(body) })
 	});
-	const answer = (await response.json().catch(() => ({}))) as A & {
-		readonly error?: { readonly message?: string; readonly code?: number };
-	};
-	if (response.ok) return answer;
+	if (response.ok) return json(schema, response);
+	const answer = await json(
+		Schema.Struct({
+			error: Schema.optionalKey(
+				Schema.Struct({
+					message: Schema.optionalKey(Schema.String),
+					code: Schema.optionalKey(Schema.Number)
+				})
+			)
+		}),
+		response
+	).catch(() => ({ error: undefined }));
 	throw new PlatformError(
 		answer.error?.message ?? `Graph API answered ${response.status}`,
 		LIMITED.has(answer.error?.code ?? 0) ? 429 : response.status
 	);
 };
-export const download = async (
-	fetch: Fetch,
-	url: string,
-	headers: Readonly<Record<string, string>> = {}
-) => {
-	const response = await fetch(url, { headers });
-	if (!response.ok) throw new PlatformError(`download answered ${response.status}`, response.status);
-	return new Uint8Array(await response.arrayBuffer());
-};
 /** The files a Messenger or Instagram message carries: each is a URL on Meta's CDN, read without a token. */
 export const filesOf = (
-	attachments: readonly Attachment[] | undefined,
+	attachments: readonly (typeof Attachment.Type)[] | undefined,
 	fetch: Fetch
 ): readonly IncomingFile[] =>
 	(attachments ?? []).flatMap(({ type, payload }) => {

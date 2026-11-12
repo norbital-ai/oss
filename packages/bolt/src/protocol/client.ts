@@ -6,7 +6,7 @@ import {
 	HttpClientRequest,
 	type HttpClientResponse
 } from 'effect/http';
-import { TransportFailed } from '../decl/errors.ts';
+import { TransportFailed } from '../decl/errors/browser.ts';
 import type { Json } from '../decl/values.ts';
 
 /** A release cutover holds the host's admission closed for seconds; requests wait it out up to this budget. */
@@ -18,7 +18,7 @@ export const updating = Effect.runSync(SubscriptionRef.make(0));
 export function browserTransport(options: {
 	base?: string;
 	fetch?: typeof fetch;
-	httpClient?: HttpClient.HttpClient;
+	http_client?: HttpClient.HttpClient;
 }) {
 	const send: typeof fetch = options.fetch ?? ((input, init) => fetch(input, init));
 	const json = (response: HttpClientResponse.HttpClientResponse) =>
@@ -53,9 +53,9 @@ export function browserTransport(options: {
 			Effect.mapError((error) =>
 				error instanceof TransportFailed ? error : new TransportFailed({ status: 0 })
 			),
-			options.httpClient === undefined
+			options.http_client === undefined
 				? Effect.provide(FetchHttpClient.layer)
-				: Effect.provideService(HttpClient.HttpClient, options.httpClient),
+				: Effect.provideService(HttpClient.HttpClient, options.http_client),
 			Effect.provideService(FetchHttpClient.Fetch, send),
 			Effect.provideService(FetchHttpClient.RequestInit, { credentials: 'same-origin' })
 		);

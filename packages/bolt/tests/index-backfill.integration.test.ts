@@ -1,18 +1,18 @@
 // `bolt.index`: a pack's rows skip the acts that evaluate pure search vectors; the run a pack load queues fills them.
 import { expect, layer } from '@effect/vitest';
 import { Effect, Layer, Result, Schema } from 'effect';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { dynamic_read } from '../src/protocol/read-request.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			swatches: {
 				description: 'A swatch',
-				label: 'title',
+				record_label: 'record.title',
 				fields: { title: { kind: 'text' }, r: { kind: 'int' } },
 				search: {
 					text: ['title'],
@@ -29,15 +29,14 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		relationships: {},
-		exposures: { swatches: { read: { swatches: { fields: 'all' } } } },
+		exposures: { swatches: { outputs: { default: { swatches: { fields: 'all' } } } } },
 		integrations: {},
 		policies: {},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
+
 		mcp: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} },
 		apps: {}
 	})
@@ -73,12 +72,12 @@ layer(workspace, { excludeTestServices: true })('bolt.index', (it) => {
 				params: []
 			});
 			expect(missing).toEqual([{ n: 2 }]);
-			yield* t.runDue();
+			yield* t.run_due();
 			const found = (r: number) =>
-				t
-					.as(t.admin)
-					.query(dynamicRead({ swatches: { search: { hue: { r } }, limit: 1, fields: ['title'] } }))
-					.pipe(
+				t.as(t.admin).pipe(
+						Effect.flatMap((admin) =>
+							admin.query(dynamic_read({ swatches: { search: { hue: { r } }, limit: 1, fields: ['title'] } }))
+						),
 						Effect.flatMap(
 							Schema.decodeUnknownEffect(
 								Schema.Struct({

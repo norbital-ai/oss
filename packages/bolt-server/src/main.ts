@@ -4,7 +4,6 @@ import { Argument, Command, Flag } from 'effect/cli';
 import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { BoltError } from '@norbital-ai/bolt/engine';
-import { hostFileOf } from '@norbital-ai/bolt/node';
 import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
 import { ServerLive } from './server.ts';
@@ -24,7 +23,7 @@ const cidrs = (list: string) =>
 			return v === 0 ||
 				(bits !== undefined && !(/^\d+$/.test(bits) && Number(bits) <= (v === 6 ? 128 : 32)))
 				? Effect.fail(
-						BoltError.make('invalidSpec', 'admission', `--trust-proxy: '${c}' is not a CIDR`)
+						BoltError.make('invalid_spec', 'admission', `--trust-proxy: '${c}' is not a CIDR`)
 					)
 				: Effect.succeed(c);
 		}
@@ -48,19 +47,11 @@ const command = Command.make(
 	(flags) =>
 		Effect.gen(function* () {
 			const root = resolve(flags.workspace);
-			const hostFile = yield* hostFileOf(root, Option.getOrUndefined(flags.hostFile));
-			if (Option.isNone(hostFile))
-				return yield* Effect.fail(
-					BoltError.make(
-						'invalidSpec',
-						'admission',
-						`${root} has no norbital.host.ts: write one (or pass --host=<file>), or let Colony serve it`
-					)
-				);
 			yield* Layer.launch(
 				ServerLive({
+					workspace: root,
 					artifact: Option.getOrElse(flags.artifact, () => join(root, '.norbital', 'bundle')),
-					hostFile: hostFile.value,
+					...(Option.isNone(flags.hostFile) ? {} : { hostFile: flags.hostFile.value }),
 					host: flags.listen,
 					port: flags.port,
 					trustProxy: Option.isNone(flags.trustProxy) ? [] : yield* cidrs(flags.trustProxy.value),

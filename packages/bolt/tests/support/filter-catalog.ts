@@ -1,9 +1,11 @@
 import type { ModelExposure } from '../../../ui/src/kinds/context.ts';
-import type { Offer, Op, FilterStep } from '../../../ui/src/filter/filter.ts';
+import type { Offer, FilterStep } from '../../../ui/src/filter/catalog.ts';
+import type { Op } from '../../../ui/src/filter/node.ts';
 
 // The browser test's synthetic catalogue: it exercises field-type rendering, not which paths the live engine offers.
-export const filterCatalog: Record<string, ModelExposure> = {
+export const filter_catalog: Record<string, ModelExposure> = {
 	people: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -19,8 +21,9 @@ export const filterCatalog: Record<string, ModelExposure> = {
 		relations: { employer: { targets: ['companies'] } },
 		many: ['contracts', 'notes']
 	},
-	companies: { label: ['name'], fields: { name: { kind: 'text' } } },
+	companies: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
 	contracts: {
+		record_label: 'record.alias',
 		label: ['alias'],
 		fields: {
 			alias: { kind: 'text' },
@@ -34,24 +37,29 @@ export const filterCatalog: Record<string, ModelExposure> = {
 		relations: { person: { targets: ['people'], inverse: 'contracts' } }
 	},
 	notes: {
+		record_label: 'record.body',
 		label: ['body'],
 		fields: { body: { kind: 'text' } },
 		relations: { person: { targets: ['people'], inverse: 'notes' } }
 	}
 };
 const operators: Record<string, Op[]> = {
-	text: ['eq', 'ne', 'like', 'in', 'nin'],
-	enum: ['eq', 'ne', 'in', 'nin'],
+	text: ['eq', 'ne', 'like', 'in', 'not_in'],
+	enum: ['eq', 'ne', 'in', 'not_in'],
 	date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'during'],
-	period: ['contains', 'overlaps', 'within', 'startsWithin', 'endsWithin'],
+	period: ['contains', 'overlaps', 'contained_by', 'starts_within', 'ends_within'],
 	bool: ['eq'],
-	number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin'],
-	seq: ['eq', 'ne', 'in', 'nin'],
+	number: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in'],
+	seq: ['eq', 'ne', 'in', 'not_in'],
 	json: ['contains']
 };
 const words: Partial<Record<Op, string>> = {
 	eq: 'is',
 	ne: 'is not',
+	not_in: 'is none of',
+	contained_by: 'is within',
+	starts_within: 'starts within',
+	ends_within: 'ends within',
 	like: 'contains',
 	contains: 'in force on',
 	overlaps: 'overlaps',
@@ -60,7 +68,7 @@ const words: Partial<Record<Op, string>> = {
 	during: 'is within'
 };
 const fields = (model: string, prefix: FilterStep[]): Offer[] =>
-	Object.entries(filterCatalog[model]?.fields ?? {}).flatMap(([name, kind]) =>
+	Object.entries(filter_catalog[model]?.fields ?? {}).flatMap(([name, kind]) =>
 		(operators[kind.kind] ?? []).map((op) => ({
 			label: name,
 			path: [...prefix, { k: 'field' as const, name }],
@@ -76,14 +84,14 @@ const fields = (model: string, prefix: FilterStep[]): Offer[] =>
 				: {})
 		}))
 	);
-export const filterOffers: Offer[] = [
+export const filter_offers: Offer[] = [
 	...fields('people', []),
-	...(['eq', 'ne', 'in', 'nin'] as const).map((op) => ({
+	...(['eq', 'ne', 'in', 'not_in'] as const).map((op) => ({
 		label: 'Employer',
 		path: [{ k: 'is' as const, rel: 'employer' }],
 		op,
 		opLabel: words[op] ?? op,
-		kind: 'id'
+		kind: 'ref'
 	})),
 	...fields('companies', [{ k: 'is', rel: 'employer' }]),
 	...(['some', 'none', 'every'] as const).flatMap((q) => [

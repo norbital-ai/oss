@@ -1,9 +1,10 @@
 // Native catalogue introspection SQL; the cell build packs these exact bytes.
+// The first owner is text so UNION preserves full function signatures instead of PostgreSQL name's 63-byte limit.
 export const INTROSPECT = `select 'table ' || c.relname || ' ' || c.relkind::text || ' ' || c.relpersistence::text
 		|| ' rls ' || c.relrowsecurity::text || ' force ' || c.relforcerowsecurity::text
 		|| case when c.relkind in ('v', 'm') then ' definition ' || pg_get_viewdef(c.oid, true) else '' end
 		|| coalesce(' options ' || array_to_string(c.reloptions, ','), '') as line,
-		'table' as kind, c.relname as owner
+		'table' as kind, c.relname::text as owner
 	from pg_class c join pg_namespace n on n.oid = c.relnamespace
 	where n.nspname = current_schema() and c.relkind in ('r', 'p', 'f', 'v', 'm') and c.relname <> 'store_migration'
 	and not exists (select 1 from pg_depend x where x.classid = 'pg_class'::regclass and x.objid = c.oid and x.deptype = 'e')

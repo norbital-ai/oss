@@ -1,345 +1,108 @@
-// One flat, Effect-native engine surface. Hosts activate EngineLive and own the runtime edge.
+// One flat, Effect-native engine surface. Hosts own the runtime edge.
 // ── exports: db ──
-export * from './contracts.ts';
-export * from '../protocol/audit.ts';
-export { Audit, auditFromAbi, auditShape, type AuditShape } from './audit.ts';
-export * from './errors.ts';
-export { BoltError, CODE, CODES, PHASES, type Code, type Phase } from '../protocol/errors.ts';
-export * from './services.ts';
-export * from './ports.ts';
+export { LIMITS } from './contracts.ts';
+export type {
+	Sql,
+	Rows,
+	RowData,
+	Authority,
+	FilesPort,
+	AiRequest,
+	AiResponse,
+	DriverEvent,
+	DriverPage,
+	ReconcilePage,
+	OutboundAttachment,
+	TransportPort,
+	LogRow,
+	LogQuery,
+	TcpSocket
+} from './contracts.ts';
+export {
+	AuditEvent,
+	AuditSummary,
+	AuditRecord,
+	AuditPreparedRecord,
+	AuditQuery,
+	AuditPendingQuery,
+	type AuditPort
+} from '../protocol/audit.ts';
+export { DbError, Fenced, ManifestInvalid } from './errors.ts';
+export { BoltError, CODE } from '../protocol/errors.ts';
+export { Files, Convert, WebRead, Geo, Transport, Ai, Http } from './ports.ts';
+export type { PushMessage } from './ports.ts';
 export { Port, type PortFailure } from './port.ts';
-export * from './host.ts';
-export { Secrets, type SecretsCodec, type SecretsShape } from './secrets.ts';
+export { TenantDb, type TenantDbShape } from './db/tenant-db.ts';
 export {
-	TenantDb,
-	type DbBatch,
-	type DbSession,
-	type TenantDbShape,
-	type RawDb
-} from './db/tenant-db.ts';
-export * from './manifest.ts';
+	EngineManifest,
+	decode_manifest,
+	decode_projected_manifest,
+	project_manifest,
+	SKILL_BYTES,
+	SKILL_FILE,
+	SkillSchema
+} from './manifest.ts';
+export type { GrantData } from './manifest.ts';
 export type { Json } from '../decl/values.ts';
-// ── exports: query ──
-export {
-	ReadsLive,
-	readEngine,
-	memoReads,
-	coalescing,
-	readComposed,
-	lowerRead
-} from './query/engine.ts';
-export { historyAt } from '../protocol/reads.ts';
-export { readHistory, pruneHistory } from './query/history.ts';
 // ── exports: guest ──
-export { GuestConfig, GuestLive, type GuestOptions, type GuestProgram } from './guest/runner.ts';
-export { TelemetryLive } from './guest/telemetry.ts';
-// ── exports: writes ──
-export { WritesLive, act, recordCapabilities, mayUpdate, type WriteEngine } from './write/act.ts';
-export { minter, fingerprinting, Chain } from './write/sql.ts';
-export {
-	decodeSeed,
-	restoreSource,
-	seed,
-	type RestoreSource,
-	type SeedPack
-} from './write/seed.ts';
-export {
-	loadPack,
-	readPack,
-	readPackSource,
-	memorySource,
-	sourceOf,
-	type Pack,
-	type PackJson,
-	type PackSource
-} from './write/pack.ts';
+export type { GuestProgram } from './guest/runner.ts';
+export { GuestTaken } from './guest/schema.ts';
+export { decode_seed, type SeedPack } from './write/seed.ts';
+export { read_pack, read_pack_source, type PackJson } from './write/pack.ts';
 // ── exports: callables ──
-export { CallablesLive, parseCallable, VERBS, admitVisitor, forActor } from './callables/index.ts';
-export { upload, sizeBytes } from './callables/upload.ts';
+export { size_bytes } from './callables/upload.ts';
 export {
-	ApprovalsLive,
-	approvalHook,
-	type ApprovalView,
-	type DecideInput,
-	type Decision
-} from './approvals/approvals.ts';
-export {
-	DecisionsLive,
-	DecisionRequestSchema,
-	DecisionAnswerSchema,
-	DecisionResultSchema,
-	decisionsSystem1,
-	encodeFiles,
-	refusalOf,
-	structuredSystem1,
-	type DecisionAnswer,
-	type DecisionEntry,
-	type DecisionsApiConfig,
-	type DecisionFile,
-	type DecisionQuestion,
-	type DecisionRequest,
-	type DecisionResult,
-	type DecisionState,
-	type System1,
-	type System1Port,
-	type System1Request
-} from './decisions/index.ts';
+	DecisionResult,
+	decisions_system_1,
+	refusal_of,
+	structured_system_1,
+	type System1
+} from './decision.ts';
 // ── exports: identity ──
-export { Authorities, previewAs } from './identity/actor.ts';
-export {
-	compileAuthority,
-	writableColumns,
-	visitorMayRead,
-	operandValue
-} from './access/authority.ts';
-export { RateWindows, chargesFor, clientAddress } from './access/rate.ts';
-export {
-	IdentityLive,
-	makeIdentityHost,
-	founderBootstrap,
-	loadKeys,
-	loggedPhone,
-	mint,
-	signupOf,
-	type IdentityHost,
-	type PhoneVerifier,
-	type Session,
-	type Signup,
-	type TransactionalProvider
-} from './identity/session.ts';
-export { assignTeam, membershipRun } from './identity/members.ts'; // Source-team affiliation; hosts bind membershipRun as runs.platform['bolt.membership'].
-export { MEMBERSHIP } from './identity/session.ts';
+export { client_address } from './access/rate.ts';
+export { logged_phone } from './identity/session.ts';
 /** Host control-plane identity reads use the system table contract without loading a tenant artifact or guest. */
-export { directory as memberDirectory } from './identity/maintenance.ts';
-export { applyPlan, managedTables, plan, readApplied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
+export { member_directory } from './identity/maintenance.ts';
+export { plan, read_applied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
 export {
-	applyMigrations,
-	migrationObjects,
-	migrationSchema,
-	readMigrations,
-	statusMigrations,
+	apply_migrations,
+	MigrationBundleSchema,
+	migration_objects,
+	migration_schema,
+	read_migrations,
 	type MigrationBundle
 } from './schema/migrations.ts';
-export { MigrationImpact, impactLines, impactText } from '../protocol/migration-impact.ts';
-export { catalogOf } from './access/pred.ts';
-// ── exports: live ──
-export { LiveHubLive, LIVE, INBOX_LIMIT, noticeRow } from './live/hub.ts';
-// ── exports: commit ──
-export {
-	committed,
-	compileCommit,
-	compileOutcomeRecord,
-	CommitAnswer,
-	historyPiece,
-	actorId,
-	actorRef,
-	type Commit,
-	type Write,
-	type OwnedLock,
-	type RateCharge
-} from './write/commit.ts';
-export {
-	enqueue,
-	nextDue,
-	queueEffects,
-	triggersOf,
-	type Triggers,
-	type WebhookTrigger,
-	type Writer
-} from './runs/queue.ts';
-export { duration, offsetMs, dueAt, backoffMs, BUCKET_MS, iso } from './runs/time.ts';
 // ── exports: runs ──
-export {
-	DeadlineTimer,
-	DeadlinesLive,
-	inProcessDeadlines,
-	type DeadlineEntry,
-	type DeadlineCompletion,
-	type DeadlineResolution
-} from './runs/deadlines.ts';
-export {
-	RunsLive,
-	RunHandlersLive,
-	WakeLive,
-	Nudges,
-	RUN_VIEW_COLUMNS,
-	RunViewRow,
-	runView,
-	type RunView
-} from './runs/index.ts';
-export { NOTICE_PUSH, noticePush, subscribe } from './runs/push.ts';
-export { imageFacts, imageJpeg } from './files/image.ts';
-export { DOWNLOAD, mediaType } from './files/media.ts';
+export { DeadlineTimer } from './runs/deadlines.ts';
+export { DOWNLOAD } from './files/media.ts';
 // ── exports: links ──
-export {
-	HOOKS,
-	integrationLinks,
-	LinksLive,
-	OAUTH_CALLBACK,
-	webhookUrl,
-	type LinkManager,
-	type LinkAdmission,
-	type LinksHost
-} from './integrations/links.ts'; // hook:hosting — every host's instance links (§4.5)
-export type {
-	DriverOpen,
-	Link,
-	OAuthClient,
-	OAuthVendor,
-	Provider
-} from './integrations/driver.ts'; // the one contract every provider implements
-export { oauthClientOf } from './integrations/driver.ts';
-export { credentials, type Credentials, type InstanceRow } from './integrations/credentials.ts'; // hook:hosting — a host's credential port
-// ── exports: facilities and syncs ──
-export {
-	FacilitiesLive,
-	facilityDispatch,
-	fileLoader,
-	loggedTransport,
-	type FacilityPorts
-} from './facilities.ts';
-export { Syncs, SyncsLive, SyncHealth } from './sync/index.ts';
-export { OutboundLive, sendInputSchema } from './integrations/outbound.ts';
-export { documentConverter, documentIngester, type DocumentConverterConfig } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
-export {
-	httpOAuth,
-	httpRequest,
-	target,
-	type HttpInstance,
-	type HttpOptions
-} from './integrations/http.ts'; // hook:hosting — every host's http driver (§2.6)
+export { OAUTH_CALLBACK } from './integrations/links.ts'; // hook:hosting — every host's instance links (§4.5)
+export type { DriverOpen, Link, Provider } from './integrations/driver.ts'; // the one contract every provider implements
+export { document_converter, document_ingester } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
+export { http_oauth, http_request } from './integrations/http.ts'; // hook:hosting — every host's http driver (§2.6)
 export {
 	DatabaseRequest,
 	DatabaseResult,
-	validateDatabaseRequest,
-	validateDatabaseResult,
+	validate_database_request,
 	DATABASE_MAX_ROWS,
 	DATABASE_MAX_BYTES,
-	type DatabaseDriver,
-	type DatabaseProjection
+	type DatabaseDriver
 } from './integrations/database.ts';
-// ── exports: conversations ──
-export { ConversationsLive } from './conversations/index.ts';
-export {
-	filterDescribe,
-	makeFilterDescribe,
-	OPS_BY_KIND,
-	ARGUMENT_OPERATORS,
-	type Op,
-	type Operator
-} from './filter-describe/index.ts';
-export { EnvoysLive, EnvoyConfig } from './envoys/index.ts';
-export { TurnsLive, TurnHandlers } from './agent/turns.ts';
-export { SmartThrottle, SmartThrottleLive, HOLD_MAX_MS, TAKEOVER_MS } from './agent/throttle.ts'; // hook:triage
-export { MessageQueue, SCHEDULED_RUN } from './agent/queue.ts';
-export {
-	isAutoReply,
-	isReported,
-	SendRefused,
-	statusAfter,
-	type DeliveryEntry,
-	type DeliveryKind,
-	type DeliveryReport
-} from './conversations/status.ts'; // the delivery status model (§5.9)
-// ── exports: agents ──
-export { inferFacility } from './agent/ai.ts';
-export {
-	openAiChat,
-	provideHttp,
-	type OpenAiChat,
-	type OpenAiChatConfig
-} from './agent/openai-chat.ts';
-export type {
-	AttachmentPort,
-	HostSkill,
-	HostTool,
-	HostToolContext,
-	WorkspacePort
-} from './agent/index.ts'; // hook:wiring — hosts bind the agent's options
-export type { WorkspaceNote } from './notifications/notify.ts'; // hook:wiring — a host's workspace events (`AgentConfig.events`)
-export { page } from './agent/context.ts'; // hook:wiring — a host's file-reading tool pages like `workspace_search` (rule 62)
-export {
-	AgentsLive,
-	AgentDrains,
-	AgentHost,
-	type AgentConfig,
-	type DrainOptions
-} from './agent/index.ts';
-export { BROWSER_RUN_PROFILE, browserProfile } from './agent/browser.ts'; // hook:wiring — the profile a host discards after a run
-export { fileAttachments } from './agent/attachments.ts'; // hook:wiring — `read_attachment` over the files port
-export { outputType, REFERENCE, ReferenceIndex, RUN_JS } from './agent/run-js.ts'; // hook:wiring — a host's `reference` tool writes the index `run_js { file }` reads; a declared tool keeps its files as `run_js` does
-export { ToolJson, type SearchAnswer, type SearchRequest } from './agent/tools.ts'; // hook:wiring — `run_tool`'s input, a host's ripgrep
+export { SendRefused, SendReceipt, type DeliveryReport } from './conversations/status.ts';
+export { open_ai_chat, type OpenAiChat, type OpenAiChatConfig } from './agent/openai-chat.ts';
+export type { HostSkill, HostTool, HostToolContext } from './agent/index.ts'; // hook:wiring — hosts bind the agent's options
+export { BROWSER_RUN_PROFILE, browser_profile } from './agent/browser.ts'; // hook:wiring — `read_attachment` over the files port
+export { output_type, REFERENCE, ReferenceIndex, RUN_JS } from './agent/run-js.ts'; // A host's reference index also serves run_js file mode.
 // ── exports: protocol ──
-export { BoltHost, BoltHostLive, ORDER, type Handler } from '../protocol/host.ts';
-export { PublicPages, publicPages, renderMode } from '../protocol/pages.ts';
 export {
-	RateLimits,
-	SessionAuthority,
-	BoltRoutes,
-	boltRoutes,
-	needsGuest,
-	dispatchAct,
-	type ActCall
-} from '../protocol/http.ts';
-export { filesRoutes } from '../protocol/files.ts';
-export { INTEGRATIONS } from '../protocol/wire.ts';
-export { IntegrationManager, integrationRoutes, hookRoutes } from '../protocol/integrations.ts';
-export {
-	decodeStatus,
-	localText,
 	type InstanceState,
-	type InstanceStatus,
 	type LinkStatus,
 	type LocalText,
-	type Pairing,
-	type ProviderChoice,
 	type SetupDescription,
-	type SetupField,
-	type SetupStep,
-	type TestSend
+	type SetupField
 } from '../protocol/instance-status.ts';
-export { statusOf, wireError } from '../protocol/wire.ts';
-export { clientPage, MIME, type ClientPage } from '../protocol/static.ts';
-export { TemplateManifest } from '../protocol/schema.ts';
+export { wire_error } from '../protocol/wire.ts';
 // ── exports: shell ──
-export {
-	ShellRoutes,
-	ShellHandler,
-	ShellConfig,
-	Turnstile,
-	authorityOf,
-	sessionAuthority,
-	type ShellHostConfig,
-	type TurnstileShape
-} from '../shell/host.ts';
-export { HostIdentity } from './services.ts';
-export { COOKIES, cookieSite, framePolicy } from '../shell/nav.ts';
-export { StudioInspectInput, StudioInspection } from '../shell/studio/inspection.ts';
-export { StudioTestRun } from '../shell/studio/test-results.ts';
-export {
-	MERGE_SUMMARY,
-	StudioOp,
-	studioView,
-	suggestMessage,
-	type StudioApproval,
-	type StudioBuild,
-	type StudioBuildRecord,
-	type StudioCommit,
-	type StudioDiffFile,
-	type StudioFile,
-	type StudioUsage,
-	type StudioChangeSet,
-	type StudioPort,
-	type StudioState
-} from '../shell/studio/model.ts';
-// ── exports: decl ──
-export type {
-	GeoHit,
-	IngestIndex,
-	IngestOptions,
-	SpeechFormat,
-	Transcript,
-	TranscriptSegment
-} from '../decl/runtime/facilities.ts';
+export { StudioInspectInput } from '../shell/studio/inspection.ts';
+export { studio_view, type StudioPort, type StudioState } from '../shell/studio/model.ts';
 
-export { ImportStart, ImportStartInput, ImportStartCapability } from '../protocol/schema.ts';

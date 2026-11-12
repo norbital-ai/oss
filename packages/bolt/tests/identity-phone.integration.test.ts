@@ -12,23 +12,23 @@ import type { TransportPort } from '../src/engine/contracts.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
-import { parseAddress } from '../src/engine/identity/address.ts';
+import { parse_address } from '../src/engine/identity/address.ts';
 import { acceptInvitation, invite, setSignup } from '../src/engine/identity/members.ts';
 import {
 	authenticate,
-	founderBootstrap,
-	loadKeys,
-	loggedPhone,
-	makeIdentityHost,
-	sendCode,
+	founder_bootstrap,
+	load_keys,
+	logged_phone,
+	make_identity_host,
+	send_code,
 	SIGNUP_TEXTS,
 	SIGNUP_TEXTS_PER_IP,
-	verifyCode,
+	verify_code,
 	type IdentityHost,
 	type PhoneVerifier
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { memoryAuditLayer } from '../../bolt-cli/src/test/index.ts';
+import { memory_audit_layer } from './support/audit.ts';
 
 const m: EngineManifest = {
 	needs: [],
@@ -46,20 +46,18 @@ const m: EngineManifest = {
 	exposures: {},
 	integrations: {},
 	policies: { customer: { description: '', grants: {} }, staff: { description: '', grants: {} } },
-	teams: { Staff: ['staff'] },
+	teams: { Staff: { policies: ['staff'] } },
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const Text = Schema.Struct({ to: Schema.String, text: Schema.String });
 const port = (box: (typeof Text.Type)[]): TransportPort => ({
 	async send(_kind, message) {
 		box.push(Schema.decodeUnknownSync(Text)(message));
-		return { providerId: 'x' };
+		return { provider_id: 'x' };
 	}
 });
 const ip = '5.5.5.5';
@@ -74,25 +72,25 @@ const fixture = Effect.gen(function* () {
 	const texts: (typeof Text.Type)[] = [],
 		mails: (typeof Text.Type)[] = [];
 	yield* TestClock.setTime(Date.parse('2026-09-30T00:00:00Z'));
-	const h = yield* makeIdentityHost({
+	const h = yield* make_identity_host({
 		db,
 		now: Clock.currentTimeMillis.pipe(Effect.map((ms) => new Date(ms))),
 		windows: new RateWindows(),
-		keys: yield* loadKeys(db),
+		keys: yield* load_keys(db),
 		mail: port(mails),
 		sms: port(texts),
 		// A local host's verifier: the code it prints lands where a text would.
-		phone: loggedPhone((line) => {
+		phone: logged_phone((line) => {
 			const to = /→ (\+\d+):/.exec(line)?.[1];
 			if (to === undefined) throw new Error('No phone number in the delivered code');
 			texts.push({ to, text: line });
 		}),
-		publicUrl: 'https://acme.example',
+		public_url: 'https://acme.example',
 		signup: m.workspace.signup
 	});
 	const authorities = new Authorities(m, 'r1');
 	const as = Effect.fnUntraced(function* (user: string) {
-		const authority = yield* authorities.member(db, user);
+		const authority = yield* authorities.member(db, 'bootstrap', user);
 		if (authority === null) throw new Error(`No active test member ${user}`);
 		return authority;
 	});
@@ -117,7 +115,7 @@ class PhoneFixture extends Context.Service<PhoneFixture, Effect.Success<typeof f
 	'test/PhoneFixture'
 ) {}
 const PhoneFixtureLive = Layer.effect(PhoneFixture, fixture).pipe(
-	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer))
 );
 
 layer(PhoneFixtureLive)((it) => {
@@ -127,14 +125,14 @@ layer(PhoneFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { h } = yield* PhoneFixture;
-					expect(parseAddress(' Ada@Example.com ')).toEqual({
+					expect(parse_address(' Ada@Example.com ')).toEqual({
 						kind: 'email',
 						value: 'Ada@Example.com'
 					});
-					expect(parseAddress('+65 8123-4567')).toEqual({ kind: 'phone', value: '+6581234567' });
-					expect(parseAddress('81234567')).toBeNull(); // no country code: ambiguous
-					expect(parseAddress('ada@')).toBeNull();
-					expect(yield* Effect.flip(sendCode(h, '81234567', ip))).toMatchObject({
+					expect(parse_address('+65 8123-4567')).toEqual({ kind: 'phone', value: '+6581234567' });
+					expect(parse_address('81234567')).toBeNull(); // no country code: ambiguous
+					expect(parse_address('ada@')).toBeNull();
+					expect(yield* Effect.flip(send_code(h, '81234567', ip))).toMatchObject({
 						_tag: 'IdentityRefusal',
 						code: 'check',
 						message: expect.stringContaining('country code')
@@ -147,8 +145,8 @@ layer(PhoneFixtureLive)((it) => {
 		it.effect('follows a member’s own visits to the hour, and never someone acting as them', () =>
 			Effect.gen(function* () {
 				const { db, h, one, lastCode } = yield* PhoneFixture;
-				yield* sendCode(h, '+6596661111', ip);
-				const s = yield* verifyCode(h, '+6596661111', lastCode(), ip);
+				yield* send_code(h, '+6596661111', ip);
+				const s = yield* verify_code(h, '+6596661111', lastCode(), ip);
 				const seen = Effect.fnUntraced(function* () {
 					const [row] = yield* one('SELECT last_seen FROM sys_user WHERE id = $1', s.user);
 					return row?.['last_seen'] ?? null;
@@ -183,12 +181,12 @@ layer(PhoneFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { h, as, one, lastCode, texts } = yield* PhoneFixture;
-					expect(yield* sendCode(h, '+6581234567', ip)).toBeNull();
+					expect(yield* send_code(h, '+6581234567', ip)).toBeNull();
 					expect(texts.at(-1)).toMatchObject({
 						to: '+6581234567',
 						text: expect.stringMatching(/sign-in code is \d{6}/)
 					});
-					const s = yield* verifyCode(h, '+65 8123 4567', lastCode(), ip);
+					const s = yield* verify_code(h, '+65 8123 4567', lastCode(), ip);
 					expect(s).toMatchObject({ user: expect.any(String) });
 					ada = s.user;
 					expect(
@@ -212,8 +210,8 @@ layer(PhoneFixtureLive)((it) => {
 		it.effect('the same number signs in again as the same member, however it is spelled', () =>
 			Effect.gen(function* () {
 				const { h, one, lastCode } = yield* PhoneFixture;
-				yield* sendCode(h, '+65-8123-4567', ip);
-				const s = yield* verifyCode(h, '+6581234567', lastCode(), ip);
+				yield* send_code(h, '+65-8123-4567', ip);
+				const s = yield* verify_code(h, '+6581234567', lastCode(), ip);
 				expect(s.user).toBe(ada);
 				expect(
 					yield* one(`SELECT count(*)::int AS n FROM sys_user WHERE phone_key = '6581234567'`)
@@ -226,8 +224,8 @@ layer(PhoneFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { db, h, one, lastCode } = yield* PhoneFixture;
-					yield* sendCode(h, '+6591112222', ip);
-					const s = yield* verifyCode(h, '+6591112222', lastCode(), ip);
+					yield* send_code(h, '+6591112222', ip);
+					const s = yield* verify_code(h, '+6591112222', lastCode(), ip);
 					const bob = s.user;
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', bob)).toEqual([
 						{ party: null }
@@ -236,13 +234,13 @@ layer(PhoneFixtureLive)((it) => {
 						text: `INSERT INTO customers VALUES ('c-bob', '+6591112222')`,
 						params: []
 					}); // the desk files them later
-					yield* sendCode(h, '+6591112222', ip);
-					expect(yield* verifyCode(h, '+6591112222', lastCode(), ip)).toMatchObject({ user: bob });
+					yield* send_code(h, '+6591112222', ip);
+					expect(yield* verify_code(h, '+6591112222', lastCode(), ip)).toMatchObject({ user: bob });
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', bob)).toEqual([
 						{ party: { model: 'customers', id: 'c-bob', matched: true } }
 					]);
-					yield* sendCode(h, '+6590000000', ip);
-					const twin = yield* verifyCode(h, '+6590000000', lastCode(), ip);
+					yield* send_code(h, '+6590000000', ip);
+					const twin = yield* verify_code(h, '+6590000000', lastCode(), ip);
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', twin.user)).toEqual([
 						{ party: null }
 					]);
@@ -254,16 +252,16 @@ layer(PhoneFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { db, h, one, lastCode } = yield* PhoneFixture;
-					yield* sendCode(h, '+6592223333', ip);
-					const s = yield* verifyCode(h, '+6592223333', lastCode(), ip);
+					yield* send_code(h, '+6592223333', ip);
+					const s = yield* verify_code(h, '+6592223333', lastCode(), ip);
 					const cid = s.user;
 					const declared = new Authorities(m, 'r2');
-					expect((yield* declared.member(db, cid))?.actor).toMatchObject({ party: null });
+					expect((yield* declared.member(db, 'bootstrap', cid))?.actor).toMatchObject({ party: null });
 					yield* db.write({
 						text: `INSERT INTO customers VALUES ('c-cy', '+65 9222 3333')`,
 						params: []
 					}); // the booking files them
-					expect((yield* declared.member(db, cid))?.actor).toMatchObject({
+					expect((yield* declared.member(db, 'bootstrap', cid))?.actor).toMatchObject({
 						party: { model: 'customers', id: 'c-cy' }
 					});
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', cid)).toEqual([
@@ -278,8 +276,8 @@ layer(PhoneFixtureLive)((it) => {
 				Effect.gen(function* () {
 					const { db, h, one, lastCode } = yield* PhoneFixture;
 					const signUp = Effect.fnUntraced(function* (phone: string) {
-						yield* sendCode(h, phone, ip);
-						return (yield* verifyCode(h, phone, lastCode(), ip)).user;
+						yield* send_code(h, phone, ip);
+						return (yield* verify_code(h, phone, lastCode(), ip)).user;
 					});
 					yield* db.write({
 						text: `INSERT INTO customers VALUES ('c-dee', '+6597771111')`,
@@ -287,7 +285,7 @@ layer(PhoneFixtureLive)((it) => {
 					});
 					const old = yield* signUp('+6597771111');
 					const remembering = new Authorities(m, 'r3', { remember: true });
-					expect((yield* remembering.member(db, old))?.actor).toMatchObject({
+					expect((yield* remembering.member(db, 'bootstrap', old))?.actor).toMatchObject({
 						party: { model: 'customers', id: 'c-dee' }
 					});
 					// the desk corrects the number, as it can on any record, and no sign-in follows
@@ -295,12 +293,12 @@ layer(PhoneFixtureLive)((it) => {
 						text: `UPDATE customers SET phone = '+6597772222' WHERE id = 'c-dee'`,
 						params: []
 					});
-					expect((yield* remembering.member(db, old))?.actor).toMatchObject({ party: null });
+					expect((yield* remembering.member(db, 'bootstrap', old))?.actor).toMatchObject({ party: null });
 					expect(yield* one('SELECT party FROM sys_user WHERE id = $1', old)).toEqual([
 						{ party: null }
 					]);
 					const moved = yield* signUp('+6597772222');
-					expect((yield* remembering.member(db, moved))?.actor).toMatchObject({
+					expect((yield* remembering.member(db, 'bootstrap', moved))?.actor).toMatchObject({
 						party: { model: 'customers', id: 'c-dee' }
 					});
 					// the old number's holder keeps their account, and a record of their own binds as any other does
@@ -308,12 +306,12 @@ layer(PhoneFixtureLive)((it) => {
 						text: `INSERT INTO customers VALUES ('c-old', '+65 9777 1111')`,
 						params: []
 					});
-					expect((yield* remembering.member(db, old))?.actor).toMatchObject({
+					expect((yield* remembering.member(db, 'bootstrap', old))?.actor).toMatchObject({
 						party: { model: 'customers', id: 'c-old' }
 					});
 					// a deleted record ends a link the same way
 					yield* db.write({ text: `DELETE FROM customers WHERE id = 'c-old'`, params: [] });
-					expect((yield* remembering.member(db, old))?.actor).toMatchObject({ party: null });
+					expect((yield* remembering.member(db, 'bootstrap', old))?.actor).toMatchObject({ party: null });
 				})
 		);
 
@@ -324,13 +322,13 @@ layer(PhoneFixtureLive)((it) => {
 					text: `INSERT INTO customers VALUES ('c-eve', '+6594445555')`,
 					params: []
 				});
-				yield* sendCode(h, '+6594445555', ip);
-				const eve = (yield* verifyCode(h, '+6594445555', lastCode(), ip)).user;
+				yield* send_code(h, '+6594445555', ip);
+				const eve = (yield* verify_code(h, '+6594445555', lastCode(), ip)).user;
 				yield* db.write({
 					text: `INSERT INTO customers VALUES ('c-eve2', '+65 9444 5555')`,
 					params: []
 				});
-				expect((yield* new Authorities(m, 'r4').member(db, eve))?.actor).toMatchObject({
+				expect((yield* new Authorities(m, 'r4').member(db, 'bootstrap', eve))?.actor).toMatchObject({
 					party: { model: 'customers', id: 'c-eve' }
 				});
 			})
@@ -341,24 +339,24 @@ layer(PhoneFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { h, as, texts, lastCode } = yield* PhoneFixture;
-					const boss = yield* founderBootstrap(h, 'boss@acme.example');
+					const boss = yield* founder_bootstrap(h, 'boss@acme.example');
 					const admin = yield* as(boss.user);
 					expect(yield* Effect.flip(setSignup(h, yield* as(ada), false))).toMatchObject({
 						code: 'forbidden'
 					});
 					expect(yield* setSignup(h, admin, false)).toBeNull();
 					const before = texts.length;
-					expect(yield* Effect.flip(sendCode(h, '+6597776666', ip))).toMatchObject({
-						code: 'notMember'
+					expect(yield* Effect.flip(send_code(h, '+6597776666', ip))).toMatchObject({
+						code: 'not_member'
 					});
 					expect(texts.length).toBe(before);
-					expect(yield* Effect.flip(verifyCode(h, '+6597776666', '000000', ip))).toMatchObject({
+					expect(yield* Effect.flip(verify_code(h, '+6597776666', '000000', ip))).toMatchObject({
 						_tag: 'IdentityRefusal',
-						code: 'invalidCode'
+						code: 'invalid_code'
 					});
-					yield* sendCode(h, '+6581234567', ip);
+					yield* send_code(h, '+6581234567', ip);
 					expect(texts.length).toBe(before + 1);
-					expect(yield* verifyCode(h, '+6581234567', lastCode(), ip)).toMatchObject({ user: ada });
+					expect(yield* verify_code(h, '+6581234567', lastCode(), ip)).toMatchObject({ user: ada });
 					expect(yield* setSignup(h, admin, true)).toBeNull();
 				})
 		);
@@ -371,14 +369,14 @@ layer(PhoneFixtureLive)((it) => {
 					refused: unknown = null;
 				for (let i = 0; i <= SIGNUP_TEXTS_PER_IP && refused === null; i++) {
 					const r = yield* Effect.result(
-						sendCode(capped, `+6571000${String(i).padStart(3, '0')}`, '7.7.7.7')
+						send_code(capped, `+6571000${String(i).padStart(3, '0')}`, '7.7.7.7')
 					);
 					if (Result.isSuccess(r)) sent += 1;
 					else refused = r.failure;
 				}
-				expect(refused).toMatchObject({ code: 'rateLimited' });
+				expect(refused).toMatchObject({ code: 'rate_limited' });
 				expect(sent).toBe(SIGNUP_TEXTS_PER_IP);
-				expect(yield* sendCode(capped, '+6571001000', '7.7.7.8')).toBeNull();
+				expect(yield* send_code(capped, '+6571001000', '7.7.7.8')).toBeNull();
 			})
 		);
 
@@ -389,16 +387,16 @@ layer(PhoneFixtureLive)((it) => {
 				const before = texts.length;
 				expect(
 					yield* Effect.flip(
-						sendCode(capped, '+6572000001', '6.6.6.6', 'sms', Effect.succeed(false))
+						send_code(capped, '+6572000001', '6.6.6.6', 'sms', Effect.succeed(false))
 					)
 				).toMatchObject({ code: 'forbidden' });
 				expect(texts.length).toBe(before);
 				expect(
-					yield* sendCode(capped, '+6572000001', '6.6.6.6', 'sms', Effect.succeed(true))
+					yield* send_code(capped, '+6572000001', '6.6.6.6', 'sms', Effect.succeed(true))
 				).toBeNull();
 				// what passed is asked of strangers only: Ada signs in on any page
 				expect(
-					yield* sendCode(capped, '+6581234567', '6.6.6.6', 'sms', Effect.succeed(false))
+					yield* send_code(capped, '+6581234567', '6.6.6.6', 'sms', Effect.succeed(false))
 				).toBeNull();
 			})
 		);
@@ -414,15 +412,15 @@ layer(PhoneFixtureLive)((it) => {
 						refused: unknown = null;
 					for (let i = 0; i <= SIGNUP_TEXTS && refused === null; i++) {
 						const r = yield* Effect.result(
-							sendCode(capped, `+6570000${String(i).padStart(3, '0')}`, `9.9.${i}.1`)
+							send_code(capped, `+6570000${String(i).padStart(3, '0')}`, `9.9.${i}.1`)
 						);
 						if (Result.isSuccess(r)) sent += 1;
 						else refused = r.failure;
 					}
-					expect(refused).toMatchObject({ _tag: 'IdentityRefusal', code: 'rateLimited' });
+					expect(refused).toMatchObject({ _tag: 'IdentityRefusal', code: 'rate_limited' });
 					expect(sent).toBeLessThan(SIGNUP_TEXTS);
 					const before = texts.length;
-					expect(yield* sendCode(capped, '+6581234567', '8.8.8.8')).toBeNull(); // Ada is a member
+					expect(yield* send_code(capped, '+6581234567', '8.8.8.8')).toBeNull(); // Ada is a member
 					expect(texts.length).toBe(before + 1);
 				})
 		);
@@ -434,8 +432,8 @@ layer(PhoneFixtureLive)((it) => {
 					const { h, texts } = yield* PhoneFixture;
 					const { signup: _declared, ...closed } = h;
 					const before = texts.length;
-					expect(yield* Effect.flip(sendCode(closed, '+6593334444', ip))).toMatchObject({
-						code: 'notMember'
+					expect(yield* Effect.flip(send_code(closed, '+6593334444', ip))).toMatchObject({
+						code: 'not_member'
 					});
 					expect(texts.length).toBe(before);
 				})
@@ -466,8 +464,8 @@ layer(PhoneFixtureLive)((it) => {
 						text: expect.stringContaining('https://acme.example/invite/')
 					});
 					const { signup: _declared, ...staff } = h; // joins by the invitation, not by sign-up
-					yield* sendCode(staff, '+447700900123', ip);
-					const s = yield* verifyCode(staff, '+447700900123', lastCode(), ip);
+					yield* send_code(staff, '+447700900123', ip);
+					const s = yield* verify_code(staff, '+447700900123', lastCode(), ip);
 					expect(s).toMatchObject({ user: expect.any(String) });
 					const who = yield* as(s.user);
 					expect(who.policies).toEqual(['staff']);
@@ -510,9 +508,9 @@ layer(PhoneFixtureLive)((it) => {
 					external: true,
 					party: { model: 'customers', id: 'c-twin1' }
 				});
-				yield* sendCode(h, '+6595556666', ip);
-				const guest = (yield* verifyCode(h, '+6595556666', lastCode(), ip)).user;
-				expect((yield* new Authorities(m, 'r6').member(db, guest))?.actor).toMatchObject({
+				yield* send_code(h, '+6595556666', ip);
+				const guest = (yield* verify_code(h, '+6595556666', lastCode(), ip)).user;
+				expect((yield* new Authorities(m, 'r6').member(db, 'bootstrap', guest))?.actor).toMatchObject({
 					party: { model: 'customers', id: 'c-twin1' }
 				});
 			})
@@ -524,12 +522,12 @@ layer(PhoneFixtureLive)((it) => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const { h } = yield* PhoneFixture;
-					const context = yield* Layer.build(Layer.mergeAll(TestDb.layer(m), memoryAuditLayer));
+					const context = yield* Layer.build(Layer.mergeAll(TestDb.layer(m), memory_audit_layer));
 					const fdb = Context.get(context, TenantDb);
-					const fh = yield* makeIdentityHost({ ...h, db: fdb, keys: yield* loadKeys(fdb) }).pipe(
+					const fh = yield* make_identity_host({ ...h, db: fdb, keys: yield* load_keys(fdb) }).pipe(
 						Effect.provide(NodeCrypto.layer)
 					);
-					const f = yield* founderBootstrap(fh, '+65 6000 0001');
+					const f = yield* founder_bootstrap(fh, '+65 6000 0001');
 					expect(f).toMatchObject({ user: expect.any(String) });
 					const [result] = yield* fdb.read([
 						{ text: 'SELECT phone, admin FROM sys_user', params: [] }
@@ -580,15 +578,15 @@ const verifierFixture = Effect.gen(function* () {
 	yield* TestClock.setTime(Date.parse('2026-09-30T00:00:00Z'));
 	const phone = verifier(),
 		sms: (typeof Text.Type)[] = [];
-	const vh = yield* makeIdentityHost({
+	const vh = yield* make_identity_host({
 		db,
-		keys: yield* loadKeys(db),
+		keys: yield* load_keys(db),
 		windows: new RateWindows(),
 		now: Clock.currentTimeMillis.pipe(Effect.map((ms) => new Date(ms))),
 		phone,
 		sms: port(sms),
 		mail: port([]),
-		publicUrl: 'https://acme.example',
+		public_url: 'https://acme.example',
 		signup: m.workspace.signup
 	});
 	return { db, vh, phone, sms };
@@ -598,7 +596,7 @@ class VerifierFixture extends Context.Service<
 	Effect.Success<typeof verifierFixture>
 >()('test/VerifierFixture') {}
 const VerifierFixtureLive = Layer.effect(VerifierFixture, verifierFixture).pipe(
-	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memoryAuditLayer))
+	Layer.provide(Layer.mergeAll(TestDb.layer(m), NodeCrypto.layer, memory_audit_layer))
 );
 
 layer(VerifierFixtureLive)((it) => {
@@ -606,8 +604,8 @@ layer(VerifierFixtureLive)((it) => {
 		it.effect('texts by default and uses WhatsApp when chosen; our own texts are never sent', () =>
 			Effect.gen(function* () {
 				const { vh, phone, sms } = yield* VerifierFixture;
-				expect(yield* sendCode(vh, '+6581110000', ip)).toBeNull();
-				expect(yield* sendCode(vh, '+6581110001', ip, 'whatsapp')).toBeNull();
+				expect(yield* send_code(vh, '+6581110000', ip)).toBeNull();
+				expect(yield* send_code(vh, '+6581110001', ip, 'whatsapp')).toBeNull();
 				expect(phone.started).toEqual([
 					{ to: '+6581110000', via: 'sms' },
 					{ to: '+6581110001', via: 'whatsapp' }
@@ -621,26 +619,26 @@ layer(VerifierFixtureLive)((it) => {
 			() =>
 				Effect.gen(function* () {
 					const { db, vh, phone } = yield* VerifierFixture;
-					const s = yield* verifyCode(vh, '+6581110000', '424242', ip);
+					const s = yield* verify_code(vh, '+6581110000', '424242', ip);
 					expect(s).toMatchObject({ user: expect.any(String) });
 					const [result] = yield* db.read([
 						{ text: `SELECT via FROM sys_session WHERE "user" = $1`, params: [s.user] }
 					]);
 					expect(result?.rows).toEqual([{ via: 'signup' }]);
-					expect(yield* Effect.flip(verifyCode(vh, '+6581110001', '000000', ip))).toMatchObject({
+					expect(yield* Effect.flip(verify_code(vh, '+6581110001', '000000', ip))).toMatchObject({
 						_tag: 'IdentityRefusal',
-						code: 'invalidCode'
+						code: 'invalid_code'
 					});
-					expect(yield* Effect.flip(verifyCode(vh, '+6581110001', 'abc', ip))).toMatchObject({
+					expect(yield* Effect.flip(verify_code(vh, '+6581110001', 'abc', ip))).toMatchObject({
 						_tag: 'IdentityRefusal',
-						code: 'invalidCode'
+						code: 'invalid_code'
 					}); // never asked
 					expect(phone.checked).toEqual(['424242', '000000']);
-					expect(yield* Effect.flip(verifyCode(vh, '+6581110001', '111111', ip))).toMatchObject({
-						code: 'invalidCode'
+					expect(yield* Effect.flip(verify_code(vh, '+6581110001', '111111', ip))).toMatchObject({
+						code: 'invalid_code'
 					});
-					expect(yield* Effect.flip(verifyCode(vh, '+6581110001', '424242', ip))).toMatchObject({
-						code: 'invalidCode'
+					expect(yield* Effect.flip(verify_code(vh, '+6581110001', '424242', ip))).toMatchObject({
+						code: 'invalid_code'
 					}); // out of attempts
 				})
 		);
@@ -648,12 +646,12 @@ layer(VerifierFixtureLive)((it) => {
 		it.effect('a challenge past its ten minutes is refused without asking the provider', () =>
 			Effect.gen(function* () {
 				const { vh, phone } = yield* VerifierFixture;
-				yield* sendCode(vh, '+6581110002', ip);
+				yield* send_code(vh, '+6581110002', ip);
 				yield* TestClock.adjust('11 minutes');
 				const before = phone.checked.length;
-				expect(yield* Effect.flip(verifyCode(vh, '+6581110002', '424242', ip))).toMatchObject({
+				expect(yield* Effect.flip(verify_code(vh, '+6581110002', '424242', ip))).toMatchObject({
 					_tag: 'IdentityRefusal',
-					code: 'invalidCode'
+					code: 'invalid_code'
 				});
 				expect(phone.checked.length).toBe(before);
 			})
@@ -666,19 +664,19 @@ layer(VerifierFixtureLive)((it) => {
 					const { vh, phone } = yield* VerifierFixture;
 					const { signup: _declared, ...closed } = vh;
 					const before = phone.started.length;
-					expect(yield* Effect.flip(sendCode(closed, '+6581110003', ip))).toMatchObject({
-						code: 'notMember'
+					expect(yield* Effect.flip(send_code(closed, '+6581110003', ip))).toMatchObject({
+						code: 'not_member'
 					});
 					expect(phone.started.length).toBe(before);
 					const capped = { ...vh, windows: new RateWindows() };
 					let refused: unknown = null;
 					for (let i = 0; i <= SIGNUP_TEXTS && refused === null; i++) {
 						const r = yield* Effect.result(
-							sendCode(capped, `+6571000${String(i).padStart(3, '0')}`, `7.7.${i}.1`)
+							send_code(capped, `+6571000${String(i).padStart(3, '0')}`, `7.7.${i}.1`)
 						);
 						if (Result.isFailure(r)) refused = r.failure;
 					}
-					expect(refused).toMatchObject({ _tag: 'IdentityRefusal', code: 'rateLimited' });
+					expect(refused).toMatchObject({ _tag: 'IdentityRefusal', code: 'rate_limited' });
 				})
 		);
 
@@ -688,16 +686,16 @@ layer(VerifierFixtureLive)((it) => {
 				Effect.gen(function* () {
 					const { vh, phone } = yield* VerifierFixture;
 					const { phone: _v, ...none } = vh;
-					expect(yield* Effect.flip(sendCode(none, '+6581110000', ip))).toMatchObject({
+					expect(yield* Effect.flip(send_code(none, '+6581110000', ip))).toMatchObject({
 						_tag: 'IdentityRefusal',
 						code: 'unavailable'
 					});
-					expect(yield* Effect.flip(verifyCode(none, '+6581110000', '424242', ip))).toMatchObject({
+					expect(yield* Effect.flip(verify_code(none, '+6581110000', '424242', ip))).toMatchObject({
 						_tag: 'IdentityRefusal'
 					});
 					const smsOnly: IdentityHost = { ...vh, phone: { ...phone, via: ['sms'] } };
 					expect(
-						yield* Effect.flip(sendCode(smsOnly, '+6581110000', ip, 'whatsapp'))
+						yield* Effect.flip(send_code(smsOnly, '+6581110000', ip, 'whatsapp'))
 					).toMatchObject({
 						_tag: 'IdentityRefusal',
 						code: 'unavailable',
@@ -710,18 +708,18 @@ layer(VerifierFixtureLive)((it) => {
 			Effect.gen(function* () {
 				const { vh, phone } = yield* VerifierFixture;
 				// A member's number: the sign-up cap above is spent.
-				expect(yield* sendCode(vh, '+6581110000', ip)).toBeNull();
+				expect(yield* send_code(vh, '+6581110000', ip)).toBeNull();
 				phone.fail(true);
-				expect(yield* Effect.flip(sendCode(vh, '+6581110000', '6.6.6.6'))).toMatchObject({
+				expect(yield* Effect.flip(send_code(vh, '+6581110000', '6.6.6.6'))).toMatchObject({
 					_tag: 'IdentityRefusal',
 					code: 'upstream'
 				});
-				expect(yield* Effect.flip(verifyCode(vh, '+6581110000', '424242', ip))).toMatchObject({
+				expect(yield* Effect.flip(verify_code(vh, '+6581110000', '424242', ip))).toMatchObject({
 					_tag: 'IdentityRefusal',
 					code: 'upstream'
 				});
 				phone.fail(false);
-				expect(yield* verifyCode(vh, '+6581110000', '424242', ip)).toMatchObject({
+				expect(yield* verify_code(vh, '+6581110000', '424242', ip)).toMatchObject({
 					user: expect.any(String)
 				}); // failure spent no attempt
 			})

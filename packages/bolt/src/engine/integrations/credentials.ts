@@ -1,3 +1,4 @@
+import { uuid } from '../port.ts';
 import { Crypto, Effect, Option, Schema } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
@@ -43,7 +44,7 @@ const Fence = Schema.Struct({ held: Schema.Number, known: Schema.Boolean });
 const owner = (instance: string) => `instance:${instance}`;
 const ROW = 'integration, owner, active, configuration, import_start';
 const unknown = (instance: string) =>
-	BoltError.make('notFound', 'facility', `no integration instance '${instance}'`);
+	BoltError.make('not_found', 'facility', `no integration instance '${instance}'`);
 const invalid = (name: string) =>
 	BoltError.make('sealed', 'facility', `the credential '${name}' is not sealed JSON`);
 
@@ -52,13 +53,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 	codec: SecretsCodec
 ): Effect.fn.Return<Credentials, never, Crypto.Crypto> {
 	const crypto = yield* Crypto.Crypto;
-	const uuid = crypto
-		.randomUUIDv4()
-		.pipe(
-			Effect.mapError((error) =>
-				BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-			)
-		);
+	const newId = uuid(crypto);
 	const opened = (instance: string, rows: readonly (typeof Sealed.Type)[]) =>
 		Effect.forEach(rows, (r) =>
 			Effect.gen(function* () {
@@ -88,7 +83,7 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 				const { epoch: previous, sealed, ...row } = found.value;
 				// Key service work finishes before a database connection or row lock is acquired.
 				const values = yield* opened(instance, sealed);
-				const epoch = yield* uuid;
+				const epoch = yield* newId;
 				const result = yield* db.transaction({
 					statements: [
 						{ text: 'SELECT id FROM sys_integration WHERE id = $1 FOR UPDATE', params: [instance] },
@@ -134,11 +129,11 @@ export const credentials = Effect.fn('Credentials.make')(function* (
 							.pipe(Effect.map((sealed) => ({ name, sealed })))
 				);
 				const unset = [...changes].flatMap(([name, value]) => (value === null ? [name] : []));
-				const next = rotate ? yield* uuid : epoch;
+				const next = rotate ? yield* newId : epoch;
 				const rows = yield* db.returning(Fence, {
 					text: `WITH fence AS (SELECT id FROM sys_integration WHERE id = $1 AND epoch IS NOT DISTINCT FROM $2 FOR UPDATE),
 			moved AS (UPDATE sys_integration SET epoch = $5::text WHERE $6::boolean AND id IN (SELECT id FROM fence) RETURNING 1),
-			rested AS (UPDATE sys_sync SET health = health - 'failures' - 'retryAt' WHERE instance IN (SELECT id FROM fence)),
+			rested AS (UPDATE sys_sync SET health = health - 'failures' - 'retry_at' WHERE instance IN (SELECT id FROM fence)),
 			up AS (INSERT INTO bolt_credential (instance, name, sealed) SELECT $1, v.name, v.sealed FROM jsonb_to_recordset($3::jsonb) AS v(name text, sealed text) WHERE EXISTS (SELECT 1 FROM fence) ON CONFLICT (instance, name) DO UPDATE SET sealed = excluded.sealed RETURNING 1),
 			gone AS (DELETE FROM bolt_credential WHERE instance = $1 AND name IN (SELECT jsonb_array_elements_text($4::jsonb)) AND EXISTS (SELECT 1 FROM fence) RETURNING 1)
 			SELECT (SELECT count(*) FROM fence)::int AS held, EXISTS (SELECT 1 FROM sys_integration WHERE id = $1) AS known`,

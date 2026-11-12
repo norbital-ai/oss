@@ -3,9 +3,9 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
-import { sendInputSchema } from '../src/engine/integrations/outbound.ts';
+import { send_input_schema } from '../src/engine/integrations/outbound.ts';
 import { conversationOf } from '../src/engine/integrations/instances.ts';
-import { isAutoReply, statusAfter } from '../src/engine/conversations/status.ts';
+import { is_auto_reply, status_after } from '../src/engine/conversations/status.ts';
 import { InboundMessage, normalizeInbound } from '../src/engine/conversations/inbound.ts';
 import { canonicalHandle } from '../src/engine/envoys/senders.ts';
 
@@ -25,9 +25,9 @@ describe('an inbound mail', () => {
 			const got = yield* inbound('email', {
 				id: '<r1@x>',
 				thread: null,
-				sentAt: '2026-09-25T10:00:00Z',
+				sent_at: '2026-09-25T10:00:00Z',
 				from: { address: 'Carol@Acme.com', name: 'Carol' },
-				replyTo: null,
+				reply_to: null,
 				to: [{ address: 'support@ws.example', name: null }],
 				cc: [],
 				subject: 'Re: your quote',
@@ -39,7 +39,7 @@ describe('an inbound mail', () => {
 			expect(got).toMatchObject({
 				id: '<r1@x>',
 				sender: 'carol@acme.com',
-				senderName: 'Carol',
+				sender_name: 'Carol',
 				thread: '<root@ws>',
 				references: ['<q1@ws>', '<root@ws>'],
 				invocation: 'direct',
@@ -59,12 +59,12 @@ describe('the inbound decode and the outbound check', () => {
 		Effect.gen(function* () {
 			expect(yield* inbound('chat', { id: 'x' })).toBeNull();
 			expect(
-				yield* inbound('email', { id: 'x', sentAt: '2026-09-25T10:00:00Z', from: {} })
+				yield* inbound('email', { id: 'x', sent_at: '2026-09-25T10:00:00Z', from: {} })
 			).toBeNull();
 			expect(
 				yield* inbound('chat', {
 					id: '1',
-					sentAt: '2026-09-25T10:00:00Z',
+					sent_at: '2026-09-25T10:00:00Z',
 					thread: '5',
 					from: { handle: '5' },
 					invocation: 'ambient',
@@ -75,7 +75,7 @@ describe('the inbound decode and the outbound check', () => {
 			expect(
 				yield* inbound('chat', {
 					id: '1',
-					sentAt: '2026-09-25T10:00:00Z',
+					sent_at: '2026-09-25T10:00:00Z',
 					thread: 'C1',
 					from: { handle: 'U1', name: 'Ana' },
 					group: true,
@@ -91,7 +91,7 @@ describe('the inbound decode and the outbound check', () => {
 			Effect.gen(function* () {
 				const group = {
 					id: '1',
-					sentAt: '2026-09-25T10:00:00Z',
+					sent_at: '2026-09-25T10:00:00Z',
 					thread: 'G1',
 					from: { handle: 'U1' },
 					group: true,
@@ -108,14 +108,14 @@ describe('the inbound decode and the outbound check', () => {
 	it.effect('OutboundFor at runtime: email needs to/subject/body; chat needs to/text', () =>
 		Effect.gen(function* () {
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('email'))({
+				yield* Schema.decodeUnknownEffect(send_input_schema('email'))({
 					to: ['a@b.c'],
 					subject: 's',
 					text: 't'
 				})
 			).toMatchObject({ to: ['a@b.c'], subject: 's', text: 't' });
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('email'))({
+				yield* Schema.decodeUnknownEffect(send_input_schema('email'))({
 					to: [],
 					subject: 's',
 					text: 't'
@@ -124,7 +124,7 @@ describe('the inbound decode and the outbound check', () => {
 			// a message row is stored as it is: a stored file's reference passes, inline bytes never do
 			const ref = { id: 'f1', name: 'r.pdf', mime: 'application/pdf', bytes: 3, sha256: 'x' };
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('email'))({
+				yield* Schema.decodeUnknownEffect(send_input_schema('email'))({
 					to: ['a@b.c'],
 					subject: 's',
 					text: 't',
@@ -132,7 +132,7 @@ describe('the inbound decode and the outbound check', () => {
 				})
 			).toMatchObject({ attachments: [ref] });
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('email'))({
+				yield* Schema.decodeUnknownEffect(send_input_schema('email'))({
 					to: ['a@b.c'],
 					subject: 's',
 					text: 't',
@@ -141,13 +141,13 @@ describe('the inbound decode and the outbound check', () => {
 			).toMatchObject({ message: expect.stringContaining('never inline bytes') });
 			// every chat driver and a custom chat definition take the one chat shape
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('chat'))({ to: '659', text: 'hi' })
+				yield* Schema.decodeUnknownEffect(send_input_schema('chat'))({ to: '659', text: 'hi' })
 			).toEqual({ to: '659', text: 'hi' });
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('chat'))({ to: '5' }).pipe(Effect.flip)
+				yield* Schema.decodeUnknownEffect(send_input_schema('chat'))({ to: '5' }).pipe(Effect.flip)
 			).toMatchObject({ message: 'a chat message needs `text`' });
 			expect(
-				yield* Schema.decodeUnknownEffect(sendInputSchema('chat'))({ text: 'hi' }).pipe(Effect.flip)
+				yield* Schema.decodeUnknownEffect(send_input_schema('chat'))({ text: 'hi' }).pipe(Effect.flip)
 			).toMatchObject({ message: 'a chat message needs `to`' });
 		})
 	);
@@ -157,7 +157,7 @@ describe('the inbound decode and the outbound check', () => {
 			Effect.gen(function* () {
 				const m = {
 					id: '1',
-					sentAt: '2026-09-25T10:00:00Z',
+					sent_at: '2026-09-25T10:00:00Z',
 					thread: '5',
 					from: { handle: '5' },
 					text: 'x',
@@ -202,27 +202,27 @@ describe('the inbound decode and the outbound check', () => {
 
 describe('delivery status order (§5.9; status.ts)', () => {
 	it('advances by rank, terminal failures win, auto_replied and a lower rank change nothing', () => {
-		expect(statusAfter('queued', 'sent')).toBe('sent');
-		expect(statusAfter('sent', 'deferred')).toBe('deferred');
-		expect(statusAfter('deferred', 'delivered')).toBe('delivered');
-		expect(statusAfter('delivered', 'deferred')).toBe('delivered');
-		expect(statusAfter('delivered', 'read')).toBe('read');
-		expect(statusAfter('read', 'opened')).toBe('read');
-		expect(statusAfter('opened', 'replied')).toBe('replied');
-		expect(statusAfter('replied', 'auto_replied')).toBe('replied');
-		expect(statusAfter('delivered', 'bounced')).toBe('bounced');
-		expect(statusAfter('bounced', 'delivered')).toBe('bounced');
-		expect(statusAfter('failed', 'replied')).toBe('failed');
-		expect(statusAfter('uncertain', 'delivered')).toBe('delivered');
+		expect(status_after('queued', 'sent')).toBe('sent');
+		expect(status_after('sent', 'deferred')).toBe('deferred');
+		expect(status_after('deferred', 'delivered')).toBe('delivered');
+		expect(status_after('delivered', 'deferred')).toBe('delivered');
+		expect(status_after('delivered', 'read')).toBe('read');
+		expect(status_after('read', 'opened')).toBe('read');
+		expect(status_after('opened', 'replied')).toBe('replied');
+		expect(status_after('replied', 'auto_replied')).toBe('replied');
+		expect(status_after('delivered', 'bounced')).toBe('bounced');
+		expect(status_after('bounced', 'delivered')).toBe('bounced');
+		expect(status_after('failed', 'replied')).toBe('failed');
+		expect(status_after('uncertain', 'delivered')).toBe('delivered');
 	});
 	it("an auto-reply is told by RFC 3834 and the common markers, a person's reply is not", () => {
-		expect(isAutoReply({ 'Auto-Submitted': 'auto-replied' })).toBe(true);
-		expect(isAutoReply({ 'auto-submitted': 'no' })).toBe(false);
-		expect(isAutoReply({ 'X-Autoreply': 'yes' })).toBe(true);
-		expect(isAutoReply({ Precedence: 'bulk' })).toBe(true);
-		expect(isAutoReply({}, 'Automatic reply: PCN 1234')).toBe(true);
-		expect(isAutoReply({}, '自动回复: PCN 1234')).toBe(true);
-		expect(isAutoReply({}, 'Re: PCN 1234')).toBe(false);
+		expect(is_auto_reply({ 'Auto-Submitted': 'auto-replied' })).toBe(true);
+		expect(is_auto_reply({ 'auto-submitted': 'no' })).toBe(false);
+		expect(is_auto_reply({ 'X-Autoreply': 'yes' })).toBe(true);
+		expect(is_auto_reply({ Precedence: 'bulk' })).toBe(true);
+		expect(is_auto_reply({}, 'Automatic reply: PCN 1234')).toBe(true);
+		expect(is_auto_reply({}, '自动回复: PCN 1234')).toBe(true);
+		expect(is_auto_reply({}, 'Re: PCN 1234')).toBe(false);
 	});
 });
 

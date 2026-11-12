@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Json, Value } from './kind.js';
 	import type { ModelKey, FieldOf, IdOf, OrderByOf, WhereOf } from '../model/types.js';
 	import type { ReadError } from '../client/contract.js';
@@ -7,16 +8,18 @@
 	 * Edits a relation or an `id` input (§3.6): searches the target model through the caller's own read grant, so
 	 * it lists only rows (and fields) the viewer may read. `label` defaults to the target model's `label`; a target
 	 * without `search` is searched over its label's text and patterned `seq` fields. Each keystroke is a server search,
-	 * so `limit` is the page shown, never the rows searched; rows sort by `orderBy`, else by the label.
+	 * so `limit` is the page shown, never the rows searched; rows sort by `order_by`, else by the label.
 	 */
 	export type PickerProps<C = ModelKey> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: C;
 		/** The chosen id; any text is shown as not found, never trusted. */
 		value: string | null;
-		onChange(next: IdOf<C> | null): void;
+		on_change(next: IdOf<C> | null): void;
 		label?: readonly FieldOf<C>[];
 		where?: WhereOf<C> & Json;
-		orderBy?: OrderByOf<C> & Json;
+		order_by?: OrderByOf<C> & Json;
 		limit?: number;
 		id?: string;
 		/** Shows the chosen row's label as copyable text; an enclosing readonly form sets it. */
@@ -31,38 +34,38 @@
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import Input from '../primitives/input/input.svelte';
 	import { label as title } from '@norbital-ai/std/label';
-	import { uiText, useControls } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
+	import { ui_text, use_controls } from '../primitives/utils.js';
 	import { Effect } from 'effect';
-	import { observeOnce as queryState } from '../effect/index.js';
-	import { idsOf } from '../form/form-state.svelte.js';
-	import { currencyOf, format, pickerRead, valueObject } from './kind.js';
-	import { byId } from '../read/request.js';
-	import { labelRead } from '../relations/select.js';
+	import { observe_once as queryState } from '../effect/index.js';
+	import { is_id } from '../form/form-state.svelte.js';
+	import { currencyOf, format, picker_read, value_object } from './kind.js';
+	import { by_id } from '../read/request.js';
+	import { label_read } from '../relations/select.js';
 	import { withOutputs } from '../client/context.js';
 
 	let {
+		ctx,
 		of,
 		value,
-		onChange,
+		on_change,
 		label,
 		where,
-		orderBy,
+		order_by,
 		limit = 20,
 		id,
 		readonly,
 		disabled,
 		invalid = false
 	}: PickerProps<C> = $props();
-	const controls = useControls();
-	const host = useKinds();
+	const controls = use_controls();
+	const host = $derived(ctx.ui.kinds);
 	const target = $derived(host.catalog?.[of]);
 	const labels = $derived(label ?? target?.label ?? []);
 	type Hit = { id: string; text: string };
-	const t = uiText();
+	const t = ui_text();
 	// The shared record identifier: declared label, otherwise its stable id.
 	const textOf = (row: { readonly [f: string]: Value }) =>
-		title(row, label === undefined ? (target?.record_label ?? labels) : labels, (f, v) => {
+		title(row, label === undefined ? (target?.record_label ?? []) : labels, (f, v) => {
 			const kind = target?.fields[f];
 			return kind === undefined
 				? String(v)
@@ -85,7 +88,7 @@
 			Effect.map((answer) => {
 				const rows = answer.jurisdiction_settings?.rows ?? [];
 				const period = (row: (typeof rows)[number]) => {
-					const range = valueObject(row.effective_range) ? row.effective_range : {};
+					const range = value_object(row.effective_range) ? row.effective_range : {};
 					return {
 						from: typeof range['from'] === 'string' ? range['from'] : '',
 						to: typeof range['to'] === 'string' ? range['to'] : null
@@ -108,10 +111,9 @@
 		const q = query;
 		const base: Json | undefined = where ?? undefined;
 		return Effect.gen(function* () {
-			const scoped =
-				of.endsWith('_catalog')
-					? yield* versionInForce(read, new Date().toISOString().slice(0, 10))
-					: null;
+			const scoped = of.endsWith('_catalog')
+				? yield* versionInForce(read, new Date().toISOString().slice(0, 10))
+				: null;
 			const filter: Json | undefined =
 				scoped === null
 					? base
@@ -122,12 +124,12 @@
 			return yield* read(
 				withOutputs(
 					target?.record_label !== undefined
-						? labelRead(
+						? label_read(
 								host.catalog,
 								of,
-								pickerRead(target, labels, { where: filter, orderBy, limit }, q)
+								picker_read(target, labels, { where: filter, order_by, limit }, q)
 							)
-						: { [of]: pickerRead(target, labels, { where: filter, orderBy, limit }, q) },
+						: { [of]: picker_read(target, labels, { where: filter, order_by, limit }, q) },
 					host.catalog
 				)
 			);
@@ -144,14 +146,14 @@
 		return read(
 			withOutputs(
 				target?.record_label !== undefined
-					? labelRead(host.catalog, of, { where: { id: { eq: id } }, limit: 1 })
-					: byId(of, id, labels),
+					? label_read(host.catalog, of, { where: { id: { eq: id } }, limit: 1 })
+					: by_id(of, id, labels),
 				host.catalog
 			)
 		).pipe(
 			Effect.map((answer): Hit => {
 				const row = answer[of]?.rows[0];
-				return { id, text: row === undefined ? t('notFound') : textOf(row) };
+				return { id, text: row === undefined ? t('not_found') : textOf(row) };
 			})
 		);
 	});
@@ -166,14 +168,14 @@
 				? selected.current
 				: selected.error === undefined || value === null
 					? null
-					: { id: value, text: t('notFound') }
+					: { id: value, text: t('not_found') }
 	);
 	const type = (q: string) => {
 		query = q;
 	};
 	const choose = (next: string | null) => {
 		chosen = hits.find((hit) => hit.id === next) ?? null;
-		onChange(next === null ? null : (idsOf<C>([next])[0] ?? null));
+		on_change(is_id<C>(next) ? next : null);
 	};
 </script>
 
@@ -206,7 +208,7 @@
 		options={hits.map((h) => ({ value: h.id, label: h.text }))}
 		{value}
 		display={current?.text}
-		onSearch={type}
-		onChange={choose}
+		on_search={type}
+		on_change={choose}
 	/>
 {/if}

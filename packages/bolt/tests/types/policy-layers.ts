@@ -2,20 +2,12 @@
 // the model's own declaration. Each `@ts-expect-error` line is a planted mistake from the plan's table; a clean tsc proves
 // every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
-import type {
-	CreateTree,
-	LayerField,
-	OutputName,
-	PathModel,
-	ReadPath,
-	StoredTree,
-	UpdateTree,
-	WritePath
-} from '../../src/index.ts';
+import type { CreateInput, StoredTree, UpdateInput } from '../../src/index.ts';
 import './registry.ts';
+import type { LayerField, OutputName, PathModel, ReadPath, WritePath } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-const is = <T extends true>(): T => true as T;
+const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 type System = 'id' | 'revision' | 'created_at' | 'updated_at' | 'created_by' | 'updated_by';
 
 // ── the generated path unions and the model behind each path ──
@@ -29,9 +21,9 @@ is<Eq<OutputName<'orders'>, 'default' | 'logistics'>>();
 is<Eq<ReadPath<'orders', 'logistics'>, 'orders' | 'orders.lines'>>();
 is<Eq<Exclude<LayerField<'orders', 'orders.lines', 'logistics'>, System>, 'item' | 'qty'>>();
 // ── the trees a check judges ──
-is<Eq<keyof CreateTree<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
-is<Eq<keyof NonNullable<CreateTree<'orders'>['lines']>[number], 'item' | 'qty' | 'price'>>();
-is<Eq<keyof UpdateTree<'orders'>, 'status' | 'note' | 'due' | 'placed_at' | 'lines'>>();
+is<Eq<keyof CreateInput<'orders'>, 'customer' | 'note' | 'due' | 'lines'>>();
+is<Eq<keyof NonNullable<CreateInput<'orders'>['lines']>[number], 'item' | 'qty' | 'price'>>();
+is<Eq<keyof UpdateInput<'orders'>, 'status' | 'note' | 'due' | 'placed_at' | 'lines'>>();
 is<Eq<'lines' extends keyof StoredTree<'orders', 'update'> ? 1 : 0, 1>>();
 
 // ── valid ──
@@ -39,43 +31,49 @@ export const layered = policy({
 	description: 'Sell to our customers, through the order tree',
 	grants: {
 		orders: {
-			read: {
-				orders: { where: { owner: { eq: { var: 'requestor.id' } } } },
-				'orders.customer': { where: { tier: { eq: 'gold' } } },
-				'orders.lines': { where: { item: { ne: '' } } }
+			outputs: {
+				default: {
+					history: true,
+					where: { owner: { eq: { var: 'requestor.id' } } },
+					customer: { where: { tier: { eq: 'gold' } } },
+					lines: { where: { item: { ne: '' } } }
+				},
+				logistics: { where: { status: { ne: 'draft' } } }
 			},
-			outputs: { logistics: { orders: { where: { status: { ne: 'draft' } } } } },
-			history: true,
 			create: {
-				columns: { orders: ['customer', 'note'], 'orders.lines': ['item', 'qty'] },
-				check: function* (rows, ctx) {
-					const bad = rows.findIndex((o) => (o.lines ?? []).some((l) => l.item === ''));
+				columns: { fields: ['customer', 'note'], lines: { fields: ['item', 'qty'] } },
+				verdict: function* (rows, ctx) {
+					const bad = rows.findIndex((o) => (o.after.lines ?? []).some((l) => l.item === ''));
 					if (bad >= 0)
-						return ctx.deny('Every line names its item.', { row: bad, path: 'orders.lines', field: 'item' });
-					const { customers } = yield* ctx.db.query({
-						customers: { where: { id: { in: rows.map((r) => r.customer) } }, fields: ['tier'] }
+						return yield* ctx.refuse('errors.refused', { row: bad });
+					const { customers } = yield* ctx.query({
+						customers: { where: { id: { in: rows.map((r) => r.after.customer) } }, fields: ['tier'] }
 					});
 					return customers.rows.every((c) => c.tier === 'gold')
 						? ctx.allow()
-						: ctx.approve((flow) => flow.step('Sales review', { teams: ['sales'] }));
+						: ctx.approve({ steps: [{ name: 'Sales review', teams: ['sales'] }] });
 				}
 			},
 			update: {
-				columns: { orders: ['status', 'note'] },
-				check: function* (changes, ctx) {
+				columns: { fields: ['status', 'note'] },
+				verdict: function* (changes, ctx) {
 					const me = ctx.actor.kind === 'member' ? ctx.actor.id : null;
 					const mine = changes.every((c) => c.before.owner === me && c.before.lines.length < 100);
-					return mine ? ctx.allow() : ctx.deny('Only your own orders change.', { field: 'status' });
+					return mine
+						? ctx.allow()
+						: yield* ctx.refuse('errors.refused', { field: 'status' });
 				}
 			},
 			delete: {
-				check: function* (rows, ctx) {
-					return rows.length < 10 ? ctx.allow() : ctx.deny('Delete fewer at once.', { row: 0 });
+				verdict: function* (rows, ctx) {
+					return rows.length < 10
+						? ctx.allow()
+						: yield* ctx.refuse('errors.refused', { row: 0 });
 				}
 			}
 		},
-		notices: { read: true },
-		customers: { update: true }
+		notices: { outputs: { default: {} } },
+		customers: { update: {} }
 	}
 });
 
@@ -83,32 +81,32 @@ export const layered = policy({
 policy({
 	description: 'x',
 	// @ts-expect-error a read layer the model does not declare (`owner` is a relation, never a layer)
-	grants: { orders: { read: { 'orders.owner': {} } } }
+	grants: { orders: { outputs: { default: { owner: {} } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a layer filter on a field of another layer (`note` is the root's)
-	grants: { orders: { read: { 'orders.customer': { where: { note: { isNull: true } } } } } }
+	grants: { orders: { outputs: { default: { customer: { where: { note: { is_null: true } } } } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a column the model's create does not declare
-	grants: { orders: { create: { columns: { orders: ['status'] } } } }
+	grants: { orders: { create: { columns: { fields: ['status'] } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a write path the model's create does not declare
-	grants: { orders: { create: { columns: { 'orders.customer': ['name'] } } } }
+	grants: { orders: { create: { columns: { customer: { fields: ['name'] } } } } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error a verb the model does not declare (sites declares no create)
-	grants: { sites: { create: true } }
+	grants: { sites: { create: {} } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error `read` on a model without `read`
-	grants: { sys_session: { read: true } }
+	grants: { sys_session: { outputs: { default: {} } } }
 });
 policy({
 	description: 'x',
@@ -117,33 +115,81 @@ policy({
 });
 policy({
 	description: 'x',
-	// @ts-expect-error an unknown ctx member
-	grants: { orders: { delete: { check: function* (_rows, ctx) { return ctx.refuse('no'); } } } }
+	grants: {
+		orders: {
+			delete: {
+				// @ts-expect-error an unknown ctx member
+				verdict: function* (_rows, ctx) {
+					return ctx.refuse('errors.refused');
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a plain-object verdict
-	grants: { orders: { delete: { check: function* () { return { kind: 'allow' }; } } } }
+	grants: {
+		orders: {
+			delete: {
+				// @ts-expect-error a plain-object verdict
+				verdict: function* () {
+					return { kind: 'allow' };
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error `deny`'s path is a write path of this verb
-	grants: { orders: { create: { check: function* (_rows, ctx) { return ctx.deny('no', { path: 'orders.customer' }); } } } }
+	grants: {
+		orders: {
+			create: {
+				verdict: function* (_rows, ctx) {
+					// @ts-expect-error a refusal names a row and a root column, never a write path
+					return yield* ctx.refuse('errors.refused', { path: 'orders.lines' });
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error `deny`'s field is a column of its path
-	grants: { orders: { create: { check: function* (_rows, ctx) { return ctx.deny('no', { path: 'orders.lines', field: 'note' }); } } } }
+	grants: {
+		orders: {
+			create: {
+				verdict: function* (_rows, ctx) {
+					// @ts-expect-error `field` is a root column of the verb
+					return yield* ctx.refuse('errors.refused', { field: 'item' });
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a mistyped `check` argument
-	grants: { orders: { create: { check: function* (_rows: readonly { readonly nope: 1 }[], ctx) { return ctx.allow(); } } } }
+	grants: {
+		orders: {
+			create: {
+				// @ts-expect-error a mistyped `check` argument
+				verdict: function* (_rows: readonly { readonly nope: 1 }[], ctx) {
+					return ctx.allow();
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
-	// @ts-expect-error a relation the create does not declare is not in its rows
-	grants: { orders: { create: { check: function* (rows, ctx) { return rows[0]?.notes === undefined ? ctx.allow() : ctx.allow(); } } } }
+	grants: {
+		orders: {
+			create: {
+				verdict: function* (rows, ctx) {
+					// @ts-expect-error a relation the create does not declare is not in its rows
+					return rows[0]?.after.notes === undefined ? ctx.allow() : ctx.allow();
+				}
+			}
+		}
+	}
 });
 policy({
 	description: 'x',
@@ -152,5 +198,5 @@ policy({
 });
 
 // ── `create.filled` naming another layer leaves this layer's required columns required ──
-type Line = NonNullable<CreateTree<'orders'>['lines']>[number];
+type Line = NonNullable<CreateInput<'orders'>['lines']>[number];
 is<Eq<{} extends Pick<Line, 'item'> ? 1 : 0, 0>>();

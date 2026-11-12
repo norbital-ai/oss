@@ -4,7 +4,7 @@
 import { Effect, Option, Schema, Stream } from 'effect';
 import type { DeviceApi, DeviceNotice, PushRegistration } from '../page/device.ts';
 import { NoticeRow, type PushBody } from '../protocol/schema.ts';
-import { PATHS, noticePath } from '../protocol/wire.ts';
+import { PATHS, notice_path } from '../protocol/wire.ts';
 import { based } from './nav.ts';
 import {
 	attempt,
@@ -36,19 +36,19 @@ export const freshNotices = (
 					id: row.id,
 					title: row.title,
 					body: row.body,
-					path: noticePath(row.link)
+					path: notice_path(row.link)
 				}))
 				.reverse();
 
 /** Opens a URL outside the workspace: through the shell when it has a way, otherwise in this browser. */
-export const openExternal = (device: DeviceApi, href: string): Effect.Effect<void> => {
+export const open_external = (device: DeviceApi, href: string): Effect.Effect<void> => {
 	const navigation = device.navigation;
 	const browser = Effect.sync(() => {
 		location.href = href;
 	});
 	return navigation === undefined
 		? browser
-		: attempt('navigation.openExternal', () => navigation.openExternal(href)).pipe(
+		: attempt('navigation.open_external', () => navigation.open_external(href)).pipe(
 				Effect.catch(() => browser)
 			);
 };
@@ -57,7 +57,7 @@ export const openExternal = (device: DeviceApi, href: string): Effect.Effect<voi
  * A signed-in staff member's Device for the page scope: taps navigate; each new unread notice of the live
  * `inbox` is raised while the page is hidden (a visible page shows its own toast, a stored web endpoint its service
  * worker's); the device's push endpoint is stored, unasked (a shell's `push`, else web push unless the browser blocks
- * notifications); the shell's notice service starts. `signOut` stops the service and forgets the endpoint, before the
+ * notifications); the shell's notice service starts. `sign_out` stops the service and forgets the endpoint, before the
  * session ends.
  */
 export const deviceSession = Effect.fn('shell.deviceSession')(function* (
@@ -72,7 +72,7 @@ export const deviceSession = Effect.fn('shell.deviceSession')(function* (
 ) {
 	const notifications = device.notifications ?? webNotifications();
 	yield* Effect.acquireRelease(
-		Effect.sync(() => notifications.onOpen(options.navigate)),
+		Effect.sync(() => notifications.on_open(options.navigate)),
 		(off) => Effect.sync(off)
 	);
 	const push = device.push,
@@ -123,7 +123,7 @@ export const deviceSession = Effect.fn('shell.deviceSession')(function* (
 			)
 		).pipe(Effect.forkScoped);
 	return {
-		signOut: Effect.gen(function* () {
+		sign_out: Effect.gen(function* () {
 			if (notices !== undefined) yield* quietly(attempt('notices.stop', () => notices.stop()));
 			if (endpoint !== null) yield* quietly(options.store({ endpoint, remove: true }));
 		})

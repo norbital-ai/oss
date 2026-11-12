@@ -7,17 +7,12 @@ import { Effect, FiberSet, Option, Schema, type Scope } from 'effect';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import type { Json } from '../../decl/values.ts';
 import type { OutboundFile } from '../services.ts';
-import { SendRefused, sendRefusal } from '../conversations/status.ts';
+import { SendReceipt, SendRefused, sendRefusal } from '../conversations/status.ts';
 import { Port, type PortFailure } from '../port.ts';
 import { Fenced } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { DriverOpen, Link, Provider } from './driver.ts';
 
-/** What a send answers: the provider's message id, and how long until bolt presumes it delivered without a report. */
-const SendReceipt = Schema.Struct({
-	providerId: Schema.String,
-	presumeAfterMs: Schema.optionalKey(Schema.Number)
-});
 /** A pushing driver's feed page (`DriverPage`). */
 const DriverPageSchema = Schema.Struct({
 	items: Schema.Array(Schema.Json),
@@ -72,7 +67,7 @@ export type LinkCalls = {
 	readonly webhook: (request: Request) => Effect.Effect<Response, PortFailure>;
 };
 
-/** The `Unavailable.facility` of a send to a paired link that is not connected: the row waits, spending no attempt. */
+/** A valid conversation account awaits initial pairing or reconnection: its queued send spends no provider attempt. */
 export const LINK_DOWN = 'link.down';
 const absent = (member: string) =>
 	Port.unavailable(`link.${member}`, `this link's provider has no ${member}`);
@@ -102,7 +97,7 @@ const refusedOr =
 		return r === null ? linkFailure(instance)(e) : new SendRefused(r.message, r.code, r.permanent);
 	};
 const receipt = (answer: unknown) =>
-	Schema.decodeUnknownEffect(SendReceipt)(answer).pipe(
+	Schema.decodeUnknownEffect(SendReceipt, { onExcessProperty: 'error' })(answer).pipe(
 		Effect.mapError(
 			() =>
 				new FacilityFailure({
@@ -136,7 +131,7 @@ export function linkCalls(link: Link, run: UrlRunner, instance: string): LinkCal
 							try: () => pair(input),
 							catch: (error) =>
 								Option.match(decodePairingInvalid(error), {
-									onSome: (failure) => BoltError.make('invalidInput', 'admission', failure.message),
+									onSome: (failure) => BoltError.make('invalid_input', 'admission', failure.message),
 									onNone: () => linkFailure(instance)(error)
 								})
 						}),

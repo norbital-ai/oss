@@ -1,6 +1,6 @@
 // The guest fixture manifest and a native guest activation without a database.
 import { Effect, Layer, Option, Result } from 'effect';
-import { decodeProjectedManifest } from '../../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../../src/engine/manifest.ts';
 import {
 	GuestConfig,
 	GuestLive,
@@ -17,39 +17,36 @@ import {
 	type InvocationEvents
 } from '../../src/engine/services.ts';
 
-export const fixtureManifest = Result.getOrThrow(
-	decodeProjectedManifest({
+export const fixture_manifest = Result.getOrThrow(
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
 		exposures: {
-			a: { read: { a: { fields: 'all' } }, create: { columns: { a: [] } } },
-			b: { read: { b: { fields: 'all' } }, update: { columns: { b: [] } } },
+			a: { outputs: { default: { a: { fields: 'all' } } }, create: { columns: { a: [] } } },
+			b: { outputs: { default: { b: { fields: 'all' } } }, update: { columns: { b: [] } } },
 			t: {
-				read: { t: { fields: 'all' } },
+				outputs: { default: { t: { fields: 'all' } } },
 				create: { columns: { t: [] } }
 			},
-			jobs: { read: { jobs: { fields: 'all' } }, update: { columns: { jobs: [] } } }
+			jobs: { outputs: { default: { jobs: { fields: 'all' } } }, update: { columns: { jobs: [] } } }
 		},
-		policies: {},
+		policies: { fixture: { description: 'Guest fixture authority', grants: {} } },
 		automations: {
-			a: { description: 'a', policies: [] },
-			b: { description: 'b', policies: [] }
+			a: { description: 'a', policies: ['fixture'] },
+			b: { description: 'b', policies: ['fixture'] }
 		},
 		integrations: {},
 		teams: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		kiosks: {},
 		groups: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
 /** A native guest activation without a database; tests supply the crossing host. */
-export const guestLayer = (
+export const guest_layer = (
 	guest: GuestProgram,
 	options: GuestOptions = {},
 	events?: (ids: EventIds) => Effect.Effect<InvocationEvents>,
@@ -60,12 +57,12 @@ export const guestLayer = (
 		Layer.provideMerge(
 			Layer.mergeAll(
 				Layer.succeed(GuestConfig, options),
-				Layer.succeed(Manifest, fixtureManifest),
+				Layer.succeed(Manifest, fixture_manifest),
 				Layer.succeed(Activation, {
 					scope: 'test',
 					epoch: '',
 					release: 'test',
-					publicUrl: 'http://localhost',
+					public_url: 'http://localhost',
 					guest: Option.some(guest)
 				}),
 				Layer.succeed(Telemetry, {

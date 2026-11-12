@@ -54,7 +54,7 @@ export const imap = (box: Mailbox, auth: Login, net: MailNet) =>
 						open: ({ host, port, secure }) =>
 							streamsSocket(net.tcp.connect({ host, port, tls: secure }, signal)),
 						upgrade: (socket) =>
-							streamsSocket(socket.connecting.then((open) => open.startTls(signal)))
+							streamsSocket(socket.connecting.then((open) => open.start_tls(signal)))
 					}),
 					auth,
 					logger: false,

@@ -114,7 +114,7 @@ function discPlace(seed: DiscSeed, time: number): DotPoint {
 	return { x: r * c, y, z: -0.8 * s, light: beam, accent: 0, boost: heat * 0.2, vis: 1 };
 }
 
-export const accretionDiscGeometry: DotGeometry<DiscSeed, 'ready'> = {
+export const accretion_disc_geometry: DotGeometry<DiscSeed, 'ready'> = {
 	states: ['ready'],
 	layout: discLayout,
 	point: discPoint

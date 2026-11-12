@@ -4,12 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { Result } from 'effect';
 import type { Plugin } from 'vite';
 import type { Discovered } from '../discover.ts';
-import type { Role } from '@norbital-ai/bolt/tooling';
 
 /** These roles supply browser modules; every other authored declaration stays on the compiler/server side. */
-const CLIENT_ROLES: ReadonlySet<Role> = new Set([
+const CLIENT_ROLES: ReadonlySet<Discovered['role']> = new Set([
 	'page',
-	'kiosk_page',
 	'session',
 	'representation',
 	'renderer',
@@ -21,7 +19,7 @@ const CLIENT_ROLES: ReadonlySet<Role> = new Set([
 /** Vite queries describe how to load a file; they never grant access to the file's source. */
 const modulePath = (id: string, importer?: string): string | undefined => {
 	if (id.includes('\0')) return undefined;
-	const path = id.split(/[?#]/, 1)[0]!;
+	const [path = ''] = id.split(/[?#]/, 1);
 	if (path.startsWith('file:')) return resolve(fileURLToPath(path));
 	const decoded = Result.getOrElse(
 		Result.try(() => decodeURIComponent(path)),

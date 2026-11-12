@@ -2,7 +2,7 @@ import { expect, layer } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
+import { dynamic_read } from '../src/protocol/read-request.ts';
 
 const manifest: EngineManifest = {
 	needs: [],
@@ -10,7 +10,7 @@ const manifest: EngineManifest = {
 	models: {
 		documents: {
 			description: 'A scoped document',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				profile: {
@@ -20,7 +20,7 @@ const manifest: EngineManifest = {
 						fields: {
 							region: { kind: 'text' },
 							rank: { kind: 'int' },
-							flags: { kind: 'list', of: { kind: 'text' } }
+							flags: { kind: 'text', many: true }
 						}
 					}
 				}
@@ -28,29 +28,31 @@ const manifest: EngineManifest = {
 		}
 	},
 	relationships: {},
-	exposures: { documents: { read: { documents: { fields: 'all' } } } },
+	exposures: { documents: { outputs: { default: { documents: { fields: 'all' } } } } },
 	policies: {
 		north: {
 			description: 'Only northern documents',
 			grants: {
-				documents: { read: { documents: { where: { profile: { region: { eq: 'north' } } } } } }
+				documents: {
+					outputs: { default: { scopes: { documents: { profile: { region: { eq: 'north' } } } } } }
+				}
 			}
 		},
 		south: {
 			description: 'Only southern documents',
 			grants: {
-				documents: { read: { documents: { where: { profile: { region: { eq: 'south' } } } } } }
+				documents: {
+					outputs: { default: { scopes: { documents: { profile: { region: { eq: 'south' } } } } } }
+				}
 			}
 		}
 	},
 	integrations: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const seed = {
@@ -100,12 +102,12 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 					['north', ['N1', 'N2', 'N3']],
 					['south', ['S1', 'S2']]
 				] as const) {
-					const actor = t.as(t.member([policy]));
+					const actor = yield* t.as(t.member([policy]));
 					const seen: string[] = [];
 					let after: string | undefined;
 					for (let page = 0; page < 4; page++) {
 						const answer = yield* actor.query(
-							dynamicRead({
+							dynamic_read({
 								documents: {
 									where: {
 										or: [
@@ -114,7 +116,7 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 										]
 									},
 									fields: ['name'],
-									orderBy: { 'profile.rank': 'asc' },
+									order_by: { 'profile.rank': 'asc' },
 									limit: 1,
 									...(after === undefined ? {} : { after })
 								}
@@ -138,12 +140,12 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 			() =>
 				Effect.gen(function* () {
 					const t = yield* TestWorkspace;
-					const actor = t.as(t.member(['north']));
-					const query = dynamicRead({
+					const actor = yield* t.as(t.member(['north']));
+					const query = dynamic_read({
 						documents: {
 							where: { not: { profile: { flags: { some: { eq: 'blocked' } } } } },
 							fields: ['name'],
-							orderBy: 'name',
+							order_by: 'name',
 							limit: 10
 						}
 					});
@@ -152,13 +154,13 @@ layer(TestWorkspace.layer({ manifest, seed }))(
 					);
 					expect(documents.rows.map((row) => row.name)).toEqual(['N1', 'N3']);
 					expect(documents.total).toBe(2);
-					const outside = dynamicRead({
+					const outside = dynamic_read({
 						documents: { where: { profile: { region: { eq: 'south' } } }, fields: ['name'] }
 					});
 					expect(
 						(yield* Schema.decodeUnknownEffect(Answer)(yield* actor.query(outside))).documents.rows
 					).toEqual([]);
-					expect(yield* Effect.flip(t.as(t.member([])).query(query))).toMatchObject({
+					expect(yield* Effect.flip((yield* t.as(t.member([]))).query(query))).toMatchObject({
 						code: 'forbidden'
 					});
 				})

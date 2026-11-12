@@ -17,7 +17,7 @@ import { TenantDb, type DbBatch, type TenantDbShape } from '../../engine/db/tena
 import {
 	cancelled,
 	copiedBatch,
-	dbError,
+	db_error,
 	lockStatements,
 	param,
 	parse,
@@ -32,7 +32,7 @@ export type PgliteClient = {
 	transaction<A>(body: (tx: Pick<PgliteClient, 'query' | 'exec'>) => Promise<A>): Promise<A>;
 } & Pick<PGlite, 'execProtocol' | 'parsers'>;
 /** A native data directory may be initialized from a dump; reopening uses that same directory. */
-export type PgliteSource =
+type PgliteSource =
 	string | Blob | { readonly dataDir: string; readonly loadDataDir?: Blob };
 type Querier = Pick<PgliteClient, 'query' | 'exec'>;
 const parsers = Object.fromEntries(PARSED_OIDS.map((oid) => [oid, (s: string) => parse(oid, s)]));
@@ -44,7 +44,7 @@ class Pglite extends PGlite {
 	override async _initArrayTypes(): Promise<void> {}
 }
 const extensions = { vector, btree_gist };
-const rowsOf = Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)));
+const rowsOf = Schema.decodeUnknownEffect(Schema.Array(Schema.Record(Schema.String, Schema.Json)));
 
 type NativeSql = { readonly text: string; readonly params: (string | null)[] };
 type NativeRows = { readonly rows: readonly unknown[]; readonly affected: number | undefined };
@@ -120,7 +120,7 @@ const namedRunner = (
 // keyed by the session's own parser table: every client wrapping one PGlite shares its prepared statements
 const runners = new WeakMap<PgliteClient['parsers'], (s: NativeSql) => Promise<NativeRows>>();
 const closed = (pg: PGlite) =>
-	Effect.tryPromise({ try: () => pg.close(), catch: dbError }).pipe(
+	Effect.tryPromise({ try: () => pg.close(), catch: db_error }).pipe(
 		Effect.uninterruptible,
 		Effect.tapCause(Effect.logWarning),
 		Effect.orDie
@@ -135,7 +135,7 @@ const checkpointed = (pg: PGlite) =>
 			await pg.exec('checkpoint');
 			return pg.dumpDataDir('none');
 		},
-		catch: dbError
+		catch: db_error
 	}).pipe(Effect.uninterruptible);
 // The smallest data directory to unpack per open: 1 MiB WAL segments (16 MiB by default), a checkpoint removes spent
 // segments instead of keeping them as future ones, and no template databases (PGlite serves its one database; nothing
@@ -155,7 +155,7 @@ const TEMPLATES = [
 const initdb = Effect.acquireUseRelease(
 	Effect.tryPromise({
 		try: () => PGlite.create({ extensions, initDbStartParams: INITDB }),
-		catch: dbError
+		catch: db_error
 	}),
 	(pg) =>
 		Effect.tryPromise({
@@ -163,7 +163,7 @@ const initdb = Effect.acquireUseRelease(
 			try: async () => {
 				for (const statement of TEMPLATES) await pg.exec(statement);
 			},
-			catch: dbError
+			catch: db_error
 		}).pipe(Effect.andThen(checkpointed(pg))),
 	closed
 );
@@ -181,7 +181,7 @@ const pristineFile = async () => {
 };
 // The machine's dump, else initdb once and keep it (written whole, then renamed, so no process reads half of one).
 const dump = Effect.gen(function* () {
-	const file = yield* Effect.tryPromise({ try: pristineFile, catch: dbError });
+	const file = yield* Effect.tryPromise({ try: pristineFile, catch: db_error });
 	const kept = yield* Effect.tryPromise(() => readFile(file)).pipe(Effect.option);
 	if (Option.isSome(kept)) return new Blob([new Uint8Array(kept.value)]);
 	const blob = yield* initdb;
@@ -192,7 +192,7 @@ const dump = Effect.gen(function* () {
 			await writeFile(temporary, new Uint8Array(await blob.arrayBuffer()));
 			await rename(temporary, file);
 		},
-		catch: dbError
+		catch: db_error
 	});
 	return blob;
 });
@@ -230,7 +230,7 @@ const create = (from: PgliteSource | undefined): Effect.Effect<PGlite, DbError, 
 				await pg.waitReady;
 				return pg;
 			},
-			catch: dbError
+			catch: db_error
 		});
 	});
 
@@ -240,7 +240,7 @@ export const PgliteDb = {
 		let named = runners.get(pg.parsers);
 		if (named === undefined)
 			runners.set(pg.parsers, (named = namedRunner(pg.execProtocol.bind(pg), pg.parsers)));
-		const exclusive = (batch: DbBatch): Effect.Effect<readonly Rows[], DbError> =>
+		const exclusive = (batch: DbBatch, readOnly = false): Effect.Effect<readonly Rows[], DbError> =>
 			Effect.try({
 				try: () => {
 					const prepared = copiedBatch(batch);
@@ -252,7 +252,7 @@ export const PgliteDb = {
 						rollback: prepared.rollback === true
 					};
 				},
-				catch: dbError
+				catch: db_error
 			}).pipe(
 				Effect.flatMap((prepared) =>
 					Effect.uninterruptibleMask((restore) =>
@@ -266,6 +266,11 @@ export const PgliteDb = {
 								.then(() =>
 									pg.transaction(async (tx) => {
 										check();
+										if (readOnly)
+											await run(tx, {
+												text: 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY',
+												params: []
+											});
 										if (prepared.setup !== '') await run(tx, { text: prepared.setup, params: [] });
 										const results: NativeRows[] = [];
 										for (const statement of prepared.statements) {
@@ -284,7 +289,7 @@ export const PgliteDb = {
 									if (error instanceof RolledBack) return error.rows;
 									throw error;
 								});
-							return restore(Effect.tryPromise({ try: () => pending, catch: dbError })).pipe(
+							return restore(Effect.tryPromise({ try: () => pending, catch: db_error })).pipe(
 								Effect.onInterrupt(() =>
 									Effect.sync(() => {
 										aborted = true;
@@ -299,7 +304,7 @@ export const PgliteDb = {
 												() => undefined,
 												() => undefined
 											),
-										catch: dbError
+										catch: db_error
 									}).pipe(Effect.ignore)
 								)
 							);
@@ -312,30 +317,21 @@ export const PgliteDb = {
 					)
 				),
 				Effect.flatMap((results) =>
-					Effect.try({
-						try: () =>
-							results.map((result) => {
-								const rows = rowsOf(result.rows);
-								return { rows, affected: result.affected ?? rows.length };
-							}),
-						catch: dbError
-					})
+					Effect.forEach(results, (result) =>
+						rowsOf(result.rows).pipe(
+							Effect.map((rows) => ({ rows, affected: result.affected ?? rows.length })),
+							Effect.mapError(db_error)
+						)
+					)
 				)
 			);
 		return TenantDb.typed({
-			read: (statements) => exclusive({ statements }),
+			read: (statements) => exclusive({ statements }, true),
 			write: (statement, lock) =>
 				exclusive({ statements: [statement], ...(lock === undefined ? {} : { lock }) }).pipe(
 					Effect.map((rows) => rows[0] ?? { rows: [], affected: 0 })
 				),
-			transaction: exclusive,
-			session: () =>
-				Effect.fail(
-					DbError.make(
-						'0A000',
-						'interactive transactions require a PostgreSQL 17+ host; in-process PGlite cannot enforce the hard transaction deadline'
-					)
-				)
+			transaction: exclusive
 		});
 	},
 	/** The open database as a dump to load (`PgliteSource`), checkpointed first so loading it replays no WAL. */
@@ -344,7 +340,7 @@ export const PgliteDb = {
 	open: (from?: PgliteSource): Effect.Effect<PGlite, DbError, Pristine | Scope.Scope> =>
 		Effect.acquireRelease(create(from), closed).pipe(
 			Effect.tap((pg) =>
-				Effect.tryPromise({ try: () => pg.exec(`set time zone 'UTC'`), catch: dbError }).pipe(
+				Effect.tryPromise({ try: () => pg.exec(`set time zone 'UTC'`), catch: db_error }).pipe(
 					Effect.uninterruptible
 				)
 			)

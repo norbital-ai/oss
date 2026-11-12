@@ -1,16 +1,16 @@
 // An approval request (rules 44–47, §3.8): today's readable face of an approval — its status, the step it waits on, the
 // names of every step, and the teams and members that decide — kept under its name (R3). Read by its participants;
 // written by the approvals engine. At most one open request per record: the lock refuses a second.
-import { model } from '../../../../decl/model.ts';
+import { bind_system_model } from '../../../../decl/model.ts';
 
-const names = { kind: 'json', shape: { kind: 'list', of: { kind: 'text' } } } as const;
+const names = { kind: 'json', shape: { kind: 'text', many: true } } as const;
 
-export default model('approval_request', {
+export default bind_system_model('approval_request')({
 	description:
 		'An approval request on a record: its status, its steps, and the teams and members that approve or supersede.',
 	fields: {
-		collection_name: { kind: 'text', label: 'Model' },
-		record_id: { kind: 'text', label: 'Record ID' },
+		collection_name: { kind: 'text' },
+		record_id: { kind: 'text' },
 		action: { kind: 'enum', values: ['create', 'update', 'delete'] },
 		status: {
 			kind: 'enum',
@@ -31,9 +31,15 @@ export default model('approval_request', {
 		revision: { kind: 'int', default: 1 },
 		created_at: { kind: 'instant' }
 	},
-	unique: [{ fields: ['collection_name', 'record_id'], where: { status: { eq: 'ONGOING' } } }],
+	constraints: {
+		one_ongoing_request: {
+			unique: ['collection_name', 'record_id'],
+			where: { status: { eq: 'ONGOING' } }
+		}
+	},
 	table: { primary: 'uuid' },
 	// Target labels are searched through the existing model/id reference by the query catalogue.
-	search: { text: ['collection_name'] },
-	read: 'all'
+
+	outputs: { default: { fields: 'all' } },
+	indexes: { find: { text: ['collection_name'] } }
 });

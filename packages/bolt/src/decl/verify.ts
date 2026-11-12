@@ -1,5 +1,5 @@
 // The `__verify` line (§3.3.9, X-12). What a model literal cannot see, because it lives in another model (an inverse
-// declared by another model's ref, a roll-up over a relation back, a FK named in `label`), is checked once over the whole
+// declared by another model's ref, a roll-up over a relation back, a FK named in `record_label`), is checked once over the whole
 // generated names index: `.norbital/names.ts` ends with `export const __verify: Check<Verify> = true;`, which fails tsc
 // with every message below. A model's own ref fields check their target and inverse in `model()`.
 import type {
@@ -11,7 +11,6 @@ import type {
 	OneRels,
 	OwnedInverse
 } from './names.ts';
-import type { ConversationOf } from './runtime/integration.ts';
 
 type Models = NamesPart<'models'>;
 type Listed<X> = X extends readonly (infer E)[] ? Listed<E> : X;
@@ -61,9 +60,9 @@ type RollUp<M, P extends string, K> = K extends { kind: 'sum' | 'count' | 'state
 			: K extends { kind: 'state'; states: infer S }
 				? Unknown<
 						M,
-						{ [X in keyof S]: S[X] extends { edit: readonly (infer E)[] } ? E : never }[keyof S],
-						FieldName<M> | OwnedInverse<M>,
-						`${P}.edit`
+						{ [X in keyof S]: S[X] extends { stamp: infer F } ? F : never }[keyof S],
+						{ [F in keyof Columns<M>]: Columns<M>[F] extends { kind: 'instant' } ? F : never }[keyof Columns<M>],
+						`${P}.stamp`
 					>
 				: K extends { kind: 'seq'; per: infer L }
 					? Unknown<M, Listed<L>, FieldName<M>, `${P}.per`>
@@ -71,11 +70,35 @@ type RollUp<M, P extends string, K> = K extends { kind: 'sum' | 'count' | 'state
 	: never;
 
 type ModelErrors<M, D = Models[M & keyof Models]> =
-	| Unknown<M, D extends { label: readonly (infer L)[] } ? L : never, FieldName<M>, 'label'>
 	| Unknown<M, Listed<D extends { key: infer L } ? L : never>, FieldName<M>, 'key'>
 	| Unknown<M, Each<D extends { unique: infer L } ? L : never, 'fields'>, FieldName<M>, 'unique'>
-	| Unknown<M, Listed<D extends { index: infer L } ? L : never>, FieldName<M>, 'index'>
-	| Unknown<M, Each<D extends { noOverlap: infer L } ? L : never, 'key'>, FieldName<M>, 'noOverlap'>
+	| Unknown<
+			M,
+			Each<D extends { indexes: infer L } ? L : never, 'on'> extends infer I
+				? I extends { lower: infer F }
+					? F
+					: I
+				: never,
+			FieldName<M>,
+			'indexes'
+	  >
+	| Unknown<M, Each<D extends { no_overlap: infer L } ? L : never, 'key'>, FieldName<M>, 'no_overlap'>
+	| Unknown<
+			M,
+			D extends { locks: infer L }
+				? { [N in keyof L]: L[N] extends { except: infer F } ? Listed<F> : never }[keyof L]
+				: never,
+			FieldName<M> | OwnedInverse<M>,
+			'constraints.locked.except'
+	  >
+	| Unknown<
+			M,
+			D extends { locks: infer L }
+				? { [N in keyof L]: L[N] extends { where: infer W } ? WhereKeys<W> : never }[keyof L]
+				: never,
+			keyof Columns<M> | keyof OneRels<M>,
+			'constraints.locked'
+	  >
 	| Unknown<
 			M,
 			D extends { check: infer C }
@@ -104,21 +127,9 @@ export type LocaleErrors<Locales = NamesPart<'locales'>, Base = NamesPart<'messa
 		: never;
 }[keyof Locales & string];
 
-/** Connections deploying an envoy on an instance that carries no conversation, as messages. */
-export type ConnectionErrors<C = NamesPart<'workspace'> extends { connections: infer X } ? X : {}> =
-	{
-		[K in keyof C & string]: C[K] extends { envoy: string; integration: infer D }
-			? [ConversationOf<D>] extends [never]
-				? `connections.${K}: an envoy answers only on a conversation integration; '${D & string}' carries none`
-				: never
-			: never;
-	}[keyof C & string];
-
 /** Every cross-file declaration error in the workspace, as messages; `never` when there is none. */
 export type Verify =
-	| { [M in keyof Models & string]: ModelErrors<M> }[keyof Models & string]
-	| LocaleErrors
-	| ConnectionErrors;
+	{ [M in keyof Models & string]: ModelErrors<M> }[keyof Models & string] | LocaleErrors;
 /**
  * `true` when `E` is `never`; otherwise an object type whose keys are the error messages, so tsc prints them. The generated `Check<Verify>` gate.
  */

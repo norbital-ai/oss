@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider, type ChatHost } from '../../src/chat/adapter.ts';
 import { gitlab } from '../../src/chat/gitlab/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const key = Buffer.alloc(32, 7);
@@ -52,13 +52,13 @@ const listing = (rows: object[], next = '') =>
 	});
 const history = (thread: string, since: string) =>
 	Effect.promise(async () =>
-		(
+		required((
 			await gitlab.connect(settings, {
 				fetch,
-				webhookUrl: 'https://hook.test/',
+				webhook_url: 'https://hook.test/',
 				receive: async () => {}
 			} satisfies ChatHost)
-		).history!(thread, since)
+		).history)(thread, since)
 	);
 const notes =
 	(rows: Response) =>
@@ -71,14 +71,14 @@ describe('GitLab', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(gitlab, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'nor.bius' });
-			expect((yield* h.link.webhook!(delivery(hook()))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(hook()))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: '100',
 						thread: '42/merge_requests/7',
-						sentAt: '2026-11-01T10:00:00.000Z',
+						sent_at: '2026-11-01T10:00:00.000Z',
 						from: { handle: '7', name: 'Ada' },
 						text: 'hello',
 						title: 'Fix the build',
@@ -96,11 +96,11 @@ describe('GitLab', () => {
 				body = hook();
 			const forged = delivery(body);
 			forged.headers.set('webhook-signature', 'v1,Zm9yZ2Vk');
-			expect((yield* h.link.webhook!(forged)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
 			const old = Math.floor(Date.now() / 1000) - 3600;
-			expect((yield* h.link.webhook!(delivery(body, old))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(delivery(body, old))).status).toBe(401);
 			const unsigned = webhook(body, { 'x-gitlab-event': 'Note Hook' });
-			expect((yield* h.link.webhook!(unsigned)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(unsigned)).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -110,17 +110,17 @@ describe('GitLab', () => {
 			const h = yield* connected(gitlab, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(hook()))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(hook()))).status).toBe(500);
 		})
 	);
 	it.live('reads an edit, a mention, a thread of two names, and an issue', () =>
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(gitlab, settings);
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				delivery(hook({ action: 'update', note: 'hi', updated_at: '2026-11-01 11:00:00 UTC' }))
 			);
-			yield* h.link.webhook!(
+			yield* required(h.link.webhook)(
 				delivery(
 					hook(
 						{ id: 101, note: 'ping @nor.bius', noteable_type: 'Issue' },
@@ -128,7 +128,7 @@ describe('GitLab', () => {
 					)
 				)
 			);
-			yield* h.link.webhook!(delivery(hook({ id: 102, note: 'ping @norxbius or `@nor.bius`' })));
+			yield* required(h.link.webhook)(delivery(hook({ id: 102, note: 'ping @norxbius or `@nor.bius`' })));
 			expect(h.events[0]).toMatchObject({
 				messages: [{ id: '100', text: 'hi', version: '2026-11-01T11:00:00.000Z' }]
 			});
@@ -150,8 +150,8 @@ describe('GitLab', () => {
 				hook({ noteable_type: 'Issue' }, { issue: { iid: 3, title: 'x', confidential: true } }),
 				hook({ noteable_type: 'Snippet' })
 			])
-				expect((yield* h.link.webhook!(delivery(body))).status).toBe(200);
-			yield* h.link.webhook!(delivery('{}', undefined, 'Push Hook'));
+				expect((yield* required(h.link.webhook)(delivery(body))).status).toBe(200);
+			yield* required(h.link.webhook)(delivery('{}', undefined, 'Push Hook'));
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -159,8 +159,8 @@ describe('GitLab', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(gitlab, settings);
-			const sent = yield* h.link.send!({ to: '42/merge_requests/7', text: 'Done' }, []);
-			expect(sent).toMatchObject({ providerId: '900' });
+			const sent = yield* required(h.link.send)({ to: '42/merge_requests/7', text: 'Done' }, []);
+			expect(sent).toMatchObject({ provider_id: '900' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://gitlab.com/api/v4/projects/42/merge_requests/7/notes');
 			expect(call?.headers.get('authorization')).toBe('Bearer glpat');
@@ -172,7 +172,7 @@ describe('GitLab', () => {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(gitlab, settings);
 			const made = api.calls.length;
-			const wrong = yield* Effect.flip(h.link.send!({ to: '42/../../users', text: 'x' }, []));
+			const wrong = yield* Effect.flip(required(h.link.send)({ to: '42/../../users', text: 'x' }, []));
 			expect(wrong).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 			expect(api.calls).toHaveLength(made);
 		})
@@ -185,16 +185,16 @@ describe('GitLab', () => {
 					: new Response('{}', { status: 429, headers: { 'retry-after': '30' } })
 			);
 			const h = yield* connected(gitlab, settings);
-			const held = yield* Effect.flip(h.link.send!({ to: '42/issues/3', text: 'x' }, []));
-			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retryAfterMs: 30_000 });
+			const held = yield* Effect.flip(required(h.link.send)({ to: '42/issues/3', text: 'x' }, []));
+			expect(held).toMatchObject({ _tag: 'ProviderUnavailable', retry_after_ms: 30_000 });
 		})
 	);
 	it.live('a token GitLab refuses and a signing token of no shape fail pairing', () =>
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: '401 Unauthorized' }, 401));
 			const h = yield* host(chatProvider(gitlab), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
-			yield* Effect.flip(h.link.pair!({ ...settings, webhookSigningToken: 'whsec_short' }));
+			yield* Effect.flip(required(h.link.pair)(settings));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, webhookSigningToken: 'whsec_short' }));
 			expect(h.values.size).toBe(0);
 		})
 	);

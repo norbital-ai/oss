@@ -6,14 +6,14 @@
 	let {
 		enabled,
 		status,
-		onChange,
-		onTest,
+		on_change,
+		on_test,
 		t
 	}: {
 		enabled: boolean;
 		status: SoundStatus;
-		onChange: (enabled: boolean) => void;
-		onTest: () => void;
+		on_change: (enabled: boolean) => void;
+		on_test: () => void;
 		t: (key: string) => string;
 	} = $props();
 </script>
@@ -26,7 +26,7 @@
 			aria-checked={enabled}
 			aria-label={t('Play sounds')}
 			class="w-full justify-start"
-			onclick={() => onChange(!enabled)}
+			onclick={() => on_change(!enabled)}
 		>
 			<Icon name={enabled ? 'lucide:volume-1' : 'lucide:volume-x'} class="size-4" />
 			<span>{t('Play sounds')}</span><span class="ml-auto">{t(enabled ? 'On' : 'Off')}</span>
@@ -39,7 +39,7 @@
 	</Stack>
 	<Stack gap="sm">
 		<Inline
-			><Button variant="outline" disabled={!enabled || status === 'unavailable'} onclick={onTest}>
+			><Button variant="outline" disabled={!enabled || status === 'unavailable'} onclick={on_test}>
 				<Icon name="lucide:play" class="size-4" />{t('Test sound')}
 			</Button></Inline
 		>

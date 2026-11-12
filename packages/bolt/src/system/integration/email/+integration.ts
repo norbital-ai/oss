@@ -1,6 +1,6 @@
-import { integration } from '../../../decl/runtime/integration.ts';
+import { bind_integration } from '../../../declarations.ts';
 
-export default integration('email', {
+export default bind_integration('email')({
 	description: 'Email: a mailbox, its threads in and out.',
 	driver: 'email'
 });

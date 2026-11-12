@@ -1,5 +1,5 @@
-// The integration workspace: customers ← orders (a seq, a state with a per-state `edit`, a roll-up) → owned lines; a
-// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows; its write `check`s
+// The integration workspace: customers ← orders (a seq, a state with an explicit lock, a roll-up) → owned lines; a
+// callbacks on orders that read the customer and refuse a blocked one; two policies, `rep` (own rows; its write verdicts
 // keep orders in the north) and `auditor` (every row through the narrower `audit` output, which omits `note`). Lines are a layer of orders (read and written through it) and their own access point.
 import type { EngineManifest } from '../src/engine/manifest.ts';
 
@@ -9,13 +9,13 @@ export const manifest = {
 	models: {
 		customers: {
 			description: 'A customer',
-			label: 'name',
+			record_label: 'record.name',
 			unique: [{ fields: ['name'] }],
 			fields: { name: { kind: 'text' }, blocked: { kind: 'bool', default: false } }
 		},
 		orders: {
 			description: 'An order',
-			label: 'title',
+			record_label: 'record.title',
 			fields: {
 				title: { kind: 'text' },
 				region: { kind: 'enum', values: ['north', 'south'] },
@@ -23,7 +23,7 @@ export const manifest = {
 				status: {
 					kind: 'state',
 					initial: 'draft',
-					states: { draft: { to: ['submitted'] }, submitted: { to: ['draft'], edit: ['note'] } }
+					states: { draft: { to: ['submitted'] }, submitted: { to: ['draft'] } }
 				},
 				note: { kind: 'text', optional: true },
 				archived: { kind: 'bool', default: false },
@@ -35,11 +35,15 @@ export const manifest = {
 				},
 				total: { kind: 'sum', of: 'lines.amount' }
 			},
-			locked: { archived: { eq: true } }
+			locks: {
+				submitted: { where: { status: { eq: 'submitted' } }, except: ['note', 'status'] },
+				archived: { where: { archived: { eq: true } } },
+				won: { where: { stage: { eq: 'won' } }, except: ['archived', 'note'] }
+			}
 		},
 		lines: {
 			description: 'A line',
-			label: 'label',
+			record_label: 'record.label',
 			fields: { label: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } }
 		}
 	},
@@ -49,16 +53,16 @@ export const manifest = {
 	},
 	exposures: {
 		customers: {
-			read: { customers: { fields: 'all' } },
+			outputs: { default: { customers: { fields: 'all' } } },
 			create: { columns: { customers: ['name', 'blocked'] } }
 		},
 		orders: {
-			read: {
-				orders: { fields: 'all' },
-				'orders.customer': { fields: 'all' },
-				'orders.lines': { fields: 'all' }
-			},
 			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.customer': { fields: 'all' },
+					'orders.lines': { fields: 'all' }
+				},
 				audit: { orders: { fields: ['title', 'region', 'number', 'status', 'total', 'customer'] } }
 			},
 			create: {
@@ -75,44 +79,48 @@ export const manifest = {
 			},
 			delete: {}
 		},
-		lines: { read: { lines: { fields: 'all' } }, update: { columns: { lines: lineCols } } }
+		lines: {
+			outputs: { default: { lines: { fields: 'all' } } },
+			update: { columns: { lines: lineCols } }
+		}
 	},
 	integrations: {},
 	policies: {
 		rep: {
 			description: 'Sales rep',
 			grants: {
-				customers: { read: true },
+				customers: { outputs: { default: {} } },
 				orders: {
-					read: { orders: { where: { created_by: { eq: { var: 'requestor.id' } } } } },
-					create: { check: true },
-					update: { check: true },
-					delete: { check: true },
-					moves: { status: ['draft->submitted'] }
+					outputs: {
+						default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
+					},
+					create: { verdict: true },
+					update: { verdict: true, moves: { status: ['draft->submitted'] } },
+					delete: { verdict: true }
 				},
 				lines: {
-					read: {
-						lines: { where: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
+					outputs: {
+						default: {
+							scopes: { lines: { order: { is: { created_by: { eq: { var: 'requestor.id' } } } } } }
+						}
 					},
-					update: { check: true }
+					update: { verdict: true }
 				}
 			}
 		},
 		auditor: {
 			description: 'Reads every order',
 			grants: {
-				customers: { read: true },
-				orders: { outputs: { audit: true } }
+				customers: { outputs: { default: {} } },
+				orders: { outputs: { audit: {} } }
 			}
 		}
 	},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -131,47 +139,47 @@ export const callbacks = {
 } satisfies EngineManifest;
 
 /**
- * `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. `rep`'s checks
+ * `guest.mjs`: each callback batches customer references into one query; `spin` burns CPU past the wall. `rep`'s verdicts
  * deny a write that leaves the north (`rule: 'rep.orders.<op>'`), a delete of another member's order, and a line change
  * on an order outside the north (one read over the batch).
  */
 export const guest = {
 	source: `function* checkCustomers(rows, ctx) {
 	const ids = [...new Set(rows.flatMap((row) => row.customer == null ? [] : [row.customer]))];
-	const customers = ids.length === 0 ? [] : (yield* ctx.db.query({ customers: { where: { id: { in: ids } } } })).customers.rows;
+	const customers = ids.length === 0 ? [] : (yield* ctx.query({ customers: { where: { id: { in: ids } } } })).customers.rows;
 	for (const customer of customers) if (customer.blocked) yield* ctx.refuse(customer.name + ' is blocked', { field: 'customer' });
 }
 const trim = (rows) => rows.map((row) => row.title === undefined ? row : { ...row, title: row.title.trim() });
 export default { model: { orders: { bodies: {
-	create: function* (rows, ctx) {
-		if (rows.some((row) => row.title === 'spin')) for (;;) {}
-		yield* checkCustomers(rows, ctx);
-		return trim(rows);
+	create: function* (changes, ctx) {
+		if (changes.some(({ set }) => set.title === 'spin')) for (;;) {}
+		yield* checkCustomers(changes.map(({ after }) => after), ctx);
+		return trim(changes.map(({ set }) => set));
 	},
 	update: function* (changes, ctx) {
 		if (changes.some(({ set }) => set.title === 'spin')) for (;;) {}
-		yield* checkCustomers(changes.map(({ before, set }) => ({ ...before, ...set })), ctx);
+		yield* checkCustomers(changes.map(({ after }) => after), ctx);
 		return trim(changes.map(({ set }) => set));
 	}
 } } },
 policy: { rep: { grants: {
 	orders: {
-		create: { check: function* (rows, ctx) {
-			const row = rows.findIndex((r) => r.region !== 'north');
-			return row >= 0 ? ctx.deny('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
+		create: { verdict: function* (changes, ctx) {
+			const row = changes.findIndex(({ after }) => after.region !== 'north');
+			return row >= 0 ? yield* ctx.refuse('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
 		} },
-		update: { check: function* (changes, ctx) {
-			const row = changes.findIndex(({ before, set }) => before.region !== 'north' || (set.region ?? before.region) !== 'north');
-			return row >= 0 ? ctx.deny('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
+		update: { verdict: function* (changes, ctx) {
+			const row = changes.findIndex(({ before, after }) => before.region !== 'north' || after.region !== 'north');
+			return row >= 0 ? yield* ctx.refuse('Reps sell in the north.', { row, field: 'region' }) : ctx.allow();
 		} },
-		delete: { check: function* (rows, ctx) {
-			return rows.every((r) => r.created_by === ctx.actor.id) ? ctx.allow() : ctx.deny('Reps delete their own orders.');
+		delete: { verdict: function* (changes, ctx) {
+			return changes.every(({ before }) => before.created_by === ctx.actor.id) ? ctx.allow() : yield* ctx.refuse('Reps delete their own orders.');
 		} }
 	},
 	lines: {
-		update: { check: function* (changes, ctx) {
-			const { orders } = yield* ctx.db.query({ orders: { where: { id: { in: changes.map((c) => c.before.order) } }, fields: ['region'] } });
-			return orders.rows.every((o) => o.region === 'north') ? ctx.allow() : ctx.deny('Reps change lines of northern orders.');
+		update: { verdict: function* (changes, ctx) {
+			const { orders } = yield* ctx.query({ orders: { where: { id: { in: changes.map((c) => c.before.order) } }, fields: ['region'] } });
+			return orders.rows.every((o) => o.region === 'north') ? ctx.allow() : yield* ctx.refuse('Reps change lines of northern orders.');
 		} }
 	}
 } } }

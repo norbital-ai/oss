@@ -18,7 +18,6 @@ import {
 	captionOf,
 	previewsOf,
 	reportView,
-	resultLine,
 	revisable,
 	runState,
 	stepArgs,
@@ -66,7 +65,7 @@ it.effect(
 					conversation: 'c',
 					seq: seq + 1,
 					role: 'tool',
-					content: { id: `call-${seq}`, name, result: { settled: completed } },
+					content: { id: `call-${seq}`, assistant: 'a1', name, result: { settled: completed } },
 					text: null,
 					state: null,
 					mode: null,
@@ -99,7 +98,7 @@ describe('source edits on the panel', () => {
 						conversation: 'c',
 						seq: 1,
 						role: 'tool',
-						content: { id: 'call', name, args: JSON.stringify(args), result },
+						content: { id: 'call', assistant: 'a1', name, args: JSON.stringify(args), result },
 						text: null,
 						state: null,
 						mode: null,
@@ -118,7 +117,7 @@ describe('source edits on the panel', () => {
 		Effect.gen(function* () {
 			const edit = yield* edited(
 				'workspace_edit',
-				{ path: 'src/a.ts', oldString: 'one\ntwo', newString: 'three' },
+				{ path: 'src/a.ts', old_string: 'one\ntwo', new_string: 'three' },
 				{ path: 'src/a.ts', diagnostics: [] }
 			);
 			expect(edit?.tool?.changes).toEqual([{ path: 'src/a.ts', diff: '-one\n-two\n+three' }]);
@@ -130,7 +129,7 @@ describe('source edits on the panel', () => {
 			expect(write?.tool?.changes).toEqual([{ path: 'src/b.ts', diff: '+a\n+b' }]);
 		})
 	);
-	it.effect('a row from before the split keeps its shape and its diffs', () =>
+	it.effect('historical source calls retain raw evidence without reviving the retired multi-file edit contract', () =>
 		Effect.gen(function* () {
 			const args = {
 					changes: [
@@ -141,13 +140,8 @@ describe('source edits on the panel', () => {
 				old = yield* edited('workspace_write', args, {
 					changes: [{ path: 'src/a.ts', diff: '-x\n+y', change: 'modified' }]
 				});
-			expect(old?.tool?.changes).toEqual([
-				{ path: 'src/a.ts', diff: '-x\n+y', change: 'modified' }
-			]);
-			expect(stepView('workspace_write', args)).toMatchObject({
-				verb: 'Edited the source',
-				target: 'src/a.ts, b.txt'
-			});
+			expect(old?.tool?.changes).toBeUndefined();
+			expect(old?.tool?.args).toBe(JSON.stringify(args));
 		})
 	);
 	it("names each source tool in the person's words", () => {
@@ -157,7 +151,7 @@ describe('source edits on the panel', () => {
 			code: { text: 'x' }
 		});
 		expect(
-			stepView('workspace_edit', { path: 'a.ts', oldString: 'x', newString: 'y' })
+			stepView('workspace_edit', { path: 'a.ts', old_string: 'x', new_string: 'y' })
 		).toMatchObject({
 			verb: 'Edited the source',
 			target: 'a.ts'
@@ -217,14 +211,26 @@ describe('the context view (L-BOLT-546)', () => {
 		).toBe("#### Goal\n\nPay run\n\n#### What's left\n\nApprove");
 		expect(checkpointSections('plain text')).toBe('plain text');
 	});
-	it('revises only a plain-text message of the person', () => {
+	it('keeps escaped checkpoint cells and leaves a lone table row in its original form', () => {
+		const table = '| Row | Summary |\n|---|---|\n| Goal | One \\| two |\n| Invalid | Three | Cells |';
+		expect(checkpointSections(table)).toBe('#### Goal\n\nOne | two');
+		const lone = '| Goal | One \\| two |';
+		expect(checkpointSections(lone)).toBe(lone);
+	});
+	it('revises posted user messages including their stored attachments', () => {
 		expect(revisable(row(1))).toBe(true);
-		expect(revisable(row(1, { files: [{ name: 'a.pdf', mime: 'application/pdf' }] }))).toBe(false);
+		expect(revisable(row(1, { files: [{ name: 'a.pdf', mime: 'application/pdf' }] }))).toBe(true);
 		expect(revisable(reply(1))).toBe(false);
 	});
 });
 
 describe('the model-change divider (L-BOLT-547)', () => {
+	it('uses decoded reply usage and ignores usage carried by a user row', () => {
+		expect([...modelDividers([
+			reply(1, 'fast'), row(2, { usage: { input: 1, output: 1, calls: 1, model: 'strong' } }),
+			reply(3), reply(4, 'fast'), reply(5, 'strong')
+		])]).toEqual([['m5', 'strong']]);
+	});
 	it('marks every change, a switch back too, and nothing between replies of one model; a reply with no model is skipped', () => {
 		const rows = [
 			row(1),
@@ -240,14 +246,6 @@ describe('the model-change divider (L-BOLT-547)', () => {
 			['m7', 'fast']
 		]);
 		expect([...modelDividers(rows)]).toEqual([...modelDividers(rows.map((r) => ({ ...r })))]);
-	});
-});
-
-describe('tool steps', () => {
-	it('reads a result in one line: its error or its row count', () => {
-		expect(resultLine({ error: 'No such field' })).toBe('No such field');
-		expect(resultLine({ rows: [1, 2] })).toBe('2 rows');
-		expect(resultLine('plain')).toBe('');
 	});
 });
 
@@ -329,7 +327,7 @@ describe('a sub-agent chip', () => {
 describe('background work in the session rail', () => {
 	it('lists each sub-agent and automation run once, in the order they started', () => {
 		const tool = (seq: number, t: Partial<NonNullable<AgentRow['tool']>>) =>
-			row(seq, { role: 'tool', tool: { name: 'act', failed: false, ...t } });
+			row(seq, { role: 'tool', tool: { behavior: {}, name: 'act', failed: false, ...t } });
 		expect(
 			background([
 				row(1),
@@ -357,11 +355,12 @@ describe('Studio outcomes outside the folded steps', () => {
 		workspace_preview: 'preview',
 		browser: 'view',
 		workspace_logs: 'logs',
-		workspace_publish: 'publish',
+		workspace_publish: 'merge',
 		workspace_rollback: 'rollback'
 	} as const;
 	const tool = (name: string, result?: string, o: Partial<NonNullable<AgentRow['tool']>> = {}) => ({
 		name,
+		behavior: {},
 		failed: false,
 		...Object.fromEntries(
 			Object.entries(ROLE)
@@ -391,7 +390,7 @@ describe('Studio outcomes outside the folded steps', () => {
 		const found = '{"failing":2,"types":{"total":2,"diagnostics":[]}}',
 			older = '{"error":"2 failing","types":{"total":2,"diagnostics":[]}}';
 		for (const result of [found, older]) {
-			const check = tool('workspace_diagnose', result, { failed: result === older });
+			const check = tool('workspace_diagnose', result, { behavior: { diagnostics: true }, failed: result === older });
 			expect(checkOf(check)).toEqual({ typeErrors: 2, testsFailed: false });
 			expect(failureOf(check)).toBe('');
 			expect(failedVerbs([row(1, { role: 'tool', tool: check })])).toEqual([]);
@@ -445,7 +444,7 @@ describe('Studio outcomes outside the folded steps', () => {
 			id: '1',
 			title: 'Build portal',
 			state: 'merged',
-			openedBy: 'u',
+			opened_by: 'u',
 			contributors: [],
 			branch: 'change-1',
 			base: 'c0',
@@ -454,11 +453,11 @@ describe('Studio outcomes outside the folded steps', () => {
 			behind: 0,
 			preview: null,
 			log: [],
-			createdAt: '',
-			updatedAt: ''
+			created_at: '',
+			updated_at: ''
 		};
 		const state = {
-			changeSets: [change],
+			change_sets: [change],
 			environments: [{ name: 'live', release: 'r1', url: 'https://live.test/' }],
 			releases: [{ commit: 'c1', at: '', message: 'Build portal', current: true }]
 		};
@@ -467,7 +466,7 @@ describe('Studio outcomes outside the folded steps', () => {
 			key: 'r1',
 			about: { environment: 'live' }
 		});
-		expect(currentPreview(preview, { ...state, changeSets: [{ ...change, state: 'open' }] })).toBe(
+		expect(currentPreview(preview, { ...state, change_sets: [{ ...change, state: 'open' }] })).toBe(
 			preview
 		);
 		expect(currentPreview({ ...preview, about: { commit: 'unrelated' } }, state).url).toBe(
@@ -482,7 +481,7 @@ describe('Studio outcomes outside the folded steps', () => {
 					conversation: 'c',
 					seq,
 					role: 'tool',
-					content: { id: `k${seq}`, name: 'workspace_merge', studio: 'merge', result },
+					content: { id: `k${seq}`, assistant: 'a1', name: 'workspace_merge', studio: 'merge', result },
 					text: null,
 					state: null,
 					mode: null,

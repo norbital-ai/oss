@@ -7,7 +7,7 @@
 <span id="commission-expression-label">{label}</span>
 <CodeEditor
 	value={$source}
-	onChange={(value) => source.set(value)}
+	on_change={(value) => source.set(value)}
 	id="commission-expression"
 	aria-labelledby="commission-expression-label"
 	language="javascript"

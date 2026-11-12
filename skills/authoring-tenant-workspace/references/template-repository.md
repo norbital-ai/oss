@@ -20,7 +20,7 @@ An app's `banner` is separate: workspace assets shipped in the artifact.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `schemaVersion` | yes | `1` |
+| `schema_version` | yes | `1` |
 | `key` | yes | the handle |
 | `name`, `description`, `industry` | yes | nonempty English |
 | `name_zh`, `description_zh` | no | maintained Chinese copy |

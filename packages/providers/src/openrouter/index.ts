@@ -1,10 +1,3 @@
-export {
-	openAiEmbeddings,
-	aiModalityRefusals,
-	type EmbedInput,
-	type Endpoint,
-	type EmbeddingsConfig,
-	type ModalityCheck
-} from './embeddings.ts';
-export { models, Model, type ModelCatalogue } from './models.ts';
-export { openRouterChat, deepSeekRouting } from './chat.ts';
+export { open_ai_embeddings, ai_modality_refusals } from './embeddings.ts';
+export { models, type ModelCatalogue } from './models.ts';
+export { open_router_chat } from './chat.ts';

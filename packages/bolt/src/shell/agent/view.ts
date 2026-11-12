@@ -3,6 +3,7 @@
 import { Array as Arr, Option, Predicate, Schema } from 'effect';
 import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 import type { StudioView } from '../studio/model.ts';
+import { humanise, handle_words } from '../i18n.ts';
 
 /** One mark per state: waiting on a person is not failing, and a finished or stopped turn is not idle. */
 export type Orb = 'ready' | 'working' | 'waiting' | 'failed' | 'done' | 'stopped';
@@ -15,6 +16,10 @@ export const ORB: { readonly [o in Orb]: { label: string; icon: string } } = {
 	done: { label: 'Done', icon: 'lucide:circle-check' },
 	stopped: { label: 'Stopped', icon: 'lucide:circle-stop' }
 };
+/** A later input continues the conversation even when it came from the ordinary composer. */
+export const waiting_question = (rows: readonly AgentRow[]) => rows.findLast((row) =>
+	row.question !== undefined && row.answered !== true && !rows.some((later) =>
+		later.seq > row.seq && later.role === 'user' && later.report === undefined && later.tag !== 'ambient' && later.state !== 'cancelled' && later.state !== 'scheduled'));
 /**
  * The conversation's mark. A caller's own knowledge wins: `failed` (a send it saw fail) over everything, `pending` (a
  * turn it just dispatched, before any status arrived) over the rows.
@@ -30,6 +35,7 @@ export function orbState(o: {
 		return 'working';
 	if (o.status === 'stopped') return 'stopped';
 	if (o.rows.some((r) => r.state === 'confirm')) return 'waiting';
+	if (waiting_question(o.rows) !== undefined) return 'waiting';
 	const last = o.rows.findLast((r) => r.role === 'assistant');
 	return last?.tag === 'failed' ? 'failed' : last?.tag === 'reply' ? 'done' : 'ready';
 }
@@ -71,7 +77,12 @@ export function checkpointSections(text: string): string {
 				.split(/(?<!\\)\|/)
 				.map((c) => c.trim().replace(/\\\|/g, '|'))
 		)
-		.filter((c) => c.length === 2 && !/^[-:\s]+$/.test(c[0]!));
+		.flatMap((c): [string, string][] => {
+			const [section, body] = c;
+			return c.length === 2 && section !== undefined && body !== undefined && !/^[-:\s]+$/.test(section)
+				? [[section, body]]
+				: [];
+		});
 	if (cells.length < 2) return text;
 	return cells
 		.slice(1)
@@ -79,17 +90,17 @@ export function checkpointSections(text: string): string {
 		.join('\n\n');
 }
 
-/** A person's own message is revised as plain text only: one carrying files would lose them. */
+/** A person's posted messages can be edited, including their stored attachments. */
 export const revisable = (r: AgentRow) =>
-	r.role === 'user' && (r.files ?? []).length === 0 && r.tag !== 'ambient';
+	r.role === 'user' && r.tag !== 'ambient' && r.report === undefined;
 
 /** Each reply whose model differs from the reply before it, and that model; a reply with no model is skipped. */
 export function modelDividers(rows: readonly AgentRow[]): ReadonlyMap<string, string> {
 	const out = new Map<string, string>();
 	let prev: string | undefined;
 	for (const r of rows) {
-		const model = (r.usage as { model?: unknown } | undefined)?.model;
-		if (r.role !== 'assistant' || typeof model !== 'string') continue;
+		const model = r.usage?.model;
+		if (r.role !== 'assistant' || model === undefined) continue;
 		if (prev !== undefined && model !== prev) out.set(r.id, model);
 		prev = model;
 	}
@@ -177,7 +188,8 @@ export function reportView(row: AgentRow): (StepView & { message: string }) | nu
 type Args = { readonly [k: PropertyKey]: unknown };
 const obj = (v: unknown): Args => (Predicate.isObject(v) && !Arr.isArray(v) ? v : {});
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
-const words = (s: string) => s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+const toolTarget = (a: Args) =>
+	['query', 'url', 'name', 'id', 'text'].map((key) => str(a[key])).find((value) => value !== '') ?? '';
 /** A file's language by its extension: TypeScript, Svelte and JavaScript highlight as JavaScript. */
 const languageOf = (path: string): 'javascript' | 'json' | 'plaintext' =>
 	/\.(m?[jt]sx?|svelte)$/.test(path) ? 'javascript' : /\.json$/.test(path) ? 'json' : 'plaintext';
@@ -185,10 +197,10 @@ const languageOf = (path: string): 'javascript' | 'json' | 'plaintext' =>
 export const callableWords = (callable: string) => {
 	const [scope = '', act = ''] = callable.split('.');
 	return scope === 'automation'
-		? `Run ${act.replace(/_/g, ' ')}`
+		? `Run ${handle_words(act)}`
 		: act === 'pipeline'
-			? `Run the ${scope.replace(/_/g, ' ')} pipeline`
-			: `${words(act || scope)} ${act ? scope.replace(/_/g, ' ') : ''}`.trim();
+			? `Run the ${handle_words(scope)} pipeline`
+			: `${humanise(act || scope)} ${act ? handle_words(scope) : ''}`.trim();
 };
 /** A read's keys with their options: `request`, or a transcript from before it, `reads` or its keys themselves. */
 export const readsOf = (a: Args): readonly (readonly [string, unknown])[] =>
@@ -248,7 +260,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Compacted the context',
 		target: str(a['reason'])
 	}),
-	skill: (a) => ({ icon: 'lucide:book-open', verb: 'Read skill', target: words(str(a['name'])) }),
+	skill: (a) => ({ icon: 'lucide:book-open', verb: 'Read skill', target: humanise(str(a['name'])) }),
 	history: (a) => ({
 		icon: 'lucide:history',
 		verb: 'Searched past messages',
@@ -316,39 +328,16 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		target: str(a['name']),
 		code: { text: str(a['markdown']), language: 'plaintext' }
 	}),
-	workspace_write: (a) => {
-		if (typeof a['content'] === 'string')
-			return {
-				icon: 'lucide:file-pen-line',
-				verb: 'Edited the source',
-				target: str(a['path']),
-				code: { text: a['content'], language: languageOf(str(a['path'])) }
-			};
-		// a row from before the split: one call, many changes
-		const changes: Args[] = Arr.isArray(a['changes']) ? a['changes'].map(obj) : [];
-		const first = changes[0] ?? {};
-		// a whole file is its text; a find/replace edit shows what it replaced and with what
-		const text = changes
-			.map((c) =>
-				typeof c['text'] === 'string'
-					? c['text']
-					: typeof c['replace'] === 'string'
-						? `// before\n${str(c['find'])}\n// after\n${c['replace']}`
-						: ''
-			)
-			.filter((t) => t !== '')
-			.join('\n\n');
-		return {
-			icon: 'lucide:file-pen-line',
-			verb: 'Edited the source',
-			target: changes.map((c) => str(c['path'])).join(', '),
-			...(text === '' ? {} : { code: { text, language: languageOf(str(first['path'])) } })
-		};
-	},
+	workspace_write: (a) => ({
+		icon: 'lucide:file-pen-line',
+		verb: 'Edited the source',
+		target: str(a['path']),
+		code: { text: str(a['content']), language: languageOf(str(a['path'])) }
+	}),
 	workspace_patch: (a) => ({
 		icon: 'lucide:file-pen-line',
 		verb: 'Edited the source',
-		target: [...str(a['patchText']).matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
+		target: [...str(a['patch_text']).matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
 			.map((file) => file[1])
 			.join(', ')
 	}),
@@ -357,7 +346,7 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 		verb: 'Edited the source',
 		target: str(a['path']),
 		code: {
-			text: `// before\n${str(a['oldString'])}\n// after\n${str(a['newString'])}`,
+			text: `// before\n${str(a['old_string'])}\n// after\n${str(a['new_string'])}`,
 			language: languageOf(str(a['path']))
 		}
 	}),
@@ -457,17 +446,21 @@ const VIEWS: { readonly [tool: string]: (a: Args) => StepView } = {
 					target: '',
 					code: { text: str(a['code']), language: 'javascript' }
 				},
-	run_tool: (a) => ({ icon: 'lucide:wrench', verb: 'Ran a tool', target: str(a['name']) }),
 	web_search: (a) => ({ icon: 'lucide:search', verb: 'Searched the web', target: str(a['query']) }),
+	mcp: (a) => ({
+		icon: 'lucide:plug',
+		verb: a['op'] === 'list' ? 'Listed external tools' : `${humanise(str(a['server']))}: ${humanise(str(a['tool']))}`,
+		target: a['op'] === 'list' ? str(a['server']) : toolTarget(obj(a['input']))
+	}),
 	personal_skill_save: (a) => ({
 		icon: 'lucide:bookmark-plus',
 		verb: 'Saved a skill',
-		target: words(str(a['name']))
+		target: humanise(str(a['name']))
 	}),
 	personal_skill_delete: (a) => ({
 		icon: 'lucide:bookmark-minus',
 		verb: 'Removed a skill',
-		target: words(str(a['name']))
+		target: humanise(str(a['name']))
 	})
 };
 const WHERE_OPS: { readonly [op: string]: string } = {
@@ -478,7 +471,6 @@ const WHERE_OPS: { readonly [op: string]: string } = {
 	gt: '>',
 	gte: '≥',
 	in: 'in',
-	nin: 'not in',
 	like: '~'
 };
 const operand = (v: unknown): string =>
@@ -498,7 +490,7 @@ const whereChips = (where: unknown): string[] =>
 		if (key === 'not') return [`not (${whereChips(value).join(', ')})`];
 		if (key === '$search') return [`"${operand(value)}"`];
 		return Object.entries(obj(value)).map(([op, given]) =>
-			op === 'isNull'
+			op === 'is_null'
 				? `${key} ${given === true ? 'is empty' : 'is set'}`
 				: Object.hasOwn(WHERE_OPS, op)
 					? `${key} ${WHERE_OPS[op]} ${operand(given)}`
@@ -512,7 +504,7 @@ export function readChips(layer: unknown): string[] {
 	return [
 		...whereChips(o['where']),
 		...(typeof o['search'] === 'string' ? [`"${o['search']}"`] : []),
-		...[o['orderBy']]
+		...[o['order_by']]
 			.flat()
 			.flatMap((by) =>
 				typeof by === 'string'
@@ -531,27 +523,12 @@ export function readChips(layer: unknown): string[] {
 	].filter((chip) => chip !== '');
 }
 
-/** A tool step's view (its arguments decoded once); an MCP tool names its server, anything else its own name. */
+/** A tool step's view, with its arguments decoded once. */
 export function stepView(name: string, args: unknown): StepView {
 	const a = obj(args);
 	const known = VIEWS[name];
 	if (known !== undefined) return known(a);
-	const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
-	const target =
-		['query', 'url', 'name', 'id', 'text'].map((k) => str(a[k])).find((v) => v !== '') ?? '';
-	return mcp === null
-		? { icon: 'lucide:wrench', verb: words(name), target }
-		: { icon: 'lucide:plug', verb: `${words(mcp[1]!)}: ${words(mcp[2]!)}`, target };
-}
-
-/** A result in one line: its error, a row count, or nothing (the Output tab has the rest). */
-export function resultLine(result: unknown): string {
-	const r = obj(result);
-	if (typeof r['error'] === 'string') return r['error'];
-	if (r['declined'] === true)
-		return typeof r['reason'] === 'string' ? `Rejected · ${r['reason']}` : 'Rejected';
-	const rows = Arr.isArray(r['rows']) ? r['rows'] : Arr.isArray(r['data']) ? r['data'] : null;
-	return rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'row' : 'rows'}`;
+	return { icon: 'lucide:wrench', verb: humanise(name), target: toolTarget(a) };
 }
 
 const parsed = (text: string | undefined): unknown =>
@@ -565,11 +542,6 @@ export const stepArgs = (text: string | undefined): unknown =>
 	Object.fromEntries(
 		[...(text ?? '').matchAll(/"(\w+)":"((?:[^"\\]|\\.)*)"/g)].reverse().map((m) => [m[1], m[2]])
 	);
-const CHECKS: ReadonlySet<string> = new Set([
-	'workspace_diagnose',
-	'workspace_preview',
-	'workspace_validate'
-]);
 /**
  * What a check that ran found: its type errors and whether its tests failed. A check's findings are its answer, never a
  * failed step; null for any other step, and for a check that could not run (no `types` or `tests` in its answer).
@@ -577,7 +549,7 @@ const CHECKS: ReadonlySet<string> = new Set([
 export function checkOf(
 	tool: AgentRow['tool']
 ): { readonly typeErrors: number; readonly testsFailed: boolean } | null {
-	if (tool === undefined || !CHECKS.has(tool.name)) return null;
+	if (tool?.behavior.diagnostics !== true) return null;
 	const answer = obj(parsed(tool.result));
 	if (answer['types'] === undefined && answer['tests'] === undefined) return null;
 	const total = obj(answer['types'])['total'];
@@ -682,10 +654,10 @@ export function previewsOf(
 /** A merged change no longer has a preview environment; show the published workspace instead. */
 export function currentPreview(
 	preview: ReturnType<typeof previewsOf>[number],
-	studio: Pick<StudioView, 'changeSets' | 'environments' | 'releases'>
+	studio: Pick<StudioView, 'change_sets' | 'environments' | 'releases'>
 ): ReturnType<typeof previewsOf>[number] {
 	const commit = preview.about?.['commit'];
-	const change = studio.changeSets?.find(
+	const change = studio.change_sets?.find(
 		(one) => commit !== undefined && (one.head === commit || one.preview?.commit === commit)
 	);
 	if (change?.state !== 'merged') return preview;

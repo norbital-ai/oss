@@ -1,5 +1,6 @@
 // The device wall's checks (shell/device-access.ts): a native host's providers decide; foreground-only location does not
 // satisfy `location:background`; a refused native permission is only fixed in the phone's settings.
+import { required } from './support/required.ts';
 import { describe, expect, it, vi } from '@effect/vitest';
 import { Effect } from 'effect';
 import { deviceAccess } from '../src/shell/device-access.ts';
@@ -8,18 +9,18 @@ import type { DeviceApi } from '../src/page/device.ts';
 const native = (always: boolean, enabled = true): DeviceApi => ({
 	geolocation: {
 		source: 'native',
-		api: {} as Geolocation,
+		api: { getCurrentPosition: vi.fn(), watchPosition: vi.fn(() => 1), clearWatch: vi.fn() },
 		background: {
 			status: async () => ({ enabled, always }),
-			openSettings: vi.fn(async () => undefined)
+			open_settings: vi.fn(async () => undefined)
 		}
 	},
 	notifications: {
 		status: async () => 'denied',
 		request: vi.fn(async () => 'denied' as const),
-		openSettings: vi.fn(async () => undefined),
+		open_settings: vi.fn(async () => undefined),
 		show: async () => undefined,
-		onOpen: () => () => undefined
+		on_open: () => () => undefined
 	}
 });
 
@@ -43,8 +44,8 @@ describe('device access', () => {
 			const f = native(true);
 			const d = deviceAccess(f);
 			expect(yield* d.check('notifications')).toEqual({ state: 'denied', settings: true });
-			yield* d.openSettings('notifications');
-			expect(f.notifications!.openSettings).toHaveBeenCalled();
+			yield* d.open_settings('notifications');
+			expect(required(f.notifications).open_settings).toHaveBeenCalled();
 		})
 	);
 

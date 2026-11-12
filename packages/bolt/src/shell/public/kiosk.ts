@@ -3,8 +3,11 @@ import type * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import type { Authority } from '../../engine/contracts.ts';
 import type { EngineManifest } from '../../engine/manifest.ts';
 import { Identity } from '../../engine/services.ts';
-import { canOpenKiosk, kioskOf } from '../../decl/runtime/kiosk.ts';
+import { audience_of, can_open_kiosk, kiosk_of, kiosk_policies } from '../nav.ts';
 import { HEADERS } from '../../protocol/wire.ts';
+import type { BoltError } from '../../protocol/errors.ts';
+
+export const KIOSK_PATH = /^[a-z][a-z0-9_]*(?:\/[a-z][a-z0-9_]*)*$/;
 
 export const requestKiosk = (
 	request: HttpServerRequest.HttpServerRequest,
@@ -13,7 +16,7 @@ export const requestKiosk = (
 	const value =
 		request.headers[HEADERS.kiosk.toLowerCase()] ??
 		(query ? new URL(request.url, 'http://bolt.local').searchParams.get('kiosk') : null);
-	return value !== null && value !== undefined && /^[a-z][a-z0-9_]*$/.test(value)
+	return value !== null && value !== undefined && KIOSK_PATH.test(value)
 		? Option.some(value)
 		: Option.none();
 };
@@ -23,12 +26,14 @@ export const kioskAuthority = Effect.fn('shell.kioskAuthority')(function* (
 	member: Authority | null,
 	visitor: { readonly id: string; readonly anonymous: boolean }
 ) {
-	const spec = Option.getOrUndefined(kioskOf(manifest, name));
+	const spec = kiosk_of(manifest, name);
+	if (spec === undefined) return Option.none<Authority>();
+	const policies = kiosk_policies(spec);
 	if (
-		spec === undefined ||
-		spec.policies.length === 0 ||
-		spec.policies.some((policy) => manifest.policies[policy] === undefined) ||
-		(member === null ? spec.auth !== 'none' : !canOpenKiosk(manifest, name, member))
+		policies === undefined ||
+		policies.length === 0 ||
+		policies.some((policy) => manifest.policies[policy] === undefined) ||
+		(member === null ? audience_of(spec) !== 'public' : !can_open_kiosk(spec, member, name))
 	)
 		return Option.none<Authority>();
 	const identity = yield* Identity;
@@ -40,7 +45,7 @@ export const kioskAuthority = Effect.fn('shell.kioskAuthority')(function* (
 				visitor: visitor.id,
 				...(visitor.anonymous ? { anonymous: true as const } : {})
 			},
-			policies: spec.policies,
+			policies,
 			admin: false,
 			...(member?.teamTree === undefined ? {} : { teamTree: member.teamTree }),
 			...(member?.scopes === undefined ? {} : { scopes: member.scopes })
@@ -60,10 +65,10 @@ export const kioskBoot = Effect.fn('shell.kioskBoot')(function* (
 	name: string,
 	member: Authority | null,
 	visitor: { readonly id: string; readonly anonymous: boolean }
-): Effect.fn.Return<KioskBoot, never, Identity> {
-	const spec = Option.getOrUndefined(kioskOf(manifest, name));
+): Effect.fn.Return<KioskBoot, BoltError, Identity> {
+	const spec = kiosk_of(manifest, name);
 	if (spec === undefined) return { _tag: 'Unknown' };
-	if (member === null && (spec.auth ?? 'members') !== 'none') return { _tag: 'SignIn' };
+	if (member === null && audience_of(spec) !== 'public') return { _tag: 'SignIn' };
 	const authority = yield* kioskAuthority(manifest, name, member, visitor);
 	return Option.isNone(authority)
 		? { _tag: 'Closed', message: 'This kiosk is not open to you.' }

@@ -1,16 +1,53 @@
 // iMessage and SMS through Linq, with Linq's own SDK. A webhook subscription must use `webhook_version: "2026-02-03"`
 // (`?version=2026-02-03` on its URL): only that version has `message.edited` and the payload parsed here. Linq sends no
 // delete event. `to:<handle>` is a person with no chat yet, since Linq creates a chat only with its first message.
-import type { Message } from '@linqapp/sdk/resources/messages/messages';
-import type {
-	MessageEditedWebhookEvent,
-	MessageEventV2,
-	UnwrapWebhookEvent
-} from '@linqapp/sdk/resources/webhooks';
+import { Schema } from 'effect';
+import { download as downloadFile } from '../http.ts';
+import type { UnwrapWebhookEvent } from '@linqapp/sdk/resources/webhooks';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 
-type Part = MessageEventV2['parts'][number] | NonNullable<Message['parts']>[number];
+const Part = Schema.Union([
+	Schema.Struct({
+		type: Schema.Literal('text'),
+		value: Schema.String,
+		mention: Schema.optionalKey(Schema.NullOr(Schema.String))
+	}),
+	Schema.Struct({ type: Schema.Literal('link'), value: Schema.String }),
+	Schema.Struct({
+		type: Schema.Literal('media'),
+		filename: Schema.String,
+		mime_type: Schema.String,
+		size_bytes: Schema.Number,
+		url: Schema.String
+	}),
+	Schema.Struct({ type: Schema.Literals(['imessage_app', 'app_clip']) })
+]);
+type Part = typeof Part.Type;
+const Chat = Schema.Struct({
+	id: Schema.String,
+	is_group: Schema.optionalKey(Schema.Boolean),
+	owner_handle: Schema.optionalKey(Schema.NullOr(Schema.Struct({ handle: Schema.String })))
+});
+const Sender = Schema.Struct({ handle: Schema.String });
+const Received = Schema.Struct({
+	id: Schema.String,
+	direction: Schema.Literals(['inbound', 'outbound']),
+	chat: Chat,
+	sender_handle: Sender,
+	parts: Schema.Array(Part),
+	reply_to: Schema.optionalKey(Schema.NullOr(Schema.Struct({ message_id: Schema.String }))),
+	sent_at: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
+const Edited = Schema.Struct({
+	id: Schema.String,
+	direction: Schema.Literals(['inbound', 'outbound']),
+	chat: Chat,
+	sender_handle: Sender,
+	edited_at: Schema.String,
+	part: Schema.Struct({ text: Schema.String })
+});
 
 const NEW = 'to:',
 	HISTORY_MAX = 500;
@@ -58,33 +95,29 @@ export const linq: ChatPlatform = {
 				throw new PlatformError(
 					error.message,
 					error.status,
-					Number(error.headers?.get('retry-after')) * 1000 || undefined
+					retry_after_ms(error.headers?.get('retry-after'))
 				);
 			throw error;
 		};
-		const download = async (url: string) => {
-			const response = await host.fetch(url);
-			if (!response.ok) throw new PlatformError('Linq media', response.status);
-			return new Uint8Array(await response.arrayBuffer());
-		};
-		const received = async (data: MessageEventV2, sentAt: string): Promise<Incoming> => {
+		const download = (url: string) => downloadFile(host.fetch, url);
+		const received = async (data: typeof Received.Type, sent_at: string): Promise<Incoming> => {
 			const group = data.chat.is_group ?? (await client.chats.retrieve(data.chat.id)).is_group,
-				replyTo = data.reply_to?.message_id ?? null,
+				reply_to = data.reply_to?.message_id ?? null,
 				owner = data.chat.owner_handle?.handle;
 			return {
 				id: data.id,
 				thread: data.chat.id,
-				sentAt,
+				sent_at,
 				from: { handle: data.sender_handle.handle, name: null },
 				group,
-				replyTo,
+				reply_to,
 				mentioned: data.parts.some(
 					(part) => part.type === 'text' && part.mention != null && part.mention === owner
 				),
-				repliedTo:
+				replied_to:
 					group &&
-					replyTo !== null &&
-					(await client.messages.retrieve(replyTo).then(
+					reply_to !== null &&
+					(await client.messages.retrieve(reply_to).then(
 						(found) => found.is_from_me,
 						() => false
 					)),
@@ -101,14 +134,14 @@ export const linq: ChatPlatform = {
 					throw new Unverified('bad signature');
 				}
 				if (event.event_type === 'message.edited') {
-					const data = event.data as MessageEditedWebhookEvent.Data;
+					const data = await Schema.decodeUnknownPromise(Edited)(event.data);
 					if (data.direction !== 'inbound') return nothing();
 					return {
 						messages: [
 							{
 								id: data.id,
 								thread: data.chat.id,
-								sentAt: data.edited_at,
+								sent_at: data.edited_at,
 								version: data.edited_at,
 								from: { handle: data.sender_handle.handle, name: null },
 								text: data.part.text,
@@ -118,7 +151,7 @@ export const linq: ChatPlatform = {
 					};
 				}
 				if (event.event_type !== 'message.received') return nothing();
-				const data = event.data as MessageEventV2;
+				const data = await Schema.decodeUnknownPromise(Received)(event.data);
 				if (data.direction !== 'inbound') return nothing();
 				return { messages: [await received(data, data.sent_at ?? event.created_at)] };
 			},
@@ -143,15 +176,15 @@ export const linq: ChatPlatform = {
 				let seen = 0;
 				for await (const message of client.chats.messages.list(thread)) {
 					if (++seen > HISTORY_MAX) return { messages, complete: false };
-					const sentAt = message.sent_at ?? message.created_at;
-					if (message.is_from_me || Date.parse(sentAt) < from) continue;
+					const sent_at = message.sent_at ?? message.created_at;
+					if (message.is_from_me || Date.parse(sent_at) < from) continue;
 					messages.push({
 						id: message.id,
 						thread,
-						sentAt,
+						sent_at,
 						from: { handle: message.from_handle?.handle ?? '', name: null },
 						group,
-						replyTo: message.reply_to?.message_id ?? null,
+						reply_to: message.reply_to?.message_id ?? null,
 						...contentOf(message.parts ?? [], download)
 					});
 				}

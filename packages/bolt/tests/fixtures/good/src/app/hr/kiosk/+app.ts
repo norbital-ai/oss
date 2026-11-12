@@ -1,6 +1,6 @@
 import { app } from '../../../../../../../src/index.ts';
 
-export default app('hr/kiosk', {
+export default app({
 	title: 'Kiosk',
 	description: 'Clock in',
 	icon: 'clock',

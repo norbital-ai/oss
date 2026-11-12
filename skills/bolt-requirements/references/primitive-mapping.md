@@ -8,7 +8,7 @@ Business requirement to default construction. Use the default unless a requireme
 | --- | --- | --- |
 | A record with a lifecycle | model with a `state` field | history is built in |
 | Independent lifecycles | separate models when identity, authority or evidence differs | screen sections do not require one |
-| A fact that changes and must be provable | `period` + `noOverlap`, successors by callback or automation | in-force is a read |
+| A fact that changes and must be provable | `period` + `no_overlap` constraint, successors by callback or automation | in-force is a read |
 | A structured value, not a row | custom field | check built-in kinds first |
 | Values of one parent | shaped JSON or custom datatype | child model only for row semantics |
 | A child with row semantics under a parent lock | `owned` relationship | never delete by omission |

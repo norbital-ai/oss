@@ -2,26 +2,27 @@
 // row, relation actions made explicit. Decode checks the model's input allowlist at every nesting level and reports
 // every offender at once; nothing is ever deleted by omission (rule 22).
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
-import { inputSchema } from '@norbital-ai/std/kind';
-import { encodeWire } from '@norbital-ai/std/wire';
-import { Decimal } from '@norbital-ai/std/decimal';
+import { input_schema } from '@norbital-ai/std/kind';
+import { encode_wire } from '@norbital-ai/std/wire';
 import type { Json } from '../../decl/values.ts';
-import type { Change, EngineActor, InputPath, RowData } from '../contracts.ts';
+import type { Change, EngineActor, InputPath, NativeWriteConflict, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { LayerColumns } from '../../decl/model.ts';
 import { LIMITS } from '../contracts.ts';
 import type { Catalog, FieldInfo, ModelInfo } from '@norbital-ai/store';
-import { clockDefault, compileVar, evaluateVar } from '@norbital-ai/std/vars';
-import { canonical } from '@norbital-ai/store';
+import { clock_default, compile_var, evaluate_var } from '@norbital-ai/std/vars';
 import { decodeInput, type InputSpec } from '../callables/decode.ts';
 import { canonicalPhone } from '../identity/address.ts';
+import { storedWireValue } from '../db/stored.ts';
+import { SYSTEM_COLUMN_SET } from '@norbital-ai/store';
+import { BoltError } from '../../protocol/errors.ts';
 
 /** An input allowlist (`SelectionBase`), or `'any'` for a callback payload: every stored field and relation action. */
 export type Sel =
 	| 'any'
 	| {
 			readonly columns: readonly string[];
-			readonly with?: { readonly [rel: string]: { readonly [action: string]: unknown } };
+			readonly with?: { readonly [rel: string]: { readonly [action: string]: Sel } };
 	  };
 const NONE: Sel = { columns: [] };
 /**
@@ -69,7 +70,7 @@ export const layerPath = (root: string, path: InputPath): string =>
 			const next = path[at + 1];
 			return typeof part === 'string' &&
 				typeof next === 'string' &&
-				(ACTIONS as readonly string[]).includes(next)
+				ACTIONS.includes(next)
 				? [part]
 				: [];
 		})
@@ -85,8 +86,6 @@ export type Item = {
 	parent?: { model: string; id: string; rel: string; fk: string };
 	/** `link`/`unlink`/nested `update`/`delete` name an existing child that must belong to (or be free for) the parent. */
 	belongs?: 'parent' | 'free';
-	/** An `attaches` write: the target row's declared ref must still be null. */
-	attach?: true;
 };
 type Problem = { path: InputPath; message: string };
 
@@ -94,7 +93,7 @@ type Obj = { readonly [k: string]: Json };
 /** A relation's value: its explicit actions, or (a create tree) the list of children, an id among them a link. */
 type Rel = Obj | readonly Json[];
 const isList = (v: Json | undefined): v is readonly Json[] => Array.isArray(v);
-const ACTIONS = ['create', 'update', 'upsert', 'link', 'unlink', 'delete'] as const;
+const ACTIONS: readonly string[] = ['create', 'update', 'upsert', 'link', 'unlink', 'delete'];
 
 export class Flattener {
 	readonly items: Item[] = [];
@@ -115,9 +114,6 @@ export class Flattener {
 		this.identities = identities;
 	}
 
-	private model(name: string): ModelInfo {
-		return this.cat.models.get(name)!;
-	}
 	private bad(path: InputPath, message: string): void {
 		this.problems.push({ path, message });
 	}
@@ -128,12 +124,16 @@ export class Flattener {
 		sel: Sel,
 		value: Json | undefined,
 		path: InputPath
-	): { values: Record<string, Json>; rels: [string, Rel][]; supplied: string[] } | null {
+	): { info: ModelInfo; values: Record<string, Json>; rels: [string, Rel][]; supplied: string[] } | null {
 		if (!Predicate.isObject(value)) {
 			this.bad(path, 'expected an object');
 			return null;
 		}
-		const info = this.model(model);
+		const info = this.cat.models.get(model);
+		if (info === undefined) {
+			this.bad(path, `unknown model '${model}'`);
+			return null;
+		}
 		const values: Record<string, Json> = {},
 			rels: [string, Rel][] = [],
 			supplied: string[] = [];
@@ -157,7 +157,7 @@ export class Flattener {
 						([name, x]) =>
 							!x.computed &&
 							!x.derived &&
-							!SYSTEM.has(name) &&
+							!SYSTEM_COLUMN_SET.has(name) &&
 							(sel === 'any' || sel.columns.includes(name))
 					)
 					.map(([name]) => name);
@@ -167,7 +167,7 @@ export class Flattener {
 				);
 				continue;
 			}
-			if (f.computed || f.derived || SYSTEM.has(k)) {
+			if (f.computed || f.derived || SYSTEM_COLUMN_SET.has(k)) {
 				this.bad(at, `'${k}' is derived and cannot be written`);
 				continue;
 			}
@@ -186,39 +186,40 @@ export class Flattener {
 			}
 			if (shape !== undefined && v !== null) {
 				const decoded = decodeInput({ [k]: shape }, { [k]: v });
-				const wired = encodeWire(decoded.value);
+				const wired = encode_wire(decoded.value);
 				if (!Predicate.isObject(wired) || wired[k] === undefined) {
 					this.bad(at, 'expected the declared field shape');
 					continue;
 				}
 				values[k] = wired[k];
-			} else
-				values[k] =
-					// a number for a decimal is the decimal its digits spell, exact to every callback and the store
-					typeof v === 'number' && (f.kind === 'decimal' || f.kind === 'money')
-						? spelled(v)
-						: typeof v === 'string' && isPhone(this.m.models[model]?.fields[k])
-							? canonicalPhone(v)
-							: v;
+			} else if (v !== null && (f.kind === 'decimal' || f.kind === 'money')) {
+				const numeric = storedWireValue(f, v);
+				if (numeric === undefined) {
+					this.bad(at, 'expected an exact decimal');
+					continue;
+				}
+				values[k] = numeric;
+			} else values[k] = typeof v === 'string' && isPhone(this.m.models[model]?.fields[k]) ? canonicalPhone(v) : v;
 			supplied.push(k);
 		}
-		return { values, rels, supplied };
+		return { info, values, rels, supplied };
 	}
 	private shapeOf(model: string, field: string): InputSpec[string] | undefined {
 		const spec = this.m.models[model]?.fields[field];
 		const shape =
 			spec?.kind === 'custom'
-				? this.m.customFields[spec.of]?.['shape']
+				? this.m.custom_fields[spec.of]?.['shape']
 				: spec?.kind === 'json'
 					? spec.shape
-					: spec?.kind === 'list' || spec?.kind === 'object'
+					: spec?.many === true || spec?.kind === 'object'
 						? spec
 						: undefined;
 		if (!isInputKind(shape)) return undefined;
-		return spec?.kind === 'custom' && spec.many ? { kind: 'list', of: shape } : shape;
+		return spec?.kind === 'custom' && spec.many
+			? { kind: 'json', shape: shape, many: true }
+			: shape;
 	}
-	private refsOf(model: string, values: Record<string, Json>): Item['refs'] {
-		const info = this.model(model);
+	private refsOf(model: string, info: ModelInfo, values: Record<string, Json>, path: InputPath): Item['refs'] {
 		return Object.entries(values).flatMap(([k, v]) => {
 			const one = info.one.get(k);
 			if (one === undefined) {
@@ -232,16 +233,22 @@ export class Flattener {
 			}
 			// an exclusive arc names its arm (`RecordRef`, decoded against the arms)
 			const ref = one.targets.length > 1 && Predicate.isObject(v) ? v : undefined;
-			return typeof v === 'string'
-				? [{ field: k, to: one.targets[0]!, id: v }]
-				: ref !== undefined
+			if (typeof v === 'string') {
+				const target = one.targets[0];
+				if (target === undefined) {
+					this.bad([...path, k], `'${k}' has no reference target`);
+					return [];
+				}
+				return [{ field: k, to: target, id: v }];
+			}
+			return ref !== undefined
 					? [{ field: k, to: String(ref['model']), id: String(ref['id']) }]
 					: [];
 		});
 	}
 	private depth(path: InputPath): boolean {
 		if (
-			path.filter((p) => typeof p === 'string' && (ACTIONS as readonly string[]).includes(p))
+			path.filter((p) => typeof p === 'string' && ACTIONS.includes(p))
 				.length <= LIMITS.writeDepth
 		)
 			return true;
@@ -255,22 +262,14 @@ export class Flattener {
 		value: Json | undefined,
 		path: InputPath,
 		parent?: Item['parent'],
-		upsert?: { on: readonly string[]; onConflict: 'update' | 'keep' },
+		upsert?: { on: readonly string[]; on_conflict: NativeWriteConflict },
 		named?: string
 	): void {
-		const attachLayers = parent === undefined ? this.m.exposures[model]?.create?.attaches : undefined;
-		let input = value;
-		let attached: Json | undefined;
-		if (attachLayers !== undefined && Predicate.isObject(value)) {
-			const { attaches: raw, ...rest } = value;
-			attached = raw;
-			input = rest;
-		}
-		const d = this.columns(model, sel, input, path);
+		const d = this.columns(model, sel, value, path);
 		if (d === null) return;
 		if (named !== undefined && upsert !== undefined) d.values['id'] = named; // an upsert by id: resolution reads it, and it is never written
 		// the parent key a relation action implies is not a caller-supplied ref (rule 36)
-		const refs = this.refsOf(model, d.values);
+		const refs = this.refsOf(model, d.info, d.values, path);
 		if (parent !== undefined) d.values[parent.fk] = parent.id;
 		const minted = this.mint();
 		const id =
@@ -286,7 +285,7 @@ export class Flattener {
 						op: 'upsert',
 						values: d.values,
 						on: upsert.on,
-						onConflict: upsert.onConflict
+						on_conflict: upsert.on_conflict
 					};
 		this.items.push({
 			change,
@@ -295,72 +294,21 @@ export class Flattener {
 			...(parent === undefined ? {} : { parent })
 		});
 		this.relations(model, sel, id, d.rels, path);
-		if (attached !== undefined && attachLayers !== undefined)
-			this.attaches(model, attachLayers, attached, id, path);
 	}
 
-	/** `attaches`: each id is an existing row whose declared optional ref is still null; the commit sets it to the new row. */
-	private attaches(
-		model: string,
-		layers: { readonly [layer: string]: { readonly model: string; readonly field: string } },
-		value: Json,
-		parentId: string,
-		path: InputPath
-	): void {
-		if (!Predicate.isObject(value)) {
-			this.bad([...path, 'attaches'], 'expected an object of layer → ids');
-			return;
-		}
-		for (const [layer, ids] of Object.entries(value)) {
-			const target = layers[layer];
-			const at = [...path, 'attaches', layer];
-			if (target === undefined) {
-				this.bad(at, `'${layer}' is not an attach layer of ${model}`);
-				continue;
-			}
-			if (!isList(ids)) {
-				this.bad(at, 'expected a list of ids');
-				continue;
-			}
-			const seen = new Set<string>();
-			for (const [index, id] of ids.entries()) {
-				if (typeof id !== 'string') {
-					this.bad([...at, index], 'expected an id');
-					continue;
-				}
-				if (seen.has(id)) {
-					this.bad([...at, index], 'duplicate id');
-					continue;
-				}
-				seen.add(id);
-				this.items.push({
-					change: {
-						model: target.model,
-						id,
-						path: [...at, 'link', index],
-						op: 'update',
-						set: { [target.field]: parentId },
-						revision: null
-					},
-					supplied: [target.field],
-					refs: [],
-					parent: { model, id: parentId, rel: layer, fk: target.field },
-					belongs: 'free',
-					attach: true
-				});
-			}
-		}
-	}
 
 	update(
 		model: string,
 		sel: Sel,
-		id: Json | undefined,
+		target: Json | undefined,
 		set: Json | undefined,
 		revision: number | null,
 		path: InputPath,
 		parent?: Item['parent']
 	): void {
+		const row = Predicate.isObject(target) ? target : undefined;
+		const id = row?.['id'] ?? target;
+		if (typeof row?.['revision'] === 'number') revision = row['revision'];
 		if (typeof id !== 'string') {
 			this.bad([...path, 'target'], 'expected an id');
 			return;
@@ -370,7 +318,7 @@ export class Flattener {
 		this.items.push({
 			change: { model: model, id, path, op: 'update', set: d.values, revision },
 			supplied: d.supplied,
-			refs: this.refsOf(model, d.values),
+			refs: this.refsOf(model, d.info, d.values, [...path, 'set']),
 			...(parent === undefined ? {} : { parent, belongs: 'parent' as const })
 		});
 		this.relations(model, sel, id, d.rels, [...path, 'set']);
@@ -378,11 +326,14 @@ export class Flattener {
 
 	delete(
 		model: string,
-		id: Json | undefined,
+		target: Json | undefined,
 		revision: number | null,
 		path: InputPath,
 		parent?: Item['parent']
 	): void {
+		const row = Predicate.isObject(target) ? target : undefined;
+		const id = row?.['id'] ?? target;
+		if (typeof row?.['revision'] === 'number') revision = row['revision'];
 		if (typeof id !== 'string') {
 			this.bad(path, 'expected an id');
 			return;
@@ -427,7 +378,7 @@ export class Flattener {
 			values,
 			at,
 			parent,
-			{ on: ['id'], onConflict: wrapped && v['onConflictDoUpdate'] === false ? 'keep' : 'update' },
+			{ on: ['id'], on_conflict: wrapped && v['onConflictDoUpdate'] === false ? 'keep' : 'update' },
 			id
 		);
 	}
@@ -441,15 +392,20 @@ export class Flattener {
 		path: InputPath
 	): void {
 		for (const [name, actions] of rels) {
-			const rel = this.model(model).many.get(name)!;
+			const rel = this.cat.models.get(model)?.many.get(name);
+			if (rel === undefined) {
+				this.bad([...path, name], `'${name}' is not a relation of ${model}`);
+				continue;
+			}
 			const spec = this.m.relationships[`${rel.child}.${rel.column}`];
 			const parent = { model: model, id, rel: name, fk: rel.column };
 			const allowed = sel === 'any' ? undefined : sel.with?.[name];
-			// a create tree's list keeps each child's index: an object creates, an id links
+			// An existing row links; a new child's values create, preserving their original input index.
 			const groups = new Map<string, (readonly [Json, InputPath])[] | null>();
 			if (isList(actions))
 				actions.forEach((v, i) => {
-					const action = typeof v === 'string' ? 'link' : 'create';
+					const action = typeof v === 'string' || (Predicate.isObject(v) && typeof v['id'] === 'string')
+						? 'link' : 'create';
 					const list = groups.get(action) ?? [];
 					list.push([v, [...path, name, action, i]]);
 					groups.set(action, list);
@@ -463,7 +419,7 @@ export class Flattener {
 			for (const [action, list] of groups) {
 				const at = [...path, name, action];
 				if (
-					!(ACTIONS as readonly string[]).includes(action) ||
+					!ACTIONS.includes(action) ||
 					(allowed !== undefined && allowed[action] === undefined)
 				) {
 					this.bad(at, `'${action}' is not accepted here`);
@@ -474,7 +430,7 @@ export class Flattener {
 					continue;
 				}
 				if (!this.depth(at)) continue;
-				const sub: Sel = allowed === undefined ? 'any' : (allowed[action] as Sel);
+				const sub = allowed?.[action] ?? 'any';
 				list.forEach(([v, p]) => {
 					if (action === 'create') this.create(rel.child, sub, v, p, parent);
 					else if (action === 'upsert') this.upsert(rel.child, sub, v, p, parent);
@@ -484,44 +440,38 @@ export class Flattener {
 							: this.bad(p, 'expected { target, set }');
 					else if (action === 'delete') this.delete(rel.child, v, null, p, parent);
 					else if (spec?.owned) this.bad(p, `an owned ${rel.child} never changes its parent`);
-					else if (typeof v !== 'string') this.bad(p, 'expected an id');
+					else if (typeof v !== 'string' && (!Predicate.isObject(v) || typeof v['id'] !== 'string')) this.bad(p, 'expected a row');
 					// link and unlink are FK updates of the child (rule 22); `unlink` of a required ref fails NOT NULL (`required`)
-					else
+					else {
+						const id = typeof v === 'string' ? v : String(v['id']);
+						const revision = Predicate.isObject(v) && typeof v['revision'] === 'number' ? v['revision'] : null;
 						this.items.push({
 							change: {
 								model: rel.child,
-								id: v,
+								id,
 								path: p,
 								op: 'update',
-								set: { [rel.column]: action === 'link' ? id : null },
-								revision: null
+								set: { [rel.column]: action === 'link' ? parent.id : null },
+								revision
 							},
 							supplied: [rel.column],
 							refs: [],
 							parent,
 							belongs: action === 'link' ? 'free' : 'parent'
 						});
+					}
 				});
 			}
 		}
 	}
 }
 
-const SYSTEM = new Set(['id', 'revision', 'created_at', 'created_by', 'updated_at', 'updated_by']);
 /**
- * A model's natural key: its `key`, else its first declared `unique`. An import matches rows and names refs by it
- * (rule 30); an upsert never does (rule 28: an upsert names its record by `id`).
+ * A model's import key: the unique constraint marked `import_key: true`, none otherwise. An import matches rows and
+ * names refs by it (rule 30); an upsert never does (rule 28: an upsert names its record by `id`).
  */
-export const modelKey = (m: EngineManifest, model: string): readonly string[] =>
-	m.models[model]?.key ?? m.models[model]?.unique?.[0]?.fields ?? [];
+export const modelKey = (m: EngineManifest, model: string): readonly string[] => m.models[model]?.key ?? [];
 
-/** A JSON number as the decimal its shortest digits spell (`1.5e-7` as 0.00000015). */
-const spelled = (v: number): Json => {
-	const text = String(v),
-		fraction = /\.(\d+)/.exec(text)?.[1]?.length ?? 0,
-		exponent = Number(/e-(\d+)$/.exec(text)?.[1] ?? 0);
-	return encodeWire(Decimal.fromNumber(v, fraction + exponent));
-};
 const isPhone = (spec: EngineManifest['models'][string]['fields'][string] | undefined) =>
 	spec?.kind === 'text' && spec.format === 'phone' && spec.many !== true;
 const isInputKind = (v: unknown): v is InputSpec[string] =>
@@ -534,6 +484,10 @@ export function decodeValue(
 	shape?: InputSpec[string]
 ): string | null {
 	if (v === null) return null;
+	if (spec?.many === true && spec.kind !== 'text' && spec.kind !== 'enum')
+		return Result.isSuccess(Schema.decodeUnknownResult(input_schema(spec))(v))
+			? null
+			: 'expected the declared field shape';
 	const str = typeof v === 'string';
 	switch (f.kind) {
 		case 'text':
@@ -556,13 +510,12 @@ export function decodeValue(
 			if (spec?.kind !== 'state') return 'expected the declared state';
 			return str && Object.hasOwn(spec.states, v) ? null : `'${String(v)}' is not a state`;
 		case 'int':
-		case 'duration':
 			return Number.isSafeInteger(v) ? null : 'expected a whole number';
 		// D6: an authored literal (decimal text or a number) or the wire's `{ $dec }`
 		case 'decimal':
 		case 'money':
 			return Result.isSuccess(
-				Schema.decodeUnknownResult(inputSchema({ kind: 'decimal', scale: 0 }))(v)
+				Schema.decodeUnknownResult(input_schema({ kind: 'decimal', scale: 0 }))(v)
 			)
 				? null
 				: 'expected a decimal';
@@ -570,7 +523,7 @@ export function decodeValue(
 			return typeof v === 'boolean' ? null : 'expected true or false';
 		// D6: a date and an instant are their ISO text, the one shape the wire carries both ways
 		case 'date':
-			return Result.isSuccess(Schema.decodeUnknownResult(inputSchema({ kind: 'date' }))(v))
+			return Result.isSuccess(Schema.decodeUnknownResult(input_schema({ kind: 'date' }))(v))
 				? null
 				: 'expected a date';
 		case 'instant':
@@ -587,12 +540,12 @@ export function decodeValue(
 				: `expected { model, id } with model one of ${(f.arms ?? []).join(', ')}`;
 		// X-11: a date period `{ from, to | null }` (inclusive), an instant period `{ start, end | null }`; empty or inverted refused
 		case 'period': {
-			const date = f.periodOf === 'date',
+			const date = f.period_of === 'date',
 				[lo, hi] = date ? ['from', 'to'] : ['start', 'end'];
 			const end = (x: Json | undefined) =>
 				typeof x === 'string' &&
 				Result.isSuccess(
-					Schema.decodeUnknownResult(inputSchema(date ? { kind: 'date' } : { kind: 'instant' }))(x)
+					Schema.decodeUnknownResult(input_schema(date ? { kind: 'date' } : { kind: 'instant' }))(x)
 				)
 					? x
 					: undefined;
@@ -614,11 +567,10 @@ export function decodeValue(
 				? null
 				: `expected ${f.dim ?? 'a list of'} finite numbers`;
 		// a declared `shape` is the value's input kind (§3.3.2), decoded as a typed input is, excess keys refused
-		case 'list':
 		case 'object': {
-			if (spec?.kind !== 'list' && spec?.kind !== 'object')
+			if (spec?.many !== true && spec?.kind !== 'object')
 				return 'expected the declared field shape';
-			return Result.isSuccess(Schema.decodeUnknownResult(inputSchema(spec))(v))
+			return Result.isSuccess(Schema.decodeUnknownResult(input_schema(spec))(v))
 				? null
 				: 'expected the declared field shape';
 		}
@@ -637,11 +589,30 @@ export function decodeValue(
 	}
 }
 
+/** Automatic entry timestamps are derived from the final state change and the invocation clock. */
+export function stateStamps(
+	m: EngineManifest,
+	model: string,
+	values: RowData,
+	before: RowData | undefined,
+	now: string
+): Record<string, Json> {
+	const stamps: Record<string, Json> = {};
+	for (const [name, kind] of Object.entries(m.models[model]?.fields ?? {})) {
+		if (kind.kind !== 'state') continue;
+		const next = values[name] ?? (before === undefined ? kind.initial : before[name]);
+		if (before !== undefined && (values[name] === undefined || next === before[name])) continue;
+		const stamp = kind.states[String(next)]?.stamp;
+		if (stamp !== undefined) stamps[stamp] = now;
+	}
+	return stamps;
+}
+
 /**
  * Defaults (rule 23a) and the required check, on a create's payload as the engine will write it. A state lands in its
  * initial value; `{ var: 'now' }`/`{ var: 'today + days(7)' }` resolve against the invocation clock; requestor defaults
  * (`{ var: 'requestor.id' }`) apply only when the requestor has that value (the system identity, an automation run, has
- * none: its code sets the field). Returns the first missing required field.
+ * none: its code sets the field). Returns the first missing required field, or a native failure for absent model metadata.
  */
 export function withDefaults(
 	m: EngineManifest,
@@ -650,8 +621,10 @@ export function withDefaults(
 	values: Record<string, Json>,
 	actor: EngineActor,
 	clock: { now: string; today: string }
-): string | null {
-	const spec = m.models[model]!;
+): string | null | BoltError {
+	const spec = m.models[model], info = cat.models.get(model);
+	if (spec === undefined || info === undefined)
+		return BoltError.make('unknown_model', 'decode', `unknown model '${model}'`);
 	for (const [name, k] of Object.entries(spec.fields)) {
 		if (values[name] !== undefined) continue;
 		if (k.kind === 'state') {
@@ -665,8 +638,8 @@ export function withDefaults(
 				? d['var']
 				: undefined;
 		const compiled =
-			text !== undefined && clockDefault(text) !== undefined ? compileVar(text) : undefined;
-		values[name] = compiled === undefined || 'error' in compiled ? d : evaluateVar(compiled, clock);
+			text !== undefined && clock_default(text) !== undefined ? compile_var(text) : undefined;
+		values[name] = compiled === undefined || 'error' in compiled ? d : evaluate_var(compiled, clock);
 	}
 	// a visitor's anonymous user is its requestor id too (it owns what it creates)
 	const requestor = actor;
@@ -676,7 +649,7 @@ export function withDefaults(
 			: requestor?.kind === 'visitor' && requestor.anonymous === true
 				? requestor.visitor
 				: undefined;
-	for (const [fk, rel] of cat.models.get(model)!.one) {
+	for (const [fk, rel] of info.one) {
 		const r = m.relationships[`${model}.${fk}`];
 		if (values[fk] !== undefined || r?.default === undefined || id === undefined) continue;
 		if (r.default.var === 'requestor.id' && rel.targets.includes('sys_user')) values[fk] = id;
@@ -688,42 +661,15 @@ export function withDefaults(
 		)
 			values[fk] = requestor.party.id;
 	}
+	Object.assign(values, stateStamps(m, model, values, undefined, clock.now));
 	const required = Object.entries(spec.fields).find(
 		([n, k]) =>
 			!k.optional && !['seq', 'sum', 'count'].includes(k.kind) && (values[n] ?? null) === null
 	);
 	if (required !== undefined) return required[0];
-	const ref = [...cat.models.get(model)!.one.keys()].find(
+	const ref = [...info.one.keys()].find(
 		(fk) => !m.relationships[`${model}.${fk}`]?.optional && (values[fk] ?? null) === null
 	);
 	return ref ?? null;
 }
 
-/** Values of `row` that `set` would change (rule 29: an update equal to the stored values writes nothing). */
-export const changed = (row: RowData, set: RowData): RowData =>
-	Object.fromEntries(Object.entries(set).filter(([k, v]) => !same(row[k] ?? null, v)));
-const same = (a: Json, b: Json): boolean => {
-	const u = (x: Json): Json =>
-		Predicate.isObject(x) && Object.keys(x).length === 1 && Object.keys(x)[0]!.startsWith('$')
-			? Object.values(x)[0]!
-			: x;
-	const [x, y] = [u(a), u(b)];
-	// numeric columns read back as text or numbers: compare those as numbers; a changed scale ('1.20') still writes
-	if (
-		(typeof x === 'number' || typeof y === 'number') &&
-		x !== null &&
-		y !== null &&
-		typeof x !== 'object' &&
-		typeof y !== 'object'
-	)
-		return Number(x) === Number(y);
-	// hook:integrations — a re-pulled value is no change (rule 29): jsonb reorders keys, timestamptz reads back as `…00Z`
-	if (
-		typeof x === 'string' &&
-		typeof y === 'string' &&
-		/^\d{4}-\d{2}-\d{2}T/.test(x) &&
-		/^\d{4}-\d{2}-\d{2}T/.test(y)
-	)
-		return Date.parse(x) === Date.parse(y);
-	return canonical(x) === canonical(y);
-};

@@ -1,68 +1,43 @@
-// Dynamic batches retain native input validation without claiming correlated JSON outputs.
+// Atomic maps correlate statically known results; dynamic maps retain native schema validation.
 import { expectTypeOf } from '@effect/vitest';
 import type { Effect } from 'effect';
 import type { Act, Committed, PendingApproval } from '../../src/decl/ctx.ts';
-import type { ActConflict, ActRefused, ActUnknown } from '../../src/decl/errors.ts';
-import type { Id } from '../../src/index.ts';
+import type { ActConflict, ActRefused } from '../../src/decl/errors.ts';
+import type { ActUnknown } from '../../src/decl/errors/act.ts';
+import type { Row } from '../../src/index.ts';
 import type { Json } from '../../src/decl/values.ts';
 import './registry.ts';
 
 declare const act: Act;
-declare const id: Id<'orders'>;
-const dynamic: Parameters<Act['checked']>[0] = [
-	{ callable: 'orders.create', input: [{ fieldsValidatedAtRuntime: true }] },
-	{ callable: 'orders.delete', input: [{ target: id }] }
-];
-const checked = act.checked(dynamic);
+declare const target: Row<'orders'>;
+declare const dynamic: Readonly<Record<string, Json>>;
+const checked = act(dynamic);
 expectTypeOf<Effect.Success<typeof checked>>().toEqualTypeOf<
-	Committed<readonly Json[]> | PendingApproval
+	Committed<Readonly<Record<string, Json>>> | PendingApproval
 >();
 expectTypeOf<Effect.Error<typeof checked>>().toEqualTypeOf<ActRefused | ActConflict | ActUnknown>();
 declare const result: Effect.Success<typeof checked>;
 // @ts-expect-error a held batch has no committed output
 void result.output;
-if (result.kind === 'committed') expectTypeOf(result.output).toEqualTypeOf<readonly Json[]>();
-
-const correlated = act.many([{ callable: 'orders.delete', input: [{ target: id }] }]);
+if (result.kind === 'committed') expectTypeOf(result.output).toEqualTypeOf<Readonly<Record<string, Json>>>();
+const correlated = act({ 'orders.delete': [{ target }] });
 expectTypeOf<Effect.Success<typeof correlated>>().toEqualTypeOf<
-	Committed<readonly [null]> | PendingApproval
+	Committed<{ readonly 'orders.delete': null }> | PendingApproval
 >();
-// @ts-expect-error the original correlated API still rejects a malformed delete
-act.many([{ callable: 'orders.delete', input: [{}] }]);
-// @ts-expect-error inputs must be JSON before the native schema validates their shape
-act.checked([{ callable: 'orders.delete', input: new Date() }]);
-
-// Observations belong to the individual verb, and a generated upsert always names its conflict policy.
-act.many([
-	{
-		callable: 'orders.upsert',
-		input: [{ id, note: 'retained' }],
-		onConflict: 'keep',
-		observed: { [id]: 1 }
-	},
-	{
-		callable: 'orders.update',
-		input: [{ target: id, set: { note: 'checked' } }],
-		observed: { [id]: 1 }
-	}
-]);
-act.checked([
-	{
-		callable: 'orders.upsert',
-		input: [{ id, note: 'retained' }],
-		onConflict: 'update',
-		observed: { [id]: 1 }
-	}
-]);
-// @ts-expect-error correlated upserts require an explicit native conflict policy
-// prettier-ignore
-act.many([{ callable: 'orders.upsert', input: [{ id, note: 'missing policy' }] }]);
-// @ts-expect-error correlated observations keep numeric revisions
-// prettier-ignore
-act.many([{ callable: 'orders.update', input: [{ target: id, set: { note: 'x' } }], observed: { [id]: '1' } }]);
-// @ts-expect-error dynamically checked observations keep numeric revisions
-// prettier-ignore
-act.checked([{ callable: 'orders.delete', input: [{ target: id }], observed: { [id]: '1' } }]);
-// @ts-expect-error conflict policies apply only to upserts, never deletes
-// prettier-ignore
-act.many([{ callable: 'orders.delete', input: [{ target: id }], onConflict: 'keep' }]);
+act({ 'orders.update': [{ target, set: { note: 'checked' } }] }, { key: 'save-order' });
+// @ts-expect-error delete requires a selected row
+act({ 'orders.delete': [{}] });
+// @ts-expect-error string ids carry no observed revision
+act({ 'orders.delete': [{ target: target.id }] });
+// @ts-expect-error every callable is current and declared
+act({ 'orders.upsert': [{ id: target.id, note: 'retired' }] });
+// @ts-expect-error observations come from each selected row
+act({ 'orders.delete': [{ target }] }, { observed: { [target.id]: 1 } });
+// @ts-expect-error import conflict policy belongs to the import input
+act({ 'orders.delete': [{ target }] }, { on_conflict: 'keep' });
+// @ts-expect-error no checked facade
+act.checked(dynamic);
+// @ts-expect-error no many facade
+act.many([{ callable: 'orders.delete', input: [{ target }] }]);
+// @ts-expect-error a dynamic map must contain JSON
+act({ [String(target.id)]: new Date() });

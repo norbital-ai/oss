@@ -11,8 +11,8 @@
 	let { facts, t }: { facts: readonly (readonly [string, Json])[]; t: (key: string) => string } =
 		$props();
 	const LABELS = $derived<{ readonly [k: string]: string }>({
-		webhookUrl: t('Webhook URL'),
-		redirectUrl: t('Redirect URI'),
+		webhook_url: t('Webhook URL'),
+		redirect_url: t('Redirect URI'),
 		address: t('Address'),
 		server: t('Server'),
 		folder: t('Folder'),

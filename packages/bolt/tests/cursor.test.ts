@@ -1,12 +1,12 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
 import { Base64Url } from 'effect/encoding';
-import { CursorValue, encodeCursor, type Cursor } from '@norbital-ai/store';
+import { CursorValue, encode_cursor, type Cursor } from '@norbital-ai/store';
 
 describe('page cursor codec', () => {
 	it('retains issued cursors with Unicode and null keys through the nominal boundary', () => {
 		for (const keys of [[], [null], ["quoted ' note \\ 🔒", '東京', null]]) {
-			const wire = encodeCursor('query-hash', keys);
+			const wire = encode_cursor('query-hash', keys);
 			const cursor: Cursor = Schema.decodeUnknownSync(CursorValue)(wire);
 			expect(cursor).toBe(wire);
 			expect(Schema.encodeSync(CursorValue)(cursor)).toBe(wire);
@@ -14,7 +14,7 @@ describe('page cursor codec', () => {
 	});
 
 	it('rejects malformed wire encodings, UTF-8, JSON and payloads', () => {
-		const wire = encodeCursor('query-hash', [null]);
+		const wire = encode_cursor('query-hash', [null]);
 		const malformed = [
 			null,
 			[],

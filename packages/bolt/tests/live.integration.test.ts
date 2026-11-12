@@ -19,17 +19,19 @@ import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { SqlReadCapture, type SqlReadCaptureService } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
 import { Agents, Live, Reads, Writes, type LiveView } from '../src/engine/services.ts';
-import { routeFixture } from './support/route-fixture.ts';
+import { route_fixture } from './support/route-fixture.ts';
 import { sse } from './support/live-bolt.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { Json } from '../src/decl/values.ts';
-import { createBolt, patched } from '../src/page/bolt.ts';
+import { create_bolt, patched } from '../src/page/bolt.ts';
 import type { ActOutcome as Outcome, Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { lowerRead } from '../src/engine/query/engine.ts';
+import { lower_read } from '../src/engine/query/engine.ts';
 import type { Frame } from '../src/protocol/wire.ts';
 import type { ReadIR } from '../src/protocol/reads.ts';
-import { Chain, noticeCaptures, noticeInsert } from '../src/engine/write/sql.ts';
+import { captureRows } from '../src/engine/db/captured.ts';
+import { shell_api } from '../src/shell/runtime.ts';
+import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { ACME, callbacks, guest, manifest as base, seed, SHADY } from './engine-fixture.ts';
 
 const present = <A>(value: A | null | undefined): A => {
@@ -49,7 +51,7 @@ const imaged: EngineManifest = {
 		...manifest.policies,
 		rep: {
 			...rep,
-			grants: { ...rep.grants, orders: { ...repOrders, create: true, update: true, delete: true } }
+			grants: { ...rep.grants, orders: { ...repOrders, create: {}, update: {}, delete: {} } }
 		}
 	}
 };
@@ -57,7 +59,7 @@ const bindings = () => ({ now: NOW, today: NOW.slice(0, 10), tz: 'UTC' });
 const Row = Schema.Record(Schema.String, Schema.Json);
 const Rows = Schema.Struct({ rows: Schema.Array(Row) });
 const BrowserPage = Schema.Struct({
-	rows: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+	rows: Schema.Array(Row),
 	next: Schema.NullOr(Schema.String)
 });
 const Captures = Schema.Array(
@@ -66,6 +68,7 @@ const Captures = Schema.Array(
 		id: Schema.String,
 		op: Schema.Literals(['create', 'update', 'delete']),
 		revision: Schema.Number,
+		transaction: Schema.String,
 		old: Schema.NullOr(Row),
 		new: Schema.NullOr(Row),
 		cause: Schema.Literals(['direct', 'cascade', 'derived', 'erased'])
@@ -88,7 +91,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 			writes = Context.get(context, Writes),
 			queries = Context.get(context, Reads),
 			agents = Context.get(context, Agents),
-			route = yield* routeFixture(context);
+			route = yield* route_fixture(context);
 		const nativeQuery = queries.run;
 		const countedQuery: typeof queries.run = (...args: Parameters<typeof queries.run>) =>
 			Effect.gen(function* () {
@@ -113,7 +116,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 		yield* Effect.addFinalizer(() =>
 			Effect.sync(() => Object.defineProperty(queries, 'run', { ...own, value: nativeQuery }))
 		);
-		const rep = t.as(t.member(['rep'])).authority;
+		const rep = (yield* t.as(t.member(['rep']))).authority;
 		const run = yield* FiberSet.makeRuntimePromise().pipe(Effect.provide(context));
 		const fetch: typeof globalThis.fetch = (input, init) => {
 			const request = new Request(
@@ -130,12 +133,13 @@ const cellOf = (m: EngineManifest, source: string) =>
 			const openStream = yield* sse((url) =>
 				route.handle(rep, new Request(new URL(url, 'http://cell')))
 			).pipe(Effect.provide(context));
-			const created = yield* createBolt({
+			const created = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				actor: null,
 				locale: 'en',
 				base: 'http://cell',
 				fetch,
-				openStream
+				open_stream: openStream
 			}).pipe(Effect.provide(context));
 			const bolt = {
 				...created,
@@ -147,7 +151,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 					const seen: (readonly Readonly<Record<string, unknown>>[])[] = [],
 						answered = yield* Queue.unbounded<typeof BrowserPage.Type>();
 					let current: typeof BrowserPage.Type | undefined;
-					yield* bolt.observe<unknown>(bolt.query({ orders: {} })).pipe(
+					yield* bolt.observe({ read: { m: 'query', a: [{ orders: {} }] } }, Schema.Unknown).pipe(
 						Stream.runForEach((answer) =>
 							Effect.gen(function* () {
 								const page = Predicate.hasProperty(answer, 'orders') ? answer.orders : undefined;
@@ -168,7 +172,7 @@ const cellOf = (m: EngineManifest, source: string) =>
 						}
 					};
 				});
-			return { bolt, orders };
+			return { bolt, orders, shell: shell_api(fetch, { base: 'http://cell' }) };
 		});
 		const flushes: (() => Effect.Effect<void>)[] = [];
 		const watcher = (authority: Authority) =>
@@ -278,14 +282,14 @@ class Cell extends Context.Service<Cell, Effect.Success<ReturnType<typeof cellOf
 ) {}
 const cell = Cell;
 const b = () => bindings();
-const titled = (rows: readonly Readonly<Record<string, unknown>>[], title: string) =>
+const titled = <R extends Readonly<Record<string, unknown>>>(rows: readonly R[], title: string): R =>
 	present(rows.find((r) => r['title'] === title));
 
 // rep's create check approves a row titled 'held'; the create transform refuses a blocked customer
-const check = 'create: { check: function* (rows, ctx) {';
+const check = 'create: { verdict: function* (changes, ctx) {';
 const approving = guest.source.replace(
 	check,
-	`${check} if (rows.some((r) => r.title === 'held')) return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] }));`
+	`${check} if (changes.some(({ after }) => after.title === 'held')) return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });`
 );
 layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approving)), {
 	excludeTestServices: true
@@ -299,7 +303,7 @@ layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approvi
 					const { bolt, orders } = yield* client;
 					const view = yield* orders();
 					const o = yield* bolt
-						.act('orders.create', [{ title: 'shady', region: 'north', customer: SHADY }])
+						.act({ 'orders.create': [{ title: 'shady', region: 'north', customer: SHADY }] })
 						.pipe(Effect.flip);
 					expect(o).toMatchObject({
 						_tag: 'ActRefused',
@@ -319,8 +323,8 @@ layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approvi
 				const { bolt, orders } = yield* client;
 				const view = yield* orders();
 				expect(
-					yield* bolt.act('orders.create', [{ title: 'held', region: 'north', customer: ACME }])
-				).toMatchObject({ kind: 'pendingApproval', records: [{ model: 'orders' }] });
+					yield* bolt.act({ 'orders.create': [{ title: 'held', region: 'north', customer: ACME }] })
+				).toMatchObject({ kind: 'pending_approval', records: [{ model: 'orders' }] });
 				expect(view.rows()).toMatchObject([
 					{
 						title: 'held',
@@ -355,20 +359,18 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						const view = yield* orders();
 						expect(
 							kind(
-								yield* bolt.act('orders.create', [
+								yield* bolt.act({ 'orders.create': [
 									{ title: 'desk', region: 'north', customer: ACME }
-								])
+								] })
 							)
 						).toBe('committed');
 						expect(view.rows().map((r) => r['title'])).toEqual(['desk']);
 						const id = String(present(view.rows()[0])['id']);
 						expect(id).not.toMatch(/^pending:/);
 						expect(
-							yield* bolt.query<{ orders: typeof BrowserPage.Type }>({
-								orders: { where: { id: { eq: id } } }
-							})
+							yield* bolt.native_query({ m: 'query', a: [{ orders: { where: { id: { eq: id } } } }] }, Schema.Unknown)
 						).toMatchObject({ orders: { rows: [{ title: 'desk' }] } });
-						expect(yield* bolt.query({ nope: {} }).pipe(Effect.flip)).toMatchObject({
+						expect(yield* bolt.native_query({ m: 'query', a: [{ nope: {} }] }, Schema.Unknown).pipe(Effect.flip)).toMatchObject({
 							code: expect.any(String)
 						});
 					})
@@ -383,8 +385,9 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						const { client, rep, other } = yield* cell;
 						const { bolt, orders } = yield* client;
 						const view = yield* orders();
-						yield* bolt.act('orders.create', [{ title: 'raced', region: 'north', customer: ACME }]);
-						const id = String(titled(view.rows(), 'raced')['id']);
+						yield* bolt.act({ 'orders.create': [{ title: 'raced', region: 'north', customer: ACME }] });
+						const target = titled(view.rows(), 'raced');
+						const id = String(target['id']);
 						const moved = yield* (yield* other()).act({
 							model: 'orders',
 							verb: 'update',
@@ -399,7 +402,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						expect(kind(moved.outcome)).toBe('committed');
 						expect(
 							yield* bolt
-								.act('orders.update', [{ target: id, set: { title: 'mine' } }])
+								.act({ 'orders.update': [{ target, set: { title: 'mine' } }] })
 								.pipe(Effect.flip)
 						).toMatchObject({ _tag: 'ActConflict' });
 						expect(present(view.rows().find((r) => r['id'] === id))['title']).toBe('raced');
@@ -415,7 +418,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						const { t, rep, writes, watcher, register, settled } = yield* cell;
 						const w = yield* watcher(rep);
 						yield* register(w, 'orders', {
-							read: lowerRead(manifest, 'read', ['orders', { all: true, select: { title: true } }])
+							read: yield* lower_read(manifest, 'read', ['orders', { all: true, select: { title: true } }])
 						});
 						const r = yield* writes.act({
 							model: 'orders',
@@ -480,7 +483,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						};
 						expect((yield* register('b')).status).toBe(200);
 						yield* until(() => answers('a') === 2 && answers('b') === 1);
-						who = t.as(t.member(['rep'])).authority;
+						who = (yield* t.as(t.member(['rep']))).authority;
 						expect((yield* register('c')).status).toBe(403);
 					})
 				)
@@ -491,7 +494,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 				Effect.gen(function* () {
 					const { rep, live, queries, count, watcher, register, settled, other } = yield* cell;
 					const w = yield* watcher(rep);
-					const simple = lowerRead(manifest, 'read', [
+					const simple = yield* lower_read(manifest, 'read', [
 						'orders',
 						{ select: { title: true, status: true }, all: true }
 					]);
@@ -527,7 +530,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 					Effect.gen(function* () {
 						const { rep, live, queries, count, watcher, register, settled, other } = yield* cell;
 						const w = yield* watcher(rep);
-						const totals = lowerRead(manifest, 'read', [
+						const totals = yield* lower_read(manifest, 'read', [
 							'orders',
 							{ select: { title: true, total: true }, all: true }
 						]);
@@ -581,8 +584,8 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 					Effect.gen(function* () {
 						const { rep, live, queries, watcher, register, settled, other } = yield* cell;
 						const w = yield* watcher(rep);
-						const tree = lowerRead(manifest, 'query', [
-							{ orders: { fields: ['title'] }, 'orders.lines': { fields: ['label', 'amount'] } }
+						const tree = yield* lower_read(manifest, 'query', [
+							{ orders: { fields: ['title'], lines: { fields: ['label', 'amount'] } } }
 						]);
 						const another = yield* other();
 						const write = (model: string, verb: 'create' | 'update', input: readonly Json[]) =>
@@ -650,7 +653,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 					Effect.gen(function* () {
 						const { t, client, rep, live, queries, count, watcher, register, settled } =
 							yield* cell;
-						const { bolt } = yield* client;
+						const { shell } = yield* client;
 						if (rep.actor.kind !== 'member') throw new Error('Expected a member');
 						const me = rep.actor.id;
 						yield* t.db.write({
@@ -681,13 +684,14 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						count.reset();
 						live.publish(
 							yield* Schema.decodeUnknownEffect(Captures)(
-								(yield* t.db.write(c.sql(`${noticeCaptures(c)} AS notices`))).rows[0]?.['notices']
+								(yield* t.db.write(c.sql(`${captureRows(c)} AS captured`))).rows[0]?.['captured']
 							)
 						);
 						yield* settled;
-						expect(count.reads).toBe(2);
+						// the image patches the page and its unread counter: no re-read
+						expect(count.reads).toBe(0);
 						expect(w.frames.at(-2)).toMatchObject({
-							t: 'answer',
+							t: 'patch',
 							view: 'inbox',
 							arrivals: [{ id: `n1:${me}` }]
 						});
@@ -697,7 +701,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						expect(w.held.get('inbox')).toEqual(yield* fresh());
 						expect(w.held.get('inbox')).toMatchObject({ unread: 1 });
 						// markRead publishes the member's changed rows: `read` flips without a reload
-						expect(kind(yield* bolt.act('sys_notification.markRead', { ids: [`n1:${me}`] }))).toBe(
+						expect(kind(yield* shell.mark_notices_read([`n1:${me}`]))).toBe(
 							'committed'
 						);
 						yield* settled;
@@ -717,7 +721,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 				Effect.scoped(
 					Effect.gen(function* () {
 						const { t, client, rep, watcher, register, settled } = yield* cell;
-						const { bolt } = yield* client;
+						const { shell } = yield* client;
 						if (rep.actor.kind !== 'member') throw new Error('Expected a member');
 						const me = rep.actor.id;
 						// one past the inbox page of 200
@@ -736,7 +740,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 						expect(w.held.get('inbox')).toMatchObject({ unread: 201 });
 						expect(Schema.decodeUnknownSync(Rows)(w.held.get('inbox')).rows.length).toBe(200);
 						expect(w.frames.at(-1)).not.toHaveProperty('arrivals');
-						expect(kind(yield* bolt.act('sys_notification.markRead', { all: true }))).toBe(
+						expect(kind(yield* shell.mark_all_notices_read())).toBe(
 							'committed'
 						);
 						yield* settled;

@@ -25,6 +25,12 @@ const workspaceFiles = Effect.fn('bolt.workspaceFiles')(function* (root: string)
 		path = yield* Path.Path;
 	// the heavy and derived folders sit at the root; everything else is the workspace's own
 	const rels = [...GENERATED];
+	for (const folder of ['models', 'integrations']) {
+		const directory = path.join('.norbital', folder);
+		if (yield* fs.exists(path.join(root, directory)))
+			for (const file of yield* fs.readDirectory(path.join(root, directory)))
+				if (file.endsWith('.ts')) rels.push(path.join(directory, file));
+	}
 	for (const name of yield* fs.readDirectory(root)) {
 		if (SKIPPED.has(name)) continue;
 		const at = path.join(root, name);
@@ -46,11 +52,11 @@ const typeDiagnostics = Effect.fn('bolt.typeDiagnostics')(function* (
 	files: ReadonlyMap<string, string>
 ) {
 	// a build needs no checker: load its TypeScript 7 API only when a check asks for it
-	const { checkWorkspace } = yield* Effect.tryPromise({
+	const { type_service } = yield* Effect.tryPromise({
 		try: () => import('@norbital-ai/bolt/node'),
 		catch: (cause) => new ToolFailure({ message: `the type check: ${String(cause)}` })
 	});
-	const answer = yield* checkWorkspace(files, `${root}/node_modules`).pipe(
+	const answer = yield* type_service.check_workspace(files, `${root}/node_modules`).pipe(
 		Effect.mapError((e) => new ToolFailure({ message: `the type check: ${e.message}` }))
 	);
 	return answer
@@ -91,14 +97,11 @@ const svelteWarnings = Effect.fn('bolt.svelteWarnings')(function* (
 	});
 	const decode = Schema.decodeUnknownOption(SvelteWarnings);
 	const warned = yield* Effect.forEach(components, ([rel, source]) =>
-		// a template page compiles in Svelte's async mode; a public page (beside its server loader) renders synchronously
 		Effect.try(() =>
 			compiler.compile(source, {
 				filename: rel,
 				generate: false,
-				experimental: {
-					async: !files.has(rel.replace(/\.page\.svelte$/, '.page.server.ts'))
-				}
+				experimental: { async: true }
 			})
 		).pipe(
 			Effect.option,

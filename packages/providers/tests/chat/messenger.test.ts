@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { messenger } from '../../src/chat/messenger/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = { pageAccessToken: 'token', appSecret: 'secret', verifyToken: 'verify' };
@@ -50,7 +50,7 @@ describe('Messenger', () => {
 			const h = yield* connected(messenger, settings),
 				body = hook({ mid: 'm1', text: 'hello' });
 			expect(h.status).toMatchObject({ state: 'connected', account: 'Acme' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(200);
 			expect(h.events).toEqual([
 				{
 					kind: 'messages',
@@ -58,11 +58,11 @@ describe('Messenger', () => {
 						{
 							id: 'm1',
 							thread: 'U1',
-							sentAt: '2026-09-21T14:13:20.000Z',
+							sent_at: '2026-09-21T14:13:20.000Z',
 							from: { handle: 'U1', name: null },
 							text: 'hello',
 							group: false,
-							replyTo: null,
+							reply_to: null,
 							attachments: [],
 							invocation: 'direct'
 						}
@@ -75,10 +75,10 @@ describe('Messenger', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* connected(messenger, settings);
-			const good = yield* h.link.webhook!(handshake('verify'));
+			const good = yield* required(h.link.webhook)(handshake('verify'));
 			expect(good.status).toBe(200);
 			expect(yield* Effect.promise(() => good.text())).toBe('1158201444');
-			expect((yield* h.link.webhook!(handshake('wrong'))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(handshake('wrong'))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -87,11 +87,11 @@ describe('Messenger', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(messenger, settings),
 				body = hook({ mid: 'm1', text: 'hello' });
-			const forged = yield* h.link.webhook!(
+			const forged = yield* required(h.link.webhook)(
 				webhook(body, { 'x-hub-signature-256': 'sha256=forged' })
 			);
 			expect(forged.status).toBe(401);
-			expect((yield* h.link.webhook!(webhook(body, {}))).status).toBe(401);
+			expect((yield* required(h.link.webhook)(webhook(body, {}))).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -102,7 +102,7 @@ describe('Messenger', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = hook({ mid: 'm1', text: 'hello' });
-			expect((yield* h.link.webhook!(webhook(body, signature(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, signature(body)))).status).toBe(500);
 		})
 	);
 	it.live('skips the page’s own echoes and reads a message’s file', () =>
@@ -111,8 +111,8 @@ describe('Messenger', () => {
 			const h = yield* connected(messenger, settings);
 			const echo = hook({ mid: 'm0', text: 'mine', is_echo: true }),
 				photo = hook({ mid: 'm2', attachments: [{ type: 'image', payload: { url: PHOTO } }] });
-			yield* h.link.webhook!(webhook(echo, signature(echo)));
-			yield* h.link.webhook!(webhook(photo, signature(photo)));
+			yield* required(h.link.webhook)(webhook(echo, signature(echo)));
+			yield* required(h.link.webhook)(webhook(photo, signature(photo)));
 			expect(h.events).toEqual([
 				expect.objectContaining({
 					messages: [
@@ -130,8 +130,8 @@ describe('Messenger', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(messenger, settings);
-			const sent = yield* h.link.send!({ to: 'U1', text: 'Hello' }, []);
-			expect(sent).toMatchObject({ providerId: 'out1' });
+			const sent = yield* required(h.link.send)({ to: 'U1', text: 'Hello' }, []);
+			expect(sent).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://graph.facebook.com/v21.0/me/messages?access_token=token');
 			expect(JSON.parse(call?.body ?? '')).toEqual({
@@ -140,7 +140,7 @@ describe('Messenger', () => {
 				messaging_type: 'RESPONSE'
 			});
 			const before = api.calls.length;
-			yield* h.link.send!({ to: 'U1', text: 'a'.repeat(2001) }, []);
+			yield* required(h.link.send)({ to: 'U1', text: 'a'.repeat(2001) }, []);
 			expect(
 				api.calls.slice(before).map((one) => JSON.parse(one.body).message.text.length)
 			).toEqual([2000, 1]);
@@ -153,13 +153,13 @@ describe('Messenger', () => {
 				limited ? json({ error: { message: 'limit', code: 613 } }, 400) : answer(call)
 			);
 			const h = yield* connected(messenger, settings);
-			yield* h.link.typing!('U1', true);
+			yield* required(h.link.typing)('U1', true);
 			expect(JSON.parse(api.calls.at(-1)?.body ?? '')).toEqual({
 				recipient: { id: 'U1' },
 				sender_action: 'typing_on'
 			});
 			limited = true;
-			const failed = yield* Effect.flip(h.link.send!({ to: 'U1', text: 'Hello' }, []));
+			const failed = yield* Effect.flip(required(h.link.send)({ to: 'U1', text: 'Hello' }, []));
 			expect(failed).toMatchObject({ _tag: 'ProviderUnavailable', status: 429 });
 		})
 	);
@@ -167,7 +167,7 @@ describe('Messenger', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ error: { message: 'Invalid token', code: 190 } }, 400));
 			const h = yield* host(chatProvider(messenger), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);

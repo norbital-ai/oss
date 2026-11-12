@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-cli",
-	"version": "0.0.24",
+	"version": "0.0.25",
 	"description": "Bolt's tooling: the compiler, the `bolt` command (check, build, test, dev, seed, templates) and the test kit.",
 	"type": "module",
 	"sideEffects": false,
@@ -9,10 +9,6 @@
 		"./test": {
 			"types": "./build/test/index.d.ts",
 			"default": "./build/test/index.js"
-		},
-		"./test/browser": {
-			"types": "./build/test/browser.d.ts",
-			"default": "./build/test/browser.js"
 		},
 		"./guests": {
 			"types": "./build/guests.d.ts",

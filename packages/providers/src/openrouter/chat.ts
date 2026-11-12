@@ -1,5 +1,5 @@
 import {
-	openAiChat,
+	open_ai_chat,
 	type AiRequest,
 	type OpenAiChat,
 	type OpenAiChatConfig
@@ -20,7 +20,7 @@ type DeepSeekRouting = {
  * tool arguments), `sort` takes the fastest on the first step, and `session_id` keeps every later step there, where its
  * prefix and cached price are, moving only if that provider fails.
  */
-export const deepSeekRouting = (endpoint: string, model: string): DeepSeekRouting =>
+const deep_seek_routing = (endpoint: string, model: string): DeepSeekRouting =>
 	model.startsWith('deepseek/') && new URL(endpoint).hostname === 'openrouter.ai'
 		? {
 				provider: {
@@ -32,15 +32,15 @@ export const deepSeekRouting = (endpoint: string, model: string): DeepSeekRoutin
 		: {};
 
 /** What never changes in a conversation names it: a compaction starts a new prefix, nothing cached to lose, and sorts again. */
-export const sessionOf = (request: Pick<AiRequest, 'system' | 'messages'>) =>
+export const session_of = (request: Pick<AiRequest, 'system' | 'messages'>) =>
 	String(Hash.string(`${request.system ?? ''}${JSON.stringify(request.messages[0])}`));
 
 /** Provider routing uses the resolved model, including a catalog id chosen instead of a configured class. */
-export const openRouterChat =
-	(config: OpenAiChatConfig, options: Parameters<typeof openAiChat>[1] = {}): OpenAiChat =>
+export const open_router_chat =
+	(config: OpenAiChatConfig, options: Parameters<typeof open_ai_chat>[1] = {}): OpenAiChat =>
 	(request) => {
 		const model = config.models[request.model] ?? request.model;
-		const routing = deepSeekRouting(config.endpoint, model);
+		const routing = deep_seek_routing(config.endpoint, model);
 		const configured = config.body?.['provider'];
 		const preferences =
 			typeof configured === 'object' &&
@@ -48,7 +48,7 @@ export const openRouterChat =
 			!EffectArray.isArray<typeof configured>(configured)
 				? configured
 				: {};
-		return openAiChat(
+		return open_ai_chat(
 			{
 				...config,
 				models: {},
@@ -56,7 +56,7 @@ export const openRouterChat =
 					...config.body,
 					...(routing.provider === undefined
 						? {}
-						: { provider: { ...routing.provider, ...preferences }, session_id: sessionOf(request) })
+						: { provider: { ...routing.provider, ...preferences }, session_id: session_of(request) })
 				}
 			},
 			options

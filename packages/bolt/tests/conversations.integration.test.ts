@@ -1,3 +1,5 @@
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // engine/conversations on PGlite (§4.3, rule 61, rule 41's exception, G12 (3)): serial-pcn's
 // `customer_notices` shape — a `sent_emails` row's create sends its mail through the `customer_mail` connection, delivery
 // reports and the customer's reply land on the row after it is closed — plus one-statement inbound keyed by instance
@@ -5,14 +7,17 @@
 // the epoch.
 import { describe, expect, it, vi } from '@effect/vitest';
 import { afterAll } from 'vitest';
-import { Context, Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
+import { Context, Crypto, Effect, Exit, Layer, Result, Schema, Scope } from 'effect';
 import { createHash } from 'node:crypto';
-import { Drivers, Files } from '../src/engine/ports.ts';
+import { Drivers, Files, Logs } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { Conversations, Outbound } from '../src/engine/services.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { Conversations, Live, Outbound } from '../src/engine/services.ts';
+import { conversations as native_conversations } from '../src/engine/conversations/index.ts';
+import { TenantDb } from '../src/engine/db/tenant-db.ts';
+import { DbError } from '../src/engine/errors.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { Authority, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
@@ -21,13 +26,28 @@ import { LINK_DOWN } from '../src/engine/integrations/abi.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { filesOf } from '../src/engine/conversations/store.ts';
 
+const runtime_accounts = [
+	{ id: 'customer_mail', integration: 'customer_notices', status: { state: 'connected' } },
+	// paused outside its own test: an active second customer_notices instance would mirror every notice
+	{ id: 'atomic_mail', integration: 'customer_notices', active: false, status: { state: 'connected' } },
+	{ id: 'desk_wa', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'slack_a', integration: 'slack', status: { state: 'connected' } },
+	{ id: 'slack_b', integration: 'slack', status: { state: 'connected' } },
+	{ id: 'supplier_inbox', integration: 'mail_import' },
+	{ id: 'repair_wa', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'envoy_wa', integration: 'whatsapp' },
+	{ id: 'recent_wa', integration: 'whatsapp' },
+	{ id: 'dedupes_wa', integration: 'whatsapp', status: { state: 'connected' } },
+] as const;
+const runtime_envoys = [{ id: '0199a000-0000-7000-8000-0000000000e9', name: 'Repair desk', policies: ['staff'], audience: 'public', triage: false, group_messages: 'disabled', accounts: ['envoy_wa', 'atomic_mail'] }] as const;
+
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {
 			sent_emails: {
 				description: 'A customer notice',
-				label: 'subject',
+				record_label: 'record.subject',
 				fields: {
 					to: { kind: 'text' },
 					subject: { kind: 'text' },
@@ -35,31 +55,29 @@ const manifest = Result.getOrThrow(
 					status: {
 						kind: 'state',
 						initial: 'open',
-						states: { open: { to: ['closed'] }, closed: { edit: 'none' } }
+						states: { open: { to: ['closed'] }, closed: {} }
 					},
 					sent_at: { kind: 'instant', optional: true },
 					delivered_at: { kind: 'instant', optional: true },
 					opened_at: { kind: 'instant', optional: true },
 					replied_at: { kind: 'instant', optional: true },
 					failed_reason: { kind: 'text', optional: true }
-				}
+				},
+				locks: { closed: { where: { status: { eq: 'closed' } }, except: ['sent_at', 'delivered_at', 'opened_at', 'replied_at', 'failed_reason'] } }
 			},
 			supplier_mail: {
 				description: 'A supplier mail',
-				label: 'subject',
-				key: ['inbox', 'message_id'],
+				record_label: 'record.subject',
+				// the engine's id map carries the connection; the row needs no routing field
+				key: ['message_id'],
+				unique: [{ fields: ['message_id'], import_key: true }],
 				fields: { message_id: { kind: 'text' }, subject: { kind: 'text' }, files: { kind: 'json' } }
 			}
 		},
-		relationships: {
-			'supplier_mail.inbox': {
-				to: 'sys_integration',
-				where: { integration: { eq: 'mail_import' } }
-			}
-		},
+		relationships: {},
 		exposures: {
 			sent_emails: {
-				read: { sent_emails: { fields: 'all' } },
+				outputs: { default: { sent_emails: { fields: 'all' } } },
 				create: { columns: { sent_emails: ['to', 'subject', 'body'] } },
 				syncs: { mail: { with: 'customer_notices', read: true, write: true } },
 				update: {
@@ -76,7 +94,7 @@ const manifest = Result.getOrThrow(
 				}
 			},
 			supplier_mail: {
-				read: { supplier_mail: { fields: 'all' } },
+				outputs: { default: { supplier_mail: { fields: 'all' } } },
 				syncs: { inbox: { with: 'mail_import', read: true } }
 			}
 		},
@@ -90,31 +108,22 @@ const manifest = Result.getOrThrow(
 				driver: 'email'
 			}
 		},
-		connections: {
-			customer_mail: { integration: 'customer_notices' },
-			desk_wa: { integration: 'whatsapp' },
-			slack_a: { integration: 'slack' },
-			slack_b: { integration: 'slack' },
-			supplier_inbox: { integration: 'mail_import' },
-			repair_wa: { integration: 'whatsapp' },
-			envoy_wa: { integration: 'whatsapp' },
-			recent_wa: { integration: 'whatsapp' },
-			dedupes_wa: { integration: 'whatsapp' }
-		},
+		
 		policies: {
 			staff: {
 				description: 'Staff',
-				grants: { sent_emails: { read: true, create: true, update: true, moves: 'all' } }
+				grants: {
+					sent_emails: { outputs: { default: {} }, create: {}, update: { moves: 'all' } }
+				}
 			}
 		},
 		teams: {
-			direct: ['staff']
+			direct: { policies: ['staff'] }
 		},
 		automations: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -136,9 +145,9 @@ const ok = (o: Outcome) => {
 const mail = (over: { [k: string]: Json }) => ({
 	id: '<r@acme.com>',
 	thread: null,
-	sentAt: '2026-09-25T10:03:00.000Z',
+	sent_at: '2026-09-25T10:03:00.000Z',
 	from: { address: 'Carol@acme.com', name: 'Carol' },
-	replyTo: null,
+	reply_to: null,
 	to: [],
 	cc: [],
 	subject: 'Re: PCN 1234',
@@ -152,7 +161,7 @@ const mail = (over: { [k: string]: Json }) => ({
 // and provider ids never repeat across tests.
 type Recorded = {
 	instance: string;
-	providerId: string;
+	provider_id: string;
 	message: Json;
 	attachments?: Parameters<Drivers['Service']['send']>[2];
 };
@@ -160,14 +169,14 @@ const recorded: Recorded[] = [];
 let sends = 0;
 const record: Drivers['Service']['send'] = (instance, message, attachments) =>
 	Effect.sync(() => {
-		const providerId = `${instance}:${++sends}`;
+		const provider_id = `${instance}:${++sends}`;
 		recorded.push({
 			instance,
-			providerId,
+			provider_id,
 			message,
 			...(attachments === undefined ? {} : { attachments })
 		});
-		return { providerId };
+		return { provider_id };
 	});
 let send = record;
 const blobs = new Map<string, Uint8Array>();
@@ -216,9 +225,9 @@ const workspace = Effect.runSync(
 	Effect.cached(
 		Effect.gen(function* () {
 			const context = yield* Layer.build(
-				TestWorkspace.layer({ manifest, guest: yield* guest, ports })
+				with_envoys(with_accounts(TestWorkspace.layer({ manifest, guest: yield* guest, ports }), runtime_accounts), runtime_envoys)
 			);
-			return { context, route: yield* routeFixture(context) };
+			return { context, route: yield* route_fixture(context) };
 		}).pipe(Scope.provide(fileScope))
 	)
 );
@@ -260,11 +269,13 @@ const fixture = () =>
 			)
 		};
 		const act = (authority: Authority, callable: string, input: Json) =>
-			actReply(route, authority, { callable, input, issuedAt: t.clock.now() }).pipe(
+			act_reply(route, authority, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 				Effect.map((r) => r.outcome)
 			);
 		const staffMember = t.member(['staff']);
-		const staff = () => t.as(staffMember).authority;
+		const staffAuthority = (yield* t.as(staffMember)).authority;
+		const adminAuthority = (yield* t.as(t.admin)).authority;
+		const staff = () => staffAuthority;
 		const notice = () =>
 			act(staff(), 'sent_emails.create', [
 				{
@@ -272,9 +283,9 @@ const fixture = () =>
 					subject: 'PCN 1234',
 					body: 'Your parts change.'
 				}
-			]).pipe(Effect.map((o) => ok(o).records[0]!.id));
+			]).pipe(Effect.map((o) => ok(o).records[0]?.id ?? ''));
 		const row = (id: string) =>
-			qReply(route, t.as(t.admin).authority, {
+			q_reply(route, adminAuthority, {
 				reads: [{ m: 'query', a: [{ sent_emails: { where: { id: { eq: id } } } }] }]
 			}).pipe(
 				Effect.flatMap((r) =>
@@ -306,13 +317,13 @@ const fixture = () =>
 			);
 		const outbox = () =>
 			rows(
-				`SELECT m.id, m.integration, m.status, m.attempts, m.error, m.conversation, m.provider_id, o.record
+				`SELECT m.id, m.integration, m.status, m.attempts, m.error, m.conversation, m.provider_id, m.sent_at, o.record
 				FROM sys_message m LEFT JOIN sys_outbox o ON o.key = m.meta ->> 'sync_write'
 				WHERE m.direction = 'outbound' AND m.status IS NOT NULL AND ${fresh('sys_message', 'm')} ORDER BY m.seq`
 			);
 		const sent = (instance: string) => recorded.filter((s) => s.instance === instance);
 		/** The provider id the native fake answered for this test's n-th send on `instance`. */
-		const provider = (instance: string, n = 1) => sent(instance)[n - 1]?.providerId ?? '';
+		const provider = (instance: string, n = 1) => sent(instance)[n - 1]?.provider_id ?? '';
 		const deliver = () =>
 			t.syncs.deliver().pipe(
 				Effect.andThen(outbound.deliver),
@@ -321,14 +332,14 @@ const fixture = () =>
 			);
 		const report = (
 			instance: string,
-			providerId: string,
+			provider_id: string,
 			r: { kind: 'delivered' | 'opened' | 'bounced' | 'deferred'; at: string } & {
 				[k: string]: Json;
 			}
 		) =>
 			conversations.receive(instance, {
 				kind: 'delivery',
-				providerId,
+				provider_id,
 				report: { provider: 'fake', ...r }
 			});
 		const timeline = () =>
@@ -384,6 +395,89 @@ const fixture = () =>
 	});
 
 describe('delivery status (§5.9)', () => {
+	it.live('commits an inbound reply, delivery correlation, sync hint and envoy admission together', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const f = yield* fixture();
+			const thread = 'atomic-reply-thread';
+			const pause = (active: boolean) =>
+				f.t.db.write({ text: 'UPDATE sys_integration SET active = $1 WHERE id = $2', params: [active, 'atomic_mail'] });
+			yield* pause(true);
+			yield* Effect.addFinalizer(() => Effect.orDie(pause(false)));
+			const outbound = yield* f.conversations.send('atomic_mail', { to: ['carol@acme.com'], subject: 'Daily report', text: 'Report', thread }, {});
+			yield* f.deliver();
+			let refuse = true, intercepted = 0;
+			const db = TenantDb.typed({ ...f.t.db, write: (statement, lock) => {
+				if (refuse && statement.text.includes('envoys.admit')) {
+					intercepted++;
+					return Effect.fail(new DbError({ sqlstate: '40001', message: 'injected inbound admission failure' }));
+				}
+				return f.t.db.write(statement, lock);
+			} });
+			const receiver = native_conversations({
+				crypto: Context.get(f.context, Crypto.Crypto),
+				engine: { manifest, db, live: Context.get(f.context, Live) },
+				files, filesReady: () => Effect.void, logs: Context.get(f.context, Logs),
+				clock: Effect.sync(() => f.t.clock.now()), outbound: f.outbound
+			});
+			const event = { kind: 'messages' as const, messages: [mail({ id: '<atomic-reply@acme.com>', thread, headers: { 'in-reply-to': f.provider('atomic_mail') } })] };
+			expect(yield* Effect.flip(receiver.receive('atomic_mail', event))).toMatchObject({ _tag: 'DbError', sqlstate: '40001' });
+			expect(intercepted).toBe(1);
+			expect(yield* f.rows(`SELECT status FROM sys_message WHERE id='${outbound}'`)).toEqual([{ status: 'sent' }]);
+			expect(yield* f.rows("SELECT id FROM sys_message WHERE provider_id='<atomic-reply@acme.com>'")).toEqual([]);
+			expect(yield* f.rows("SELECT id FROM sys_inbox WHERE instance='atomic_mail'")).toEqual([]);
+			expect(yield* f.rows(`SELECT id FROM sys_run r WHERE automation='envoys.admit' AND ${f.fresh('sys_run', 'r')}`)).toEqual([]);
+			refuse = false;
+			yield* receiver.receive('atomic_mail', event);
+			yield* receiver.receive('atomic_mail', event);
+			expect(yield* f.rows(`SELECT status FROM sys_message WHERE id='${outbound}'`)).toEqual([{ status: 'replied' }]);
+			expect(yield* f.rows("SELECT id FROM sys_message WHERE provider_id='<atomic-reply@acme.com>'")).toHaveLength(1);
+			expect(yield* f.rows("SELECT id FROM sys_inbox WHERE instance='atomic_mail'")).toHaveLength(1);
+			expect(yield* f.rows(`SELECT id FROM sys_run r WHERE automation='envoys.admit' AND ${f.fresh('sys_run', 'r')}`)).toHaveLength(1);
+		}))
+	);
+	it.live('persists a provider reference before I/O and preserves an early reply across a later send acknowledgement', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const f = yield* fixture();
+			const provider_id = '<early-reference@acme.com>', thread = 'early-reference-thread';
+			let outgoing = '';
+			f.setSend((instance, message) => Effect.gen(function* () {
+				outgoing = (yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(message)).id;
+				yield* f.conversations.receive(instance, { kind: 'outbound_ref', message: outgoing, provider_id });
+				expect(yield* f.rows(`SELECT provider_id,status,sent_at FROM sys_message WHERE id='${outgoing}'`)).toEqual([{ provider_id, status: 'sending', sent_at: null }]);
+				yield* f.conversations.receive(instance, { kind: 'messages', messages: [mail({ id: '<early-reply@acme.com>', thread, headers: { 'in-reply-to': provider_id }, text: 'Explain this report' })] });
+				expect(yield* f.rows(`SELECT status, sent_at = '2026-09-25T10:03:00.000Z'::timestamptz AS accepted_at_reply FROM sys_message WHERE id='${outgoing}'`)).toEqual([{ status: 'replied', accepted_at_reply: true }]);
+				return { provider_id };
+			}).pipe(Effect.mapError(Port.failure('link'))));
+			const id = yield* f.conversations.send('customer_mail', { to: ['carol@acme.com'], subject: 'Daily report', text: 'Daily report', thread }, {});
+			yield* f.deliver();
+			expect(id).toBe(outgoing);
+			expect(yield* f.outbox()).toMatchObject([{ id, provider_id, status: 'replied', attempts: 1 }]);
+			expect((yield* f.history()).filter((row) => row['provider_id'] === '<early-reply@acme.com>')).toHaveLength(1);
+			expect((yield* f.timeline())['delivery']).toMatchObject([{ kind: 'queued' }, { kind: 'replied' }, { kind: 'sent' }]);
+			expect(yield* Effect.flip(f.outbound.reference('customer_mail', { message: id, provider_id: '<conflicting@acme.com>' }))).toMatchObject({ code: 'conflict' });
+		}))
+	);
+	it.live('keeps an early delivery acknowledgement when the non-idempotent send ends without an answer', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const f = yield* fixture();
+			let calls = 0;
+			const provider_id = 'ack-before-timeout';
+			f.setSend((instance, message) => Effect.gen(function* () {
+				calls++;
+				const { id } = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }))(message);
+				yield* f.conversations.receive(instance, { kind: 'outbound_ref', message: id, provider_id });
+				expect(yield* f.rows(`SELECT sent_at FROM sys_message WHERE id='${id}'`)).toEqual([{ sent_at: null }]);
+				yield* f.conversations.receive(instance, { kind: 'delivery', provider_id, report: { kind: 'delivered', at: f.t.clock.now(), provider: 'fake' } });
+				expect(yield* f.rows(`SELECT status, sent_at = '${f.t.clock.now()}'::timestamptz AS accepted_at_report FROM sys_message WHERE id='${id}'`)).toEqual([{ status: 'delivered', accepted_at_report: true }]);
+				return yield* Effect.fail(new FacilityFailure({ kind: 'timeout', message: 'send acknowledgement lost' }));
+			}).pipe(Effect.mapError(Port.failure('link'))));
+			yield* f.conversations.send('desk_wa', { to: 'early-ack@s.whatsapp.net', text: 'Daily update' }, {});
+			f.t.clock.advance('1h');
+			yield* f.deliver();
+			expect(calls).toBe(1);
+			expect(yield* f.outbox()).toMatchObject([{ provider_id, status: 'delivered', attempts: 1 }]);
+		}))
+	);
 	it.live(
 		'every report lands on the timeline; a bounce is terminal: a later delivered neither moves the status nor maps; a redelivery is recorded once',
 		() =>
@@ -456,7 +550,7 @@ describe('delivery status (§5.9)', () => {
 					t.clock.advance('10min');
 					yield* f.deliver();
 					expect(yield* f.outbox()).toMatchObject([
-						{ status: 'failed', attempts: 2, error: 'no such user' }
+						{ status: 'failed', attempts: 2, error: 'no such user', sent_at: null }
 					]);
 					expect((yield* f.timeline())['delivery']).toMatchObject([
 						{},
@@ -481,7 +575,8 @@ describe('delivery order', () => {
 					f.failing(() => {
 						if (first) {
 							first = false;
-							return new Error('socket closed');
+							// an explicit temporary refusal retries; an unexplained failure after handoff is uncertain
+							return new SendRefused('socket closed', undefined, false);
 						}
 						return null;
 					});
@@ -545,7 +640,7 @@ describe('inbound (§4.3)', () => {
 	const chat = (over: { [k: string]: Json } = {}): Json => ({
 		id: 'W1',
 		thread: '6591234567@s.whatsapp.net',
-		sentAt: '2026-09-25T10:00:00.000Z',
+		sent_at: '2026-09-25T10:00:00.000Z',
 		from: { handle: '6591234567@s.whatsapp.net', name: 'Ben' },
 		text: 'first',
 		attachments: [],
@@ -611,7 +706,7 @@ describe('inbound (§4.3)', () => {
 					);
 					yield* t.receive('desk_wa', chat({ id: 'F2', thread, text: 'second' }));
 					const rows = yield* f.history();
-					expect(rows[0]!['files']).toEqual([
+					expect(rows[0]?.['files']).toEqual([
 						{
 							id: expect.any(String),
 							name: 'form.pdf',
@@ -621,7 +716,8 @@ describe('inbound (§4.3)', () => {
 					]);
 					expect(f.blobs.size).toBe(1);
 					expect(new Set(rows.map((r) => r['conversation'])).size).toBe(1);
-					yield* t.receive('desk_wa', { id: 'bad' });
+					// the engine logs a link's malformed message and moves on (the kit's `receive` refuses one outright)
+					yield* f.conversations.receive('desk_wa', { kind: 'messages', messages: [{ id: 'bad' }] });
 					expect(
 						t.fakes.logs
 							.filter((r) => r.event === 'conversation.malformed')
@@ -662,12 +758,13 @@ describe('inbound (§4.3)', () => {
 					]);
 					// The source's readSoon coalesces inbound hints for exactly two seconds.
 					t.clock.advance('2s');
-					yield* t.runDue();
+					yield* t.run_due();
 					const rows = () =>
 						t.db
 							.read([
 								{
-									text: `SELECT inbox, message_id, subject FROM supplier_mail WHERE message_id = '<pcn-1@onsemi.com>'`,
+									text: `SELECT r.instance AS inbox, m.message_id, m.subject FROM supplier_mail m
+										JOIN sys_sync_row r ON r.record = m.id::text WHERE m.message_id = '<pcn-1@onsemi.com>'`,
 									params: []
 								}
 							])
@@ -680,7 +777,7 @@ describe('inbound (§4.3)', () => {
 						pcn({ subject: 'PCN 1234 rev B', version: '2026-09-25T10:04:00.000Z' })
 					);
 					t.clock.advance('2s');
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* runs()).toHaveLength(2);
 					expect(yield* rows(), JSON.stringify(yield* runs())).toEqual([
 						{ inbox: 'supplier_inbox', message_id: '<pcn-1@onsemi.com>', subject: 'PCN 1234 rev B' }
@@ -699,7 +796,7 @@ describe('inbound (§4.3)', () => {
 						yield* Effect.flip(
 							f.conversations.receive('nowhere', { kind: 'messages', messages: [chat()] })
 						)
-					).toMatchObject({ code: 'notFound' });
+					).toMatchObject({ code: 'not_found' });
 				})
 			)
 	);
@@ -713,9 +810,9 @@ describe('inbound (§4.3)', () => {
 						bytes = new TextEncoder().encode('%PDF-1.7'),
 						put = vi.spyOn(f.files, 'put');
 					ok(
-						yield* f.act(f.t.as(f.t.admin).authority, 'sys_integration.update', [
+						yield* f.act((yield* f.t.as(f.t.admin)).authority, 'sys_integration.update', [
 							{
-								target: 'desk_wa',
+								target: { id: 'desk_wa' },
 								set: {
 									import_start: {
 										kind: 'since',
@@ -730,31 +827,31 @@ describe('inbound (§4.3)', () => {
 					yield* f.conversations.receive('desk_wa', {
 						kind: 'messages',
 						messages: [
-							chat({ thread, id: 'missing-source', sentAt: '2030-01-01T00:00:00.000Z' }),
+							chat({ thread, id: 'missing-source', sent_at: '2030-01-01T00:00:00.000Z' }),
 							chat({
 								thread,
 								id: 'invalid-source',
-								sentAt: '2030-01-01T00:00:00.000Z',
-								sourceAt: 'not an instant'
+								sent_at: '2030-01-01T00:00:00.000Z',
+								source_at: 'not an instant'
 							}),
 							chat({
 								thread,
 								id: 'old-source',
-								sentAt: '2030-01-01T00:00:00.000Z',
-								sourceAt: '2026-09-25T09:59:59.999Z'
+								sent_at: '2030-01-01T00:00:00.000Z',
+								source_at: '2026-09-25T09:59:59.999Z'
 							}),
 							chat({
 								thread,
 								id: 'new-source',
-								sentAt: '1999-01-01T00:00:00.000Z',
-								sourceAt: '2026-09-25T10:00:00.001Z'
+								sent_at: '1999-01-01T00:00:00.000Z',
+								source_at: '2026-09-25T10:00:00.001Z'
 							}),
-							chat({ thread, id: 'equal-source', sourceAt: '2026-09-25T10:00:00.000Z' }),
+							chat({ thread, id: 'equal-source', source_at: '2026-09-25T10:00:00.000Z' }),
 							chat({
 								thread,
 								id: 'old-attachment',
-								sentAt: '2030-01-01T00:00:00.000Z',
-								sourceAt: '2026-09-25T09:59:59.999Z',
+								sent_at: '2030-01-01T00:00:00.000Z',
+								source_at: '2026-09-25T09:59:59.999Z',
 								attachments: [
 									{ name: 'old.pdf', mime: 'application/pdf', bytes: bytes.byteLength, bin: 0 }
 								]
@@ -790,7 +887,7 @@ describe('what a send does not know (§5.9)', () => {
 		f.outbox().pipe(Effect.map((rows) => rows.map((r) => [r['status'], r['attempts']])));
 	const dedupes = (f: Effect.Success<ReturnType<typeof fixture>>) =>
 		f.t.db.write({
-			text: `UPDATE sys_integration SET status = coalesce(status, '{}'::jsonb) || '{"idempotentSends":true}'::jsonb WHERE id = 'dedupes_wa'`,
+			text: `UPDATE sys_integration SET status = coalesce(status, '{}'::jsonb) || '{"idempotent_sends":true}'::jsonb WHERE id = 'dedupes_wa'`,
 			params: []
 		});
 
@@ -881,9 +978,12 @@ describe('what a send does not know (§5.9)', () => {
 					yield* strand(f, 'desk_wa', 'U4@s.whatsapp.net');
 					yield* f.conversations.send('desk_wa', { to: 'U4@s.whatsapp.net', text: 'next' }, {});
 					const lease = new Date(Date.parse(t.clock.now()) + 600_000).toISOString();
+					// the send's drain runs now; the stranded row holds the next one back, so the drain moves to its lease
+					yield* t.run_due();
+					expect(f.sent('desk_wa')).toHaveLength(0);
 					expect(
 						yield* f.rows(
-							`SELECT 1 AS woken FROM sys_run r WHERE r.automation = 'integrations.deliver' AND r.state = 'queued' AND r.key = 'integrations.deliver@${lease}'`
+							`SELECT 1 AS woken FROM sys_run r WHERE r.automation = 'integrations.deliver' AND r.state = 'queued' AND r.key = 'bolt.drain:integrations.deliver' AND r.due_at = '${lease}'::timestamptz`
 						)
 					).toEqual([{ woken: 1 }]);
 					t.clock.advance('11min');
@@ -920,13 +1020,13 @@ describe('what a send does not know (§5.9)', () => {
 					yield* f.conversations.send('desk_wa', { to: 'U6@s.whatsapp.net', text: 'wait' }, {});
 					expect(yield* statuses(f)).toEqual([['queued', 0]]);
 					t.clock.advance('1h');
-					yield* t.runDue();
+					yield* t.run_due();
 					t.clock.advance('2d');
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(yield* statuses(f)).toEqual([['queued', 0]]);
 					f.setSend(f.record);
 					yield* f.outbound.resume('desk_wa').pipe(Effect.provide(f.context));
-					yield* t.runDue();
+					yield* t.run_due();
 					expect(f.sent('desk_wa')).toHaveLength(1);
 					expect(yield* statuses(f)).toEqual([['sent', 1]]);
 				})
@@ -949,10 +1049,10 @@ describe('repair (a webhook is a hint)', () => {
 		DAY = 24 * HOUR;
 	type F = Effect.Success<ReturnType<typeof fixture>>;
 	const ago = (f: F, ms: number) => new Date(Date.parse(f.t.clock.now()) - ms).toISOString();
-	const seen = (thread: string, id: string, sentAt: string, over: { [k: string]: Json } = {}) => ({
+	const seen = (thread: string, id: string, sent_at: string, over: { [k: string]: Json } = {}) => ({
 		id,
 		thread,
-		sentAt,
+		sent_at,
 		from: { handle: thread, name: 'Ben' },
 		text: 'as stored',
 		attachments: [],
@@ -977,12 +1077,12 @@ describe('repair (a webhook is a hint)', () => {
 						t = f.t,
 						thread = 'R1@s.whatsapp.net',
 						since = ago(f, 7 * DAY);
-					const sentAt = ago(f, 3 * HOUR);
-					yield* t.receive('repair_wa', seen(thread, 'R1-a', sentAt));
+					const sent_at = ago(f, 3 * HOUR);
+					yield* t.receive('repair_wa', seen(thread, 'R1-a', sent_at));
 					const page = {
 						complete: false,
 						messages: [
-							seen(thread, 'R1-a', sentAt, { text: 'edited', version: ago(f, 2 * HOUR) }),
+							seen(thread, 'R1-a', sent_at, { text: 'edited', version: ago(f, 2 * HOUR) }),
 							seen(thread, 'R1-b', ago(f, 2 * HOUR), { text: 'lost' })
 						]
 					};
@@ -1040,7 +1140,7 @@ describe('repair (a webhook is a hint)', () => {
 					const [ours] = f.sent('repair_wa');
 					yield* f.conversations.repair('repair_wa', thread, since, {
 						complete: false,
-						messages: [seen(thread, ours?.providerId ?? '', ago(f, 11 * 60_000))]
+						messages: [seen(thread, ours?.provider_id ?? '', ago(f, 11 * 60_000))]
 					});
 					expect(yield* stored(f, thread)).toHaveLength(5);
 					t.count.reset();
@@ -1069,7 +1169,7 @@ describe('repair (a webhook is a hint)', () => {
 					});
 					yield* t.receive('envoy_wa', seen(thread, 'R3-known', ago(f, 3 * HOUR)));
 					yield* t.receive('envoy_wa', seen(thread, 'R3-dropped', ago(f, 3 * HOUR)));
-					const before = (yield* admissions(f)).length;
+					const before = (yield* admissions(f)).map((r) => r['message']);
 					yield* f.conversations.repair('envoy_wa', thread, since, {
 						complete: true,
 						messages: [
@@ -1087,12 +1187,12 @@ describe('repair (a webhook is a hint)', () => {
 						['R3-known', 'live'],
 						['R3-old', 'sync']
 					]);
-					const after = yield* admissions(f);
-					expect(after).toHaveLength(before + 1);
-					expect(after.at(-1)?.['message']).toBe(
-						(yield* f.rows(
+					// sys_run rows carry no order: the admission the repair added is the one not there before
+					const added = (yield* admissions(f)).map((r) => r['message']).filter((m) => !before.includes(m));
+					expect(added).toEqual(
+						yield* f.rows(
 							`SELECT m.id FROM sys_message m WHERE m.provider_id = 'R3-fresh' AND m.integration = 'envoy_wa'`
-						))[0]?.['id']
+						).pipe(Effect.map((rows) => rows.map((r) => r['id'])))
 					);
 				})
 			)
@@ -1138,7 +1238,7 @@ describe('epochs', () => {
 			Effect.gen(function* () {
 				const f = yield* fixture(),
 					t = f.t;
-				f.failing(() => new Error('down'));
+				f.failing(() => new SendRefused('down', undefined, false));
 				yield* f.notice();
 				yield* f.deliver();
 				f.setSend(f.record);

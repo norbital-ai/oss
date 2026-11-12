@@ -103,34 +103,23 @@ class Buffer extends Uint8Array {
 	copy(target, targetStart = 0, start = 0, end = this.length) { const part = this.subarray(start, Math.min(end, start + target.length - targetStart)); target.set(part, targetStart); return part.length; }
 	indexOf(value, from = 0, encoding) { if (typeof value === 'number') return super.indexOf(value & 255, from); const needle = typeof value === 'string' ? encode(value, encoding) : value; outer: for (let i = from; i <= this.length - needle.length; i++) { for (let j = 0; j < needle.length; j++) if (this[i + j] !== needle[j]) continue outer; return i; } return -1; }
 	includes(value, from, encoding) { return this.indexOf(value, from, encoding) !== -1; }
-	readUInt8(o = 0) { return view(this).getUint8(o); }
-	readInt8(o = 0) { return view(this).getInt8(o); }
-	readUInt16LE(o = 0) { return view(this).getUint16(o, true); }
-	readUInt16BE(o = 0) { return view(this).getUint16(o, false); }
-	readInt16LE(o = 0) { return view(this).getInt16(o, true); }
-	readInt16BE(o = 0) { return view(this).getInt16(o, false); }
-	readUInt32LE(o = 0) { return view(this).getUint32(o, true); }
-	readUInt32BE(o = 0) { return view(this).getUint32(o, false); }
-	readInt32LE(o = 0) { return view(this).getInt32(o, true); }
-	readInt32BE(o = 0) { return view(this).getInt32(o, false); }
-	readFloatLE(o = 0) { return view(this).getFloat32(o, true); }
-	readFloatBE(o = 0) { return view(this).getFloat32(o, false); }
-	readDoubleLE(o = 0) { return view(this).getFloat64(o, true); }
-	readDoubleBE(o = 0) { return view(this).getFloat64(o, false); }
-	readBigUInt64LE(o = 0) { return view(this).getBigUint64(o, true); }
-	readBigUInt64BE(o = 0) { return view(this).getBigUint64(o, false); }
-	writeUInt8(v, o = 0) { view(this).setUint8(o, v); return o + 1; }
-	writeInt8(v, o = 0) { view(this).setInt8(o, v); return o + 1; }
-	writeUInt16LE(v, o = 0) { view(this).setUint16(o, v, true); return o + 2; }
-	writeUInt16BE(v, o = 0) { view(this).setUint16(o, v, false); return o + 2; }
-	writeInt16LE(v, o = 0) { view(this).setInt16(o, v, true); return o + 2; }
-	writeInt16BE(v, o = 0) { view(this).setInt16(o, v, false); return o + 2; }
-	writeUInt32LE(v, o = 0) { view(this).setUint32(o, v, true); return o + 4; }
-	writeUInt32BE(v, o = 0) { view(this).setUint32(o, v, false); return o + 4; }
-	writeInt32LE(v, o = 0) { view(this).setInt32(o, v, true); return o + 4; }
-	writeInt32BE(v, o = 0) { view(this).setInt32(o, v, false); return o + 4; }
-	writeFloatLE(v, o = 0) { view(this).setFloat32(o, v, true); return o + 4; }
-	writeDoubleLE(v, o = 0) { view(this).setFloat64(o, v, true); return o + 8; }
+}
+const ACCESSORS = [
+	['UInt8', 'Uint8', 1, ['']], ['Int8', 'Int8', 1, ['']],
+	['UInt16', 'Uint16', 2, ['LE', 'BE']], ['Int16', 'Int16', 2, ['LE', 'BE']],
+	['UInt32', 'Uint32', 4, ['LE', 'BE']], ['Int32', 'Int32', 4, ['LE', 'BE']],
+	['Float', 'Float32', 4, ['LE']], ['Double', 'Float64', 8, ['LE']],
+	['BigUInt64', 'BigUint64', 8, []]
+];
+for (const operation of ['read', 'write']) for (const [stem, native, bytes, writers] of ACCESSORS) {
+	for (const ending of bytes === 1 ? [''] : ['LE', 'BE']) {
+		if (operation === 'write' && !writers.includes(ending)) continue;
+		const name = operation + stem + ending, little = ending === 'LE';
+		const method = operation === 'read' ? function(o = 0) { return view(this)['get' + native](o, little); }
+			: function(v, o = 0) { view(this)['set' + native](o, v, little); return o + bytes; };
+		Object.defineProperty(method, 'name', { value: name, configurable: true });
+		Object.defineProperty(Buffer.prototype, name, { value: method, writable: true, configurable: true });
+	}
 }
 for (const name of Object.getOwnPropertyNames(Buffer.prototype)) {
 	const lower = name.replace('UInt', 'Uint');

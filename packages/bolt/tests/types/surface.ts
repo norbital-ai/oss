@@ -1,37 +1,38 @@
 // Type corpus for the declarations the P1 review added (§3.3.1 `team` and `messages`, §3.3.10 signature helpers).
 // Each `@ts-expect-error` line is a planted mistake; a clean tsc proves both the passes and the rejections.
-import { messages, model, team } from '../../src/index.ts';
+import { messages, team } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
+import type { InstanceId } from '../../src/index.ts';
+import type { LocaleErrors } from '../../src/decl/verify.ts';
+import './registry.ts';
 import type {
 	BtreeField,
 	FileField,
-	InstanceId,
-	KeyValues,
-	OutputOf,
 	PeriodField,
 	RelPath,
 	RequiredBtreeField,
 	SearchableField,
-	State,
 	TextField,
 	VectorField
-} from '../../src/index.ts';
-import type { LocaleErrors } from '../../src/decl/verify.ts';
-import './registry.ts';
+} from '../../src/decl/names.ts';
+import type { KeyValues } from '../../src/decl/ctx.ts';
+import type { OutputOf } from '../../src/decl/body.ts';
+import type { State } from '../../src/decl/access/policy.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── team(): keys are TeamName, values name policies ──
-team({ sales: ['sales_rep'], finance: [] });
+team({ sales: { policies: ['sales_rep'] }, finance: { policies: [] } });
 // @ts-expect-error T1 an unknown policy
 // prettier-ignore
-team({ sales: ['sales_rap'] });
-// @ts-expect-error T2 a team holds a list of policies, not one
+team({ sales: { policies: ['sales_rap'] } });
+// @ts-expect-error T2 a team is an object with its policy list
 // prettier-ignore
 team({ sales: 'sales_rep' });
 
 // Source handles are case-sensitive and labels do not merge them.
-team({ sales: ['sales_rep'], Sales: ['sales_rep'] });
+team({ sales: { policies: ['sales_rep'] }, Sales: { policies: ['sales_rep'] } });
 // @ts-expect-error T3 an unknown source parent
 // prettier-ignore
 team({ sales: { policies: ['sales_rep'], parent: 'missing' } });
@@ -50,18 +51,22 @@ is<
 >();
 
 // ── model search: the semantic model is one +workspace.ts declares, at the width it declares ──
-model('semantic_case', {
+bind_model('semantic_case')({
 	description: 'x',
-	label: 'body',
+	record_label: 'record.body',
 	fields: { body: { kind: 'text' } },
-	search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small', dim: 1536 } }
+
+	indexes: {
+		find: { text: ['body'] },
+		semantic: { semantic: { fields: ['body'], model: 'text_small', dim: 1536 } }
+	}
 });
 // @ts-expect-error S1 an embedding model +workspace.ts does not declare
 // prettier-ignore
-model('semantic_case', { description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } });
+bind_model('semantic_case')({ description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_big', dim: 1536 } } } });
 // @ts-expect-error the embedding column's width is stated, never guessed
 // prettier-ignore
-model('semantic_case', { description: 'x', label: 'body', fields: { body: { kind: 'text' } }, search: { text: ['body'], semantic: { fields: ['body'], model: 'text_small' } } });
+bind_model('semantic_case')({ description: 'x', record_label: "record.body", fields: { body: { kind: 'text' } }, indexes: { find: { text: ['body'] }, semantic: { semantic: { fields: ['body'], model: 'text_small' } } } });
 
 // ── signature helpers ──
 is<Eq<State<'orders'>, 'draft' | 'submitted' | 'ordered'>>();

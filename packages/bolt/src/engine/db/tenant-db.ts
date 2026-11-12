@@ -1,10 +1,9 @@
 // The tenant database (C11, per activation; W2.E1): complete, bounded SQL work, failing with the
 // driver's `DbError` (the SQLSTATE the write compiler maps to a refusal, rule 20) and, for a typed read, `BoltError`
-// naming the table of a row that does not decode. Completed batches release their connection before answering;
-// interactive automation transactions own a native, absolutely bounded lease. Adapters: `postgres.ts`, `pglite.ts`.
-import { Clock, Context, Effect, Semaphore, type Option, type Schema, type Scope } from 'effect';
+// naming the table of a row that does not decode. Batches release their connection before answering.
+import { Clock, Context, Effect, Semaphore, type Option, type Schema } from 'effect';
 import type { Lock, Rows, Sql } from '../contracts.ts';
-import type { DbError } from '../errors.ts';
+import { DbError } from '../errors.ts';
 import type { BoltError } from '../../protocol/errors.ts';
 import { decodeOne, decodeRows, decodeValue } from './rows.ts';
 import { AuditMutation, auditedBatch } from '../audit-context.ts';
@@ -17,13 +16,6 @@ export type DbBatch = {
 	readonly rollback?: true;
 };
 
-/** One native SERIALIZABLE lease. Its fixed five-second deadline starts at admission and never resets. */
-export type DbSession = {
-	readonly db: Omit<RawDb, 'session'>;
-	readonly commit: Effect.Effect<void, DbError>;
-	readonly rollback: Effect.Effect<void, DbError>;
-};
-
 /** What an adapter implements; `TenantDb.typed` adds the decoding reads over it. */
 export type RawDb = {
 	/** Read statements share one snapshot and answer in order; rows are relayed as JSON (D5). */
@@ -32,8 +24,6 @@ export type RawDb = {
 	readonly write: (statement: Sql, lock?: Lock) => Effect.Effect<Rows, DbError>;
 	/** Complete SQL statements atomically; answers are decoded only after commit or native dry-run rollback. */
 	readonly transaction: (batch: DbBatch) => Effect.Effect<readonly Rows[], DbError>;
-	/** PG17+ only: the driver enforces the deadline independently of the guest; unsupported hosts fail before BEGIN. */
-	readonly session: () => Effect.Effect<DbSession, DbError, Scope.Scope>;
 };
 export type SqlReadCaptureService = {
 	readonly read: (
@@ -47,11 +37,6 @@ const SqlOwed = Context.Reference<boolean>('bolt/SqlOwed', { defaultValue: () =>
 const IDENTITY = /\bsys_(?:user|session)\b/;
 /** Neon's default: a database touched this recently is still awake, so one more read costs no wake. */
 const AWAKE_MILLIS = 5 * 60_000;
-/** Native transaction routing. Captured services retain their contracts while every SQL call uses this lease. */
-export const SqlSessionDb = Context.Reference<Omit<RawDb, 'session'> | undefined>(
-	'bolt/SqlSessionDb',
-	{ defaultValue: () => undefined }
-);
 export const SqlReadCapture = Context.Reference<SqlReadCaptureService | undefined>(
 	'bolt/SqlReadCapture',
 	{ defaultValue: () => undefined }
@@ -96,7 +81,21 @@ export type TenantDbShape = RawDb & {
 	) => Effect.Effect<readonly A[], DbError | BoltError>;
 };
 
-const NONE: Rows = { rows: [], affected: 0 };
+const protocolFailure = (operation: string, detail: string) => {
+	const fields = {
+		sqlstate: 'XX000',
+		message: `The database ${operation} returned ${detail}.${operation === 'transaction' ? ' Its commit or rollback outcome is unverified.' : ''}`
+	};
+	return operation === 'transaction' ? DbError.make({ ...fields, outcome_unknown: true }) : DbError.make(fields);
+};
+const complete = (rows: readonly Rows[], expected: number, operation: string): Effect.Effect<readonly Rows[], DbError> => {
+	if (rows.length !== expected)
+		return Effect.fail(protocolFailure(operation, `${rows.length} statement results; expected ${expected}`));
+	for (let index = 0; index < expected; index++)
+		if (rows[index] === undefined)
+			return Effect.fail(protocolFailure(operation, `no result for statement ${index + 1}`));
+	return Effect.succeed(rows);
+};
 export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/TenantDb') {
 	/** An adapter's calls with the decoding reads over them. */
 	static readonly typed = (adapter: RawDb): TenantDbShape => {
@@ -113,7 +112,6 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 						? Effect.void
 						: owed.pipe(
 								Effect.provideService(SqlOwed, true),
-								Effect.provideService(SqlSessionDb, undefined),
 								Effect.provideService(SqlReadCapture, undefined),
 								Effect.provideService(AuditMutation, undefined),
 								Effect.tap(() =>
@@ -137,34 +135,35 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 				if (texts.some((text) => IDENTITY.test(text))) identity++;
 			});
 		const raw: RawDb = {
-			read: (statements) => Effect.andThen(settled, adapter.read(statements)),
+			read: (statements) => Effect.andThen(settled, adapter.read(statements)).pipe(
+				Effect.flatMap((rows) => complete(rows, statements.length, 'read'))
+			),
 			write: (statement, lock) =>
 				Effect.andThen(settled, adapter.write(statement, lock)).pipe(
 					Effect.ensuring(wrote([statement.text]))
 				),
 			transaction: (batch) =>
 				Effect.andThen(settled, adapter.transaction(batch)).pipe(
+					Effect.flatMap((rows) => complete(rows, batch.statements.length, 'transaction')),
 					Effect.ensuring(wrote(batch.statements.map((statement) => statement.text)))
-				),
-			// what an interactive transaction ran is not seen here: its commit counts as touching everything
-			session: () =>
-				Effect.map(Effect.andThen(settled, adapter.session()), (session) => ({
-					...session,
-					commit: Effect.ensuring(session.commit, wrote(['sys_user']))
-				}))
+				)
 		};
 		const read = Effect.fn('Bolt.tenantRead')(function* (statements: readonly Sql[]) {
-			const session = yield* SqlSessionDb;
-			if (session !== undefined) return yield* session.read(statements);
 			const capture = yield* SqlReadCapture;
 			if (capture === undefined) return yield* raw.read(statements);
 			return yield* capture
 				.read(statements, raw.read)
-				.pipe(Effect.provideService(SqlReadCapture, undefined));
+				.pipe(
+					Effect.provideService(SqlReadCapture, undefined),
+					Effect.flatMap((rows) => complete(rows, statements.length, 'captured read'))
+				);
 		});
+		const read_one = (statement: Sql) => Effect.flatMap(read([statement]), ([row]) =>
+			row === undefined
+				? Effect.fail(protocolFailure('read', 'no result for its statement'))
+				: Effect.succeed(row)
+		);
 		const write: RawDb['write'] = Effect.fn('Bolt.tenantWrite')(function* (statement, lock) {
-			const session = yield* SqlSessionDb;
-			if (session !== undefined) return yield* session.write(statement, lock);
 			const audit = yield* AuditMutation;
 			if (audit === undefined) return yield* raw.write(statement, lock);
 			const rows = yield* raw
@@ -172,11 +171,12 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 					auditedBatch({ statements: [statement], ...(lock === undefined ? {} : { lock }) }, audit)
 				)
 				.pipe(Effect.provideService(AuditMutation, undefined));
-			return rows[1] ?? NONE;
+			const answer = rows[1];
+			if (answer === undefined)
+				return yield* Effect.fail(protocolFailure('transaction', 'no result for the audited write'));
+			return answer;
 		});
 		const transaction: RawDb['transaction'] = Effect.fn('Bolt.tenantBatch')(function* (batch) {
-			const session = yield* SqlSessionDb;
-			if (session !== undefined) return yield* session.transaction(batch);
 			const audit = yield* AuditMutation;
 			if (audit === undefined) return yield* raw.transaction(batch);
 			const answers = yield* raw
@@ -207,11 +207,11 @@ export class TenantDb extends Context.Service<TenantDb, TenantDbShape>()('bolt/T
 			write,
 			transaction,
 			rows: (schema, statement) =>
-				Effect.flatMap(read([statement]), ([r]) => decodeRows(schema, r ?? NONE)),
+				Effect.flatMap(read_one(statement), (row) => decodeRows(schema, row)),
 			one: (schema, statement) =>
-				Effect.flatMap(read([statement]), ([r]) => decodeOne(schema, r ?? NONE)),
+				Effect.flatMap(read_one(statement), (row) => decodeOne(schema, row)),
 			value: (schema, statement) =>
-				Effect.flatMap(read([statement]), ([r]) => decodeValue(schema, r ?? NONE)),
+				Effect.flatMap(read_one(statement), (row) => decodeValue(schema, row)),
 			returning: (schema, statement, lock) =>
 				Effect.flatMap(write(statement, lock), (r) => decodeRows(schema, r))
 		};

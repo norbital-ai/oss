@@ -82,8 +82,9 @@ it.live(
 						name: { kind: 'text' },
 						secret: { kind: 'text', hidden: true },
 						rows: {
-							kind: 'list',
-							of: { kind: 'object', fields: { code: { kind: 'text' }, paid: { kind: 'bool' } } }
+							kind: 'object',
+							fields: { code: { kind: 'text' }, paid: { kind: 'bool' } },
+							many: true
 						}
 					}
 				},
@@ -126,7 +127,7 @@ it.live('a model custom datatype keeps its authored renderer ahead of the fallba
 		const { target } = await show({
 			cell: true,
 			kind: { kind: 'custom', of: 'sign' },
-			host: { customFields: { sign: { shape: { kind: 'text' }, renderer: Renderer } } },
+			host: { custom_fields: { sign: { shape: { kind: 'text' }, renderer: Renderer } } },
 			initial: 'A. Tan'
 		});
 		assert.equal(target.querySelector('[data-renderer=show]')?.textContent, 'A. Tan');
@@ -145,7 +146,7 @@ it.live('model summaries respect hidden fields through nested JSON and custom sh
 			{
 				kind: { kind: 'custom', of: 'nested' },
 				host: {
-					customFields: {
+					custom_fields: {
 						nested: { shape: { kind: 'json', shape: { kind: 'json', shape: hidden } } }
 					}
 				}
@@ -181,7 +182,7 @@ it.live('a registered boolean shape uses the unified read-only checkbox fallback
 			view: true,
 			kind: { kind: 'custom', of: 'toggle' },
 			initial: false,
-			host: { customFields: { toggle: { shape: { kind: 'bool' } } } }
+			host: { custom_fields: { toggle: { shape: { kind: 'bool' } } } }
 		});
 		assert.ok(target.querySelector('[role=checkbox][aria-checked=false]'));
 	})

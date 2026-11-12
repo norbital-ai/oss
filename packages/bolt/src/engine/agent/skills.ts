@@ -12,7 +12,7 @@ description: Protocol for reading and writing a workspace's records.
 1. Know: describe_workspace { names } gives every model the task touches, in one call, before any read of them, unless the conversation shows them.
 2. Read: one request with every root; narrow by where, never by paging. Pick rows by their relations with is/some/none/every/count. Every read answers total, its match count, beside its rows; aggregate is for sums, averages and groups, and answers measures instead of rows. A value may be a { var } over requestor, today, now.
 3. Resolve: each referenced record by one exact read. Missing and stated in the source: create it nested if the write allows, else ask. A word search is ranking, not proof of identity or a category count.
-4. Write: one act, the whole change as a batch, related rows inside their root. A computed or large batch is a JSON file run_js returned, given as inputFile.
+4. Write: one act, the whole change as a batch, related rows inside their root. A computed or large batch is a JSON file run_js returned, given as input_file.
 5. Report from the answer, with no read after it: a committed write returns its stored rows; a held write awaits its approvers, say so; a refused one names why, say that. An empty read earns one different read, then a question.
 `),
 	ingest: skill(`---
@@ -53,33 +53,57 @@ description: How to turn a brief into the smallest product that fits.
 5. A build is not done until the design note, the tests and workspace_preview agree with the brief.
 `),
 	'data-modelling': skill(`---
-description: When a fact earns a model, an inline field, or a live read.
+description: How to model a domain with the fewest, most general models, and how to lay them out.
 ---
-1. A model earns its table only when the fact has its own identity, lifecycle, permissions, history or relational queries. Otherwise it is a field, a child of its owner, or a shape inside one record.
-2. One owner per fact. Do not duplicate a value across models; a read that needs it reaches the owner.
-3. External live facts — rates, prices, weather, feeds — are reads through the host's facilities. Persist a value only when the requirement asks for history or audit, and say which requirement does.
-4. A dated report is one record: its figures, sections and conclusions are inline children or shapes on that record, not one model per section.
-5. Model the domain, not the page. If a table exists only to arrange a screen, it is a UI concern, not a model.
+1. Learn the domain first: its jobs, actors, inputs and the variations its users need. Design so a new variation is a new configuration record created at runtime, never new source.
+2. Generic over specific: one engine model plus the records that configure it. A parser model whose rows hold the instructions and output schema an inference uses; a settings model holding rates, rules and templates. Code reads the configuration and never branches on a customer or a case.
+3. Fewest models. A fact is, in order of preference: a field; a custom datatype or shaped json on its owner; an owned child model; a separate model.
+4. A model earns its table over a custom datatype only when the fact needs a foreign-key constraint, its own view, its own lifecycle, permissions or approval, history, or relational queries.
+5. Lay models out as a hierarchy: a model's folder nests under the model that owns it (data/model/<root>/<child>/+model.ts); catalogues and settings group under one settings root. The tree reads as the domain.
+6. One owner per fact. Do not duplicate a value across models; a read that needs it reaches the owner.
+7. External live facts (rates, prices, weather, feeds) are reads through the host's facilities. Persist a value only when a requirement asks for history or audit, and say which one.
+8. A dated report is one record: its figures, sections and conclusions are inline shapes or owned children, not one model per section.
+9. Model the domain, not the page. A table that exists only to arrange a screen is a UI concern, not a model.
 `),
 	'product-ux': skill(`---
 description: How a workspace page and form should be composed.
 ---
 1. Read the page and layout references before the first page. Use the shell and layout primitives; a page root is not a raw flex/grid div.
 2. AppShell and Scroll own the page. A page with more than one section scrolls inside its shell; the page never relies on the browser body for scrolling.
-3. Use Section or Fieldset to reveal detail progressively. Group forms by meaning; do not present a long flat field list.
-4. Give record models a representation; use Table for lists and a record surface for one row. Do not render a model as ad-hoc markup.
-5. Artwork is part of the app identity: a banner or thumbnail is a real image, not an empty placeholder. Give every image a working source and alt text.
-6. Verify with workspace_preview: pages render, scroll, and show no broken images or console errors.
+3. Use Section to reveal detail progressively. Group forms by meaning; do not present a long flat field list.
+4. The main views are Table, Board (a kanban) and Chart, with the record sheet for one row; give record models a representation. Use them before any custom component, and never render a model as ad-hoc markup.
+5. One scroll owner per region. Never nest scrolling containers: two scrollbars on one axis read as broken.
+6. A table takes size="fill" with a min_height floor: it grows to fill its container without pushing the page past it, then scrolls its own rows. Lay out every growing region the same way (layout-and-scrolling reference).
+7. The simplest, most general layout that serves the job is the better UX. Prefer fewer pages and fewer components.
+8. Artwork is part of the app identity: a banner or thumbnail is a real image, not an empty placeholder. Give every image a working source and alt text.
+9. Verify with workspace_preview: pages render, scroll, and show no broken images or console errors.
 `),
 	engineering: skill(`---
 description: General engineering practice for a workspace change.
 ---
 1. Read the source, the contract and the relevant references before writing. Do not guess an API when a type or a reference answers it.
 2. Make the smallest complete change. No unasked feature, no abstraction without two real call sites, no dead model, page or field.
-3. Keep values in the form the platform already gives them; decode at the boundary once. Do not erase types or fabricate partial data.
-4. Tests are evidence for the risky paths. A write, a state move, a live read and a refusal each need a case.
-5. Verify in this order: types, tests, build, preview. Report what failed and what you fixed.
-6. When feedback says the result is wrong, remove or merge before adding. A larger diff is not progress.
+3. Write Effect code: bodies are function* and yield* their ctx Effects; helpers return Effects with typed failures; no Promise wrappers.
+4. src/lib/<domain>/ holds reusable services. Logic a server body and a page both need lives there once and both import it. No lone file: a helper with one caller stays beside that caller.
+5. Keep values in the form the platform already gives them; decode at the boundary once. Do not erase types or fabricate partial data.
+6. Tests are evidence for the risky paths. A write, a state move, a live read and a refusal each need a case.
+7. Finish the source, then verify in this order: types, tests, build, preview. Report what failed and what you fixed.
+8. When feedback says the result is wrong, remove or merge before adding. A larger diff is not progress.
+`),
+	capabilities: skill(`---
+description: What a workspace can do on its own, to compose a solution to a person's problem.
+---
+1. Start from the problem: what the person does by hand, how often, from what input. Then compose the mechanisms below. Configuring an existing mechanism beats writing new code.
+2. Models: transforms validate and derive on every write; effects react after commit; constraints and locks guard state.
+3. Automations: jobs run queued, on a cron or from an effect; calls answer at once and serve pages and agents as tools. Each runs with its own policies.
+4. Inference: ctx.ai infers structured output against a JSON schema with CEL rules, to parse documents, classify, extract or draft. Keep its instructions and schema in configuration records.
+5. Messaging: envoys converse on a paired account; ctx.send sends through it; a scheduled message is a cron automation; replies continue in the same conversation.
+6. Syncs and integrations: syncs exchange rows with remote systems and with files (import, export, templates); connections are runtime records the person creates and pairs.
+7. Policies and approvals: grants decide who may do what; a verdict can route a write for approval.
+8. Agent work: run_js computes over reads and files; the browser works the web; an automation marked for agents becomes a tool; a workspace skill (agent/skill/<s>/+skill.md) records a repeated procedure.
+9. Platform skills: records, ingest, research, analysis, requirements, data-modelling, product-ux, engineering and workspace-eval. Open the one the task needs.
+10. Onboarding and configuration: set up envoys, connections and runtime catalogues through native records and the integration page. Never collect a credential in chat.
+11. When a step repeats, build a tool for it; when a procedure repeats, write a skill. Prefer the least complex composition.
 `),
 	'workspace-eval': skill(`---
 description: How to grade a workspace against its brief before merge.

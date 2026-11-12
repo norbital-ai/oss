@@ -1,14 +1,14 @@
 import { Effect } from 'effect';
 import { expect, it } from '@effect/vitest';
-import { createBolt } from '../src/page/bolt.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 
-it.effect('describe exists only with AI and returns the committed where/orderBy', () =>
+it.effect('describe exists only with AI and returns the committed where/order_by', () =>
 	Effect.gen(function* () {
 		const sent: unknown[] = [];
 		let reply: unknown = {
 			outcome: {
 				kind: 'committed',
-				output: { where: { status: { eq: 'open' } }, orderBy: { created_at: 'desc' } },
+				output: { where: { status: { eq: 'open' } }, order_by: { created_at: 'desc' } },
 				records: []
 			},
 			v: 0
@@ -19,10 +19,11 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 			return Response.json(reply);
 		};
 		expect(
-			(yield* createBolt({ actor: null, locale: 'en', base: 'https://workspace.test', fetch }))
+			(yield* create_bolt({ operation_outputs: { automations: {} }, actor: null, locale: 'en', base: 'https://workspace.test', fetch }))
 				.describe
 		).toBeUndefined();
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -32,7 +33,7 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 		if (bolt.describe === undefined) throw new Error('expected describe');
 		expect(yield* bolt.describe('jobs', 'open jobs, newest first')).toEqual({
 			where: { status: { eq: 'open' } },
-			orderBy: { created_at: 'desc' }
+			order_by: { created_at: 'desc' }
 		});
 		expect(sent[0]).toMatchObject({
 			callable: 'filter.describe',
@@ -40,14 +41,14 @@ it.effect('describe exists only with AI and returns the committed where/orderBy'
 		});
 		// a sort alone is an answer: there is no condition to return
 		reply = {
-			outcome: { kind: 'committed', output: { orderBy: { title: 'asc' } }, records: [] },
+			outcome: { kind: 'committed', output: { order_by: { title: 'asc' } }, records: [] },
 			v: 0
 		};
-		expect(yield* bolt.describe('jobs', 'sort by title')).toEqual({ orderBy: { title: 'asc' } });
+		expect(yield* bolt.describe('jobs', 'sort by title')).toEqual({ order_by: { title: 'asc' } });
 		reply = {
 			outcome: {
 				kind: 'refused',
-				code: 'invalidInput',
+				code: 'invalid_input',
 				message: 'Could not build a filter from that description.'
 			},
 			v: 0
@@ -83,7 +84,8 @@ it.effect('options returns the catalogue the builder renders', () =>
 				v: 0
 			});
 		};
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',

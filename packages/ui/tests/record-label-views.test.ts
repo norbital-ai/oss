@@ -12,7 +12,7 @@ const catalog = {
 	jobs: {
 		label: ['title', 'code'],
 		record_label: "record.code + ' · ' + record.title",
-		labelPaths: ['code', 'title'],
+		label_paths: ['code', 'title'],
 		fields: {
 			title: { kind: 'text' },
 			code: { kind: 'text' },
@@ -27,12 +27,13 @@ for (const identifier of ['label', 'uuid'] as const)
 			browser(async () => {
 				const reads: ReadOptions[] = [];
 				const id = '0190f1e2-3c4d-7e8f-9a0b-1c2d3e4f5a6b';
-				const { record_label: _expression, labelPaths: _paths, ...unlabelled } = catalog.jobs;
+				const { record_label: _expression, label_paths: _paths, ...unlabelled } = catalog.jobs;
 				const metadata = identifier === 'label' ? catalog : { jobs: { ...unlabelled, label: [] } };
 				const { bolt } = await viewFixture({
+					catalog: metadata,
 					read: (_model, options) => {
 						reads.push(options);
-						const row = { id, title: 'Pump', code: 'JOB-7', status: 'todo' };
+						const row = { id, revision: 1, title: 'Pump', code: 'JOB-7', status: 'todo' };
 						return {
 							rows: [
 								Object.fromEntries(

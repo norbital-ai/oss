@@ -1,19 +1,43 @@
-// SMS and iMessage through Dial, with Dial's own SDK, which calls the global `fetch`. Every thread is a person's number.
+// SMS and iMessage through Dial. Every thread is a person's number.
 // Dial shows no dedupe key on a message send and no edit or delete event. Call events carry no chat message.
-import type { DialEvent, Message, MessageEvent } from '@getdial/sdk';
+import { Result, Schema } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
+import { json } from '../http.ts';
 
-/** The adapter Dial publishes reads these two from a delivery; its SDK's event type has not caught up. */
-type Received = MessageEvent['data'] & Pick<Message, 'replyToId' | 'reaction'>;
-
+const API = 'https://api.getdial.ai/api/v1';
 const TEXT_MAX = 1600;
 
-/** The SDK folds a refusal into its message: this gets the status back, which decides whether a send retries. */
-const refused = (error: Error): never => {
-	const status = /^Dial API error (\d+):/.exec(error.message)?.[1];
-	throw status === undefined ? error : new PlatformError(error.message, Number(status));
+const Numbers = Schema.Struct({
+	numbers: Schema.Array(Schema.Struct({ id: Schema.String, number: Schema.String }))
+});
+const Sent = Schema.Struct({ message: Schema.Struct({ id: Schema.String }) });
+const messageFields = {
+	from: Schema.String,
+	body: Schema.String,
+	media: Schema.Array(
+		Schema.Struct({ id: Schema.String, url: Schema.String, contentType: Schema.String })
+	),
+	replyToId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	reaction: Schema.optionalKey(Schema.NullOr(Schema.String))
 };
+const Message = Schema.Struct({ ...messageFields, id: Schema.String, createdAt: Schema.String });
+const History = Schema.Struct({ messages: Schema.Array(Message) });
+const envelope = Schema.decodeUnknownResult(
+	Schema.fromJsonString(
+		Schema.Struct({
+			type: Schema.String,
+			createdAt: Schema.optionalKey(Schema.Unknown),
+			data: Schema.optionalKey(Schema.Unknown)
+		})
+	)
+);
+const received = Schema.decodeUnknownResult(
+	Schema.Struct({
+		createdAt: Schema.String,
+		data: Schema.Struct({ ...messageFields, messageId: Schema.String })
+	})
+);
 
 export const dial: ChatPlatform = {
 	id: 'dial',
@@ -28,20 +52,27 @@ export const dial: ChatPlatform = {
 		{ name: 'webhookSecret', label: { en: 'Webhook secret', zh: 'Webhook 密钥' }, secret: true }
 	],
 	async connect({ apiKey = '', fromNumberId = '', webhookSecret = '' }, host) {
-		const { DialClient, verifyDialSignature } = await import('@getdial/sdk');
-		const client = new DialClient({ apiKey });
-		const own = (await client.listNumbers()).find((number) => number.id === fromNumberId);
+		const { verifyDialSignature } = await import('@getdial/sdk');
+		const request = async (path: string, body?: object) => {
+			const response = await host.fetch(`${API}${path}`, {
+				method: body === undefined ? 'GET' : 'POST',
+				headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+				...(body === undefined ? {} : { body: JSON.stringify(body) })
+			});
+			if (!response.ok)
+				throw new PlatformError(`Dial API answered ${response.status}`, response.status);
+			return response;
+		};
+		const { numbers } = await json(Numbers, await request('/numbers'));
+		const own = numbers.find((number) => number.id === fromNumberId);
 		if (own === undefined) throw new Error(`${fromNumberId} is not a number of this account`);
-		const parse = (
-			message: Pick<Received, 'from' | 'body' | 'media' | 'replyToId'> & { readonly id: string },
-			sentAt: string
-		): Incoming => ({
+		const parse = (message: typeof Message.Type): Incoming => ({
 			id: message.id,
 			thread: message.from,
-			sentAt,
+			sent_at: message.createdAt,
 			from: { handle: message.from, name: null },
 			text: message.body,
-			replyTo: message.replyToId ?? null,
+			reply_to: message.replyToId ?? null,
 			files: message.media.map((item) => ({
 				name: item.id,
 				mime: item.contentType,
@@ -58,33 +89,42 @@ export const dial: ChatPlatform = {
 				const signature = request.headers.get('x-dial-signature') ?? '';
 				if (!verifyDialSignature(webhookSecret, signature, body))
 					throw new Unverified('bad signature');
-				const event = JSON.parse(body) as DialEvent;
-				if (event.type !== 'message.received') return nothing();
-				const data: Received = event.data;
+				const parsed = envelope(body);
+				if (Result.isFailure(parsed)) return nothing(new Response(null, { status: 400 }));
+				if (parsed.success.type !== 'message.received') return nothing();
+				const event = received(parsed.success);
+				if (Result.isFailure(event)) return nothing(new Response(null, { status: 400 }));
+				const { createdAt, data } = event.success;
 				if (data.reaction) return nothing();
-				return { messages: [parse({ ...data, id: data.messageId }, event.createdAt)] };
+				return { messages: [parse({ ...data, id: data.messageId, createdAt })] };
 			},
 			async send(thread, text) {
-				const sent = await client
-					.sendMessage({ to: thread, fromNumberId, body: text.slice(0, TEXT_MAX) })
-					.catch(refused);
-				return { id: sent.id };
+				const response = await request('/messages', {
+					to: thread,
+					fromNumberId,
+					...(text === '' ? {} : { body: text.slice(0, TEXT_MAX) })
+				});
+				return (await json(Sent, response)).message;
 			},
 			typing: async (thread, on) => {
-				const params = { toNumber: thread, fromNumber: own.number };
-				await (on ? client.startTyping(params) : client.stopTyping(params));
+				const response = await request('/typing', {
+					toNumber: thread,
+					fromNumber: own.number,
+					value: on
+				});
+				await response.json();
 			},
 			// the list is the whole number's and never says it stopped short, so it cannot claim the whole window
 			async history(thread, since) {
-				const rows = await client.listMessages({
+				const query = new URLSearchParams({
 					numberId: fromNumberId,
 					direction: 'inbound',
 					since
 				});
+				const response = await request(`/messages?${query}`);
+				const { messages } = await json(History, response);
 				return {
-					messages: rows
-						.filter((row) => row.from === thread && !row.reaction)
-						.map((row) => parse(row, row.createdAt)),
+					messages: messages.filter((row) => row.from === thread && !row.reaction).map(parse),
 					complete: false
 				};
 			}

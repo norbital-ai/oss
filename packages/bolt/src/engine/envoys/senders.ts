@@ -1,11 +1,11 @@
-import { Effect } from 'effect';
 // Who an envoy sender is (rule 57, §4.4): the active member whose registered handle is the sender's, by the handle the
 // definition's conversation carries — `sys_user.email` for `email`, `sys_user.phone` for `phone` (WhatsApp, a custom chat
 // that names phones), `sys_user.telegram` for `telegram`. An administrator sets them (the command center's People). A conversation
 // with no handle (Slack, Discord, WeChat) names no member: every sender is unknown.
+import { Effect, Schema } from 'effect';
+import { sql } from '../db/sql.ts';
 import type { HandleKind } from '../../decl/runtime/integration.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
-const sql = (text: string, ...params: import('../../decl/values.ts').Json[]) => ({ text, params });
 /**
  * The comparable form of one address of handle kind `kind`. A WhatsApp JID addresses a device (`6589548277:14@s.whatsapp.net`
  * is companion device 14), so the device suffix goes before the digits are taken; a leading `@` is a sigil, not a
@@ -34,8 +34,9 @@ export const memberByHandle = Effect.fn('Agents.memberByHandle')(function* (
 ) {
 	const canonical = canonicalHandle(kind, handle);
 	if (kind === null || canonical === '') return null;
-	const [res] = yield* db.read([
+	const rows = yield* db.rows(
+		Schema.Struct({ id: Schema.String }),
 		sql(`SELECT u.id FROM sys_user u WHERE u.active AND ${CANONICAL[kind]} = $1 LIMIT 2`, canonical)
-	]);
-	return res!.rows.length === 1 ? String(res!.rows[0]!['id']) : null;
+	);
+	return rows.length === 1 ? (rows[0]?.id ?? null) : null;
 });

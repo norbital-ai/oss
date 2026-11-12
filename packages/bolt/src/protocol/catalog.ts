@@ -1,37 +1,35 @@
 // Bolt's catalog: a workspace's models, relationships and models with the built-in layer's (`src/system`) beside
-// them, as the store's tables (`tableOf`); and the browser's (the shell boot's `catalog`), which `bolt.decode` checks
+// them, as the store's tables (`table_of`); and the browser's (the shell boot's `catalog`), which `bolt.decode` checks
 // against.
 import {
-	catalogOf as storeCatalogOf,
+	catalog_of as storeCatalogOf,
 	type Catalog,
 	type CatalogExposure,
 	type CatalogTable,
 	type FieldSpec,
-	type KindSpec,
+	KindSpec,
 	type TableSpec
 } from '@norbital-ai/store';
+import { Schema } from 'effect';
 import type { ModelSpec } from '../decl/model.ts';
 import type { RelationshipSpec } from '../decl/names.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
 import { SYSTEM } from '../system/index.ts';
-import { labelPaths, recordLabelExpression } from '@norbital-ai/std/label';
 
 /**
  * A model as the store's table: a workspace model is audited (its `id`, `revision` and created/updated columns) with
- * its `key` as the natural key; a system model (`table`) is keyed as its `table.primary` says, and audits nothing.
+ * import matching marked on its unique constraint; a system model (`table`) is keyed as its `table.primary` says.
  */
-export function tableOf(model: ModelSpec): TableSpec {
+export function table_of(model: ModelSpec): TableSpec {
 	const {
 		description: _d,
 		icon: _i,
-		label: _l,
 		record_label: _rl,
 		table,
-		key,
-		locked: _lock,
+		key: _key,
 		...storage
 	} = model;
-	// application-only metadata is not schema: enum transitions and the record lock never generate DDL
+	// Enum transitions remain application metadata. State transitions, stamps and lock predicates generate native rules.
 	const fields = Object.fromEntries(
 		Object.entries(storage.fields).map(([name, kind]) => {
 			if (kind.kind !== 'enum' || kind.transitions === undefined) return [name, kind];
@@ -39,39 +37,42 @@ export function tableOf(model: ModelSpec): TableSpec {
 			return [name, plain];
 		})
 	);
-	const natural = key === undefined ? {} : { natural: key };
-	const label = recordLabelExpression(model);
-	const recordLabel = label === undefined ? {} : { recordLabel: label };
+	const label = model.record_label;
+	const record_label = label === undefined ? {} : { record_label: label };
 	if (table === undefined)
-		return { ...storage, fields, ...natural, ...recordLabel, audit: true, nativeRules: 2 };
+		return { ...storage, fields, ...record_label, audit: true };
 	const p = table.primary;
 	return {
 		...storage,
 		fields,
-		...natural,
-		...recordLabel,
-		nativeRules: 2,
+		...record_label,
 		key: typeof p === 'object' ? [p.field] : p,
-		...(table.identity === undefined ? {} : { identity: table.identity }),
-		...(table.indexes === undefined ? {} : { indexes: table.indexes })
+		...(table.identity === undefined ? {} : { identity: table.identity })
 	};
 }
 /**
  * Models as the store's tables, each `+relationship.ts` entry `<model>.<fk>` a ref field of its model, with the
  * built-in layer's beside them.
  */
-export function tablesOf(
+export function tables_of(
 	models: { readonly [model: string]: ModelSpec },
 	relationships: { readonly [key: string]: RelationshipSpec }
 ): { readonly [table: string]: TableSpec } {
 	const tables = Object.fromEntries(
-		Object.entries({ ...SYSTEM.models, ...models }).map(([name, m]) => [name, tableOf(m)])
+		Object.entries({ ...SYSTEM.models, ...models }).map(([name, m]) => [name, table_of(m)])
 	);
 	const refs = new Map<string, { [field: string]: FieldSpec }>();
 	for (const [key, r] of Object.entries({ ...SYSTEM.relationships, ...relationships })) {
 		const [model = '', field = ''] = key.split('.');
 		const own = refs.get(model) ?? {};
-		own[field] = { kind: 'ref', ...r };
+		const { where, ...relationship } = r;
+		own[field] = {
+			kind: 'ref',
+			...relationship,
+			...(where === undefined
+				? {}
+				: { where })
+		};
 		refs.set(model, own);
 	}
 	return Object.fromEntries(
@@ -84,14 +85,11 @@ export function tablesOf(
 
 /** The query model of a workspace and the built-in layer, whose models and models are declared alike. */
 export function catalog(m: EngineManifest): Catalog {
-	const tables = tablesOf(m.models, m.relationships);
+	const tables = tables_of(m.models, m.relationships);
 	// Approval references already carry model + record id. Resolve/search the target label live, without a snapshot field.
 	const requests = tables.approval_request;
-	// only a label over the row's own fields is a generated column; a relation label is read with its target
-	const labelled = Object.keys(m.models).filter((name) => {
-		const label = tables[name]?.recordLabel;
-		return label !== undefined && labelPaths(label).every((path) => !path.includes('.'));
-	});
+	// an own-field label is a generated column; a one-hop relation label is read with its target under its grants
+	const labelled = Object.keys(m.models).filter((name) => tables[name]?.record_label !== undefined);
 	return storeCatalogOf(
 		{
 			tables: {
@@ -101,7 +99,7 @@ export function catalog(m: EngineManifest): Catalog {
 					: {
 							approval_request: {
 								...requests,
-								labelLink: { model: 'collection_name', record: 'record_id', targets: labelled }
+								label_link: { model: 'collection_name', record: 'record_id', targets: labelled }
 							}
 						})
 			}
@@ -112,20 +110,19 @@ export function catalog(m: EngineManifest): Catalog {
 
 /** What the browser knows of the caller's models (the shell boot's `catalog`): readable fields as declared, the
  * one-relations it may use (with their inverse names) and the many-relations it exposes. `bolt.decode` checks against it. */
-export type BrowserCatalog = {
-	readonly [c: string]: {
-		fields: { readonly [f: string]: KindSpec };
-		relations?: { readonly [fk: string]: { targets: readonly string[]; inverse?: string } };
-		many?: readonly string[];
-		/** `search.text`'s fields and whether `search.semantic` is declared: where `$search` and `$similar` decode. */
-		search?: readonly string[];
-		record_label?: string;
-		semantic?: true;
-	};
-};
-export function browserCatalog(b: BrowserCatalog): Catalog {
+export const BrowserCatalog = Schema.Record(Schema.String, Schema.Struct({
+	fields: Schema.Record(Schema.String, KindSpec),
+	relations: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({
+		targets: Schema.Array(Schema.String), inverse: Schema.optionalKey(Schema.String)
+	}))),
+	many: Schema.optionalKey(Schema.Array(Schema.String)),
+	search: Schema.optionalKey(Schema.Array(Schema.String)),
+	record_label: Schema.optionalKey(Schema.String), semantic: Schema.optionalKey(Schema.Literal(true))
+}));
+export type BrowserCatalog = typeof BrowserCatalog.Type;
+export function browser_catalog(b: BrowserCatalog): Catalog {
 	const exposed = Object.entries(b);
-	const system = tablesOf({}, {});
+	const system = tables_of({}, {});
 	// the built-in layer's relationships hold whatever the browser knows a system model as
 	const systemRefs = (c: string) =>
 		Object.fromEntries(Object.entries(system[c]?.fields ?? {}).filter(([, k]) => k.kind === 'ref'));
@@ -151,7 +148,7 @@ export function browserCatalog(b: BrowserCatalog): Catalog {
 									])
 								)
 							},
-							...(x.record_label === undefined ? {} : { recordLabel: x.record_label }),
+							...(x.record_label === undefined ? {} : { record_label: x.record_label }),
 							audit: true,
 							search:
 								x.search === undefined
@@ -170,7 +167,7 @@ export function browserCatalog(b: BrowserCatalog): Catalog {
 			...Object.fromEntries(
 				exposed.map(([c, x]): [string, CatalogExposure] => [
 					c,
-					{ read: { [c]: { fields: 'all' } } }
+					{ outputs: { default: { [c]: { fields: 'all' } } } }
 				])
 			)
 		}

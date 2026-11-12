@@ -1,4 +1,5 @@
-import { Effect, Schema } from 'effect';
+import { Effect, Predicate, Schema } from 'effect';
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 // Committed history is scoped by current reader authority and shows the fields of the output the read names; pending
 // proposals append no revisions.
 import type { Json } from '../../decl/values.ts';
@@ -8,38 +9,49 @@ import { BoltError } from '../../protocol/errors.ts';
 import type { ReadIR } from '../../protocol/reads.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape as TenantDb } from '../db/tenant-db.ts';
-import { catalogOf } from '../access/pred.ts';
-import { grantedArms, readScope, viewOutput } from '../access/authority.ts';
-import { catalogFor, exposureOf, exposedField, q, DEFAULT_OUTPUT } from '@norbital-ai/store';
-import { grantSql, canonical } from '@norbital-ai/store';
+import { catalog_of } from '../access/pred.ts';
+import { historyArms, viewOutput } from '../access/authority.ts';
+import { or } from '../access/pred.ts';
+import { catalog_for, exposure_of, exposed_field, q, DEFAULT_OUTPUT, SYSTEM_COLUMNS, SYSTEM_COLUMN_SET } from '@norbital-ai/store';
+import { grant_sql, canonical } from '@norbital-ai/store';
 import { resolverOf } from './reader.ts';
-import { fromStore } from '../../protocol/errors.ts';
+import { open_sql } from '../approvals/sql.ts';
+import { acknowledgements } from '../audit-retention.ts';
+import { from_store } from '../../protocol/errors.ts';
 import {
 	HistorySchema,
-	SYSTEM_HISTORY_FIELDS,
 	historyChanges,
 	historyKinds,
 	compatibleHistoryValue,
 	type HistoricalValue
 } from './history-schema.ts';
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
 const isTrue = (p: Pred) => p.t === 'const' && p.value;
 const HistoryRows = Schema.Array(
 	Schema.Struct({
+		collection: Schema.String,
 		revision: Schema.Int,
 		at: Schema.NullOr(Schema.String),
 		actor: Schema.NullOr(Schema.String),
 		op: Schema.String,
 		cause: Schema.String,
 		restored_from: Schema.NullOr(Schema.Int),
-		meta: Schema.Record(Schema.String, Schema.Json),
+		meta: Schema.Struct({
+			schema: Schema.String,
+			full: Schema.optionalKey(Schema.Boolean),
+			id: Schema.optionalKey(Schema.Json),
+			revision: Schema.optionalKey(Schema.Json),
+			created_at: Schema.optionalKey(Schema.Json),
+			created_by: Schema.optionalKey(Schema.Json),
+			updated_at: Schema.optionalKey(Schema.Json),
+			updated_by: Schema.optionalKey(Schema.Json)
+		}),
 		changes: Schema.Record(Schema.String, Schema.Json),
 		request: Schema.NullOr(Schema.String),
 		request_state: Schema.NullOr(Schema.String)
 	})
 );
-export const readHistory = Effect.fn('Bolt.readHistory')(function* (
+export const read_history = Effect.fn('Bolt.read_history')(function* (
 	db: TenantDb,
 	m: EngineManifest,
 	read: Extract<
@@ -51,18 +63,18 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	reader: Reader,
 	bindings: Bindings
 ) {
-	const cat = catalogOf(m),
+	const cat = catalog_of(m),
 		output =
 			read.output ??
 			(reader.as === 'caller' && !reader.authority.admin
 				? (viewOutput(m, reader.authority, read.model) ?? DEFAULT_OUTPUT)
 				: DEFAULT_OUTPUT),
-		c = yield* catalogFor(cat, read.model, output).pipe(
-			Effect.flatMap((view) => exposureOf(view, read.model)),
-			Effect.mapError(fromStore)
+		c = yield* catalog_for(cat, read.model, output).pipe(
+			Effect.flatMap((view) => exposure_of(view, read.model)),
+			Effect.mapError(from_store)
 		),
 		id = read.id;
-	if (!UUID.test(id)) return read.full === true || read.view === true ? null : [];
+	if (!UUID_PATTERN.test(id)) return read.full === true || read.view === true ? null : [];
 	const at = read.at;
 	const params: Json[] = [read.model, id];
 	const cut =
@@ -81,11 +93,11 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 				SELECT DISTINCT unnest(bolt_history_purge_fields(source.meta->>'schema',p.collection,p.purge)) FROM bolt_audit_erase p WHERE p.mode='anonymise'
 				AND bolt_history_matches(source.collection,source.meta,p.collection) AND p.record=source.record AND source.revision<p.revision) AS sanitised
 			FROM bolt_history source LEFT JOIN bolt_history_schema definition ON definition.id::text=source.meta->>'schema'
-			WHERE source.record=$2::uuid AND (source.collection=$1 AND definition.id IS NULL OR definition.lineage IN (
+			WHERE source.record=$2::uuid AND (source.collection=$1 OR definition.lineage IN (
 				SELECT s.lineage FROM bolt_history_current c JOIN bolt_history_schema s ON s.id=c.schema WHERE c.model=$1 AND c.active)) AND NOT EXISTS (
 				SELECT 1 FROM bolt_audit_erase p WHERE p.mode='remove' AND bolt_history_matches(source.collection,source.meta,p.collection) AND p.record=source.record
 				AND source.revision<=p.revision AND NOT (p.keep_marker AND source.revision=p.revision)))
-			SELECT h.revision, to_char(h.at AT TIME ZONE 'UTC', ${ISO}) AS at, h.actor, h.op, h.cause, h.restored_from, h.meta,
+			SELECT h.collection, h.revision, to_char(h.at AT TIME ZONE 'UTC', ${ISO}) AS at, h.actor, h.op, h.cause, h.restored_from, h.meta,
 			(SELECT coalesce(jsonb_object_agg(e.key,CASE WHEN jsonb_typeof(e.value)='number' AND
 				coalesce(s.definition->'fields'->e.key->>'kind',s.definition->'computed'->e.key->>'kind') IN ('decimal','money','sum')
 				THEN to_jsonb(e.value #>> '{}')
@@ -96,7 +108,7 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 					ELSE jsonb_build_object('start',to_char(lower((e.value #>> '{}')::tstzrange) AT TIME ZONE 'UTC',${ISO}),
 						'end',to_char(upper((e.value #>> '{}')::tstzrange) AT TIME ZONE 'UTC',${ISO})) END
 				ELSE e.value END),'{}'::jsonb) FROM jsonb_each(h.sanitised) e) AS changes,
-			h.request::text AS request, coalesce(ap.log->-1->>'to', ap.state) AS request_state
+			h.request::text AS request, ap.state AS request_state
 			FROM visible h LEFT JOIN bolt_approvals ap ON ap.id = h.request LEFT JOIN bolt_history_schema s ON s.id::text=h.meta->>'schema'
 		WHERE (h.sanitised<>'{}'::jsonb OR h.cause='erased' OR h.changes='{}'::jsonb) ${cut} ORDER BY h.revision`,
 			params
@@ -104,19 +116,18 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	];
 	const auth = reader.as === 'caller' && !reader.authority.admin ? reader.authority : null;
 	const self: Pred = { t: 'cmp', field: 'id', op: 'eq', arg: { _tag: 'Lit', value: id } };
-	const granted = auth === null ? undefined : grantedArms(auth, read.model, output);
-	// the record's read scope is its history scope: a record the caller may read, it may also see change
-	const scope = auth === null ? undefined : readScope(auth, read.model, output);
+	const granted = auth === null ? [] : historyArms(auth, read.model, output);
 	if (auth !== null) {
+		if (granted.length === 0) return read.full === true || read.view === true ? null : [];
 		// grant predicates, so compiled raw; a requestor variable in them resolves against the caller
 		statements.push(
 			{ text: `SELECT 1 FROM ${q(c.model.name)} WHERE id = $1::uuid`, params: [id] },
-			yield* grantSql(
+			yield* grant_sql(
 				cat,
 				read.model,
-				{ t: 'and', of: [scope ?? { t: 'const', value: false }, self] },
+				{ t: 'and', of: [or(granted.map((arm) => arm.where)), self] },
 				{ resolve: resolverOf(bindings, auth), tz: bindings.tz }
-			).pipe(Effect.mapError(fromStore))
+			).pipe(Effect.mapError(from_store))
 		);
 	}
 	const versionsAt = statements.length;
@@ -128,138 +139,150 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 	});
 	const res = yield* db.read(statements);
 	if (auth !== null) {
-		const exists = res[1]!.rows.length > 0;
+		const existence = res[1], scope = res[2];
+		if (existence === undefined || scope === undefined)
+			return yield* BoltError.make('corrupt', 'decode', 'The history admission read returned an incomplete answer.');
+		const exists = existence.rows.length > 0;
 		// a live row needs the history scope; a deleted one, an unconditional grant of the output (rule 17)
-		const visible =
-			granted !== undefined &&
-			(exists ? res[2]!.rows.length > 0 : granted.some((a) => isTrue(a.where)));
+		const visible = exists ? scope.rows.length > 0 : granted.some((a) => isTrue(a.where));
 		if (!visible) return read.full === true || read.view === true ? null : [];
 	}
-	const versions = yield* Schema.decodeUnknownEffect(Schema.Array(HistorySchema))(
-		res[versionsAt]?.rows ?? []
+	const versionRows = res[versionsAt], historyRows = res[0];
+	if (versionRows === undefined || historyRows === undefined)
+		return yield* BoltError.make('corrupt', 'decode', 'The history read returned an incomplete answer.');
+	const versions = yield* Schema.decodeUnknownEffect(Schema.Array(HistorySchema), { onExcessProperty: 'error' })(
+		versionRows.rows
 	).pipe(Effect.mapError((error) => BoltError.make('schema', 'decode', error.message)));
 	const byId = new Map(versions.map((version) => [version.id, version]));
 	const current = versions.find((version) => version.current === true);
-	const currentKinds = current === undefined ? {} : historyKinds(current);
-	const convert = (value: Json, before: FieldSpec | undefined, after: FieldSpec) =>
-		compatibleHistoryValue(value, before, after, m.customFields);
+	if (current === undefined || current.model !== read.model)
+		return yield* BoltError.make('schema', 'decode', `History requires a registered current schema for ${read.model}.`);
+	for (const version of versions) {
+		const identities = new Set<string>();
+		const declared = Object.keys({ ...version.definition.fields, ...version.definition.computed });
+		if (Object.keys(version.fields).length !== declared.length)
+			return yield* BoltError.make('schema', 'decode', `History schema ${version.id} has incomplete field metadata.`);
+		for (const field of declared) {
+			const identity = version.fields[field];
+			if (identity === undefined || !UUID_PATTERN.test(identity) || identities.has(identity))
+				return yield* BoltError.make('schema', 'decode', `History schema ${version.id} has invalid field identities.`);
+			identities.add(identity);
+		}
+	}
+	const currentKinds = historyKinds(current);
+	const convert = (value: Json, before: FieldSpec, after: FieldSpec) =>
+		compatibleHistoryValue(value, before, after, m.custom_fields);
 	const currentFields = new Map(
-		Object.entries(current?.fields ?? {}).map(([field, identity]) => [identity, field])
+		Object.entries(current.fields).map(([field, identity]) => [identity, field])
 	);
 	const canSeeRemoved =
 		reader.as === 'workspace' ||
 		(reader.authority.admin && output === 'default' && c.fields === 'all');
 	const visibleField = (identity: string, stored: HistoricalValue) => {
-		if (reader.as === 'workspace' || SYSTEM_HISTORY_FIELDS.has(stored.field)) return true;
-		const field =
-			currentFields.get(identity) ?? (identity.startsWith('legacy:') ? stored.field : undefined);
-		if (field !== undefined) return exposedField(c, field);
-		return (
-			canSeeRemoved &&
-			(stored.version === undefined || historyKinds(stored.version)[stored.field]?.hidden !== true)
-		);
+		if (reader.as === 'workspace' || SYSTEM_COLUMN_SET.has(stored.field)) return true;
+		const archived = stored.version.definition.fields[stored.field] ?? stored.version.definition.computed?.[stored.field];
+		if (archived === undefined) return false;
+		const field = currentFields.get(identity);
+		if (field !== undefined) return exposed_field(c, field);
+		return canSeeRemoved && !(Predicate.isReadonlyObject(archived) && archived['hidden'] === true);
 	};
 	const state = new Map<string, HistoricalValue>();
-	const rows = yield* Schema.decodeUnknownEffect(HistoryRows)(res[0]?.rows ?? []).pipe(
+	const rows = yield* Schema.decodeUnknownEffect(HistoryRows, { onExcessProperty: 'error' })(historyRows.rows).pipe(
 		Effect.mapError((error) => BoltError.make('schema', 'decode', error.message))
 	);
-	const revisions = rows.map((row) => {
-		const meta = Schema.is(Schema.Record(Schema.String, Schema.Json))(row['meta'])
-			? row['meta']
-			: {};
-		const version = typeof meta['schema'] === 'string' ? byId.get(meta['schema']) : undefined;
-		const raw = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
-			row['changes'] ?? {}
-		);
-		const changes = historyChanges(version, raw);
+	const revisions = yield* Effect.forEach(rows, (row) => Effect.gen(function* () {
+		const meta = row.meta;
+		const version = byId.get(meta.schema);
+		if (version === undefined || version.model !== row.collection)
+			return yield* BoltError.make('schema', 'decode', `History revision ${row.revision} has no matching registered schema.`);
+		const changes = historyChanges(version, row.changes);
+		if (changes instanceof BoltError) return yield* changes;
 		const previous = new Map(state);
-		if (row['op'] === 'create' || row['cause'] === 'erased' || meta['full'] === true) state.clear();
+		if (row.op === 'create' || row.cause === 'erased' || meta.full === true) state.clear();
 		for (const [identity, value] of changes) state.set(identity, value);
-		for (const field of SYSTEM_HISTORY_FIELDS) {
+		for (const field of SYSTEM_COLUMNS) {
 			const value = meta[field];
-			if (value !== undefined) state.set(`legacy:${field}`, { version, field, value });
+			if (value !== undefined) state.set(`system:${field}`, { version, field, value });
 		}
-		if (row['op'] === 'delete') state.clear();
-		const actor = typeof row['actor'] === 'string' ? row['actor'] : null;
+		if (row.op === 'delete') state.clear();
+		const actor = row.actor;
 		const colon = actor?.indexOf(':') ?? -1;
 		const changed = Object.fromEntries(
 			[...changes]
 				.filter(
 					([identity, value]) =>
 						visibleField(identity, value) &&
-						(meta['full'] !== true ||
+						(meta.full !== true ||
 							canonical(previous.get(identity)?.value) !== canonical(value.value))
 				)
 				.map(([, value]) => [value.field, value.value])
 		);
-		const uncompatible = [...state].flatMap(([identity, value]) => {
-			if (!visibleField(identity, value) || SYSTEM_HISTORY_FIELDS.has(value.field)) return [];
-			const field =
-				currentFields.get(identity) ?? (identity.startsWith('legacy:') ? value.field : undefined);
+		const incompatible = [...state].flatMap(([identity, value]) => {
+			if (!visibleField(identity, value) || SYSTEM_COLUMN_SET.has(value.field)) return [];
+			const field = currentFields.get(identity);
 			const kind = field === undefined ? undefined : currentKinds[field];
-			return kind === undefined ||
+			const before = historyKinds(value.version)[value.field];
+			return kind === undefined || before === undefined ||
 				convert(
 					value.value,
-					value.version === undefined ? undefined : historyKinds(value.version)[value.field],
+					before,
 					kind
 				) === undefined
 				? [value.field]
 				: [];
 		});
 		return {
-			revision: row['revision'] ?? null,
-			at: row['at'] ?? null,
-			cause: row['cause'] ?? null,
-			restoredFrom: row['restored_from'] ?? null,
+			revision: row.revision,
+			at: row.at,
+			cause: row.cause,
+			restored_from: row.restored_from,
 			/** The approval request this revision belongs to: its provisional change, a reviewer's edit, or its rollback. */
 			approval:
-				typeof row['request'] === 'string'
-					? { request: row['request'], state: row['request_state'] ?? null }
+				row.request !== null
+					? { request: row.request, state: row.request_state }
 					: null,
 			changed,
-			schemaVersion: version?.id ?? null,
-			legacy: meta['legacy'] === true || version === undefined,
-			uncompatible,
+			schema_version: version.id,
+			incompatible,
 			/** Whether the whole revision still projects into today's representation. */
-			valid: uncompatible.length === 0,
+			valid: incompatible.length === 0,
 			actor:
 				actor === null || colon < 0
 					? null
 					: { kind: actor.slice(0, colon), id: actor.slice(colon + 1) }
 		};
-	});
+	}));
 	if (read.full !== true && read.view !== true) return revisions;
 	const last = revisions.at(-1);
 	if (last === undefined || state.size === 0) return null;
 	if (read.view === true && at?._tag === 'Revision' && last.revision !== at.revision) return null;
-	const definition = last.schemaVersion === null ? undefined : byId.get(last.schemaVersion);
-	const kinds = definition === undefined ? {} : historyKinds(definition);
+	const definition = byId.get(last.schema_version);
+	if (definition === undefined)
+		return yield* BoltError.make('schema', 'decode', 'The selected history schema is missing.');
+	const kinds = historyKinds(definition);
 	const values: Record<string, Json> = { id, revision: last.revision };
 	const fields: Record<string, FieldSpec> = {};
 	const compatible: Record<string, Json> = { id, revision: last.revision };
-	const uncompatible: string[] = [];
+	const incompatible: string[] = [];
 	for (const [identity, value] of state) {
 		if (!visibleField(identity, value)) continue;
-		const original =
-			definition === undefined
-				? value.field
-				: (Object.entries(definition.fields).find(([, id]) => id === identity)?.[0] ??
-					(identity.startsWith('legacy:') ? value.field : undefined));
+		const original = SYSTEM_COLUMN_SET.has(value.field) ? value.field
+			: Object.entries(definition.fields).find(([, id]) => id === identity)?.[0];
 		if (original === undefined) continue;
 		values[original] = value.value;
 		const oldKind =
 			kinds[original] ??
-			(value.version === undefined ? undefined : historyKinds(value.version)[value.field]);
+			historyKinds(value.version)[value.field];
 		if (oldKind !== undefined) fields[original] = oldKind;
-		if (SYSTEM_HISTORY_FIELDS.has(original)) {
+		if (SYSTEM_COLUMN_SET.has(original)) {
 			compatible[original] = value.value;
 			continue;
 		}
-		const field =
-			currentFields.get(identity) ?? (identity.startsWith('legacy:') ? value.field : undefined);
+		const field = currentFields.get(identity);
 		const kind = field === undefined ? undefined : currentKinds[field];
-		const converted = kind === undefined ? undefined : convert(value.value, oldKind, kind);
-		if (field === undefined || converted === undefined) uncompatible.push(original);
+		const converted = kind === undefined || oldKind === undefined
+			? undefined : convert(value.value, oldKind, kind);
+		if (field === undefined || converted === undefined) incompatible.push(original);
 		else compatible[field] = converted;
 	}
 	if (read.view === true)
@@ -268,12 +291,13 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
 			record: id,
 			revision: last.revision,
 			at: last.at,
-			schemaVersion: last.schemaVersion,
-			legacy: last.legacy,
-			fields: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(canonical(fields)),
+			schema_version: last.schema_version,
+			fields: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(canonical(fields)).pipe(
+				Effect.mapError(() => BoltError.make('corrupt', 'decode', 'A history field definition is not JSON.'))
+			),
 			values,
 			compatible,
-			uncompatible
+			incompatible
 		};
 	return compatible;
 });
@@ -282,25 +306,32 @@ export const readHistory = Effect.fn('Bolt.readHistory')(function* (
  * its anchor: the full row folded from its last schema snapshot, recorded as a create, so every kept revision still rebuilds (and
  * so stays restorable) — never an open restore point.
  */
-export const pruneHistory = Effect.fn('Bolt.pruneHistory')(function* (
+export const prune_history = Effect.fn('Bolt.prune_history')(function* (
 	db: TenantDb,
 	keep: number = 256
 ) {
+	// acknowledgements waiting for the next commit statement ride on this one: their history may go now
+	const acks = [...acknowledgements(db)];
 	const res = yield* db.write(
 		{
-			text: `WITH held AS MATERIALIZED (
+			text: `WITH acknowledged AS (UPDATE bolt_audit_receipt SET acknowledged_at=clock_timestamp()
+	WHERE operation IN (SELECT jsonb_array_elements_text($2::jsonb)) AND acknowledged_at IS NULL AND expired_at IS NULL RETURNING operation),
+admitted AS MATERIALIZED (
+	SELECT bolt_assert(NOT EXISTS (SELECT 1 FROM bolt_history h LEFT JOIN bolt_history_schema s ON s.id::text=h.meta->>'schema'
+		WHERE s.id IS NULL OR s.model<>h.collection), 'schema', 'History requires registered schema versions before retention') AS valid),
+held AS MATERIALIZED (
 	SELECT DISTINCT entry->>'collection' AS collection, entry->>'id' AS record
 	FROM bolt_approvals a CROSS JOIN LATERAL jsonb_array_elements(a.records) entry
-	WHERE a.state IN ('Pending','ChangesRequested')),
+	WHERE ${open_sql('a.state', true)}),
 history AS MATERIALIZED (
-	SELECT h.*,coalesce(s.lineage::text,h.collection) AS lineage FROM bolt_history h
-	LEFT JOIN bolt_history_schema s ON s.id::text=h.meta->>'schema'),
+	SELECT h.*,s.lineage::text AS lineage FROM bolt_history h
+	JOIN bolt_history_schema s ON s.id::text=h.meta->>'schema'),
 ranked AS (
 	SELECT lineage, collection, record, revision, op, cause, row_number() OVER (PARTITION BY lineage, record ORDER BY revision DESC) AS rn
 	FROM history h WHERE NOT EXISTS (
 		SELECT 1 FROM history pending LEFT JOIN bolt_audit_receipt r ON r.operation=pending.operation
 		WHERE pending.lineage=h.lineage AND pending.record=h.record AND pending.operation IS NOT NULL
-		AND r.acknowledged_at IS NULL AND r.expired_at IS NULL)
+		AND r.acknowledged_at IS NULL AND r.expired_at IS NULL AND r.operation NOT IN (SELECT operation FROM acknowledged))
 	AND NOT EXISTS (SELECT 1 FROM held WHERE bolt_history_matches(h.collection,h.meta,held.collection) AND held.record=h.record::text)),
 oldest AS (SELECT DISTINCT ON (x.lineage, x.record) x.lineage, x.collection, x.record, x.revision, x.op FROM ranked x
 	WHERE x.rn <= $1 AND x.cause <> 'erased'
@@ -319,10 +350,11 @@ anchored AS (UPDATE bolt_history h SET op = 'create', changes = (SELECT coalesce
 gone AS (DELETE FROM bolt_history h USING ranked x
 	WHERE h.collection = x.collection AND h.record = x.record AND h.revision = x.revision
 	AND x.rn > $1 AND x.cause <> 'erased' RETURNING 1)
-SELECT count(*)::int AS n FROM gone`,
-			params: [keep]
+SELECT CASE WHEN (SELECT valid FROM admitted) THEN (SELECT count(*)::int FROM gone) END AS n`,
+			params: [keep, JSON.stringify(acks)]
 		},
 		{ tables: ['bolt_history'], mode: 'SHARE ROW EXCLUSIVE' }
 	);
+	for (const operation of acks) acknowledgements(db).delete(operation);
 	return Number(res.rows[0]?.['n'] ?? 0);
 });

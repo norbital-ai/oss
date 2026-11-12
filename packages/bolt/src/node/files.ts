@@ -8,9 +8,9 @@ import { Effect } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
 import type { Files } from '../engine/ports.ts';
 import { Port } from '../engine/port.ts';
-import { downloadMedia, type DownloadOptions } from './download.ts';
+import { download_media, type DownloadOptions } from './download.ts';
 
-export function localFiles(dir: string, options: DownloadOptions = {}): Files['Service'] {
+export function local_files(dir: string, options: DownloadOptions = {}): Files['Service'] {
 	const path = (key: string): Effect.Effect<string, FacilityFailure> =>
 		/^[0-9a-f]{64}$/.test(key)
 			? Effect.succeed(join(dir, key))
@@ -33,7 +33,7 @@ export function localFiles(dir: string, options: DownloadOptions = {}): Files['S
 				if (bytes.byteLength > max)
 					return yield* Effect.fail(
 						new FacilityFailure({
-							kind: 'tooLarge',
+							kind: 'too_large',
 							message: `the file holds ${bytes.byteLength} bytes; at most ${max} were requested`
 						})
 					);
@@ -46,7 +46,7 @@ export function localFiles(dir: string, options: DownloadOptions = {}): Files['S
 				Effect.asVoid
 			),
 		download: (url) =>
-			downloadMedia(
+			download_media(
 				url,
 				{
 					begin: () =>

@@ -1,8 +1,9 @@
 <script lang="ts" generics="T">
+	import type { UiContext } from '../client/contract.js';
 	// Every view's non-ready states in one place: loading, "No access to <label>" (never an empty list) and a named error.
 	import type { Snippet } from 'svelte';
 	import Alert from '../primitives/alert/alert.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import TableSkeleton from './TableSkeleton.svelte';
@@ -11,12 +12,13 @@
 
 	/** `skeleton` replaces the default one (rows of a table) with the view's own shape (a board's cards). */
 	let {
+		ctx,
 		state,
 		what,
 		children,
 		skeleton
-	}: { state: ReadState<T>; what: string; children: Snippet<[T]>; skeleton?: Snippet } = $props();
-	const bolt = useBolt();
+	}: { ctx: UiContext; state: ReadState<T>; what: string; children: Snippet<[T]>; skeleton?: Snippet } = $props();
+	const bolt = $derived(bolt_of(ctx));
 </script>
 
 {#if state.kind === 'ready'}
@@ -26,7 +28,7 @@
 	<div
 		role="status"
 		aria-busy="true"
-		aria-label={msg(bolt, 'view.loading', 'Loading')}
+		aria-label={msg(bolt, 'view.loading')}
 		data-read="loading"
 	>
 		{#if skeleton}{@render skeleton()}
@@ -39,17 +41,17 @@
 		icon="lock"
 		read="noAccess"
 		variant="card"
-		title={msg(bolt, 'view.noAccess', 'No access to {what}', { what })}
+		title={msg(bolt, 'view.noAccess', { what })}
 	/>
 {:else if state.kind === 'error'}
 	<Alert variant="destructive" data-read="error">
 		<Glyph name="alert" class="size-4" />
 		<div class="flex flex-col gap-1 text-sm">
 			<p class="font-medium">
-				{msg(bolt, 'view.errorTitle', '{what} could not be loaded', { what })}
+				{msg(bolt, 'view.errorTitle', { what })}
 			</p>
 			<p class="break-words opacity-90">
-				{msg(bolt, 'view.error', '{what} could not be read ({code}): {message}', {
+				{msg(bolt, 'view.error', {
 					what,
 					code: state.code,
 					message: state.message

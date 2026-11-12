@@ -6,9 +6,10 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 <script lang="ts">
 	import { Inline } from '../../layout/index.js';
 	import CopyText from '../copy-text/copy-text.svelte';
-	import { cn, useControls, uiText } from '../utils.js';
+	import { cn, use_controls, ui_text } from '../utils.js';
 	import Icon from '@iconify/svelte';
 	import { Checkbox as CheckboxPrimitive, type WithoutChildrenOrChild } from 'bits-ui';
+	import type { SnakeProps } from '../bits.js';
 
 	let {
 		ref = $bindable(null),
@@ -17,10 +18,15 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 		class: className,
 		readonly,
 		disabled,
+		on_checked_change,
+		on_indeterminate_change,
 		...restProps
-	}: WithoutChildrenOrChild<CheckboxPrimitive.RootProps> & { readonly?: boolean } = $props();
-	const controls = useControls();
-	const t = uiText();
+	}: SnakeProps<Omit<WithoutChildrenOrChild<CheckboxPrimitive.RootProps>, 'name'>, {
+		on_checked_change: 'onCheckedChange';
+		on_indeterminate_change: 'onIndeterminateChange';
+	}> & { readonly?: boolean; name?: string } = $props();
+	const controls = use_controls();
+	const t = ui_text();
 </script>
 
 {#if readonly ?? controls.readonly}
@@ -36,6 +42,8 @@ A checkbox, bindable `checked` (and `indeterminate`). `readonly` (or an enclosin
 		bind:checked
 		disabled={disabled ?? controls.disabled}
 		{...restProps}
+		onCheckedChange={on_checked_change}
+		onIndeterminateChange={on_indeterminate_change}
 	>
 		{#snippet children({ checked })}
 			<Inline as="span" justify="center" class="size-4 text-current">

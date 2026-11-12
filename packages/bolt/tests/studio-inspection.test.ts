@@ -3,8 +3,8 @@ import { Schema } from 'effect';
 import { StudioInspectInput, StudioInspection } from '../src/shell/studio/inspection.ts';
 
 const inspection: StudioInspection = {
-	canInspect: false,
-	asOf: '2026-10-26T08:00:00.000Z',
+	can_inspect: false,
+	as_of: '2026-10-26T08:00:00.000Z',
 	usage: [
 		{
 			title: 'Memory held',
@@ -64,19 +64,30 @@ describe('Studio operational inspection boundary', () => {
 	it('does not infer an administrator capability from member inventory', () => {
 		const native = Schema.decodeUnknownSync(StudioInspection)({
 			...inspection,
-			canInspect: true,
+			can_inspect: true,
 			members: null,
 			errors: null
 		});
-		expect(native.canInspect).toBe(true);
+		expect(native.can_inspect).toBe(true);
 		expect(native.members).toBeNull();
 		expect(() =>
-			Schema.decodeUnknownSync(StudioInspection)({ ...inspection, canInspect: undefined })
+			Schema.decodeUnknownSync(StudioInspection)({ ...inspection, can_inspect: undefined })
 		).toThrow();
 	});
 	it('keeps unknown gauges distinct from measured zero', () => {
 		const decoded = Schema.decodeUnknownSync(StudioInspection)(inspection);
 		expect(decoded.usage[0]?.lines[0]?.points.map((point) => point.value)).toEqual([null, 0]);
+	});
+	it('carries a selected build log and diagnostics through the curated inspection boundary', () => {
+		const build = { commit: 'c1', at: '2026-10-26T08:00:00Z', status: 'failed', message: 'Build rejected', deployed: false, live: false, lines: 1, diagnostics: 1 } as const;
+		const log = [{ at: build.at, level: 'error', message: 'Invalid model field' }] as const;
+		const diagnostics = [{ code: 'model/field', path: 'src/data/model/order/+model.ts', line: 3, message: 'Unknown field', help: 'Declare the field.', severity: 'error' }] as const;
+		const snapshot: StudioInspection = { ...inspection, can_inspect: true, errors: null,
+			studio: { commit: 'c0', message: 'Current live version', builds: [build], releases: [], environments: [], changes: [], log: [], diagnostics: [], build: { build, log, diagnostics } },
+			filters: { level: null, text: '', run: '', build: 'c1' }
+		};
+		expect(Schema.decodeUnknownSync(StudioInspection)(snapshot, { onExcessProperty: 'error' })).toEqual(snapshot);
+		expect(() => Schema.decodeUnknownSync(StudioInspection)({ ...snapshot, studio: { ...snapshot.studio, build: { build, log: {}, diagnostics } } })).toThrow();
 	});
 	it('refuses an invalid inspection payload before the shared UI consumes it', () => {
 		expect(() =>

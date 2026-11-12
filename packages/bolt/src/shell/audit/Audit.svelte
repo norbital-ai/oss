@@ -13,13 +13,14 @@ sits under the table there. -->
 		StructuredData,
 		Table,
 		ToolbarSearch,
-		useKinds,
-		type Kind
+		type Kind,
+		type ModelExposure,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
-	import { fork, observeOnce } from '@norbital-ai/ui/effect';
+	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect, Result, Schema } from 'effect';
-	import { Debounced } from 'runed';
+	import { Debounced, watch } from 'runed';
 	import { onDestroy, untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import {
@@ -33,20 +34,24 @@ sits under the table there. -->
 	import AutoRefresh from '../AutoRefresh.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
 	import { displayWireValue } from '../wire-value.ts';
+	import { date_time } from '../i18n.ts';
 
 	let {
+		ctx,
 		api,
 		admin,
 		locale,
+		catalog,
 		t
 	}: {
-		api: Pick<ShellApi, 'audit' | 'auditDetail' | 'settings'>;
+		ctx: UiContext;
+		api: Pick<ShellApi, 'audit' | 'audit_detail' | 'settings'>;
 		admin: boolean;
 		locale: string;
+		catalog: Readonly<Record<string, ModelExposure>>;
 		t: (key: string) => string;
 	} = $props();
 
-	const kinds = useKinds();
 	const narrow = new MediaQuery('max-width: 47.999rem');
 	const WINDOWS = ['day', 'week', 'month', 'all', 'custom'] as const;
 	const SIZES = [25, 50, 100, 200] as const;
@@ -64,10 +69,10 @@ sits under the table there. -->
 		AUDIT_CATEGORIES.find((v) => v === saved('category'))
 	);
 	let status = $state<AuditQuery['status']>(AUDIT_STATUSES.find((v) => v === saved('status')));
-	let actorKind = $state<AuditQuery['actorKind']>(
-		AUDIT_ACTOR_KINDS.find((v) => v === saved('actorKind'))
+	let actor_kind = $state<AuditQuery['actor_kind']>(
+		AUDIT_ACTOR_KINDS.find((v) => v === saved('actor_kind'))
 	);
-	let actorId = $state(saved('actorId'));
+	let actor_id = $state(saved('actor_id'));
 	let action = $state(saved('action'));
 	let model = $state(saved('model'));
 	let record = $state(saved('record'));
@@ -83,7 +88,7 @@ sits under the table there. -->
 	const words = new Debounced(
 		() => ({
 			text: text.trim(),
-			actorId: actorId.trim(),
+			actor_id: actor_id.trim(),
 			action: action.trim(),
 			model: model.trim(),
 			record: record.trim(),
@@ -121,7 +126,7 @@ sits under the table there. -->
 		...range,
 		...(category === undefined ? {} : { category }),
 		...(status === undefined ? {} : { status }),
-		...(actorKind === undefined ? {} : { actorKind }),
+		...(actor_kind === undefined ? {} : { actor_kind }),
 		...Object.fromEntries(Object.entries(words.current).filter(([, value]) => value !== ''))
 	});
 	const filterKey = $derived(JSON.stringify(query));
@@ -139,7 +144,7 @@ sits under the table there. -->
 	});
 	// read by key: the debounced words settle into an equal new object, which must not read the page again
 	const requestKey = $derived(request.key);
-	const page = observeOnce(() => {
+	const page = observe_once(() => {
 		const key = requestKey;
 		const query = untrack(() => request.query);
 		return !admin || customError !== null
@@ -147,15 +152,15 @@ sits under the table there. -->
 			: api.audit(query).pipe(Effect.map((page) => ({ key, page })));
 	});
 	const answer = $derived(page.current?.key === request.key ? page.current.page : undefined);
-	const opened = observeOnce(() => {
+	const opened = observe_once(() => {
 		const id = selected?.id;
 		return !admin || id === undefined
 			? null
-			: api.auditDetail(id).pipe(Effect.map((record) => ({ id, record })));
+			: api.audit_detail(id).pipe(Effect.map((record) => ({ id, record })));
 	});
 	const detail = $derived(opened.current?.id === selected?.id ? opened.current?.record : undefined);
 	/** The workspace's people, so an actor reads as a person rather than a uuid (the sheet keeps the id). */
-	const directory = observeOnce(() => (admin ? api.settings() : null));
+	const directory = observe_once(() => (admin ? api.settings() : null));
 	const names = $derived(
 		new Map(
 			(directory.current?.members ?? []).map((member) => [
@@ -174,8 +179,8 @@ sits under the table there. -->
 		[
 			// a phone's Filters holds these too; anywhere else they show in the toolbar
 			...(narrow.current ? [category, status] : []),
-			actorKind,
-			actorId.trim(),
+			actor_kind,
+			actor_id.trim(),
 			action.trim(),
 			model.trim(),
 			record.trim(),
@@ -185,13 +190,13 @@ sits under the table there. -->
 	);
 	const statusName = (value: AuditSummary['status']) =>
 		t(
-			value === 'pendingApproval'
+			value === 'pending_approval'
 				? 'Pending approval'
 				: value.charAt(0).toUpperCase() + value.slice(1)
 		);
 	const actorName = (value: AuditSummary['actor']['kind']) =>
-		t(value === 'apiKey' ? 'API key' : value.charAt(0).toUpperCase() + value.slice(1));
-	const when = (value: string) => new Date(value).toLocaleString(locale);
+		t(value === 'api_key' ? 'API key' : value.charAt(0).toUpperCase() + value.slice(1));
+	const when = (value: string) => date_time(value, locale);
 	/** A write's verb, as the event line reads it. */
 	const VERBS: { readonly [verb: string]: string } = {
 		create: 'Created',
@@ -232,7 +237,7 @@ sits under the table there. -->
 			category: row.category,
 			status: row.status,
 			actor: nameOf(row.actor),
-			actorKind: actorName(row.actor.kind),
+			actor_kind: actorName(row.actor.kind),
 			what: whatOf(row)
 		}))
 	);
@@ -266,7 +271,7 @@ sits under the table there. -->
 	type Given = typeof Given.Type;
 	/** Stored images stay typed so empty, null, missing and false values remain distinct in the shared diff. */
 	const changed = (change: Change, given: Given | undefined) => {
-		const declared = kinds.catalog?.[change.model]?.fields;
+		const declared = catalog[change.model]?.fields;
 		const keep = (field: string) =>
 			!SYSTEM.has(field) &&
 			!declared?.[field]?.hidden &&
@@ -336,8 +341,8 @@ sits under the table there. -->
 		fork(page.refetch());
 	};
 	const clear = () => {
-		text = actorId = action = model = record = invocation = run = '';
-		category = status = actorKind = undefined;
+		text = actor_id = action = model = record = invocation = run = '';
+		category = status = actor_kind = undefined;
 	};
 	const copy = Effect.fn('Audit.copy')(function* () {
 		if (detail === null || detail === undefined) return;
@@ -349,26 +354,28 @@ sits under the table there. -->
 		else copyError = t('Could not copy. Select and copy the payload below.');
 	});
 
-	$effect(() => {
-		const values = {
+	watch(
+		() => ({
 			...words.current,
 			window,
 			since: window === 'custom' ? since : '',
 			until: window === 'custom' ? until : '',
 			category: category ?? '',
 			status: status ?? '',
-			actorKind: actorKind ?? '',
+			actor_kind: actor_kind ?? '',
 			order,
 			limit: String(limit)
-		};
-		if (typeof location === 'undefined') return;
-		const url = new URL(location.href);
-		for (const [key, value] of Object.entries(values)) {
-			if (value === '') url.searchParams.delete(`audit.${key}`);
-			else url.searchParams.set(`audit.${key}`, value);
+		}),
+		(values) => {
+			if (typeof location === 'undefined') return;
+			const url = new URL(location.href);
+			for (const [key, value] of Object.entries(values)) {
+				if (value === '') url.searchParams.delete(`audit.${key}`);
+				else url.searchParams.set(`audit.${key}`, value);
+			}
+			if (url.href !== location.href) history.replaceState(history.state, '', url);
 		}
-		if (url.href !== location.href) history.replaceState(history.state, '', url);
-	});
+	);
 </script>
 
 {#snippet at({ row }: { row: AuditRow })}
@@ -394,9 +401,9 @@ sits under the table there. -->
 	>
 {/snippet}
 {#snippet actor({ row }: { row: AuditRow })}
-	<span class="flex min-w-0 items-baseline gap-1.5" title={`${row.actor} (${row.actorKind})`}>
+	<span class="flex min-w-0 items-baseline gap-1.5" title={`${row.actor} (${row.actor_kind})`}>
 		<span class="truncate">{row.actor}</span>
-		{#if row.actor !== row.actorKind}<span class="shrink-0 text-meta">{row.actorKind}</span>{/if}
+		{#if row.actor !== row.actor_kind}<span class="shrink-0 text-meta">{row.actor_kind}</span>{/if}
 	</span>
 {/snippet}
 {#snippet empty()}
@@ -426,7 +433,7 @@ sits under the table there. -->
 			{ value: 'custom', label: t('Custom dates') }
 		]}
 		value={window}
-		onChange={(value) => {
+		on_change={(value) => {
 			window = WINDOWS.find((v) => v === value) ?? 'week';
 		}}
 	/>
@@ -438,7 +445,7 @@ sits under the table there. -->
 		aria-label={t('Category')}
 		options={AUDIT_CATEGORIES.map((value) => ({ value, label: t(value) }))}
 		value={category ?? null}
-		onChange={(value) => {
+		on_change={(value) => {
 			category = value ?? undefined;
 		}}
 	/>
@@ -450,7 +457,7 @@ sits under the table there. -->
 		aria-label={t('Status')}
 		options={AUDIT_STATUSES.map((value) => ({ value, label: statusName(value) }))}
 		value={status ?? null}
-		onChange={(value) => {
+		on_change={(value) => {
 			status = value ?? undefined;
 		}}
 	/>
@@ -466,13 +473,13 @@ sits under the table there. -->
 			{ value: 'oldest', label: t('Oldest first') }
 		]}
 		value={order}
-		onChange={(value) => {
+		on_change={(value) => {
 			order = value === 'oldest' ? 'oldest' : 'newest';
 		}}
 	/>
 {/snippet}
 {#snippet reload()}
-	<AutoRefresh {t} onRefresh={refresh} />
+	<AutoRefresh {t} on_refresh={refresh} />
 	<Button
 		size="icon"
 		variant="ghost"
@@ -494,13 +501,13 @@ sits under the table there. -->
 				clearable
 				placeholder={t('All actors')}
 				options={AUDIT_ACTOR_KINDS.map((value) => ({ value, label: actorName(value) }))}
-				value={actorKind ?? null}
-				onChange={(value) => {
-					actorKind = value ?? undefined;
+				value={actor_kind ?? null}
+				on_change={(value) => {
+					actor_kind = value ?? undefined;
 				}}
 			/>
 		</label>
-		<label class="flex flex-col gap-1 text-xs">{t('Actor ID')}<Input bind:value={actorId} /></label>
+		<label class="flex flex-col gap-1 text-xs">{t('Actor ID')}<Input bind:value={actor_id} /></label>
 		<label class="flex flex-col gap-1 text-xs sm:col-span-2"
 			>{t('Action')}<Input bind:value={action} placeholder="orders.update" /></label
 		>
@@ -543,7 +550,7 @@ sits under the table there. -->
 					label: t('{n} / page').replace('{n}', String(n))
 				}))}
 				value={String(limit)}
-				onChange={(value) => {
+				on_change={(value) => {
 					limit = SIZES.find((n) => String(n) === value) ?? 50;
 				}}
 			/>
@@ -638,7 +645,7 @@ sits under the table there. -->
 			{/if}
 		</div>
 		<div class="flex min-h-64 min-w-0 flex-1 flex-col" aria-busy={page.loading} data-audit-table>
-			<Table
+			<Table {ctx}
 				of={rows}
 				key="audit-events"
 				toolbar={false}
@@ -652,16 +659,16 @@ sits under the table there. -->
 					{ field: 'actor', label: t('Who'), cell: actor, width: 220 },
 					{ field: 'status', label: t('Outcome'), cell: state, width: 140 }
 				]}
-				onOpen={choose}
+				on_open={choose}
 			/>
 		</div>
 	{/if}
 </div>
 
 {#if admin && selected !== null}
-	<DetailSheet
+	<DetailSheet {ctx}
 		title={phrase(selected.action)}
-		onClose={() => {
+		on_close={() => {
 			selected = null;
 		}}
 		fields={[
@@ -670,7 +677,7 @@ sits under the table there. -->
 			{ label: t('Who'), value: `${nameOf(selected.actor)} (${actorName(selected.actor.kind)})` },
 			{ label: t('What'), value: whatOf(selected) || undefined },
 			{ label: t('Category'), value: t(selected.category) },
-			{ label: t('Recorded'), value: when(selected.recordedAt) }
+			{ label: t('Recorded'), value: when(selected.recorded_at) }
 		]}
 	>
 		<section class="flex min-w-0 flex-col gap-3" aria-label={t('Changes')}>
@@ -696,12 +703,12 @@ sits under the table there. -->
 								{t('No field changes were recorded for this event.')}
 							</p>
 						{:else}
-							<StructuredData
+							<StructuredData {ctx}
 								before={change.before}
 								kind={change.kind}
 								value={change.after}
 								mode="diff"
-								changesOnly
+								changes_only
 								name={change.heading}
 							/>
 						{/if}
@@ -715,7 +722,7 @@ sits under the table there. -->
 					>
 					<div class="mt-2 flex flex-col gap-2">
 						<dl class="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
-							{#each [{ label: t('Event ID'), value: selected.id }, { label: t('Operation ID'), value: selected.operationId }, { label: t('Invocation ID'), value: selected.invocation }, { label: t('Transaction ID'), value: selected.transaction }, { label: t('Run ID'), value: selected.run }, { label: t('Approval ID'), value: selected.approval }, { label: t('Record ID'), value: selected.subject?.id }, { label: t('Revision'), value: selected.subject?.revision }, { label: t('Payload bytes'), value: selected.payloadBytes }] as entry (entry.label)}
+							{#each [{ label: t('Event ID'), value: selected.id }, { label: t('Operation ID'), value: selected.operation_id }, { label: t('Invocation ID'), value: selected.invocation }, { label: t('Transaction ID'), value: selected.transaction }, { label: t('Run ID'), value: selected.run }, { label: t('Approval ID'), value: selected.approval }, { label: t('Record ID'), value: selected.subject?.id }, { label: t('Revision'), value: selected.subject?.revision }, { label: t('Payload bytes'), value: selected.payload_bytes }] as entry (entry.label)}
 								{#if entry.value !== undefined && entry.value !== null}
 									<div class="flex min-w-0 gap-2">
 										<dt class="shrink-0 text-meta">{entry.label}</dt>
@@ -733,7 +740,7 @@ sits under the table there. -->
 							</Button>
 						</div>
 						<div aria-label={t('Full event payload')} class="max-h-[50dvh] overflow-auto">
-							<StructuredData value={detail.payload} name={t('Payload')} />
+							<StructuredData {ctx} value={detail.payload} name={t('Payload')} />
 						</div>
 					</div>
 				</details>

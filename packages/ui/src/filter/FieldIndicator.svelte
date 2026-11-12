@@ -1,43 +1,45 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
-	import type { Resolved } from './filter.js';
+	import type { Resolved } from './catalog.js';
 	let {
+		ctx,
 		resolved = null,
 		many = false,
 		nested = false
-	}: { resolved?: Resolved | null; many?: boolean; nested?: boolean } = $props();
-	const bolt = useBolt();
+	}: { ctx: UiContext; resolved?: Resolved | null; many?: boolean; nested?: boolean } = $props();
+	const bolt = $derived(bolt_of(ctx));
 	const info = $derived.by((): { name: GlyphName; label: string } => {
-		if (many) return { name: 'links', label: msg(bolt, 'view.type.many', 'Related records') };
+		if (many) return { name: 'links', label: msg(bolt, 'view.type.many') };
 		if (resolved?.leaf === 'rel')
-			return { name: 'link', label: msg(bolt, 'view.type.record', 'Related record') };
-		if (resolved === null) return { name: 'panel', label: msg(bolt, 'view.field', 'Field') };
+			return { name: 'link', label: msg(bolt, 'view.type.record') };
+		if (resolved === null) return { name: 'panel', label: msg(bolt, 'view.field') };
 		const kind = resolved?.leaf === 'field' ? resolved.kind.kind : undefined;
 		let field: { name: GlyphName; label: string };
 		if (kind === 'date')
-			field = { name: 'fieldDate', label: msg(bolt, 'view.type.date', 'Date field') };
+			field = { name: 'fieldDate', label: msg(bolt, 'view.type.date') };
 		else if (kind === 'period')
-			field = { name: 'fieldPeriod', label: msg(bolt, 'view.type.period', 'Date range field') };
+			field = { name: 'fieldPeriod', label: msg(bolt, 'view.type.period') };
 		else if (kind === 'instant' || kind === 'time')
-			field = { name: 'fieldTime', label: msg(bolt, 'view.type.time', 'Time field') };
+			field = { name: 'fieldTime', label: msg(bolt, 'view.type.time') };
 		else if (kind === 'bool')
-			field = { name: 'fieldBool', label: msg(bolt, 'view.type.bool', 'Yes/no field') };
-		else if (kind === 'json' || kind === 'object' || kind === 'list' || kind === 'custom')
-			field = { name: 'fieldObject', label: msg(bolt, 'view.type.structured', 'Structured field') };
+			field = { name: 'fieldBool', label: msg(bolt, 'view.type.bool') };
+		else if (kind === 'json' || kind === 'object' || kind === 'custom')
+			field = { name: 'fieldObject', label: msg(bolt, 'view.type.structured') };
 		else if (kind === 'enum' || kind === 'state' || kind === 'currency')
-			field = { name: 'fieldChoice', label: msg(bolt, 'view.type.choice', 'Choice field') };
+			field = { name: 'fieldChoice', label: msg(bolt, 'view.type.choice') };
 		else if (
 			kind !== undefined &&
-			['int', 'number', 'decimal', 'money', 'sum', 'count', 'duration'].includes(kind)
+			['int', 'number', 'decimal', 'money', 'sum', 'count'].includes(kind)
 		)
-			field = { name: 'fieldNumber', label: msg(bolt, 'view.type.number', 'Number field') };
-		else field = { name: 'fieldText', label: msg(bolt, 'view.type.text', 'Text field') };
+			field = { name: 'fieldNumber', label: msg(bolt, 'view.type.number') };
+		else field = { name: 'fieldText', label: msg(bolt, 'view.type.text') };
 		return nested
 			? {
 					name: 'fieldInside',
-					label: `${msg(bolt, 'view.type.linked', 'Field in a related record')} · ${field.label}`
+					label: `${msg(bolt, 'view.type.linked')} · ${field.label}`
 				}
 			: field;
 	});

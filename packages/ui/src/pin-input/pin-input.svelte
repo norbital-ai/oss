@@ -10,10 +10,18 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Foc
 		REGEXP_ONLY_DIGITS,
 		type WithoutChildrenOrChild
 	} from 'bits-ui';
+	import type { SnakeProps } from '../primitives/bits.js';
 
-	type Props = Omit<WithoutChildrenOrChild<PinInputPrimitive.RootProps>, 'maxlength'> & {
+	type Props = SnakeProps<Omit<WithoutChildrenOrChild<PinInputPrimitive.RootProps>, 'maxlength' | 'onComplete'>, {
+		on_value_change: 'onValueChange';
+		paste_transformer: 'pasteTransformer';
+		push_password_manager_strategy: 'pushPasswordManagerStrategy';
+		input_id: 'inputId';
+		input_ref: 'inputRef';
+	}> & {
 		maxlength?: number;
-		cellClass?: string;
+		cell_class?: string;
+		on_complete?: (value: string) => void;
 	};
 
 	let {
@@ -22,7 +30,13 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Foc
 		disabled = false,
 		autofocus = true,
 		class: className,
-		cellClass,
+		cell_class,
+		on_value_change,
+		paste_transformer,
+		push_password_manager_strategy,
+		input_id,
+		input_ref = $bindable(null),
+		on_complete,
 		'aria-invalid': ariaInvalid,
 		...restProps
 	}: Props = $props();
@@ -47,6 +61,12 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Foc
 	aria-invalid={ariaInvalid}
 	class={cn('w-full', className)}
 	{...restProps}
+	onValueChange={on_value_change}
+	pasteTransformer={paste_transformer}
+	pushPasswordManagerStrategy={push_password_manager_strategy}
+	inputId={input_id}
+	bind:inputRef={input_ref}
+	onComplete={on_complete}
 >
 	{#snippet children({ cells })}
 		<Inline justify="between" class="w-full">
@@ -58,7 +78,7 @@ A one-time code in separate cells (bits-ui PinInput): the sign-in code step. Foc
 						cell.isActive && 'border-ring ring-[3px] ring-ring/50 ring-inset dark:bg-input/40',
 						invalid && 'border-destructive ring-destructive/20 ring-inset dark:ring-destructive/40',
 						disabled && 'cursor-not-allowed bg-muted opacity-50 shadow-none',
-						cellClass
+						cell_class
 					)}
 				>
 					{#snippet child({ props })}

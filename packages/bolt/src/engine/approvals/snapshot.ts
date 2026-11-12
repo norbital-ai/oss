@@ -23,3 +23,12 @@ export const StoredSnapshot = Schema.Struct({
 	__boltReadGuards: Schema.optionalKey(StoredReadGuards)
 });
 export type StoredSnapshot = typeof StoredSnapshot.Type;
+
+// Stored records keep `collection` for the audit trigger; decoded checkpoints use the engine's `model`.
+export const Checkpoint = Schema.Struct({
+	model: Schema.String,
+	id: Schema.String,
+	op: Schema.Literals(['create', 'update', 'delete']),
+	before: Schema.NullOr(Schema.Number)
+}).pipe(Schema.encodeKeys({ model: 'collection' }));
+export type Checkpoint = typeof Checkpoint.Type;

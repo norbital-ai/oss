@@ -17,7 +17,7 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 is<Eq<Effect.Success<ReturnType<ShellApi['audit']>>, AuditPage>>();
-is<Eq<Effect.Success<ReturnType<ShellApi['auditDetail']>>, AuditRecord | null>>();
+is<Eq<Effect.Success<ReturnType<ShellApi['audit_detail']>>, AuditRecord | null>>();
 is<Eq<Awaited<ReturnType<AuditPort['query']>>, AuditPage>>();
 is<Eq<Awaited<ReturnType<AuditPort['detail']>>, AuditRecord | null>>();
 is<Eq<Awaited<ReturnType<AuditPort['pending']>>, AuditPendingPage>>();
@@ -42,7 +42,7 @@ void environment;
 void order;
 void status;
 
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* (_, ctx) {
 		// @ts-expect-error tenant code cannot append native administrative audit facts

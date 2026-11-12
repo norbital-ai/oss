@@ -1,13 +1,13 @@
 <!--
 @component
-A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hidden.
+A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while hidden.
 -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel } from './level.js';
 	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 
-	/** One tab (§3.6 `RecordTab`): a `keepAlive` tab stays mounted while hidden, so a form inside keeps its state. */
+	/** One tab (§3.6 `RecordTab`): a `keep_alive` tab stays mounted while hidden, so a form inside keeps its state. */
 	export type TabItem = {
 		name: string;
 		title: string;
@@ -15,14 +15,14 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		icon?: string;
 		/** A count after the title (the rows the tab holds). */
 		count?: number;
-		keepAlive?: true;
+		keep_alive?: true;
 		disabled?: boolean;
 	};
 	/** The props of `Tabs`: the tabs, the bindable selected `value`, and trailing content. */
 	export type TabsProps = {
 		tabs: readonly TabItem[];
 		value?: string;
-		onValueChange?: (value: string) => void;
+		on_value_change?: (value: string) => void;
 		class?: string;
 		/** Rendered at the list's end (a toolbar, a trailing action). */
 		trailing?: Snippet;
@@ -51,19 +51,21 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 
 <script lang="ts">
 	import { Tabs } from 'bits-ui';
+	import { watch } from 'runed';
 	import * as Popover from '../popover/index.js';
 	import { getContext, setContext, untrack } from 'svelte';
 	import Icon from '../icon/icon-wrapper.svelte';
-	import { cn } from '../utils.js';
-	import { insetReader } from '../../layout/inset.svelte.js';
+	import { cn, ui_text } from '../utils.js';
+	import { inset_reader } from '../../layout/inset.svelte.js';
 	import { INSET_X_CLASS, SCROLL_AXIS_CLASSES } from '../../layout/layout.shared.js';
 	import { observeTabOverflow } from './overflow.js';
+	import OverflowTrigger from './overflow-trigger.svelte';
 	import TabPanel from './tab-panel.svelte';
 
 	let {
 		tabs,
 		value = $bindable(),
-		onValueChange,
+		on_value_change,
 		class: className,
 		trailing,
 		leading,
@@ -72,7 +74,8 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 		side = 'start'
 	}: TabsProps = $props();
 	const parent = getContext<{ level: TabLevel; shown: readonly string[] } | undefined>(TAB_LEVEL);
-	const hasInset = insetReader();
+	const t = ui_text();
+	const hasInset = inset_reader();
 	const placed = $derived(tabLevel(parent?.level, explicit));
 	const variant = $derived(tabVariant(placed.level));
 	const vertical = $derived(orientation === 'vertical');
@@ -90,24 +93,27 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 	const active = $derived(value ?? tabs.find((t) => !t.disabled)?.name);
 	const select = (next: string) => {
 		value = next;
-		onValueChange?.(next);
+		on_value_change?.(next);
 	};
 	// a horizontal strip never scrolls: the triggers that fit stay in it, the rest go under More (marked active when one is)
 	let list = $state<HTMLElement | null>(null),
 		measure = $state<HTMLElement | null>(null),
 		fit = $state(Infinity),
 		moreOpen = $state(false);
-	$effect(() => {
-		if (vertical || list === null || measure === null) return;
-		return observeTabOverflow(list, measure, (count) => (fit = count));
-	});
+	watch(
+		() => vertical || list === null || measure === null ? null : { list, measure },
+		(elements) => {
+			if (elements === null) return;
+			return observeTabOverflow(elements.list, elements.measure, (count) => (fit = count));
+		}
+	);
 	const shownTabs = $derived(vertical || fit >= tabs.length ? tabs : tabs.slice(0, fit));
 	const overflow = $derived(tabs.filter((t) => !shownTabs.includes(t)));
 	const activeInMore = $derived(overflow.some((t) => t.name === active));
 	const triggerClass = $derived(cn(TAB_TRIGGER, vertical ? RAIL_TRIGGER : TAB_TYPE[variant]));
-	// a tab is mounted once visited and, unless keepAlive, dropped when left
+	// a tab is mounted once visited and, unless keep_alive, dropped when left
 	let visited = $state<Record<string, true>>({});
-	$effect.pre(() => {
+	watch.pre(() => active, (active) => {
 		if (active !== undefined && !visited[active]) visited[active] = true;
 	});
 </script>
@@ -166,20 +172,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				{/each}
 				{#if overflow.length > 0}
 					<Popover.Root bind:open={moreOpen}>
-						<!-- `data-state` after the popover's own: More wears the active style while it holds the selected tab -->
-						<Popover.Trigger>
-							{#snippet child({ props })}
-								<button
-									{...props}
-									type="button"
-									class={cn(triggerClass, 'ml-auto')}
-									data-tabs-more
-									data-state={activeInMore ? 'active' : 'inactive'}
-								>
-									<Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span>
-								</button>
-							{/snippet}
-						</Popover.Trigger>
+						<OverflowTrigger active={activeInMore} label={t('moreTabs')} class={triggerClass} />
 						<Popover.Content align="end" class="flex w-56 flex-col gap-0.5 p-1">
 							{#each overflow as tab (tab.name)}
 								<button
@@ -206,7 +199,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 						{#each tabs as tab (tab.name)}<span class={triggerClass}>{@render label(tab)}</span
 							>{/each}
 						<span class={triggerClass}
-							><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>More</span></span
+							><Icon name="lucide:ellipsis" class={TAB_ICON} /><span>{t('moreTabs')}</span></span
 						>
 					</div>
 				{/if}
@@ -219,7 +212,7 @@ A tab strip with the selected tab's body; `keepAlive` tabs stay mounted while hi
 				label={tab.title}
 				class={railEnd ? '@2xl:col-start-1 @2xl:row-start-1' : ''}
 			>
-				{#if tab.name === active || (tab.keepAlive && visited[tab.name])}
+				{#if tab.name === active || (tab.keep_alive && visited[tab.name])}
 					{@render tab.body()}
 				{/if}
 			</TabPanel>

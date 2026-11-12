@@ -1,4 +1,4 @@
-import { formatValue as show } from '../kinds/kind.js';
+import { format_value as show } from '../kinds/kind.js';
 import type { Fields, Kind } from '../kinds/kind.js';
 import type { ModelExposure } from '../kinds/context.js';
 import type { Values } from '../model/types.js';
@@ -37,7 +37,7 @@ export function searchIndexes(
 ): SearchIndex[] {
 	const untypable = (k: Kind): boolean =>
 		['seq', 'sum', 'count', 'vector', 'state'].includes(k.kind) ||
-		(k.kind === 'list' && k.of.kind === 'number');
+		(k.many === true && k.kind === 'number');
 	const why = (raw: string | undefined, input: Fields) =>
 		raw !== undefined
 			? fill(text.raw, { field: input[raw]?.label ?? humanize(raw) })
@@ -78,9 +78,9 @@ export function rangeText(
 ): string {
 	const from = shown === 0 ? 0 : offset + 1,
 		to = offset + shown;
-	if (shown === 0 && offset === 0) return msg(bolt, 'table.none', 'No rows');
+	if (shown === 0 && offset === 0) return msg(bolt, 'table.none');
 	// the count is re-read at most every 30 s (rule 7): a live page ahead of it shows the rows it has, not a stale total
 	return count === null || count < to
-		? msg(bolt, 'table.range', 'rows {from}–{to}', { from, to })
-		: msg(bolt, 'table.rangeOf', 'rows {from}–{to} of {count}', { from, to, count });
+		? msg(bolt, 'table.range', { from, to })
+		: msg(bolt, 'table.rangeOf', { from, to, count });
 }

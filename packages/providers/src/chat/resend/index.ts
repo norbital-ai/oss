@@ -3,6 +3,7 @@
 // inbox API names no way to read an attachment's bytes, so a file arrives as its name and size.
 import type { InboxMessage, Response as Answer } from 'resend';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 
 // ponytail: entities stay encoded in an HTML-only email; html-to-text if they matter
@@ -24,7 +25,7 @@ const answered = async <A>(call: Promise<Answer<A>>) => {
 	throw new PlatformError(
 		error.message,
 		error.statusCode,
-		Number(headers?.['retry-after'] ?? Number.NaN) * 1000 || undefined
+		retry_after_ms(headers?.['retry-after'])
 	);
 };
 
@@ -58,7 +59,7 @@ export const resend: ChatPlatform = {
 			return {
 				id: email.id,
 				thread,
-				sentAt: new Date(email.received_at).toISOString(),
+				sent_at: new Date(email.received_at).toISOString(),
 				from: person(email.from),
 				text: (email.text || (email.html ?? '').replace(TAGS, '')).trim(),
 				group: [...to, ...handles(email.cc)].some((one) => one !== account),

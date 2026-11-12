@@ -3,10 +3,9 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
 import type { DriverOpen, Json } from '@norbital-ai/bolt/engine';
-import { toDrivers, type LinkDef, type ProviderDef, type Run } from '../src/abi.ts';
+import { to_drivers, type LinkDef, type ProviderDef, type Run } from '../src/abi.ts';
 import { PairingInvalid, ProviderRefused, ProviderUnavailable } from '../src/errors.ts';
-import { loopbackTcpPort } from '@norbital-ai/bolt/node';
-import { fakeFetch, HOOK, REDIRECT } from './kit.ts';
+import { fakeFetch, HOOK, loopback_tcp, REDIRECT } from './kit.ts';
 
 class AbiRejected extends Schema.TaggedError<AbiRejected>()('AbiRejected', {
 	cause: Schema.Defect()
@@ -19,20 +18,20 @@ const context = (): DriverOpen => ({
 	syncs: [],
 	configuration: {},
 	personal: false,
-	webhookUrl: HOOK,
-	redirectUrl: REDIRECT,
+	webhook_url: HOOK,
+	redirect_url: REDIRECT,
 	state: async () => `${crypto.randomUUID()}.desk`,
 	signal: new AbortController().signal,
 	fetch: fakeFetch([]),
-	tcp: loopbackTcpPort,
-	oauthClient: async () => undefined,
+	tcp: loopback_tcp,
+	oauth_client: async () => undefined,
 	credentials: { load: async () => new Map<string, Json>(), write: async () => {} },
 	emit: async () => {},
 	status: async () => {},
 	pairing: () => {}
 });
 
-describe('toDrivers', () => {
+describe('to_drivers', () => {
 	it.effect('a reconcile crosses with its arguments, and a provider without one has none', () =>
 		Effect.gen(function* () {
 			const run: Run = yield* FiberSet.makeRuntimePromise();
@@ -44,7 +43,7 @@ describe('toDrivers', () => {
 				driver: 'chat',
 				open: () => Effect.succeed({ reconcile })
 			});
-			const [history, none] = yield* toDrivers(
+			const [history, none] = yield* to_drivers(
 				[
 					provider((thread, since) =>
 						Effect.succeed({ messages: [{ id: `${thread}@${since}` }], complete: false })
@@ -85,7 +84,7 @@ describe('toDrivers', () => {
 							);
 							return {
 								send: (message: Json) =>
-									Effect.succeed({ providerId: `sent:${JSON.stringify(message)}` }),
+									Effect.succeed({ provider_id: `sent:${JSON.stringify(message)}` }),
 								request: () =>
 									Deferred.succeed(started, undefined).pipe(
 										Effect.andThen(Effect.never),
@@ -103,7 +102,7 @@ describe('toDrivers', () => {
 							};
 						})
 				};
-				const [provider] = yield* toDrivers([def], run);
+				const [provider] = yield* to_drivers([def], run);
 				if (provider === undefined) throw new Error('The native provider was not adapted.');
 				const link = yield* abi(() => provider.open(context()));
 				if (
@@ -115,7 +114,7 @@ describe('toDrivers', () => {
 					throw new Error('The adapted link lost a declared capability.');
 				const { send, request, pair, test } = link;
 				expect(yield* abi(() => send({ to: 'x' }, new AbortController().signal))).toEqual({
-					providerId: 'sent:{"to":"x"}'
+					provider_id: 'sent:{"to":"x"}'
 				});
 				expect(link.typing).toBeUndefined();
 				const abort = new AbortController();
@@ -169,7 +168,7 @@ describe('toDrivers', () => {
 						return yield* Effect.fail(failure);
 					})
 			};
-			const [provider] = yield* toDrivers([def], run);
+			const [provider] = yield* to_drivers([def], run);
 			if (provider === undefined) throw new Error('The native provider was not adapted.');
 			expect((yield* abi(() => provider.open(context())).pipe(Effect.flip)).cause).toBe(failure);
 			expect([acquired, released]).toEqual([1, 1]);

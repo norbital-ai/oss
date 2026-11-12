@@ -1,8 +1,8 @@
-import { model } from '../../../../../../../src/index.ts';
+import { model } from '../../../../.norbital/models/orders.ts';
 
-export default model('orders', {
+export default model({
 	description: 'Sales orders',
-	label: 'number',
+	record_label: 'record.number',
 	fields: {
 		number: { kind: 'seq', pattern: 'SO-{0000}' },
 		amount: { kind: 'money' },
@@ -10,12 +10,10 @@ export default model('orders', {
 		status: {
 			kind: 'state',
 			initial: 'draft',
-			states: { draft: { to: ['placed'] }, placed: { edit: 'none' } }
+			states: { draft: { to: ['placed'] }, placed: {} }
 		}
 	},
-	read: {
-		orders: { fields: 'all' },
-		'orders.customer': { fields: ['name', 'rating'] }
-	},
-	create: { columns: { orders: ['customer', 'amount'] } }
+	constraints: { placed: { locked: { status: { eq: 'placed' } } } },
+	outputs: { default: { fields: 'all', customer: { fields: ['name', 'rating'] } } },
+	create: { columns: { fields: ['customer', 'amount'] } }
 });

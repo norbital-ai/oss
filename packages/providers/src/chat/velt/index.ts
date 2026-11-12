@@ -1,14 +1,16 @@
 // Velt, through its REST API. A thread is a comment annotation, which needs its organization and document to be reached:
 // `organization:document:annotation`, each URI-encoded. An annotation reads back with every comment, which is its
 // history. Webhooks are version 2 (Advanced, Standard Webhooks signed); the basic version sends only a shared token.
+import { Schema } from 'effect';
+import { parse as parseJson, json, download as downloadFile } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
-import { nothing, PlatformError, Unverified } from '../adapter.ts';
-import { hmac, same } from '../verify.ts';
+import { retry_after_ms } from '../../errors.ts';
+import { nothing, PlatformError } from '../adapter.ts';
+import { standardWebhook } from '../verify.ts';
 
 const API = 'https://api.velt.dev';
 /** A generated token's working life, as Velt's own adapter keeps one. */
 const TOKEN_MS = 40 * 3_600_000;
-const TOLERANCE_S = 5 * 60;
 const COMMENT_EVENTS = new Set([
 	'comment.add',
 	'comment_annotation.add',
@@ -16,59 +18,75 @@ const COMMENT_EVENTS = new Set([
 	'comment.delete'
 ]);
 
-type At = number | string;
-type User = { readonly userId: string; readonly name?: string };
-type Comment = {
-	readonly commentId: number;
-	readonly commentText?: string;
-	readonly commentHtml?: string;
-	readonly from?: User;
-	readonly to?: readonly User[];
-	readonly taggedUserContacts?: readonly {
-		readonly userId: string;
-		readonly text?: string;
-		readonly contact?: User;
-	}[];
-	readonly createdAt?: At;
-	readonly lastUpdated?: At;
-	readonly editedAt?: At;
-	readonly isEdited?: boolean;
-	readonly attachments?: readonly {
-		readonly name?: string;
-		readonly url?: string;
-		readonly mimeType?: string;
-		readonly size?: number;
-	}[];
-};
-type Annotation = { readonly annotationId?: string; readonly comments?: readonly Comment[] };
-type Hook = {
-	readonly event?: string;
-	readonly data: {
-		readonly commentAnnotation?: Annotation;
-		readonly targetComment?: Comment;
-		readonly metadata?: {
-			readonly organizationId?: string;
-			readonly clientOrganizationId?: string;
-			readonly organization?: { readonly organizationId?: string };
-			readonly documentId?: string;
-			readonly clientDocumentId?: string;
-			readonly document?: { readonly documentId?: string };
-		};
-	};
-};
+const At = Schema.Union([Schema.Number, Schema.String]);
+type At = typeof At.Type;
+const User = Schema.Struct({
+	userId: Schema.String,
+	name: Schema.optionalKey(Schema.String)
+});
+type User = typeof User.Type;
+const Comment = Schema.Struct({
+	commentId: Schema.Number,
+	commentText: Schema.optionalKey(Schema.String),
+	commentHtml: Schema.optionalKey(Schema.String),
+	from: Schema.optionalKey(User),
+	to: Schema.optionalKey(Schema.Array(User)),
+	taggedUserContacts: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				userId: Schema.String,
+				text: Schema.optionalKey(Schema.String),
+				contact: Schema.optionalKey(User)
+			})
+		)
+	),
+	createdAt: Schema.optionalKey(At),
+	lastUpdated: Schema.optionalKey(At),
+	editedAt: Schema.optionalKey(At),
+	isEdited: Schema.optionalKey(Schema.Boolean),
+	attachments: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				name: Schema.optionalKey(Schema.String),
+				url: Schema.optionalKey(Schema.String),
+				mimeType: Schema.optionalKey(Schema.String),
+				size: Schema.optionalKey(Schema.Number)
+			})
+		)
+	)
+});
+type Comment = typeof Comment.Type;
+const Annotation = Schema.Struct({
+	annotationId: Schema.optionalKey(Schema.String),
+	comments: Schema.optionalKey(Schema.Array(Comment))
+});
+type Annotation = typeof Annotation.Type;
+const Hook = Schema.Struct({
+	event: Schema.optionalKey(Schema.String),
+	data: Schema.Struct({
+		commentAnnotation: Schema.optionalKey(Annotation),
+		targetComment: Schema.optionalKey(Comment),
+		metadata: Schema.optionalKey(
+			Schema.Struct({
+				organizationId: Schema.optionalKey(Schema.String),
+				clientOrganizationId: Schema.optionalKey(Schema.String),
+				organization: Schema.optionalKey(
+					Schema.Struct({
+						organizationId: Schema.optionalKey(Schema.String)
+					})
+				),
+				documentId: Schema.optionalKey(Schema.String),
+				clientDocumentId: Schema.optionalKey(Schema.String),
+				document: Schema.optionalKey(
+					Schema.Struct({
+						documentId: Schema.optionalKey(Schema.String)
+					})
+				)
+			})
+		)
+	})
+});
 
-/** Standard Webhooks: an HMAC of `id.timestamp.body` under the decoded key, its timestamp recent. */
-const verify = (headers: Headers, body: string, key: Buffer) => {
-	const id = headers.get('webhook-id'),
-		at = headers.get('webhook-timestamp'),
-		want = hmac(key, `${id}.${at}.${body}`, 'base64');
-	const fresh = Math.abs(Date.now() / 1000 - Number(at)) <= TOLERANCE_S;
-	const matches = headers
-		.get('webhook-signature')
-		?.split(' ')
-		.some((one) => same(one.slice(one.indexOf(',') + 1), want));
-	if (id === null || !fresh || matches !== true) throw new Unverified('bad signature');
-};
 const place = (thread: string) => {
 	const [organizationId = '', documentId = '', annotationId = ''] = thread
 		.split(':')
@@ -108,20 +126,24 @@ export const velt: ChatPlatform = {
 				body: JSON.stringify({ data })
 			});
 			if (!response.ok) {
-				const wait = Number(response.headers.get('retry-after'));
 				throw new PlatformError(
 					`${path} answered ${response.status}`,
 					response.status,
-					wait > 0 ? wait * 1000 : undefined
+					retry_after_ms(response.headers.get('retry-after'))
 				);
 			}
-			const { result } = (await response.json()) as {
-				readonly result?: {
-					readonly status?: string;
-					readonly message?: string;
-					readonly data?: unknown;
-				};
-			};
+			const { result } = await json(
+				Schema.Struct({
+					result: Schema.optionalKey(
+						Schema.Struct({
+							status: Schema.optionalKey(Schema.String),
+							message: Schema.optionalKey(Schema.String),
+							data: Schema.optionalKey(Schema.Unknown)
+						})
+					)
+				}),
+				response
+			);
 			if (result?.status !== undefined && result.status !== 'success')
 				throw new PlatformError(result.message ?? `${path} refused`, 400);
 			return result?.data;
@@ -134,13 +156,22 @@ export const velt: ChatPlatform = {
 		} | null = null;
 		const token = async (organization: string) => {
 			if (held?.organization === organization && held.until > Date.now()) return held.token;
-			const made = (await post('/v2/auth/generate_token', {
-				userId: botUserId,
-				userProperties: { name: botUserName },
-				permissions: {
-					resources: [{ type: 'organization', id: organization, accessRole: 'editor' }]
-				}
-			})) as { readonly token?: string } | undefined;
+			const made = await Schema.decodeUnknownPromise(
+				Schema.Union([
+					Schema.Struct({
+						token: Schema.optionalKey(Schema.String)
+					}),
+					Schema.Undefined
+				])
+			)(
+				await post('/v2/auth/generate_token', {
+					userId: botUserId,
+					userProperties: { name: botUserName },
+					permissions: {
+						resources: [{ type: 'organization', id: organization, accessRole: 'editor' }]
+					}
+				})
+			);
 			if (made?.token === undefined) throw new Error('Velt answered no token');
 			held = { organization, token: made.token, until: Date.now() + TOKEN_MS };
 			return made.token;
@@ -152,12 +183,7 @@ export const velt: ChatPlatform = {
 				return post(path, data, await token(data.organizationId));
 			});
 		await token(organizationId);
-		const download = async (url: string) => {
-			const response = await host.fetch(url);
-			if (!response.ok)
-				throw new PlatformError(`a file answered ${response.status}`, response.status);
-			return new Uint8Array(await response.arrayBuffer());
-		};
+		const download = (url: string) => downloadFile(host.fetch, url);
 		const escaped = botUserName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 		const named = new RegExp(`@${escaped}(?![\\w-])`, 'i');
 		const parse = (comment: Comment, thread: string): Incoming => {
@@ -182,7 +208,7 @@ export const velt: ChatPlatform = {
 				// a comment id is a number within its annotation, and ids dedupe across all of them
 				id: `${place(thread).annotationId}:${comment.commentId}`,
 				thread,
-				sentAt: instant(comment.createdAt),
+				sent_at: instant(comment.createdAt),
 				from: { handle: comment.from?.userId ?? '', name: comment.from?.name ?? null },
 				text,
 				group: true,
@@ -208,8 +234,8 @@ export const velt: ChatPlatform = {
 		const connection: ChatConnection = {
 			account: botUserName,
 			async deliver(request, body) {
-				verify(request.headers, body, key);
-				const { event, data } = JSON.parse(body) as Hook;
+				standardWebhook(request.headers, body, key);
+				const { event, data } = await parseJson(Hook, body);
 				if (event === undefined || !COMMENT_EVENTS.has(event)) return nothing();
 				const { metadata, commentAnnotation, targetComment } = data;
 				const organization =
@@ -248,7 +274,10 @@ export const velt: ChatPlatform = {
 					...where,
 					annotationIds: [where.annotationId]
 				});
-				const annotation = (Array.isArray(found) ? found[0] : undefined) as Annotation | undefined;
+				const annotations = await Schema.decodeUnknownPromise(
+					Schema.optional(Schema.Array(Annotation))
+				)(found);
+				const annotation = annotations?.[0];
 				// no annotation is gone or out of reach, and the answer does not say which
 				if (annotation === undefined) return { messages: [], complete: false };
 				const from = Date.parse(since);

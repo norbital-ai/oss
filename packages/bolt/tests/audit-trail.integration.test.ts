@@ -2,23 +2,29 @@ import { randomUUID } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
-import { Audit, auditFromAbi } from '../src/engine/audit.ts';
+import { Audit, audit_from_abi } from '../src/engine/audit.ts';
 import { recoverAudit } from '../src/engine/audit-operation.ts';
-import { pruneHistory, readHistory } from '../src/engine/query/history.ts';
-import { applyPlan, plan, readApplied } from '../src/engine/schema/plan.ts';
+import { prune_history, read_history } from '../src/engine/query/history.ts';
+import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { Writes } from '../src/engine/services.ts';
-import { TestWorkspace, memoryAudit } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, memory_audit } from '../../bolt-cli/src/test/index.ts';
 import type { AuditPort } from '../src/protocol/audit.ts';
 import { layered, type EngineManifest } from '../src/engine/manifest.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const manifest: EngineManifest = {
 	...base,
-	models: { items: { description: 'Item', label: 'title', fields: { title: { kind: 'text' } } } },
+	models: {
+		items: {
+			description: 'Item',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' } }
+		}
+	},
 	relationships: {},
 	exposures: {
 		items: {
-			read: { items: { fields: 'all' } },
+			outputs: { default: { items: { fields: 'all' } } },
 			create: { columns: { items: ['title'] } },
 			update: { columns: { items: ['title'] } }
 		}
@@ -29,11 +35,12 @@ const fixture = (port: AuditPort) =>
 		const context = yield* Layer.build(
 			TestWorkspace.layer({
 				manifest,
-				ports: auditFromAbi(port).pipe(Layer.provide(NodeCrypto.layer))
+				ports: audit_from_abi(port).pipe(Layer.provide(NodeCrypto.layer))
 			})
 		);
 		const t = Context.get(context, TestWorkspace),
 			writes = Context.get(context, Writes);
+		const admin = (yield* t.as(t.admin)).authority;
 		const act = (
 			verb: 'create' | 'update' | 'erase',
 			input: import('../src/decl/values.ts').Json
@@ -47,7 +54,7 @@ const fixture = (port: AuditPort) =>
 				key,
 				issuedAt: now,
 				invocationId: key,
-				authority: t.as(t.admin).authority,
+				authority: admin,
 				mode: { _tag: 'Direct' },
 				bindings: { now, today: now.slice(0, 10), tz: 'UTC' }
 			});
@@ -58,7 +65,7 @@ const fixture = (port: AuditPort) =>
 it.live('durable preparation fails before a governed mutation can write', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const store = memoryAudit();
+			const store = memory_audit();
 			const f = yield* fixture({
 				...store.port,
 				append: async () => {
@@ -79,7 +86,7 @@ it.live('durable preparation fails before a governed mutation can write', () =>
 it.live('governed writes accept an explicitly buffered host audit facility', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const store = memoryAudit();
+			const store = memory_audit();
 			const f = yield* fixture({ ...store.port, mode: 'buffered' });
 			expect(yield* f.act('create', [{ title: 'Buffered receipt' }])).toMatchObject({
 				outcome: { kind: 'committed' }
@@ -96,17 +103,17 @@ it.live(
 	() =>
 		Effect.scoped(
 			Effect.gen(function* () {
-				const store = memoryAudit();
+				const store = memory_audit();
 				let blocked = true;
 				let lookupOffline = false;
-				let recordedAt: string | undefined;
+				let recorded_at: string | undefined;
 				const f = yield* fixture({
 					...store.port,
 					detail: async (id, signal) => {
 						if (lookupOffline) throw new Error('audit lookup offline');
 						const event = await store.port.detail(id, signal);
-						return event !== null && event.status === 'prepared' && recordedAt !== undefined
-							? { ...event, recordedAt }
+						return event !== null && event.status === 'prepared' && recorded_at !== undefined
+							? { ...event, recorded_at }
 							: event;
 					},
 					append: async (events, signal) => {
@@ -132,7 +139,7 @@ it.live(
 				).toBe('Sanitised');
 				const now = f.t.clock.now(),
 					bindings = { now, today: now.slice(0, 10), tz: 'UTC' };
-				const prior = yield* readHistory(
+				const prior = yield* read_history(
 					f.t.db,
 					manifest,
 					{
@@ -147,7 +154,7 @@ it.live(
 				);
 				expect(JSON.stringify(prior)).not.toContain('Synthetic private title');
 				expect(
-					yield* readHistory(
+					yield* read_history(
 						f.t.db,
 						manifest,
 						{
@@ -160,7 +167,7 @@ it.live(
 						bindings
 					)
 				).toMatchObject({ id: row.id, revision: 2, title: 'Sanitised' });
-				yield* pruneHistory(f.t.db, 1);
+				yield* prune_history(f.t.db, 1);
 				expect(
 					yield* f.t.db.value(Schema.Number, {
 						text: 'SELECT count(*)::int FROM bolt_history WHERE collection=$1 AND record=$2::uuid',
@@ -223,7 +230,7 @@ it.live(
 					})
 				).toBe(1);
 				expect(
-					yield* readHistory(
+					yield* read_history(
 						f.t.db,
 						manifest,
 						{
@@ -259,7 +266,7 @@ it.live(
 				).toBe(1);
 				// Expiry is separate from acknowledgement and requires a healthy host, even after the native deadline.
 				blocked = true;
-				recordedAt = '2000-01-01T00:00:00.123456Z';
+				recorded_at = '2000-01-01T00:00:00.123456Z';
 				const expiring = yield* f.act('create', [{ title: 'Private expiry fixture' }]);
 				if (expiring.outcome.kind !== 'committed')
 					throw new Error('Expected expiring fixture commit');
@@ -271,27 +278,54 @@ it.live(
 					params: ['items', expiringRow.id]
 				});
 				expect(operations).toHaveLength(2);
-				const legacy = operations[0];
-				if (legacy === undefined) throw new Error('Missing legacy receipt fixture');
+				const retained = operations[0];
+				if (retained === undefined) throw new Error('Missing retained receipt fixture');
 				const ids = operations.map((entry) => entry.operation);
 				expect(
-					yield* f.t.db.value(Schema.String, {
-						text: `SELECT to_char(min(expires_at) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') FROM bolt_audit_receipt WHERE operation IN (SELECT jsonb_array_elements_text($1::jsonb))`,
+					yield* f.t.db.rows(Schema.Struct({ expires: Schema.String }), {
+						text: `SELECT to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS expires FROM bolt_audit_receipt WHERE operation IN (SELECT jsonb_array_elements_text($1::jsonb)) ORDER BY operation`,
 						params: [JSON.stringify(ids)]
 					})
-				).toBe('2000-01-31T00:00:00.123456Z');
+				).toEqual([
+					{ expires: '2000-01-31T00:00:00.123456Z' },
+					{ expires: '2000-01-31T00:00:00.123456Z' }
+				]);
+				expect(
+					yield* Effect.flip(
+						f.t.db.write({
+							text: 'UPDATE bolt_audit_receipt SET expires_at=NULL WHERE operation=$1',
+							params: [retained.operation]
+						})
+					)
+				).toMatchObject({ sqlstate: '23502' });
+				expect(
+					yield* Effect.flip(
+						f.t.db.write({
+							text: "UPDATE bolt_audit_receipt SET expires_at='infinity'::timestamptz WHERE operation=$1",
+							params: [retained.operation]
+						})
+					)
+				).toMatchObject({ sqlstate: '23514' });
+				expect(
+					yield* Effect.flip(
+						f.t.db.write({
+							text: "UPDATE bolt_audit_receipt SET expired_at='infinity'::timestamptz WHERE operation=$1",
+							params: [retained.operation]
+						})
+					)
+				).toMatchObject({ sqlstate: '23514' });
 				yield* f.t.db.write({
-					text: 'UPDATE bolt_audit_receipt SET expires_at=NULL WHERE operation=$1',
-					params: [legacy.operation]
+					text: "UPDATE bolt_audit_receipt SET expires_at=clock_timestamp()+interval '1 day' WHERE operation=$1",
+					params: [retained.operation]
 				});
-				const grace = () =>
+				const deadline = () =>
 					f.t.db.value(Schema.String, {
-						text: 'SELECT expires_at::text FROM bolt_audit_retention WHERE one',
-						params: []
+						text: 'SELECT expires_at::text FROM bolt_audit_receipt WHERE operation=$1',
+						params: [retained.operation]
 					});
-				const epoch = yield* grace();
-				yield* applyPlan(f.t.db, yield* plan(yield* readApplied(f.t.db), layered(manifest)));
-				expect(yield* grace()).toBe(epoch);
+				const expires = yield* deadline();
+				yield* TestDb.migrate(f.t.db, layered(manifest));
+				expect(yield* deadline()).toBe(expires);
 				lookupOffline = true;
 				for (const operation of ids) store.records.delete(`${operation}:prepared`);
 				const expiredEvents = [...store.records.values()];
@@ -306,13 +340,25 @@ it.live(
 				expect(yield* recover).toBe(true);
 				expect(
 					yield* f.t.db.value(Schema.Number, {
+						text: 'SELECT count(*)::int FROM bolt_audit_receipt WHERE operation IN (SELECT jsonb_array_elements_text($1::jsonb)) AND expired_at IS NOT NULL',
+						params: [JSON.stringify(ids)]
+					})
+				).toBe(1);
+				expect(
+					yield* f.t.db.value(Schema.Boolean, {
+						text: 'SELECT expired_at IS NULL FROM bolt_audit_receipt WHERE operation=$1',
+						params: [retained.operation]
+					})
+				).toBe(true);
+				expect(
+					yield* f.t.db.value(Schema.Number, {
 						text: 'SELECT count(*)::int FROM bolt_audit_erase',
 						params: []
 					})
 				).toBe(1);
 				yield* f.t.db.write({
-					text: "UPDATE bolt_audit_retention SET expires_at=clock_timestamp()-interval '1 second' WHERE one",
-					params: []
+					text: "UPDATE bolt_audit_receipt SET expires_at=clock_timestamp()-interval '1 second' WHERE operation=$1",
+					params: [retained.operation]
 				});
 				expect(yield* recover).toBe(false);
 				expect([...store.records.values()]).toEqual(expiredEvents);
@@ -347,7 +393,7 @@ it.live(
 it.live('committed writes recover complete external payloads after terminal append failure', () =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const store = memoryAudit();
+			const store = memory_audit();
 			let blocked = true;
 			const f = yield* fixture({
 				...store.port,
@@ -382,7 +428,7 @@ it.live('committed writes recover complete external payloads after terminal appe
 			if (full === undefined) throw new Error('Missing recovered row event');
 			if (f.t.admin.actor.kind !== 'member') throw new Error('Expected member actor');
 			expect(full.actor.id).toBe(f.t.admin.actor.id);
-			expect(full.payloadBytes).toBeGreaterThan(16 * 1024);
+			expect(full.payload_bytes).toBeGreaterThan(16 * 1024);
 			expect(JSON.stringify(full.payload)).toContain(original);
 			yield* recover;
 			expect([...store.records.values()]).toEqual(before);
@@ -412,7 +458,7 @@ it.live('committed writes recover complete external payloads after terminal appe
 it.live("a bulk write's request rides on its terminal event, not on each row event", () =>
 	Effect.scoped(
 		Effect.gen(function* () {
-			const store = memoryAudit();
+			const store = memory_audit();
 			const f = yield* fixture(store.port);
 			const has = (payload: unknown) =>
 				typeof payload === 'object' && payload !== null && 'request' in payload;

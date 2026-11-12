@@ -1,9 +1,9 @@
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 // Telegram: the Bot API update codec, pairing (getMe + setWebhook on this instance's URL, again on each open), the
 // secret-token refusal, inbound with media, and the sendMessage shape.
 import { describe, expect, it } from '@effect/vitest';
 import { telegram, telegramUpdate } from '../src/telegram/index.ts';
-import { fakeFetch, file, HOOK, host, json, signal } from './kit.ts';
+import { required, fakeFetch, file, HOOK, host, json, signal } from './kit.ts';
 
 const bot = { id: 42, username: 'DeskBot' };
 const tg = (message: object, edited = false) => ({
@@ -18,7 +18,7 @@ const tg = (message: object, edited = false) => ({
 
 describe('Telegram updates', () => {
 	it('a DM is direct; the chat is part of the provider id', () => {
-		const got = telegramUpdate(tg({ chat: { id: 5, type: 'private' }, text: 'hello' }), bot)!;
+		const got = required(telegramUpdate(tg({ chat: { id: 5, type: 'private' }, text: 'hello' }), bot));
 		expect(got.message).toMatchObject({
 			id: '5:7',
 			thread: '5',
@@ -29,58 +29,58 @@ describe('Telegram updates', () => {
 		});
 	});
 	it('a group names itself by its chat title, and the name reaches the decoded message', () => {
-		const got = telegramUpdate(
+		const got = required(telegramUpdate(
 			tg({ chat: { id: -9, type: 'supergroup', title: 'Site crew' }, text: 'hi' }),
 			bot
-		)!;
+		));
 		expect(got.message).toMatchObject({ group: true, title: 'Site crew' });
 		expect(
-			telegramUpdate(tg({ chat: { id: 5, type: 'private' }, text: 'hi' }), bot)!.message
+			required(telegramUpdate(tg({ chat: { id: 5, type: 'private' }, text: 'hi' }), bot)).message
 		).not.toHaveProperty('title');
 	});
 	it('in a group: an @mention, a bot command for us, a reply to our message address the bot; anything else is ambient', () => {
 		const group = { chat: { id: -9, type: 'supergroup' } };
 		expect(
-			telegramUpdate(
+			required(telegramUpdate(
 				tg({
 					...group,
 					text: 'hey @deskbot status?',
 					entities: [{ type: 'mention', offset: 4, length: 8 }]
 				}),
 				bot
-			)!.message['invocation']
+			)).message['invocation']
 		).toBe('mention');
 		expect(
-			telegramUpdate(
+			required(telegramUpdate(
 				tg({
 					...group,
 					text: '/status@DeskBot',
 					entities: [{ type: 'bot_command', offset: 0, length: 15 }]
 				}),
 				bot
-			)!.message['invocation']
+			)).message['invocation']
 		).toBe('mention');
 		expect(
-			telegramUpdate(
+			required(telegramUpdate(
 				tg({ ...group, text: 'yes', reply_to_message: { message_id: 3, from: { id: 42 } } }),
 				bot
-			)!.message['invocation']
+			)).message['invocation']
 		).toBe('reply');
 		expect(
-			telegramUpdate(
+			required(telegramUpdate(
 				tg({ ...group, text: 'yes', reply_to_message: { message_id: 3, from: { id: 8 } } }),
 				bot
-			)!.message['invocation']
+			)).message['invocation']
 		).toBe('ambient');
 		expect(
-			telegramUpdate(
+			required(telegramUpdate(
 				tg({ ...group, text: 'hey @other', entities: [{ type: 'mention', offset: 4, length: 6 }] }),
 				bot
-			)!.message['invocation']
+			)).message['invocation']
 		).toBe('ambient');
 	});
 	it('an edit carries its edit time as the version; a topic is its own conversation; media is named for the adapter to fetch', () => {
-		const got = telegramUpdate(
+		const got = required(telegramUpdate(
 			tg(
 				{
 					chat: { id: -9, type: 'supergroup' },
@@ -93,7 +93,7 @@ describe('Telegram updates', () => {
 				true
 			),
 			bot
-		)!;
+		));
 		expect(got.message).toMatchObject({
 			thread: '-9:thread:3',
 			text: 'site photo',
@@ -106,7 +106,7 @@ describe('Telegram updates', () => {
 
 describe('Telegram kinds', () => {
 	const of = (message: object) =>
-		telegramUpdate(tg({ chat: { id: 5, type: 'private' }, ...message }), bot)!;
+		required(telegramUpdate(tg({ chat: { id: 5, type: 'private' }, ...message }), bot));
 	it('every file a bot receives is named for the link to fetch, with what it says of itself', () => {
 		expect(of({ voice: { file_id: 'v', duration: 2, file_size: 900 } }).media).toEqual({
 			fileId: 'v',
@@ -201,16 +201,16 @@ describe('the Telegram link', () => {
 				const f = bot(),
 					h = yield* host(telegram(), f);
 				expect(h.status).toBeUndefined();
-				expect((yield* Effect.flip(h.link.pair!({ token: 'nope' }))).message).toMatch(
+				expect((yield* Effect.flip(required(h.link.pair)({ token: 'nope' }))).message).toMatch(
 					/bot token does not look right/
 				);
 				expect(f.calls).toEqual([]);
-				yield* h.link.pair!({ token: '123:abc' });
+				yield* required(h.link.pair)({ token: '123:abc' });
 				expect(api(f.calls)).toEqual([
 					'https://api.telegram.org/bot…/getMe',
 					'https://api.telegram.org/bot…/setWebhook'
 				]);
-				expect(JSON.parse(f.calls[1]!.body)).toMatchObject({
+				expect(JSON.parse(required(f.calls[1]).body)).toMatchObject({
 					url: HOOK,
 					allowed_updates: ['message', 'edited_message']
 				});
@@ -226,7 +226,7 @@ describe('the Telegram link', () => {
 		Effect.gen(function* () {
 			const f = fakeFetch([() => json({ ok: false, description: 'Unauthorized' }, 401)]),
 				h = yield* host(telegram(), f);
-			expect((yield* Effect.flip(h.link.pair!({ token: '123:abc' }))).message).toMatch(
+			expect((yield* Effect.flip(required(h.link.pair)({ token: '123:abc' }))).message).toMatch(
 				/Telegram getMe: Unauthorized/
 			);
 			expect(h.writes).toEqual([]);
@@ -240,7 +240,7 @@ describe('the Telegram link', () => {
 				'https://api.telegram.org/bot…/getMe',
 				'https://api.telegram.org/bot…/setWebhook'
 			]);
-			expect(JSON.parse(f.calls[1]!.body)).toMatchObject({ url: HOOK });
+			expect(JSON.parse(required(f.calls[1]).body)).toMatchObject({ url: HOOK });
 			expect(h.status).toMatchObject({ state: 'connected', account: '@DeskBot' });
 		})
 	);
@@ -250,7 +250,7 @@ describe('the Telegram link', () => {
 			Effect.gen(function* () {
 				const f = bot(),
 					h = yield* host(telegram(), f, { credential: { token: '123:abc' } });
-				const secret = JSON.parse(f.calls[1]!.body).secret_token as string;
+				const secret = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ secret_token: Schema.String })))(required(f.calls[1]).body).secret_token;
 				const update = {
 					update_id: 1,
 					message: {
@@ -268,9 +268,9 @@ describe('the Telegram link', () => {
 						headers: { 'x-telegram-bot-api-secret-token': s },
 						body: JSON.stringify(update)
 					});
-				expect((yield* h.link.webhook!(post('wrong'))).status).toBe(401);
+				expect((yield* required(h.link.webhook)(post('wrong'))).status).toBe(401);
 				expect(h.events).toEqual([]);
-				expect((yield* h.link.webhook!(post(secret))).status).toBe(200);
+				expect((yield* required(h.link.webhook)(post(secret))).status).toBe(200);
 				expect(h.events).toMatchObject([
 					{
 						kind: 'messages',
@@ -296,8 +296,8 @@ describe('the Telegram link', () => {
 						: undefined
 			]);
 			const h = yield* host(telegram(), f, { credential: { token: '123:abc' } });
-			const secret = JSON.parse(f.calls[1]!.body).secret_token as string;
-			yield* h.link.webhook!(
+			const secret = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ secret_token: Schema.String })))(required(f.calls[1]).body).secret_token;
+			yield* required(h.link.webhook)(
 				new Request('https://internal/hook', {
 					method: 'POST',
 					headers: { 'x-telegram-bot-api-secret-token': secret },
@@ -332,7 +332,7 @@ describe('the Telegram link', () => {
 						}
 					}
 				);
-			const secret = JSON.parse(f.calls[1]!.body).secret_token as string;
+			const secret = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ secret_token: Schema.String })))(required(f.calls[1]).body).secret_token;
 			const update = {
 				update_id: 1,
 				message: {
@@ -345,7 +345,7 @@ describe('the Telegram link', () => {
 			};
 			expect(
 				(yield* Effect.flip(
-					h.link.webhook!(
+					required(h.link.webhook)(
 						new Request('https://internal/hook', {
 							method: 'POST',
 							headers: { 'x-telegram-bot-api-secret-token': secret },
@@ -360,10 +360,10 @@ describe('the Telegram link', () => {
 		Effect.gen(function* () {
 			const f = bot(),
 				h = yield* host(telegram(), f, { credential: { token: '123:abc' } });
-			expect(yield* h.link.send!({ to: '-9:thread:3', text: 'hi' }, undefined)).toEqual({
-				providerId: '-9:9'
+			expect(yield* required(h.link.send)({ to: '-9:thread:3', text: 'hi' }, undefined)).toEqual({
+				provider_id: '-9:9'
 			});
-			expect(JSON.parse(f.calls.at(-1)!.body)).toEqual({
+			expect(JSON.parse(required(f.calls.at(-1)).body)).toEqual({
 				chat_id: '-9',
 				text: 'hi',
 				message_thread_id: 3
@@ -377,16 +377,17 @@ describe('the Telegram link', () => {
 				const f = bot(),
 					h = yield* host(telegram(), f, { credential: { token: '123:abc' } });
 				expect(
-					yield* h.link.send!({ to: '-9:thread:3', text: 'hi' }, [
+					yield* required(h.link.send)({ to: '-9:thread:3', text: 'hi' }, [
 						file('report.pdf', 'application/pdf', '%PDF r')
 					])
-				).toEqual({ providerId: '-9:9' });
+				).toEqual({ provider_id: '-9:9' });
 				expect(api(f.calls).slice(-2)).toEqual([
 					'https://api.telegram.org/bot…/sendMessage',
 					'https://api.telegram.org/bot…/sendDocument'
 				]);
-				const form = f.calls.at(-1)!.form!,
-					doc = form.get('document') as File;
+				const form = required(required(f.calls.at(-1)).form),
+					doc = form.get('document');
+				if (!(doc instanceof File)) throw new Error('The multipart document is missing.');
 				expect([
 					form.get('chat_id'),
 					form.get('message_thread_id'),

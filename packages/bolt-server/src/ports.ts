@@ -5,21 +5,25 @@ import {
 	Files,
 	Geo,
 	Port,
-	decisionsSystem1,
-	openAiChat,
-	structuredSystem1,
+	decisions_system_1,
+	open_ai_chat,
+	structured_system_1,
 	type AiResponse
 } from '@norbital-ai/bolt/engine';
 import { off, type Facilities } from '@norbital-ai/bolt/facilities';
-import { downloadMedia, type DownloadOptions } from '@norbital-ai/bolt/node';
-import { openAiEmbeddings, openRouterChat } from '@norbital-ai/providers/openrouter';
+import { download_media } from '@norbital-ai/bolt/node';
+import { open_ai_embeddings, open_router_chat } from '@norbital-ai/providers/openrouter';
 import type { HostSettings } from './host.ts';
 
 /** S3-compatible SigV4, with a provider-requested signed URL expiry. */
-export const s3Files = Effect.fn('server.s3Files')(function* (
+export const s3Files: (
 	endpoint: string,
 	credential: string,
-	downloads: DownloadOptions = {}
+	downloads?: NonNullable<Parameters<typeof download_media>[2]>
+) => Effect.Effect<Files['Service'], never, HttpClient.HttpClient> = Effect.fn('server.s3Files')(function* (
+	endpoint: string,
+	credential: string,
+	downloads: NonNullable<Parameters<typeof download_media>[2]> = {}
 ) {
 	const client = yield* HttpClient.HttpClient;
 	const base = new URL(endpoint);
@@ -164,7 +168,7 @@ export const s3Files = Effect.fn('server.s3Files')(function* (
 		remove: (key) => call('DELETE', key).pipe(Effect.asVoid),
 		// a multipart upload, a part at a time: a download never holds the whole file
 		download: (url) =>
-			downloadMedia(
+			download_media(
 				url,
 				{
 					begin: (mime) =>
@@ -237,6 +241,8 @@ type Run = <A, E>(
 	effect: Effect.Effect<A, E, HttpClient.HttpClient>,
 	options?: { readonly signal?: AbortSignal | undefined }
 ) => Promise<A>;
+/** What `openAi` provides of the intelligence group. */
+export type OpenAiMembers = Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'>;
 /** The intelligence group over OpenAI-compatible endpoints: `sys_1`, `sys_2` and, when mapped, `embed`. */
 export const openAi = Effect.fn('server.openAi')(function* (
 	endpoints: { sys1: Endpoint & { provider?: string }; sys2: Endpoint; embed?: Endpoint },
@@ -249,34 +255,34 @@ export const openAi = Effect.fn('server.openAi')(function* (
 	const client = yield* HttpClient.HttpClient;
 	const system1 =
 		endpoints.sys1.provider === 'decisions' || endpoints.sys1.provider === 'openai-decisions'
-			? decisionsSystem1(
+			? decisions_system_1(
 					{
 						url: endpoints.sys1.endpoint,
 						...(endpoints.sys1.provider === 'openai-decisions'
 							? { format: 'openai' as const }
 							: {}),
 						model: config.sys1 ?? '',
-						apiKey: endpoints.sys1.credential ?? ''
+						api_key: endpoints.sys1.credential ?? ''
 					},
-					{ httpClient: client }
+					{ http_client: client }
 				)
-			: structuredSystem1(
-					openAiChat(
+			: structured_system_1(
+					open_ai_chat(
 						{ ...endpoints.sys1, models: { sys_1: config.sys1 ?? '' } },
-						{ httpClient: client }
+						{ http_client: client }
 					),
 					'sys_1'
 				);
-	const chat = openRouterChat({ ...endpoints.sys2, models: config.sys2 }, { httpClient: client });
+	const chat = open_router_chat({ ...endpoints.sys2, models: config.sys2 }, { http_client: client });
 	const mapped = declared.filter((name) => config.sys2[name] !== undefined);
 	const embed = endpoints.embed;
 	const embeddings =
 		embed === undefined
 			? undefined
-			: openAiEmbeddings({
+			: open_ai_embeddings({
 					files,
-					baseUrl: embed.endpoint,
-					...(embed.credential === undefined ? {} : { apiKey: embed.credential }),
+					base_url: embed.endpoint,
+					...(embed.credential === undefined ? {} : { api_key: embed.credential }),
 					model: (name) => {
 						const model =
 							config.embed[name] ??
@@ -288,10 +294,10 @@ export const openAi = Effect.fn('server.openAi')(function* (
 								: { id: model.model, batch: model.inputs ?? 1 };
 					}
 				});
-	const members: Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'> = {
+	const members: OpenAiMembers = {
 		system1: {
 			ask: (request, signal) => run(system1.ask(request), { signal }),
-			...(system1.maxChoices === undefined ? {} : { maxChoices: system1.maxChoices })
+			...(system1.maxChoices === undefined ? {} : { max_choices: system1.maxChoices })
 		},
 		system2: {
 			models: mapped,
@@ -335,7 +341,9 @@ const Hit = Schema.Struct({
 	name: Schema.optionalKey(Schema.String),
 	display_name: Schema.String
 });
-export const nominatim = Effect.fn('server.nominatim')(function* (
+export const nominatim: (
+	endpoint: string
+) => Effect.Effect<Geo['Service'], never, HttpClient.HttpClient> = Effect.fn('server.nominatim')(function* (
 	endpoint: string
 ): Effect.fn.Return<Geo['Service'], never, HttpClient.HttpClient> {
 	const client = yield* HttpClient.HttpClient;

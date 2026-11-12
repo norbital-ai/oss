@@ -28,7 +28,7 @@
 		status,
 		error,
 		pair,
-		importStart,
+		import_start,
 		unpair,
 		test,
 		busy,
@@ -67,7 +67,7 @@
 	{#await chunk}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:then module}
-		{#if module.configurationTab !== undefined}
+		{#if module.configuration_tab !== undefined}
 			{@render standard()}
 		{:else}
 			<module.default
@@ -75,7 +75,7 @@
 				{status}
 				{error}
 				{pair}
-				{importStart}
+				{import_start}
 				{unpair}
 				{test}
 				{busy}
@@ -147,7 +147,7 @@
 				{error}
 				{unpair}
 				{test}
-				{importStart}
+				{import_start}
 				reconnect={() => (again = true)}
 				{t}
 				{locale}

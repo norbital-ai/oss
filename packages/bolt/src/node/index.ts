@@ -1,80 +1,35 @@
-// `@norbital-ai/bolt/node`: the Node side of a Bolt host — the same-graph hosts' ports, their cron clock, and what a
-// kernel's own cells and isolates reuse.
+// `@norbital-ai/bolt/node`: the Node side of a Bolt host — an untethered server's `serve` and `default_facilities`, and
+// what a kernel's own cells and isolates reuse.
 // Node-only; nothing here enters the cell bundle.
 // a kernel's own cells speak the membrane; every guest runner serves the prelude's hooks
 export { Answer, CELL_ABI_VERSION, membrane, type Message } from '../protocol/membrane.ts';
 export {
-	assetHook,
+	asset_hook,
 	digest,
-	moduleScript,
-	randomStream,
+	module_script,
+	random_stream,
 	type GuestHooks,
 	type ImportDeclaration
 } from './guest-hooks.ts';
-export { nodePorts, type NodePorts, type NodePortsOptions } from './ports.ts';
-export { cronClock } from './cron-clock.ts';
+export { default_facilities, serve } from './host.ts';
+export { bundler } from './bundler/index.ts';
+export { artifact_port } from './artifact.ts';
+export { images_port } from './images.ts';
+export { keys_port } from './keys.ts';
+export { mcp_port } from './mcp.ts';
+export { download_media, store_media } from './download.ts';
+export { tenant_db_port } from './db/port.ts';
+export { PgliteDb, Pristine } from './db/pglite.ts';
+export { module_hash } from './module-hash.ts';
+export { PostgresDb } from './db/postgres.ts';
 export {
-	call,
-	HOST_FILE,
-	hostFileOf,
-	loadHost,
-	serveRelease,
-	type Generation,
-	type ServeOptions
-} from './host.ts';
-export {
-	bundler,
-	BUNDLER,
-	type BundlerCounts,
-	type BundlerOptions,
-	type NodeBundler
-} from './bundler/index.ts';
-export { artifactPort } from './artifact.ts';
-export { docsPort } from './docs.ts';
-export { imagesPort } from './images.ts';
-export { keysPort } from './keys.ts';
-export { mcpPort } from './mcp.ts';
-export { localFiles } from './files.ts';
-export { localAudit, purgePostgresAuditPartition } from './audit.ts';
-export { auditLogSpec } from './audit-schema.ts';
-export {
-	applyAuditMigrations,
-	auditMigrationProof,
-	readAuditMigrations,
-	type AuditMigrations
-} from './audit-migrations.ts';
-export { downloadMedia, storeMedia, type DownloadOptions, type DownloadSink } from './download.ts';
-export { tenantDbPort } from './db/port.ts';
-export { PgliteDb, Pristine, type PgliteClient, type PgliteSource } from './db/pglite.ts';
-export { moduleHash } from './module-hash.ts';
-export { PostgresDb, type PgClient, type PgPool } from './db/postgres.ts';
-export {
-	connectPublic,
-	httpPort,
-	isPublicWebAddress,
-	makeRequestPage,
-	pinnedLookup,
-	publicAddresses,
-	publicDestination,
-	publicFetch,
-	WEB_PAGE_BYTE_LIMIT,
-	type Address,
-	type PageWrite,
-	type Resolve
+	connect_public,
+	http_port,
+	pinned_lookup,
+	public_addresses,
+	public_destination,
+	public_fetch,
+	read_public_page
 } from './net.ts';
-export { loopbackTcpPort, tcpPort } from './tcp.ts';
-
-export {
-	checkWorkspace,
-	filesystem,
-	holder,
-	offsetIn,
-	PROBE,
-	refresh,
-	rootOf,
-	TypeCheckError,
-	view,
-	type Held,
-	type LangDiagnostic,
-	type LangPosition
-} from '../typing/workspace.ts';
+export { tcp_port } from './tcp.ts';
+export { type_service } from '../typing/workspace.ts';

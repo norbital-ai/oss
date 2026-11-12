@@ -19,9 +19,7 @@ const blocks = (data: Uint8Array, block: (bytes: Uint8Array, offset: number) => 
 	view.setUint32(tail.length - 4, (n * 8) >>> 0);
 	for (let i = 0; i < tail.length; i += 64) block(tail, i);
 };
-const word = (b: Uint8Array, i: number) =>
-	(b[i]! << 24) | (b[i + 1]! << 16) | (b[i + 2]! << 8) | b[i + 3]!;
-const bigEndian = (h: Uint32Array): Uint8Array => {
+const bigEndian = (h: readonly number[]): Uint8Array => {
 	const out = new Uint8Array(h.length * 4),
 		view = new DataView(out.buffer);
 	h.forEach((v, i) => view.setUint32(i * 4, v));
@@ -30,16 +28,14 @@ const bigEndian = (h: Uint32Array): Uint8Array => {
 const rotl = (x: number, n: number) => (x << n) | (x >>> (32 - n));
 
 export const sha1 = (data: Uint8Array | string): Uint8Array => {
-	const h = new Uint32Array([0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0]),
-		w = new Uint32Array(80);
+	const h: [number, number, number, number, number] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
+	const w = new DataView(new ArrayBuffer(80 * 4));
 	blocks(bytesOf(data), (b, o) => {
-		for (let t = 0; t < 16; t++) w[t] = word(b, o + t * 4);
-		for (let t = 16; t < 80; t++) w[t] = rotl(w[t - 3]! ^ w[t - 8]! ^ w[t - 14]! ^ w[t - 16]!, 1);
-		let a = h[0]!,
-			bb = h[1]!,
-			c = h[2]!,
-			d = h[3]!,
-			e = h[4]!;
+		const input = new DataView(b.buffer, b.byteOffset, b.byteLength);
+		for (let t = 0; t < 16; t++) w.setUint32(t * 4, input.getUint32(o + t * 4));
+		for (let t = 16; t < 80; t++) w.setUint32(t * 4, rotl(
+			w.getUint32((t - 3) * 4) ^ w.getUint32((t - 8) * 4) ^ w.getUint32((t - 14) * 4) ^ w.getUint32((t - 16) * 4), 1));
+		let [a, bb, c, d, e] = h;
 		for (let t = 0; t < 80; t++) {
 			const f =
 				t < 20
@@ -49,18 +45,18 @@ export const sha1 = (data: Uint8Array | string): Uint8Array => {
 						: t < 60
 							? ((bb & c) | (bb & d) | (c & d)) + 0x8f1bbcdc
 							: (bb ^ c ^ d) + 0xca62c1d6;
-			const next = (rotl(a, 5) + f + e + w[t]!) | 0;
+			const next = (rotl(a, 5) + f + e + w.getUint32(t * 4)) | 0;
 			e = d;
 			d = c;
 			c = rotl(bb, 30);
 			bb = a;
 			a = next;
 		}
-		h[0] = h[0]! + a;
-		h[1] = h[1]! + bb;
-		h[2] = h[2]! + c;
-		h[3] = h[3]! + d;
-		h[4] = h[4]! + e;
+		h[0] = (h[0] + a) >>> 0;
+		h[1] = (h[1] + bb) >>> 0;
+		h[2] = (h[2] + c) >>> 0;
+		h[3] = (h[3] + d) >>> 0;
+		h[4] = (h[4] + e) >>> 0;
 	});
 	return bigEndian(h);
 };
@@ -73,9 +69,9 @@ export const hmacSha256 = (key: Uint8Array | string, data: Uint8Array | string):
 	const message = bytesOf(data),
 		inner = new Uint8Array(64 + message.length),
 		outer = new Uint8Array(64 + 32);
-	for (let i = 0; i < 64; i++) {
-		inner[i] = pad[i]! ^ 0x36;
-		outer[i] = pad[i]! ^ 0x5c;
+	for (const [i, value] of pad.entries()) {
+		inner[i] = value ^ 0x36;
+		outer[i] = value ^ 0x5c;
 	}
 	inner.set(message, 64);
 	outer.set(sha256(inner), 64);
@@ -86,7 +82,8 @@ export const hmacSha256 = (key: Uint8Array | string, data: Uint8Array | string):
 export const timingSafeEqual = (a: Uint8Array, b: Uint8Array): boolean => {
 	if (a.length !== b.length) return false;
 	let diff = 0;
-	for (let i = 0; i < a.length; i++) diff |= a[i]! ^ b[i]!;
+	const other = new DataView(b.buffer, b.byteOffset, b.byteLength);
+	for (const [i, value] of a.entries()) diff |= value ^ other.getUint8(i);
 	return diff === 0;
 };
 
@@ -97,14 +94,15 @@ const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/',
 	B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const encode = (bytes: Uint8Array, alphabet: string, padded: boolean): string => {
 	const parts: string[] = [];
+	const input = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	for (let i = 0; i < bytes.length; i += 3) {
-		const n = (bytes[i]! << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0),
+		const n = (input.getUint8(i) << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0),
 			left = bytes.length - i;
 		parts.push(
-			alphabet[n >> 18]! +
-				alphabet[(n >> 12) & 63]! +
-				(left > 1 ? alphabet[(n >> 6) & 63]! : padded ? '=' : '') +
-				(left > 2 ? alphabet[n & 63]! : padded ? '=' : '')
+			alphabet.charAt(n >> 18) +
+				alphabet.charAt((n >> 12) & 63) +
+				(left > 1 ? alphabet.charAt((n >> 6) & 63) : padded ? '=' : '') +
+				(left > 2 ? alphabet.charAt(n & 63) : padded ? '=' : '')
 		);
 	}
 	return parts.join('');
@@ -122,7 +120,7 @@ export const fromBase64 = (text: string): Uint8Array => {
 	for (let i = 0; i < text.length; i++) {
 		const code = text.charCodeAt(i);
 		if (code === 61) break;
-		const v = code < 128 ? SEXTET[code]! : -1;
+		const v = SEXTET[code] ?? -1;
 		if (v < 0) continue;
 		acc = (acc << 6) | v;
 		bits += 6;

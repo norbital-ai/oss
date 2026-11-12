@@ -1,15 +1,19 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Decimal } from '@norbital-ai/std/decimal';
-import { fromWhere, toWhere, matches, taggedArg, type Node } from '../src/filter/filter.ts';
+import { fromWhere, toWhere } from '../src/filter/where.ts';
+import { matches } from '../src/filter/local.ts';
+import { taggedArg, type Node } from '../src/filter/node.ts';
 import type { ModelExposure } from '../src/kinds/context.ts';
 import type { Json } from '@norbital-ai/std/wire';
 const catalog: Record<string, ModelExposure> = {
 	accounts: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: { name: { kind: 'text' }, active: { kind: 'bool' } },
 		many: ['orders']
 	},
 	orders: {
+		record_label: 'record.placed_on',
 		label: ['placed_on'],
 		fields: { placed_on: { kind: 'date' }, status: { kind: 'text' }, amount: { kind: 'number' } },
 		relations: { account_id: { targets: ['accounts'], inverse: 'orders' } }

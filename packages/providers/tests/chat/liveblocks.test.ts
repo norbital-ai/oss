@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider, type ChatHost } from '../../src/chat/adapter.ts';
 import { liveblocks } from '../../src/chat/liveblocks/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const key = Buffer.alloc(24, 9);
@@ -77,13 +77,13 @@ const headers = (body: string, signing: Buffer = key) => {
 const delivery = (body: string) => webhook(body, headers(body));
 const history = (name: string, since: string) =>
 	Effect.promise(async () =>
-		(
+		required((
 			await liveblocks.connect(settings, {
 				fetch,
-				webhookUrl: 'https://hook.test/',
+				webhook_url: 'https://hook.test/',
 				receive: async () => {}
 			} satisfies ChatHost)
-		).history!(name, since)
+		).history)(name, since)
 	);
 
 describe('Liveblocks', () => {
@@ -92,14 +92,14 @@ describe('Liveblocks', () => {
 			yield* platformApi(answer());
 			const h = yield* connected(liveblocks, settings);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'norbius' });
-			expect((yield* h.link.webhook!(delivery(created()))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(created()))).status).toBe(200);
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
 				messages: [
 					{
 						id: 'cm_1',
 						thread: 'team:room:th_1',
-						sentAt: '2026-11-01T10:00:00.000Z',
+						sent_at: '2026-11-01T10:00:00.000Z',
 						from: { handle: 'ada' },
 						text: 'hello',
 						group: true,
@@ -115,7 +115,7 @@ describe('Liveblocks', () => {
 			const h = yield* connected(liveblocks, settings),
 				body = created();
 			const forged = webhook(body, headers(body, Buffer.alloc(24, 1)));
-			expect((yield* h.link.webhook!(forged)).status).toBe(401);
+			expect((yield* required(h.link.webhook)(forged)).status).toBe(401);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -125,7 +125,7 @@ describe('Liveblocks', () => {
 			const h = yield* connected(liveblocks, settings, {
 				emit: () => Promise.reject(new Error('the store refused'))
 			});
-			expect((yield* h.link.webhook!(delivery(created()))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(delivery(created()))).status).toBe(500);
 		})
 	);
 	it.live('reads an edit, a delete, a mention, a link and a file', () =>
@@ -144,9 +144,9 @@ describe('Liveblocks', () => {
 			yield* platformApi(answer(edited));
 			const h = yield* connected(liveblocks, settings);
 			const edit = created('commentEdited', { editedAt: '2026-11-01T11:00:00.000Z' });
-			yield* h.link.webhook!(delivery(edit));
+			yield* required(h.link.webhook)(delivery(edit));
 			const gone = created('commentDeleted', { deletedAt: '2026-11-01T12:00:00.000Z' });
-			yield* h.link.webhook!(delivery(gone));
+			yield* required(h.link.webhook)(delivery(gone));
 			expect(h.events[0]).toMatchObject({
 				messages: [
 					{
@@ -169,9 +169,9 @@ describe('Liveblocks', () => {
 			let found: object | null = comment({ userId: 'norbius' });
 			yield* platformApi((call) => answer(found)(call));
 			const h = yield* connected(liveblocks, settings);
-			yield* h.link.webhook!(delivery(created()));
+			yield* required(h.link.webhook)(delivery(created()));
 			found = null;
-			expect((yield* h.link.webhook!(delivery(created()))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(created()))).status).toBe(200);
 			const resolved = JSON.stringify({
 				type: 'threadMarkedAsResolved',
 				data: {
@@ -182,7 +182,7 @@ describe('Liveblocks', () => {
 					updatedBy: 'ada'
 				}
 			});
-			expect((yield* h.link.webhook!(delivery(resolved))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(delivery(resolved))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -190,8 +190,8 @@ describe('Liveblocks', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer());
 			const h = yield* connected(liveblocks, settings);
-			const sent = yield* h.link.send!({ to: 'team:room:th_1', text: 'Done' }, []);
-			expect(sent).toMatchObject({ providerId: 'cm_9' });
+			const sent = yield* required(h.link.send)({ to: 'team:room:th_1', text: 'Done' }, []);
+			expect(sent).toMatchObject({ provider_id: 'cm_9' });
 			const call = api.calls.at(-1);
 			expect(decodeURIComponent(call?.url ?? '')).toBe(
 				'https://api.liveblocks.io/v2/rooms/team:room/threads/th_1/comments'
@@ -211,7 +211,7 @@ describe('Liveblocks', () => {
 					: json({ message: 'Forbidden' }, 403)
 			);
 			const h = yield* connected(liveblocks, settings);
-			const lost = yield* Effect.flip(h.link.send!({ to: 'team:room:th_1', text: 'x' }, []));
+			const lost = yield* Effect.flip(required(h.link.send)({ to: 'team:room:th_1', text: 'x' }, []));
 			expect(lost).toMatchObject({ _tag: 'ProviderRefused', permanent: true });
 		})
 	);
@@ -219,8 +219,8 @@ describe('Liveblocks', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'Unauthorized' }, 401));
 			const h = yield* host(chatProvider(liveblocks), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
-			yield* Effect.flip(h.link.pair!({ ...settings, webhookSecret: 'plain' }));
+			yield* Effect.flip(required(h.link.pair)(settings));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, webhookSecret: 'plain' }));
 			expect(h.values.size).toBe(0);
 		})
 	);

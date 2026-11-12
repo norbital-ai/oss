@@ -1,13 +1,13 @@
 import type { AppendOnlyLogSpec } from '@norbital-ai/store';
 import {
-	AuditEvent,
 	AUDIT_ACTOR_KINDS,
 	AUDIT_CATEGORIES,
 	AUDIT_STATUSES
 } from '../protocol/audit.ts';
+import { StoredAuditEvent } from './audit-storage.ts';
 
 /** Bolt supplies its envelope; Store owns the native log programs and storage policy. */
-export const auditLogSpec = (scoped: boolean): AppendOnlyLogSpec => ({
+export const audit_log_spec = (scoped: boolean): AppendOnlyLogSpec => ({
 	format: 1,
 	namespace: 'bolt_audit',
 	scope: scoped ? ['platform', 'tenant', 'environment'] : [],
@@ -17,7 +17,7 @@ export const auditLogSpec = (scoped: boolean): AppendOnlyLogSpec => ({
 		id: ['id'],
 		at: ['at'],
 		payload: ['payload'],
-		required: Object.keys(AuditEvent.fields),
+		required: Object.keys(StoredAuditEvent.fields),
 		nonempty: [['operationId'], ['action']],
 		objects: [['actor']],
 		enums: [

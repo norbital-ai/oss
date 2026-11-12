@@ -2,7 +2,7 @@
 // writes what this reads (bolt-cli's compiler/artifact/index.ts); `artifact.json` and `manifest.json` are decoded here, once (A.4).
 // Every read goes through Effect's `FileSystem` and `Path`: in a cell they are the host's artifact port, which resolves
 // symlinks and refuses a path outside the release, so containment here is a check of the path's shape.
-import { sha256Hex } from '@norbital-ai/store';
+import { sha256_hex } from '@norbital-ai/store';
 import { Effect, FileSystem, Path, Predicate, Result, Schema, Stream } from 'effect';
 import * as EffectArray from 'effect/Array';
 import release from '../../../package.json' with { type: 'json' };
@@ -12,23 +12,24 @@ import { ManifestInvalid } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { Files } from '../ports.ts';
-import { decodeManifest, type EngineManifest } from '../manifest.ts';
+import { decode_manifest, type EngineManifest } from '../manifest.ts';
 import type { WorkspacePort } from '../agent/tools.ts';
 import type { GuestProgram } from '../guest/runner.ts';
-import { fingerprint, schemaSlice } from '../schema/plan.ts';
-import { migrationSchema, readMigrations, type MigrationBundle } from '../schema/migrations.ts';
+import { fingerprint, schema_slice } from '../schema/plan.ts';
+import { migration_schema, read_migrations, type MigrationBundle } from '../schema/migrations.ts';
 import { current } from '@norbital-ai/store';
-import { fromStore } from '../../protocol/errors.ts';
-import { drain, packLoader, type Pack, type PackSource, type SeedAsset } from '../write/pack.ts';
+import { equal_json } from '@norbital-ai/std/json';
+import { from_store } from '../../protocol/errors.ts';
+import { packLoader, type Pack, type PackSource, type SeedAsset } from '../write/pack.ts';
 
-export const ArtifactJsonSchema = Schema.Struct({
+export const ArtifactJson = Schema.Struct({
 	format: Schema.Literal(1),
 	/** The engine contract this artifact was built against (§2.3 decision 5); a host refuses one it does not implement. */
 	contract: Schema.String,
 	/** The tenant handle (`norbital.template.json` `key`, else the directory name) and the display name. */
 	handle: Schema.String,
 	name: Schema.String,
-	/** The schema fingerprint `plan`/`applyPlan` record (rule 69). */
+	/** The schema fingerprint `plan`/`apply_migrations` record (rule 69). */
 	schema: Schema.String,
 	client: Schema.Struct({ entry: Schema.String, css: Schema.Array(Schema.String) }),
 	/** Public routes carry their own browser entry and a private, bounded server program. */
@@ -51,7 +52,7 @@ export const ArtifactJsonSchema = Schema.Struct({
 	snapshot: Schema.optionalKey(Schema.Struct({ key: Schema.String, sha: Schema.String })),
 	hash: Schema.String
 });
-export type ArtifactJson = typeof ArtifactJsonSchema.Type;
+export type ArtifactJson = typeof ArtifactJson.Type;
 export type Artifact = {
 	dir: string;
 	artifact: ArtifactJson;
@@ -67,27 +68,24 @@ export type Artifact = {
 	>;
 };
 
-/** The route namespace keeps a nested app named kiosk/* distinct from a kiosk. Portal chrome does not decide SSR. */
-export function publicPageKeys(m: EngineManifest): readonly string[] {
-	return [
-		...Object.entries(m.apps).flatMap(([name, app]) =>
+/** The artifact key for a page in an app, including apps with the kiosk shell. */
+export const page_route_key = (m: EngineManifest, name: string) =>
+	`${m.apps[name.slice(0, name.lastIndexOf('/'))]?.shell === 'kiosk' ? 'kiosk' : 'app'}/${name}`;
+
+/** Portal chrome does not decide SSR. Only apps for audiences other than members have public bundles. */
+export function public_page_keys(m: EngineManifest): readonly string[] {
+	return Object.entries(m.apps)
+		.flatMap(([name, app]) =>
 			(app.audience ?? 'members') === 'members'
 				? []
-				: Object.keys(app.pages).map((page) => `app/${name}/${page}`)
-		),
-		...Object.entries(m.kiosks ?? {}).flatMap(([name, kiosk]) =>
-			(kiosk.auth ?? 'members') === 'members'
-				? []
-				: Object.keys(kiosk.pages).map((page) => `kiosk/${name}/${page}`)
+				: Object.keys(app.pages).map((page) => page_route_key(m, `${name}/${page}`))
 		)
-	].sort();
+		.sort();
 }
 
-const Release = Schema.Struct({ name: Schema.String, version: Schema.String });
-const PKG = Schema.decodeUnknownSync(Release)(release);
 // ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor (§2.3 decision 5);
 // switch when those descriptors exist as files. A host implements a set of these.
-export const CONTRACT = sha256Hex(`${PKG.name}@${PKG.version}`);
+export const CONTRACT = sha256_hex(`${release.name}@${release.version}`);
 
 export const tree = Effect.fn('bolt.artifactTree')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
@@ -99,45 +97,45 @@ export const tree = Effect.fn('bolt.artifactTree')(function* (dir: string) {
 			files.push(name.split(path.sep).join('/'));
 	return files.sort();
 });
-/** sha256 hex of a tree's sorted `<path>\0<sha256 hex>` lines, `\n`-joined: a folder's `treeHash`, a skill's digest. */
-export const treeDigest = (files: Iterable<readonly [path: string, bytes: Uint8Array]>): string =>
-	sha256Hex(
-		Array.from(files, ([file, bytes]) => `${file}\0${sha256Hex(bytes)}`)
+/** sha256 hex of a tree's sorted `<path>\0<sha256 hex>` lines, `\n`-joined: a folder's `tree_hash`, a skill's digest. */
+export const tree_digest = (files: Iterable<readonly [path: string, bytes: Uint8Array]>): string =>
+	sha256_hex(
+		Array.from(files, ([file, bytes]) => `${file}\0${sha256_hex(bytes)}`)
 			.sort()
 			.join('\n')
 	);
 /** A tree's digest; `*.map` files are left out: the bundler writes random names into them, so they are not byte-stable. */
-export const treeHash = Effect.fn('bolt.artifactTreeHash')(function* (dir: string) {
+export const tree_hash = Effect.fn('bolt.artifactTreeHash')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const files: (readonly [string, Uint8Array])[] = [];
 	for (const file of yield* tree(dir))
 		if (!file.endsWith('.map')) files.push([file, yield* fs.readFile(path.join(dir, file))]);
-	return treeDigest(files);
+	return tree_digest(files);
 });
-export const artifactHash = Effect.fn('bolt.artifactHash')(function* (
+export const artifact_hash = Effect.fn('bolt.artifactHash')(function* (
 	dir: string,
 	body: Omit<ArtifactJson, 'hash'>
 ) {
 	const path = yield* Path.Path;
-	return sha256Hex(
+	return sha256_hex(
 		JSON.stringify([
 			body,
-			yield* treeHash(path.join(dir, 'assets')),
-			yield* treeHash(path.join(dir, 'skills')),
-			yield* treeHash(path.join(dir, 'workspace', 'src')),
-			yield* treeHash(path.join(dir, 'migrations'))
+			yield* tree_hash(path.join(dir, 'assets')),
+			yield* tree_hash(path.join(dir, 'skills')),
+			yield* tree_hash(path.join(dir, 'workspace', 'src')),
+			yield* tree_hash(path.join(dir, 'migrations'))
 		])
 	);
 });
 
 // `hash` covers the body as written: a decoded struct takes its schema's key order, the order `bolt build` writes
-const decodeArtifactJson = Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactJsonSchema));
+const decodeArtifactJson = Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactJson));
 /** A file of the artifact, whole; one that cannot be read refuses activation. */
 const file = (path: string) =>
 	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFile(path)).pipe(
 		Effect.mapError((cause) =>
-			BoltError.make('notFound', 'admission', `${path} cannot be read; run bolt build`, cause)
+			BoltError.make('not_found', 'admission', `${path} cannot be read; run bolt build`, cause)
 		)
 	);
 const text = (path: string) => Effect.map(file(path), (b) => new TextDecoder().decode(b));
@@ -149,7 +147,7 @@ const text = (path: string) => Effect.map(file(path), (b) => new TextDecoder().d
  * `hash` the assets, skills and workspace source.
  * Historical snapshot metadata remains in the descriptor digest; its native blob is never read or trusted.
  */
-export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
+export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 	dir: string,
 	contracts: readonly string[] = [CONTRACT],
 	/** `executed`: a host that admitted the release already checked its trees; only what runs here is checked again. */
@@ -160,7 +158,7 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 	const at = join(dir, 'artifact.json');
 	if (!(yield* fs.exists(at)))
 		return yield* BoltError.make(
-			'notFound',
+			'not_found',
 			'admission',
 			`${dir} holds no artifact.json; run bolt build`
 		);
@@ -185,17 +183,17 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 						issues: [`manifest.json: ${e instanceof Error ? e.message : 'not JSON'}`]
 					})
 			}),
-			decodeManifest
+			decode_manifest
 		)
 	);
-	const migrations = yield* readMigrations(join(dir, 'migrations'));
+	const migrations = yield* read_migrations(join(dir, 'migrations'));
 	// The fingerprint folds in this engine's system layer: only an artifact of this contract can be re-derived here.
 	// A pinned older release's schema is verified by its own graph's HOST_API; its digest still binds the manifest.
 	if (artifact.contract === CONTRACT) {
-		yield* current(migrations.snapshot, migrationSchema(manifest)).pipe(Effect.mapError(fromStore));
-		if (fingerprint(schemaSlice(manifest)) !== artifact.schema)
+		yield* current(migrations.snapshot, migration_schema(manifest)).pipe(Effect.mapError(from_store));
+		if (fingerprint(schema_slice(manifest)) !== artifact.schema)
 			return yield* BoltError.make(
-				'schemaMismatch',
+				'schema_mismatch',
 				'admission',
 				'manifest.json does not match the artifact schema hash'
 			);
@@ -203,14 +201,14 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 	const map = join(dir, 'guest.mjs.map');
 	const guest: GuestProgram = {
 		source: yield* text(join(dir, 'guest.mjs')),
-		...((yield* fs.exists(map)) ? { sourceMap: yield* text(map) } : {})
+		...((yield* fs.exists(map)) ? { source_map: yield* text(map) } : {})
 	};
 	const assets = join(dir, 'guest-assets');
 	if (yield* fs.exists(assets)) {
 		const held: { [hash: string]: Uint8Array } = {};
 		for (const hash of yield* fs.readDirectory(assets)) {
 			const bytes = new Uint8Array(yield* file(join(assets, hash)));
-			if (sha256Hex(bytes) !== hash)
+			if (sha256_hex(bytes) !== hash)
 				return yield* BoltError.make(
 					'corrupt',
 					'admission',
@@ -222,19 +220,19 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 	}
 	const { format, contract, handle, name, schema, client, pages, hashes, snapshot } = artifact;
 	const actual = {
-		manifest: sha256Hex(manifestText),
-		guest: sha256Hex(guest.source),
+		manifest: sha256_hex(manifestText),
+		guest: sha256_hex(guest.source),
 		...(digests === 'executed'
 			? {}
 			: {
-					client: yield* treeHash(join(dir, 'client')),
-					server: yield* treeHash(join(dir, 'server'))
+					client: yield* tree_hash(join(dir, 'client')),
+					server: yield* tree_hash(join(dir, 'server'))
 				})
 	};
 	const bad =
-		(Object.keys(actual) as (keyof typeof actual)[]).find((k) => hashes[k] !== actual[k]) ??
+		Object.entries(actual).find(([k, v]) => new Map(Object.entries(hashes)).get(k) !== v)?.[0] ??
 		(digests === 'executed' ||
-		(yield* artifactHash(dir, {
+		(yield* artifact_hash(dir, {
 			format,
 			contract,
 			handle,
@@ -249,14 +247,14 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 			: 'hash');
 	if (bad !== undefined)
 		return yield* BoltError.make(
-			'artifactDigest',
+			'artifact_digest',
 			'admission',
 			`the artifact's ${bad} does not match its recorded digest; rebuild it`
 		);
-	const expectedPages = publicPageKeys(manifest);
-	if (JSON.stringify(Object.keys(pages).sort()) !== JSON.stringify(expectedPages))
+	const expectedPages = public_page_keys(manifest);
+	if (!equal_json(Object.keys(pages).sort(), expectedPages))
 		return yield* BoltError.make(
-			'artifactDigest',
+			'artifact_digest',
 			'admission',
 			'the artifact must contain exactly the public page programs declared by its manifest; rebuild it'
 		);
@@ -278,36 +276,36 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
 			![page.entry, ...page.css].every(canonicalFile)
 		)
 			return yield* BoltError.make(
-				'artifactDigest',
+				'artifact_digest',
 				'admission',
 				`the public page ${route} has an invalid artifact path; rebuild it`
 			);
 		for (const name of [page.entry, ...page.css, `public/${route}/index.html`])
 			if ((yield* fs.stat(join(dir, 'client', name))).type !== 'File')
 				return yield* BoltError.make(
-					'artifactDigest',
+					'artifact_digest',
 					'admission',
 					`the public page ${route} names a browser file outside its client tree`
 				);
 		const absolute = join(dir, page.server.file);
 		const source = yield* text(absolute);
-		if (sha256Hex(source) !== page.server.sha256)
+		if (sha256_hex(source) !== page.server.sha256)
 			return yield* BoltError.make(
-				'artifactDigest',
+				'artifact_digest',
 				'admission',
 				`the public page ${route} does not match its server program digest; rebuild it`
 			);
 		const map = `${absolute}.map`;
 		const program: GuestProgram = { source };
-		if (yield* fs.exists(map)) program.sourceMap = yield* text(map);
+		if (yield* fs.exists(map)) program.source_map = yield* text(map);
 		const assets = join(dir, `server/${route}.assets`);
 		if (yield* fs.exists(assets)) {
 			const held: Record<string, Uint8Array> = {};
 			for (const hash of yield* fs.readDirectory(assets)) {
 				const bytes = new Uint8Array(yield* file(join(assets, hash)));
-				if (sha256Hex(bytes) !== hash)
+				if (sha256_hex(bytes) !== hash)
 					return yield* BoltError.make(
-						'artifactDigest',
+						'artifact_digest',
 						'admission',
 						`the public page ${route} has a corrupt server asset; rebuild it`
 					);
@@ -332,7 +330,7 @@ export const readArtifact = Effect.fn('bolt.readArtifact')(function* (
  * The artifact's `workspace/` (the source `bolt build` copied) as the agent's workspace port; `undefined` for an
  * artifact built without one. A path never leaves the directory.
  */
-export const workspaceFiles = Effect.fn('bolt.workspaceFiles')(function* (artifactDir: string) {
+export const workspace_files = Effect.fn('bolt.workspaceFiles')(function* (artifactDir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const dir = path.join(artifactDir, 'workspace');
@@ -351,7 +349,7 @@ export const workspaceFiles = Effect.fn('bolt.workspaceFiles')(function* (artifa
 });
 
 /** The artifact's skill folders (`skills/<name>/`): one file's bytes, by the skill and its path in the folder. */
-export const skillFiles = Effect.fn('bolt.skillFiles')(function* (artifactDir: string) {
+export const skill_files = Effect.fn('bolt.skillFiles')(function* (artifactDir: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	// repository-health:allow EFF3 -- the agent's skill files are the host's Promise ABI.
@@ -362,10 +360,10 @@ export const skillFiles = Effect.fn('bolt.skillFiles')(function* (artifactDir: s
 });
 
 /** A seed row's `file` value names a pack asset as `{ asset: '<path under assets/>' }` (or an array of them). */
-export const assetPath = (v: unknown): string | undefined =>
+export const asset_path = (v: unknown): string | undefined =>
 	Predicate.isObject(v) && 'asset' in v && typeof v.asset === 'string' ? v.asset : undefined;
 const uuidOf = (s: string) => {
-	const h = sha256Hex(s);
+	const h = sha256_hex(s);
 	return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 };
 
@@ -378,19 +376,19 @@ const seedFiles = (m: EngineManifest, meta: Pack['meta']) => {
 	const assets = new Map(meta.assets.map((a) => [a.path, a]));
 	const files = new Map<string, SeedFile>();
 	const ref = (c: string, f: string, v: Json): Result.Result<Json, BoltError> => {
-		const path = assetPath(v);
+		const path = asset_path(v);
 		if (path === undefined) return Result.succeed(v);
 		const asset = assets.get(path);
 		if (asset === undefined)
 			return Result.fail(
-				BoltError.make('seedDecode', 'decode', `seed ${c}.${f}: the pack has no asset '${path}'`)
+				BoltError.make('seed_decode', 'decode', `seed ${c}.${f}: the pack has no asset '${path}'`)
 			);
 		const id = uuidOf(`${c}.${f}\0${path}`);
 		files.set(id, { field: `${c}.${f}`, path, asset });
 		return Result.succeed({
 			id,
 			name: path.slice(path.lastIndexOf('/') + 1),
-			mime: asset.contentType,
+			mime: asset.content_type,
 			bytes: asset.bytes,
 			sha256: asset.sha256
 		}); // hook:runtime — a seeded FileRef carries its size
@@ -416,7 +414,7 @@ const seedFiles = (m: EngineManifest, meta: Pack['meta']) => {
  * `sys_file` row, and each asset's bytes are put in the files store once, in bounded batches after the rows; a last step
  * records the `sys_file` rows. Nothing is stored when the database already had rows.
  */
-export const packAssetLoader = Effect.fn('bolt.packAssetLoader')(function* (
+export const pack_asset_loader = Effect.fn('bolt.packAssetLoader')(function* (
 	db: TenantDbShape,
 	m: EngineManifest,
 	pack: PackSource,
@@ -443,7 +441,7 @@ export const packAssetLoader = Effect.fn('bolt.packAssetLoader')(function* (
 		Effect.gen(function* () {
 			const bytes = yield* pack.asset(path);
 			return (yield* files
-				.put(bytes, { name: pathService.basename(path), mime: asset.contentType })
+				.put(bytes, { name: pathService.basename(path), mime: asset.content_type })
 				.pipe(
 					Effect.timeoutOrElse({
 						duration: '60 seconds',
@@ -468,7 +466,7 @@ export const packAssetLoader = Effect.fn('bolt.packAssetLoader')(function* (
 					[...seeded.files].map(([id, { field, path, asset }]) => ({
 						id,
 						name: pathService.basename(path),
-						mime: asset.contentType,
+						mime: asset.content_type,
 						size: asset.bytes,
 						key: keys.get(path),
 						sha256: asset.sha256,
@@ -519,19 +517,8 @@ export const packAssetLoader = Effect.fn('bolt.packAssetLoader')(function* (
 	});
 	return { step };
 });
-/** `packAssetLoader` whole: `false` when the database had rows and nothing changed. */
-export const loadPackWithAssets = Effect.fn('bolt.loadPackWithAssets')(function* (
-	db: TenantDbShape,
-	m: EngineManifest,
-	pack: PackSource,
-	files: Files['Service'],
-	now: string
-) {
-	return (yield* drain((yield* packAssetLoader(db, m, pack, files, now)).step)) === 'loaded';
-});
-
 /** Facilities and declaration refusals a host checks before activating the verified artifact. */
-export function activationRequirements(m: EngineManifest): {
+export function activation_requirements(m: EngineManifest): {
 	files: true;
 	mail: true;
 	secrets: boolean;

@@ -4,9 +4,10 @@ import { Cause, Effect, Fiber, FiberHandle } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Value } from '@norbital-ai/std/kind';
 import type { CommandItem, KindsHost, ModelExposure } from '@norbital-ai/ui';
-import { labelRead } from '@norbital-ai/ui/read';
+import { label_read } from '@norbital-ai/ui/read';
 import { label as recordTitle } from '@norbital-ai/std/label';
 import { based, type NavNode } from '../nav.ts';
+import { handle_words } from '../i18n.ts';
 import type { ManifestItem } from './manifest.ts';
 
 export type FinderHit =
@@ -48,11 +49,11 @@ export function pageHits(
 	return out;
 }
 
-/** The shared CEL identifier or legacy label fields; unnamed rows use a placeholder, never their id. */
-export const labelOf = (row: Row, label: readonly string[], expression?: string) =>
+/** The shared CEL identifier. */
+export const labelOf = (row: Row, expression?: string) =>
 	(typeof row['$label'] === 'string' && row['$label'].trim() !== ''
 		? row['$label']
-		: recordTitle(row, expression ?? label)) ?? 'Unnamed record';
+		: recordTitle(row, expression ?? [])) ?? 'Unnamed record';
 
 /** The same model scopes and declared search hints serve Find and Norbius mentions. */
 export function recordScopes(
@@ -69,14 +70,14 @@ export function recordScopes(
 						? t('Users')
 						: model === 'approval_request'
 							? t('Approval requests')
-							: model.replaceAll('_', ' ')
+							: handle_words(model)
 					: translated;
 			const fields = [
 				...new Set(
 					(exposure.search ?? []).map((field) =>
 						field === '$label'
 							? t('Record label')
-							: t(exposure.fields[field]?.label ?? field.replaceAll('_', ' '))
+							: t(exposure.fields[field]?.label ?? handle_words(field))
 					)
 				)
 			];
@@ -130,7 +131,6 @@ export const scopeKind = (scope: SearchScope) =>
 		relationship: 'Relationship',
 		field: 'Field type',
 		skill: 'Skill',
-		tool: 'Tool',
 		secret: 'Secret',
 		kiosk: 'Kiosk',
 		group: 'App group',
@@ -185,37 +185,31 @@ export function searchScopes(
 			.map((scope) => ({ ...scope, kind: 'model' as const, command: scope.model })),
 		...entries.map((entry) => ({
 			...entry,
-			label: t(entry.name.replaceAll('_', ' ')),
+			label: t(handle_words(entry.name)),
 			command: `${entry.kind}:${entry.name}`,
 			description: t(entry.description)
 		}))
 	];
 }
 
-/** `/scope query` is shared everywhere. Old `@model/query` links remain usable while suggestions teach spaces. */
+/** `/scope query` is shared everywhere; the space separates a whole scope name from its query. */
 export function scopeQuery(scopes: readonly SearchScope[], input: string) {
 	if (!input.startsWith('/')) return { explicit: false, scope: undefined, query: input };
 	const text = input.slice(1);
 	const match = /^(\S+)\s([\s\S]*)$/.exec(text);
-	if (match) {
-		const scope = scopes.find((scope) => scope.command.toLowerCase() === match[1]!.toLowerCase());
-		if (scope) return { explicit: true, scope, query: match[2]! };
+	const command = match?.[1], query = match?.[2];
+	if (command !== undefined && query !== undefined) {
+		const scope = scopes.find((scope) => scope.command.toLowerCase() === command.toLowerCase());
+		if (scope) return { explicit: true, scope, query };
 	}
-	const slash = text.indexOf('/');
-	const legacy =
-		slash > 0 && !scopes.some((scope) => scope.command === text)
-			? scopes.find((scope) => scope.kind === 'model' && scope.command === text.slice(0, slash))
-			: undefined;
-	return legacy
-		? { explicit: true, scope: legacy, query: text.slice(slash + 1) }
-		: { explicit: true, scope: undefined, query: text };
+	return { explicit: true, scope: undefined, query: text };
 }
 
 export const scopeSuggestions = (scopes: readonly SearchScope[], query: string) => {
-	const words = query.trim().toLowerCase().replaceAll('_', ' ').split(/\s+/);
+	const words = handle_words(query.trim().toLowerCase()).split(/\s+/);
 	return scopes.filter((scope) =>
 		words.every((word) =>
-			has(`${scope.command.replaceAll('_', ' ')} ${scope.label} ${scope.description}`, word)
+			has(`${handle_words(scope.command)} ${scope.label} ${scope.description}`, word)
 		)
 	);
 };
@@ -244,9 +238,9 @@ export function manifestMatches(
 	query: string,
 	t: (key: string) => string
 ) {
-	const normalized = query.trim().toLowerCase().replaceAll('_', ' ');
+	const normalized = handle_words(query.trim().toLowerCase());
 	const rank = (label: string, command = '') => {
-		const names = [label, command].map((name) => name.toLowerCase().replaceAll('_', ' '));
+		const names = [label, command].map((name) => handle_words(name.toLowerCase()));
 		return names.some((name) => name === normalized)
 			? 0
 			: names.some((name) => name.startsWith(normalized))
@@ -278,7 +272,8 @@ export const searchRecords = Effect.fn('Finder.searchRecords')(function* (
 ) {
 	const scope = recordScopes(catalog, t).find((scope) => scope.model === model);
 	if (model === null || scope === undefined || !scope.searchable || query.trim() === '') return [];
-	const exposure = catalog[model]!;
+	const exposure = catalog[model];
+	if (exposure === undefined) return [];
 	const semantic = /^\/semantic(?:\s|$)/.test(query.trim());
 	if (semantic && exposure.semantic !== true) return [];
 	const text =
@@ -286,7 +281,7 @@ export const searchRecords = Effect.fn('Finder.searchRecords')(function* (
 	if (text === '/semantic') return [];
 	const options = { search: text, limit: RECORDS_PER_MODEL, output: exposure.output ?? 'default' };
 	const answer = yield* read(
-		exposure.record_label !== undefined ? labelRead(catalog, model, options) : { [model]: options }
+		exposure.record_label !== undefined ? label_read(catalog, model, options) : { [model]: options }
 	);
 	return (answer[model]?.rows ?? []).flatMap((row): FinderHit[] =>
 		typeof row['id'] === 'string'
@@ -294,7 +289,7 @@ export const searchRecords = Effect.fn('Finder.searchRecords')(function* (
 					{
 						kind: 'record',
 						key: `${model}/${row['id']}`,
-						label: labelOf(row, exposure.label, exposure.record_label),
+						label: labelOf(row, exposure.record_label),
 						context: scope.label,
 						model,
 						id: row['id']
@@ -340,10 +335,7 @@ export const recordMentions = Effect.fn('Finder.recordMentions')(function* (
 	}: { nav?: readonly NavNode[]; prefix?: '@' | '/'; entries?: readonly ManifestItem[] } = {}
 ): Effect.fn.Return<CommandItem[], FinderError> {
 	const scopes = searchScopes(nav, catalog, t, entries);
-	const explicit =
-		prefix === '/' ||
-		query.startsWith('/') ||
-		scopes.some((scope) => scope.kind === 'model' && query.startsWith(`${scope.command}/`));
+	const explicit = prefix === '/' || query.startsWith('/');
 	const parsed = scopeQuery(scopes, explicit ? `/${query.replace(/^\//, '')}` : query);
 	const link = (label: string, href: string) =>
 		`[@${label.replace(/[\\[\]]/g, '\\$&')}](${href.startsWith('/') ? based(href) : href}) `;

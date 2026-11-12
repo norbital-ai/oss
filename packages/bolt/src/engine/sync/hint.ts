@@ -11,14 +11,15 @@ import type { EngineManifest } from '../manifest.ts';
 import { enqueue } from '../runs/queue.ts';
 import { iso } from '../runs/time.ts';
 import { Chain } from '../write/sql.ts';
+import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
 import { instancesOf } from '../integrations/instances.ts';
-import { syncsOf, type SyncEngine } from './index.ts';
+import { syncs_of, type SyncEngine } from './index.ts';
 
 /** How long a hint waits for the rest of its burst before its read runs. */
 const DEBOUNCE_MS = 2_000;
 /** The read syncs over `definition`, by run name. */
 const readers = (m: EngineManifest, definition: string): readonly string[] =>
-	[...syncsOf(m).values()].filter((s) => s.read && s.definition === definition).map((s) => s.name);
+	[...syncs_of(m).values()].filter((s) => s.read && s.definition === definition).map((s) => s.name);
 /** The debounced read of each sync the CTE `stored` (column `sync`) stored a new delivery for. */
 const readSoon = (c: Chain, stored: string, instance: string, now: string) => {
 	const input = `jsonb_build_object('instance', ${c.p(instance)}::text)`;
@@ -47,12 +48,14 @@ export function inboxPiece(
 	const rows = source();
 	readSoon(
 		c,
-		c.cte(
+		capturePiece(c,
 			name,
+			'sys_inbox',
 			`INSERT INTO sys_inbox (id, sync, instance, delivery, received_at, body)
 			SELECT gen_random_uuid(), s.sync, ${c.p(instance)}, d.delivery, ${c.p(now)}::timestamptz, d.body
 			FROM jsonb_array_elements_text(${c.p(syncs)}::jsonb) AS s(sync) CROSS JOIN (${rows}) d
-			ON CONFLICT (sync, instance, delivery) DO NOTHING RETURNING sync`
+			ON CONFLICT (sync, instance, delivery) DO NOTHING`,
+			{ returning: 'sync' }
 		),
 		instance,
 		now
@@ -68,16 +71,18 @@ export function reportRowsPiece(
 	source: () => string,
 	now: string
 ): void {
-	const syncs = [...syncsOf(m).values()].filter((s) => s.read && s.write).map((s) => s.name);
+	const syncs = [...syncs_of(m).values()].filter((s) => s.read && s.write).map((s) => s.name);
 	if (syncs.length === 0) return;
 	const rows = source();
-	const stored = c.cte(
+	const stored = capturePiece(c,
 		'report_inbox',
+		'sys_inbox',
 		`INSERT INTO sys_inbox (id, sync, instance, delivery, received_at, body)
 		SELECT gen_random_uuid(), r.sync, r.instance, d.delivery, ${c.p(now)}::timestamptz, d.body
 		FROM (${rows}) d JOIN sys_sync_row r ON r.instance = d.instance AND r.remote_id = d.message
 		WHERE r.sync IN (SELECT jsonb_array_elements_text(${c.p(syncs)}::jsonb))
-		ON CONFLICT (sync, instance, delivery) DO NOTHING RETURNING sync, instance`
+		ON CONFLICT (sync, instance, delivery) DO NOTHING`,
+		{ returning: 'sync, instance' }
 	);
 	enqueue(c, {
 		select: `SELECT DISTINCT x.sync AS automation, jsonb_build_object('instance', x.instance) AS input,
@@ -92,7 +97,7 @@ export function makeHint(e: SyncEngine) {
 			const [inst] = yield* instancesOf(e.manifest, e.db, { ids: [instance] });
 			if (inst === undefined)
 				return yield* Effect.fail(
-					BoltError.make('notFound', 'decode', `No integration instance '${instance}'.`)
+					BoltError.make('not_found', 'decode', `No integration instance '${instance}'.`)
 				);
 			const now = iso(yield* Clock.currentTimeMillis),
 				c = new Chain();
@@ -106,12 +111,13 @@ export function makeHint(e: SyncEngine) {
 				now
 			);
 			// health compares hints with what reads find ("webhooks quiet while reads find changes")
-			c.cte(
+			capturePiece(c,
 				'hinted',
+				'sys_sync',
 				`UPDATE sys_sync SET last_hint_at = ${c.p(now)}::timestamptz WHERE instance = ${c.p(instance)}
-				AND sync IN (SELECT jsonb_array_elements_text(${c.p(readers(e.manifest, inst.integration))}::jsonb)) RETURNING 1`
+				AND sync IN (SELECT jsonb_array_elements_text(${c.p(readers(e.manifest, inst.integration))}::jsonb))`
 			);
-			yield* e.db.write(c.sql('NULL AS outcome'));
+			yield* nativeCommit(e.db.write, e.live.publish, c, CapturedResult);
 			yield* e.announce(iso(Date.parse(now) + DEBOUNCE_MS));
 		})
 	};

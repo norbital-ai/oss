@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // The public network guard every host-side outbound request shares (§3.3.8, L-BOLT-366): HTTPS only, DNS resolved
 // once and the checked address pinned (no private, loopback or reserved network), redirects re-checked hop by hop,
-// bounded bodies. `httpPort` serves it to the engine (`HttpPort`); `publicFetch` puts it behind a `fetch` shape for the
+// bounded bodies. `http_port` serves it to the engine (`HttpPort`); `public_fetch` puts it behind a `fetch` shape for the
 // http driver; a host's page reader uses the parts.
 import { Effect, Result, Schema } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
@@ -42,7 +42,7 @@ for (const [network, prefix] of [
 ] as const)
 	excluded.addSubnet(network, prefix, 'ipv6');
 
-export const isPublicWebAddress = (address: string): boolean => {
+export const is_public_web_address = (address: string): boolean => {
 	const family = isIP(address);
 	return family === 4
 		? !excluded.check(address, 'ipv4')
@@ -51,14 +51,15 @@ export const isPublicWebAddress = (address: string): boolean => {
 
 export type Address = { address: string; family: number };
 export type Resolve = (hostname: string) => Promise<readonly Address[]>;
+const unbracket = (hostname: string) => hostname.replace(/^\[|\]$/g, '');
 
 /** A TCP destination is checked independently of HTTP's protocol and port restrictions. */
-export const publicDestination = Effect.fn('Network.publicDestination')(function* (
+export const public_destination = Effect.fn('Network.public_destination')(function* (
 	hostname: string,
 	port: number,
 	resolve: Resolve = (host) => lookup(host, { all: true })
 ) {
-	const host = hostname.replace(/^\[|\]$/g, '');
+	const host = unbracket(hostname);
 	if (
 		!Number.isInteger(port) ||
 		port < 1 ||
@@ -66,26 +67,26 @@ export const publicDestination = Effect.fn('Network.publicDestination')(function
 		host === '' ||
 		/[\s\/\\@%?#\x00-\x1f]/.test(host)
 	)
-		return yield* Effect.fail(invalid('The outbound hostname or port is invalid.'));
+		return yield* Effect.fail(FacilityFailure.invalid('The outbound hostname or port is invalid.'));
 	const addresses = isIP(host)
 		? [{ address: host, family: isIP(host) }]
 		: yield* Port.attempt('network', () => resolve(host));
 	if (
 		addresses.some(
-			(entry) => isIP(entry.address) !== entry.family || !isPublicWebAddress(entry.address)
+			(entry) => isIP(entry.address) !== entry.family || !is_public_web_address(entry.address)
 		)
 	)
 		return yield* Effect.fail(
-			invalid('Outbound connections cannot reach private or reserved networks.')
+			FacilityFailure.invalid('Outbound connections cannot reach private or reserved networks.')
 		);
 	const address = addresses.find((entry) => entry.family === 4) ?? addresses[0];
 	if (address === undefined)
-		return yield* Effect.fail(invalid('The outbound hostname resolved to no addresses.'));
+		return yield* Effect.fail(FacilityFailure.invalid('The outbound hostname resolved to no addresses.'));
 	return { hostname: host, port, address, addresses };
 });
 
 /** Node's connector receives only the already validated set, including Happy Eyeballs' all-address lookup. */
-export const pinnedLookup =
+export const pinned_lookup =
 	(addresses: readonly Address[]): LookupFunction =>
 	(_host, options, callback) => {
 		const family = options.family;
@@ -106,12 +107,12 @@ export const pinnedLookup =
 	};
 
 /** Every invocation resolves again; only checked numeric addresses reach the actual socket. */
-export const connectPublic = Effect.fn('Network.connectPublic')(function* (
+export const connect_public = Effect.fn('Network.connect_public')(function* (
 	hostname: string,
 	port: number,
 	resolve?: Resolve
 ) {
-	const destination = yield* publicDestination(hostname, port, resolve);
+	const destination = yield* public_destination(hostname, port, resolve);
 	let last: FacilityFailure | undefined;
 	for (const address of orderAddresses(destination.addresses)) {
 		const socket = yield* Effect.acquireRelease(
@@ -167,13 +168,13 @@ const isLoopbackAddress = (address: string): boolean =>
  * (a development host only, L-BOLT-366) also admits this machine's own names (`localhost`, `*.localhost`, `127.0.0.1`,
  * `::1`) over HTTP or HTTPS on any port, when every address they resolve to is loopback; nothing else private, ever.
  */
-export const publicAddresses = (
+export const public_addresses = (
 	url: URL,
 	resolve: Resolve = (host) => lookup(host, { all: true }),
 	allowLoopback = false
 ) =>
 	Effect.gen(function* () {
-		const hostname = url.hostname.replace(/^\[|\]$/g, '');
+		const hostname = unbracket(url.hostname);
 		const loopback =
 			allowLoopback &&
 			isLoopbackName(hostname) &&
@@ -184,28 +185,25 @@ export const publicAddresses = (
 			(!loopback && (url.protocol !== 'https:' || (url.port && url.port !== '443')))
 		)
 			return yield* Effect.fail(
-				invalid('Outbound requests require HTTPS without credentials or custom ports.')
+				FacilityFailure.invalid('Outbound requests require HTTPS without credentials or custom ports.')
 			);
-		if (!loopback) return (yield* publicDestination(hostname, 443, resolve)).addresses;
+		if (!loopback) return (yield* public_destination(hostname, 443, resolve)).addresses;
 		const addresses = isIP(hostname)
 			? [{ address: hostname, family: isIP(hostname) }]
 			: yield* Port.attempt('web', () => resolve(hostname));
 		if (
 			addresses.length === 0 ||
-			addresses.some((entry) =>
-				loopback ? !isLoopbackAddress(entry.address) : !isPublicWebAddress(entry.address)
-			)
+			addresses.some((entry) => !isLoopbackAddress(entry.address))
 		)
 			return yield* Effect.fail(
-				invalid('Outbound requests cannot reach private or reserved networks.')
+				FacilityFailure.invalid('Outbound requests cannot reach private or reserved networks.')
 			);
 		return addresses;
 	});
 
-const invalid = (message: string) => new FacilityFailure({ kind: 'invalid', message });
-const tooLarge = (maxBytes: number) =>
+const too_large = (maxBytes: number) =>
 	new FacilityFailure({
-		kind: 'tooLarge',
+		kind: 'too_large',
 		message: `The response exceeds the ${maxBytes} byte limit.`
 	});
 const failed = (error: unknown) =>
@@ -305,7 +303,7 @@ const attemptPage = (
 						response.on('data', (chunk: Buffer) => {
 							bytes += chunk.byteLength;
 							if (bytes > maxBytes) {
-								resume(Effect.fail(tooLarge(maxBytes)));
+								resume(Effect.fail(too_large(maxBytes)));
 								response.destroy();
 							} else chunks.push(chunk);
 						});
@@ -348,7 +346,7 @@ const attemptPage = (
 				const bytes = yield* Effect.tryPromise({
 					try: () => unzipPage(body, { maxOutputLength: maxBytes }),
 					catch: (error) =>
-						errorCode(error) === 'ERR_BUFFER_TOO_LARGE' ? tooLarge(maxBytes) : failed(error)
+						errorCode(error) === 'ERR_BUFFER_TOO_LARGE' ? too_large(maxBytes) : failed(error)
 				});
 				return { ...raw, body: new Uint8Array(bytes) };
 			}
@@ -356,7 +354,7 @@ const attemptPage = (
 		})
 	);
 
-export const makeRequestPage =
+export const make_request_page =
 	(request: typeof httpsRequest = httpsRequest) =>
 	(
 		url: URL,
@@ -389,7 +387,7 @@ export const makeRequestPage =
 				)
 			);
 		});
-type RequestPage = ReturnType<typeof makeRequestPage>;
+type RequestPage = ReturnType<typeof make_request_page>;
 const RESERVED = new Set([
 	'host',
 	'connection',
@@ -416,7 +414,7 @@ const guarded = (
 	limits: HttpFetchOptions,
 	options: PublicRequestOptions = {}
 ): Effect.Effect<HttpResponse, PortFailure> => {
-	const send = options.request ?? makeRequestPage();
+	const send = options.request ?? make_request_page();
 	return Effect.gen(function* () {
 		let headers: Record<string, string> = yield* Effect.try({
 			try: () =>
@@ -426,25 +424,25 @@ const guarded = (
 			catch: failed
 		});
 		if (Object.keys(headers).some((name) => RESERVED.has(name) || name.startsWith('proxy-')))
-			return yield* Effect.fail(invalid('An http request cannot set transport headers.'));
+			return yield* Effect.fail(FacilityFailure.invalid('An http request cannot set transport headers.'));
 		let target = yield* Effect.try({
 			try: () => new URL(request.url),
-			catch: () => invalid('The request URL is invalid.')
+			catch: () => FacilityFailure.invalid('The request URL is invalid.')
 		});
 		let method = request.method.toUpperCase(),
 			body = request.body;
 		for (let hop = 0; hop <= limits.redirects; hop++) {
-			if (options.loopbackOnly === true && !isLoopbackName(target.hostname.replace(/^\[|\]$/g, '')))
+			if (options.loopbackOnly === true && !isLoopbackName(unbracket(target.hostname)))
 				return yield* Effect.fail(
-					invalid(`This host reaches loopback only, not ${target.hostname}.`)
+					FacilityFailure.invalid(`This host reaches loopback only, not ${target.hostname}.`)
 				);
-			const addresses = yield* publicAddresses(target, options.resolve, options.allowLoopback);
+			const addresses = yield* public_addresses(target, options.resolve, options.allowLoopback);
 			const response = yield* send(
 				target,
 				addresses,
 				headers,
 				method === 'GET' ? undefined : { method, ...(body === undefined ? {} : { body }) },
-				limits.maxBytes
+				limits.max_bytes
 			);
 			if (response.status >= 300 && response.status < 400 && response.location) {
 				const location = response.location;
@@ -473,16 +471,16 @@ const guarded = (
 						: response.body
 			};
 		}
-		return yield* Effect.fail(invalid(`The request exceeded ${limits.redirects} redirects.`));
+		return yield* Effect.fail(FacilityFailure.invalid(`The request exceeded ${limits.redirects} redirects.`));
 	});
 };
 
 /** The engine's outbound HTTP (`HttpPort`); the wall is the engine's (`Port.call`). */
-export const httpPort: HttpPort = {
+export const http_port: HttpPort = {
 	fetch: (request, limits, signal) => Effect.runPromise(guarded(request, limits), { signal })
 };
 /** Outbound HTTP to this machine only (the test kit): every hop to another host is refused. */
-export const loopbackHttpPort: HttpPort = {
+export const loopback_http_port: HttpPort = {
 	fetch: (request, limits, signal) =>
 		Effect.runPromise(guarded(request, limits, { allowLoopback: true, loopbackOnly: true }), {
 			signal
@@ -490,7 +488,7 @@ export const loopbackHttpPort: HttpPort = {
 };
 
 /** The provider's fetch ABI runs guarded work on its already supplied scoped host runner. */
-export function publicFetch(
+export function public_fetch(
 	run: (
 		effect: Effect.Effect<Response, PortFailure>,
 		options?: { readonly signal?: AbortSignal | undefined }
@@ -520,7 +518,7 @@ export function publicFetch(
 					headers,
 					...(body === undefined ? {} : { body: new Uint8Array(body) })
 				},
-				{ redirects: MAX_REDIRECTS, maxBytes: WEB_PAGE_BYTE_LIMIT },
+				{ redirects: MAX_REDIRECTS, max_bytes: WEB_PAGE_BYTE_LIMIT },
 				options
 			);
 			return yield* Effect.try({
@@ -535,3 +533,37 @@ export function publicFetch(
 		return run(exchange, { signal: init.signal ?? original?.signal });
 	};
 }
+
+const request_page = make_request_page();
+const unreadable = (message: string) => new FacilityFailure({ kind: 'upstream', message });
+/** A host's web reader: one public page's bytes, every redirect hop re-checked, at most `WEB_PAGE_BYTE_LIMIT`. */
+export const read_public_page = Effect.fn('Network.read_public_page')(function* (
+	url: string,
+	options: { readonly resolve?: Resolve; readonly request?: RequestPage } = {}
+) {
+	if (url === '') return yield* Effect.fail(unreadable('A public page needs a URL.'));
+	let target = yield* Effect.try({
+		try: () => new URL(url),
+		catch: () => unreadable('A public page needs a valid URL.')
+	});
+	for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+		const addresses = yield* public_addresses(target, options.resolve);
+		const response = yield* (options.request ?? request_page)(target, addresses);
+		if (response.status >= 300 && response.status < 400 && response.location) {
+			const location = response.location;
+			target = yield* Effect.try({
+				try: () => new URL(location, target),
+				catch: () => unreadable('The public page returned an invalid redirect URL.')
+			});
+			continue;
+		}
+		if (response.status < 200 || response.status >= 300)
+			return yield* Effect.fail(unreadable(`Public page returned HTTP ${response.status}.`));
+		const bytes =
+			typeof response.body === 'string' ? new TextEncoder().encode(response.body) : response.body;
+		if (bytes.byteLength > WEB_PAGE_BYTE_LIMIT)
+			return yield* Effect.fail(unreadable('Public page exceeds the 2 MiB limit.'));
+		return { url: target.toString(), contentType: response.contentType, bytes };
+	}
+	return yield* Effect.fail(unreadable('Public page exceeded five redirects.'));
+});

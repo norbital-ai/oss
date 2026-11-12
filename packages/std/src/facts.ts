@@ -1,6 +1,6 @@
 // std/facts (§3.7): runtime-declared fields. An administrator declares the keys a record may carry (a jurisdiction's
 // statutory facts, an intake form's questions) as rows; the record stores the values in one `json` field, and the
-// model's transform validates them with `validateFacts`. `facts` checks the declarations themselves.
+// model's transform validates them with `validate_facts`. `facts` checks the declarations themselves.
 
 /** One declared key, as stored (a `json` row or a seed file). */
 export type FactSpec = {
@@ -105,7 +105,7 @@ export function facts(specs: readonly FactSpec[]): readonly FactSpec[] {
  * The first fault of `values` against `specs`, or null: an undeclared key, a value of the wrong type or outside its
  * constraints, and (with `complete`) a required fact that is missing or blank. A transform refuses with the message.
  */
-export function validateFacts(
+export function validate_facts(
 	specs: readonly FactSpec[],
 	values: { readonly [key: string]: unknown },
 	o: { complete?: boolean } = {}

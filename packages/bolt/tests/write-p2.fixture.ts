@@ -1,34 +1,42 @@
 // The second write workspace shares the native tenant-db and transform bridge.
 import { Effect, Result } from 'effect';
-import type { Bindings, Invocation } from '../src/engine/contracts.ts';
+import type { Invocation } from '../src/engine/contracts.ts';
 import { PgliteDb } from '../src/node/db/pglite.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
-import { decodeManifest, type EngineManifest } from '../src/engine/manifest.ts';
-import { readEngine } from '../src/engine/query/engine.ts';
-import type { Bridge } from '../src/engine/services.ts';
-import type { Fingerprint } from '../src/engine/write/sql.ts';
-import { fingerprinting } from '../src/engine/write/sql.ts';
+import { decode_manifest, type EngineManifest } from '../src/engine/manifest.ts';
+import { transformBridge } from '../src/engine/write/act.ts';
 import { manifest as base } from './write-fixture.ts';
 
 const orders = base.exposures.orders;
 if (orders === undefined) throw new Error('the base write fixture has no orders model');
 export const manifest = Result.getOrThrow(
-	decodeManifest({
+	decode_manifest({
 		...base,
 		models: {
 			...base.models,
+			// a ref names its order by the import key's values (rule 30)
+			orders: { ...base.models.orders, key: ['title'], unique: [{ fields: ['title'], import_key: true }] },
 			tags: {
 				description: 'A tag',
-				label: 'name',
+				record_label: 'record.name',
 				unique: [{ fields: ['name'] }],
 				fields: { name: { kind: 'text' } }
 			},
-			receipts: { description: 'A receipt', label: 'memo', fields: { memo: { kind: 'text' } } },
+			receipts: {
+				description: 'A receipt',
+				record_label: 'record.memo',
+				// an import matches its rows by a declared import key
+				key: ['memo'],
+				unique: [{ fields: ['memo'], name: 'one_memo', import_key: true }],
+				fields: { memo: { kind: 'text' } }
+			},
 			people: {
 				description: 'A person',
-				label: 'name',
+				record_label: 'record.name',
 				key: ['code'],
+				unique: [{ fields: ['code'], name: 'one_code', import_key: true }],
+				locks: { archived: { where: { status: { eq: 'archived' } } } },
 				search: { text: ['name'] },
 				fields: {
 					code: { kind: 'text' },
@@ -37,7 +45,7 @@ export const manifest = Result.getOrThrow(
 					status: {
 						kind: 'state',
 						initial: 'active',
-						states: { active: { to: ['archived'] }, archived: { edit: 'none' } }
+						states: { active: { to: ['archived'] }, archived: {} }
 					}
 				},
 				computed: { shout: { kind: 'text', expr: { upper: { field: 'name' } } } }
@@ -60,17 +68,17 @@ export const manifest = Result.getOrThrow(
 				}
 			},
 			tags: {
-				read: { tags: { fields: 'all' } },
+				outputs: { default: { tags: { fields: 'all' } } },
 				create: { columns: { tags: ['name'] } },
 				delete: {}
 			},
 			receipts: {
-				read: { receipts: { fields: 'all' } },
+				outputs: { default: { receipts: { fields: 'all' } } },
 				create: { columns: { receipts: ['memo', 'order'] } },
 				update: { columns: { receipts: ['memo', 'order'] } }
 			},
 			people: {
-				read: { people: { fields: 'all' } },
+				outputs: { default: { people: { fields: 'all' } } },
 				create: { columns: { people: ['code', 'name', 'email'] } },
 				update: { columns: { people: ['name', 'email', 'status'] } },
 				delete: {}
@@ -86,37 +94,6 @@ export const open = (m: EngineManifest = manifest) =>
 		return { pg, db };
 	});
 
-/** Workspace reads, fingerprinted, retain one database round trip per crossing. */
-export function bridgeOn(db: TenantDbShape, m: EngineManifest = manifest) {
-	return (
-		inv: Invocation
-	): Bridge & { tables(): readonly string[]; fingerprints(): readonly Fingerprint[] } => {
-		const fp = fingerprinting(db),
-			reads = readEngine({ db: fp.db, manifest: m });
-		const tables = new Set<string>();
-		const bindings: Bindings = {
-			now: inv.ctx.now,
-			today: inv.ctx.today,
-			tz: inv.ctx.tz
-		};
-		return {
-			tables: () => [...tables],
-			fingerprints: fp.fingerprints,
-			cross: (calls) =>
-				Effect.gen(function* () {
-					const batch = calls.flatMap((call) => (call._tag === 'read' ? [call.read] : []));
-					for (const read of batch)
-						for (const name of read.kind === 'request'
-							? read.roots.map((r) => r.root)
-							: 'model' in read
-								? [read.model]
-								: [])
-							tables.add(name);
-					return (yield* reads.run(batch, { as: 'workspace' }, bindings)).map((value) => ({
-						ok: true as const,
-						value
-					}));
-				}).pipe(Effect.orDie)
-		};
-	};
-}
+/** The same workspace bridge, dependencies and fingerprints as a native transform. */
+export const bridge_on = (db: TenantDbShape, m: EngineManifest = manifest) =>
+	(inv: Invocation) => transformBridge(m, db, inv);

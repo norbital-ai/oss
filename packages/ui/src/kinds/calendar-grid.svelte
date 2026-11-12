@@ -6,53 +6,29 @@
 	import { getLocalTimeZone, today, type DateValue } from '@internationalized/date';
 	import type { DatePicker, DateRangePicker } from 'bits-ui';
 	import Combobox from '../primitives/combobox/combobox.svelte';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
+	type CalendarPart = 'Header' | 'PrevButton' | 'NextButton' | 'Grid' | 'GridHead' |
+		'GridRow' | 'HeadCell' | 'GridBody' | 'Cell' | 'Day';
 
 	let {
 		parts: P,
 		months,
 		weekdays,
 		placeholder,
-		onPlaceholder,
+		on_placeholder,
 		locale,
 		range = false
 	}: {
-		parts:
-			| Pick<
-					typeof DatePicker,
-					| 'Header'
-					| 'PrevButton'
-					| 'NextButton'
-					| 'Grid'
-					| 'GridHead'
-					| 'GridRow'
-					| 'HeadCell'
-					| 'GridBody'
-					| 'Cell'
-					| 'Day'
-			  >
-			| Pick<
-					typeof DateRangePicker,
-					| 'Header'
-					| 'PrevButton'
-					| 'NextButton'
-					| 'Grid'
-					| 'GridHead'
-					| 'GridRow'
-					| 'HeadCell'
-					| 'GridBody'
-					| 'Cell'
-					| 'Day'
-			  >;
+		parts: Pick<typeof DatePicker, CalendarPart> | Pick<typeof DateRangePicker, CalendarPart>;
 		months: readonly { value: DateValue; weeks: DateValue[][] }[];
 		weekdays: readonly string[];
 		placeholder: DateValue | undefined;
-		onPlaceholder(next: DateValue): void;
+		on_placeholder(next: DateValue): void;
 		locale?: string;
 		/** A range picker: the ends are filled, the days between tinted. */
 		range?: boolean;
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	const shown = $derived(placeholder ?? today(getLocalTimeZone()));
 	const monthNames = $derived(
 		Array.from({ length: 12 }, (_, i) => ({
@@ -82,14 +58,14 @@
 			aria-label={t('month')}
 			options={monthNames}
 			value={String(shown.month)}
-			onChange={(m) => m !== null && onPlaceholder(shown.set({ month: Number(m) }))}
+			on_change={(m) => m !== null && on_placeholder(shown.set({ month: Number(m) }))}
 		/>
 		<Combobox
 			class="w-20"
 			aria-label={t('year')}
 			options={years}
 			value={String(shown.year)}
-			onChange={(y) => y !== null && onPlaceholder(shown.set({ year: Number(y) }))}
+			on_change={(y) => y !== null && on_placeholder(shown.set({ year: Number(y) }))}
 		/>
 	</div>
 	<P.NextButton class={ARROW} aria-label={t('next')}

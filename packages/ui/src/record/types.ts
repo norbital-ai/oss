@@ -1,16 +1,17 @@
+import type { UiContext } from '../client/contract.js';
 import type { Component } from 'svelte';
 import type { Json } from '@norbital-ai/std/wire';
 import type { RecordOf, InsertOf } from '../model/types.js';
 /** Native advisory capabilities of the current record; saving always rechecks the backend rules. */
 export type RecordRestriction =
-	| 'noGrant'
-	| 'stateLocked'
+	| 'no_grant'
+	| 'state_locked'
 	/** A read-only sync owns the field. */
-	| 'syncOwned'
-	| 'ownedParent'
-	| 'ownedParentLocked'
+	| 'sync_owned'
+	| 'owned_parent'
+	| 'owned_parent_locked'
 	/** An open approval request holds the record; only its current approvers or (changes requested) its requester edit. */
-	| 'underApproval';
+	| 'under_approval';
 /** A nested edit uses one declared parent relation and the parent's observed revision. */
 export type RecordParentContext = {
 	model: string;
@@ -29,11 +30,11 @@ export type RecordCapabilities = {
 	update: { allowed: boolean; proposal: boolean; reasons: readonly RecordRestriction[] };
 	delete: { allowed: boolean; proposal: boolean; reasons: readonly RecordRestriction[] };
 	moves: Readonly<Record<string, readonly string[]>>;
-	proposalMoves: Readonly<Record<string, readonly string[]>>;
+	proposal_moves: Readonly<Record<string, readonly string[]>>;
 };
 /** Why a past value is not written back by a per-record restore. */
 export type RestoreSkip =
-	'deletedTarget' | 'readOnly' | 'noGrant' | 'stateLocked' | 'definitionChanged' | 'uncompatible';
+	'deleted_target' | 'read_only' | 'no_grant' | 'state_locked' | 'definition_changed' | 'incompatible';
 /**
  * `history.preview`: what restoring past `revision` would write over the live record (`live`), field by field, and
  * what it leaves alone and why. `approval`: that field's write routes to an approval rather than committing.
@@ -55,5 +56,7 @@ export type RestorePreview = {
 export type RecordView<C extends string = string> =
 	| { model: C; mode: 'view' | 'edit'; record: RecordOf<C>; capabilities?: RecordCapabilities }
 	| { model: C; mode: 'create'; values: Partial<InsertOf<C>> };
-/** A model's `+representation.svelte`, loaded on first use (its module may import `$bolt`). */
-export type RepresentationLoader = () => Promise<{ default: Component<{ view: RecordView }> }>;
+/** A model's `+representation.svelte`, loaded on first use. */
+export type RepresentationLoader = () => Promise<{
+	default: Component<{ view: RecordView; ctx: UiContext }>;
+}>;

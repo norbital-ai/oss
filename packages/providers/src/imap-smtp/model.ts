@@ -1,12 +1,12 @@
 import { Effect, Option, Schema } from 'effect';
-import type { TcpPort, TcpSocket } from '@norbital-ai/bolt/engine';
+import type { DriverOpen, TcpSocket } from '@norbital-ai/bolt/engine';
 import { OAuthRefused, ProviderRefused, ProviderUnavailable } from '../errors.ts';
 import { codeOf } from './reports.ts';
 
 export type Method = 'password' | 'microsoft' | 'google';
 /** How a mailbox reaches its servers: the host's TCP/TLS port, and whether TLS is off (the tests' fake servers). */
 export type MailNet = {
-	readonly tcp: TcpPort;
+	readonly tcp: DriverOpen['tcp'];
 	readonly plain: boolean;
 };
 /** A port connection as the web streams socket imapflow's streams transport drives. */
@@ -38,7 +38,7 @@ const OAuth = Schema.Struct({
 export const Mailbox = Schema.Union([
 	Schema.Struct({ ...fields, method: Schema.Literal('password'), password: Schema.NonEmptyString }),
 	Schema.Struct({ ...fields, method: Schema.Literal('microsoft'), oauth: OAuth }),
-	// Google signs in with the host's OAuth client (`DriverOpen.oauthClient`), so the mailbox keeps none
+	// Google signs in with the host's OAuth client (`DriverOpen.oauth_client`), so the mailbox keeps none
 	Schema.Struct({ ...fields, method: Schema.Literal('google') })
 ]);
 export type Mailbox = typeof Mailbox.Type;
@@ -55,10 +55,11 @@ export const Wire = Schema.Struct({
 	id: Schema.NonEmptyString,
 	to: Schema.Array(Schema.String),
 	cc: Schema.optionalKey(Schema.Array(Schema.String)),
+	bcc: Schema.optionalKey(Schema.Array(Schema.String)),
 	subject: Schema.String,
 	text: Schema.optionalKey(Schema.String),
 	html: Schema.optionalKey(Schema.String),
-	inReplyTo: Schema.optionalKey(Schema.String),
+	reply_to: Schema.optionalKey(Schema.String),
 	references: Schema.optionalKey(Schema.Array(Schema.String))
 });
 export type Wire = typeof Wire.Type;

@@ -8,7 +8,7 @@ untethered: its default export is this `Facilities` record (`satisfies Facilitie
 adds the parts served around it (`Serving`). The host file is never part of the release's source. `off` is the only
 way to leave an optional member out; `mail` has none. Activation refuses a bundle whose recorded needs name a member
 left `off`, naming each one. The guest runner is no facility: each host owns its own (`HostPorts.guests`; bolt-server
-and `bolt dev` run bolt-cli's `nodeGuests`, Colony its isolated-vm runner).
+and `bolt dev` run bolt-cli's `node_guests`, Colony its isolated-vm runner).
 
 ## storage
 
@@ -33,7 +33,7 @@ and `bolt dev` run bolt-cli's `nodeGuests`, Colony its isolated-vm runner).
 | `phone` | `Phone` | or `off` | Sends and checks a mobile number's sign-in code. |
 | `push` | `Push` | or `off` | Web and native push for inbox notices, over the environment's database (a gone subscription is deleted there). |
 | `challenge` | `Challenge` | or `off` | Turnstile-style bot protection: the public site key the widget renders, and the server-side check. |
-| `fixedCodes` | `FixedCodes` | required | A local host's sign-in codes are all `123456` (38a(f)); a deployed host's are random. |
+| `fixed_codes` | `FixedCodes` | required | A local host's sign-in codes are all `123456` (38a(f)); a deployed host's are random. |
 
 ## intelligence
 
@@ -42,7 +42,6 @@ and `bolt dev` run bolt-cli's `nodeGuests`, Colony its isolated-vm runner).
 | `system1` | `System1` | or `off` | Fast structured decisions (`ctx.ai.sys_1.decide`, triage). |
 | `system2` | `System2` | or `off` | The LLM (`ctx.ai.sys_2.infer`, agents). |
 | `embed` | `Embed` | or `off` | Multimodal embeddings (`ctx.ai.embed`). |
-| `speech` | `Speech` | or `off` | Text to speech (`ctx.ai.speak`); transcription is Norbital Convert's ingest (`ctx.convert.ingest`). |
 
 ## ports
 

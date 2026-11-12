@@ -1,3 +1,5 @@
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // A payroll hotline on PGlite (§2.5, §2.7, §4.3, §4.4): one envoy deployed on two WhatsApp connections, one per legal
 // entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'requestor.instance' }` is the instance
 // the message arrived on, so the same member reads only the entity whose hotline they wrote to, and only their own rows;
@@ -9,24 +11,33 @@ import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { Agents, Conversations } from '../src/engine/services.ts';
-import { actReply, qReply, routeFixture } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { respondSystem1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { respond_system_1, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
 	return value;
 };
 
+const runtime_accounts = [
+	{ id: 'hotline_a', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'hotline_b', integration: 'whatsapp', status: { state: 'connected' } },
+] as const;
+
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } },
 	models: {
-		entities: { description: 'A legal entity', label: 'name', fields: { name: { kind: 'text' } } },
+		entities: {
+			description: 'A legal entity',
+			record_label: 'record.name',
+			fields: { name: { kind: 'text' } }
+		},
 		payslips: {
 			description: 'A payslip',
-			label: 'period',
+			record_label: 'record.period',
 			fields: {
 				period: { kind: 'text' },
 				net: { kind: 'int' },
@@ -45,11 +56,11 @@ const manifest = {
 	},
 	exposures: {
 		entities: {
-			read: { entities: { fields: 'all' } },
+			outputs: { default: { entities: { fields: 'all' } } },
 			create: { columns: { entities: ['name', 'hotline'] } }
 		},
 		payslips: {
-			read: { payslips: { fields: 'all' } },
+			outputs: { default: { payslips: { fields: 'all' } } },
 			create: { columns: { payslips: ['period', 'net', 'entity', 'employee'] } },
 			update: { columns: { payslips: ['status'] } }
 		}
@@ -61,44 +72,49 @@ const manifest = {
 				"What the payroll hotline answers: the sender's own payslips of the entity whose hotline this is",
 			grants: {
 				payslips: {
-					read: {
-						payslips: {
-							where: {
-								employee: { eq: { var: 'requestor.id' } },
-								entity: { is: { hotline: { eq: { var: 'requestor.instance' } } } }
-							},
-							fields: ['period', 'net', 'status']
+					outputs: {
+						default: {
+							scopes: {
+								payslips: {
+									employee: { eq: { var: 'requestor.id' } },
+									entity: { is: { hotline: { eq: { var: 'requestor.instance' } } } }
+								}
+							}
 						}
 					}
 				}
 			}
 		},
-		payroll: { description: 'Payroll staff', grants: { payslips: { read: true, update: true } } }
+		payroll: {
+			description: 'Payroll staff',
+			grants: { payslips: { outputs: { default: {} }, update: {} } }
+		}
 	},
 	teams: { payroll: { name: 'Payroll', policies: ['payroll'] } },
 	automations: {},
-	connections: {
-		hotline_a: { integration: 'whatsapp', envoy: 'payroll_hotline' },
-		hotline_b: { integration: 'whatsapp', envoy: 'payroll_hotline' }
-	},
-	envoys: {
-		payroll_hotline: {
-			audience: 'private',
-			name: 'Payroll',
-			policies: ['hotline'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'disabled',
-			dm: 'envoy',
-			task: 'Answer payslip questions.'
-		}
-	},
+	
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const payrollHotlineEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const runtimeEnvoys = [
+	{
+		id: payrollHotlineEnvoy,
+		accounts: ['hotline_a', 'hotline_b'],
+		audience: 'private',
+		name: 'Payroll',
+		policies: ['hotline'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'disabled',
+		dm: 'envoy',
+		task: 'Answer payslip questions.'
+	}
+] as const;
 
 /** The model: "slips" reads the payslips, "pay <id>" marks one paid, "find <word>" searches the sender's own history; then "Done.". */
 function scriptedAi() {
@@ -109,12 +125,12 @@ function scriptedAi() {
 	const usage = { input: 10, output: 5 };
 	const call = (name: string, input: Json) => ({
 		content: '',
-		toolCalls: [{ id: `c${++n}`, name, input }],
+		tool_calls: [{ id: `c${++n}`, name, input }],
 		finish: 'tool' as const,
 		usage
 	});
 	const layer = Layer.succeed(Ai, {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Effect.succeed({
@@ -128,22 +144,24 @@ function scriptedAi() {
 					requests.push(request);
 					const last = present(
 						request.messages.findLast(
-							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
+							// the step's notes (available actions) and conversation state are context, not what was said
+							(m) => !(typeof m.content === 'string' && /^\[(?:note\]|conversation state)/.test(m.content))
 						)
 					);
 					if (last.role === 'tool')
-						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
+						return { content: 'Done.', tool_calls: [], finish: 'stop', usage };
 					const said = text(last.content);
-					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said)) return call('read', { request: { payslips: {} } });
+					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said))
+						return call('read', { request: { payslips: {} } });
 					const pay = /^(?:\[[^\]\n]*\] )?pay (\S+)$/m.exec(said);
 					if (pay !== null)
 						return call('act', {
 							callable: 'payslips.update',
-							input: [{ target: present(pay[1]), set: { status: 'paid' } }]
+input: [{ target: present(pay[1]), set: { status: 'paid' } }]
 						});
 					const find = /^(?:\[[^\]\n]*\] )?find (\S+)$/m.exec(said);
 					if (find !== null) return call('history', { query: present(find[1]), scope: 'mine' });
-					return { content: `echo: ${said}`, toolCalls: [], finish: 'stop', usage };
+					return { content: `echo: ${said}`, tool_calls: [], finish: 'stop', usage };
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});
@@ -158,11 +176,13 @@ afterAll(() => Effect.runPromise(Scope.close(fileScope, Exit.void)));
 const build = Effect.gen(function* () {
 	const ai = scriptedAi(),
 		slip = { cal_a: '', cal_b: '', ada_a: '' };
-	const context = yield* Layer.build(TestWorkspace.layer({ manifest, ports: ai.layer }));
+	const context = yield* Layer.build(
+		with_envoys(with_accounts(TestWorkspace.layer({ manifest, ports: ai.layer }), runtime_accounts), runtimeEnvoys)
+	);
 	const t = Context.get(context, TestWorkspace),
 		agents = Context.get(context, Agents),
 		conversations = Context.get(context, Conversations),
-		route = yield* routeFixture(context);
+		route = yield* route_fixture(context);
 	yield* t.db.write({
 		text: `INSERT INTO sys_user (id, email, name, admin, team, phone) VALUES
 			('${ADA}', 'ada@ws.example', 'Ada', true, NULL, '+65 9123 4567'), ('${CAL}', 'cal@ws.example', 'Cal', false, NULL, '6598765432')`,
@@ -170,10 +190,9 @@ const build = Effect.gen(function* () {
 	});
 	const make = (callable: string, input: Json) =>
 		Effect.gen(function* () {
-			const o = (yield* actReply(route, t.as(t.admin).authority, {
-				callable,
-				input,
-				issuedAt: t.clock.now()
+			const o = (yield* act_reply(route, (yield* t.as(t.admin)).authority, {
+				acts: { [callable]: input },
+				issued_at: t.clock.now()
 			})).outcome;
 			if (o.kind !== 'committed') throw new Error(JSON.stringify(o));
 			return present(o.records[0]).id;
@@ -211,7 +230,7 @@ const build = Effect.gen(function* () {
 			.receive(instance, {
 				id: `h${++seq}`,
 				thread: from,
-				sentAt: t.clock.now(),
+				sent_at: t.clock.now(),
 				from: { handle: from, name: null },
 				text,
 				attachments: []
@@ -220,7 +239,7 @@ const build = Effect.gen(function* () {
 				Effect.andThen(
 					Effect.gen(function* () {
 						t.clock.advance('2s');
-						yield* t.runDue();
+						yield* t.run_due();
 					})
 				)
 			);
@@ -258,7 +277,9 @@ describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () =>
 
 					// the envoy's policies grant no write, and without the bypass her turn has no write tool at all
 					yield* dm('hotline_a', '6591234567@s.whatsapp.net', `pay ${slip.ada_a}`);
-					expect(yield* lastResult()).toEqual({ error: "No tool 'act'." });
+					expect(yield* lastResult()).toEqual({
+						error: expect.stringMatching(/^Tool 'act' is not available in this step\. Available tools: (?!.*\bact\b)/)
+					});
 					expect(
 						(yield* Schema.decodeUnknownEffect(
 							Schema.Struct({
@@ -267,7 +288,7 @@ describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () =>
 								})
 							})
 						)(
-							(yield* qReply(route, t.as(t.admin).authority, {
+							(yield* q_reply(route, (yield* t.as(t.admin)).authority, {
 								reads: [
 									{
 										m: 'query',
@@ -318,7 +339,7 @@ describe('durable admission (§4.3)', () => {
 								{
 									id: 'crash-1',
 									thread: '6598765432@s.whatsapp.net',
-									sentAt: t.clock.now(),
+									sent_at: t.clock.now(),
 									from: { handle: '6598765432@s.whatsapp.net', name: null },
 									text: 'slips',
 									attachments: []
@@ -335,25 +356,24 @@ describe('durable admission (§4.3)', () => {
 					expect(yield* admissions('queued')).toBe(1);
 					expect(ai.requests).toHaveLength(asked);
 					// the admission is a queued run (a restart re-arms queued runs: runs.integration, lost leases)
-					yield* t.runDue();
+					yield* t.run_due();
 					t.clock.advance('2s'); // the admitted DM waits out the sender's pause
-					yield* t.runDue();
+					yield* t.run_due();
 					yield* t.settled();
 					expect(yield* admissions('queued')).toBe(0);
 					expect(ai.requests).toHaveLength(asked + 2);
 					expect(nets(yield* lastResult())).toEqual([100]);
 
 					const all = yield* admissions('%');
-					const o = (yield* actReply(route, t.as(t.admin).authority, {
-						callable: 'sys_integration.update',
-						input: [{ target: 'hotline_a', set: { active: false } }],
-						issuedAt: t.clock.now()
+					const o = (yield* act_reply(route, (yield* t.as(t.admin)).authority, {
+						acts: { 'sys_integration.update': [{ target: { id: 'hotline_a' }, set: { active: false } }] },
+						issued_at: t.clock.now()
 					})).outcome;
 					expect(o.kind).toBe('committed');
 					const message = {
 						id: 'p-1',
 						thread: '6598765432@s.whatsapp.net',
-						sentAt: t.clock.now(),
+						sent_at: t.clock.now(),
 						from: { handle: '6598765432@s.whatsapp.net', name: null },
 						text: 'held',
 						attachments: []

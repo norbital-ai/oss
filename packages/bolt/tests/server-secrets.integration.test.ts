@@ -17,11 +17,9 @@ const manifest: EngineManifest = {
 	teams: {},
 	automations: { check: { description: 'Check server configuration', policies: ['server'] } },
 	integrations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const source = program(`import { Config, Option, Redacted } from 'effect';
@@ -31,7 +29,9 @@ function* helper(input, ctx) {
  return { matches: Redacted.value(token) === input, ambientAbsent: Option.isNone(missing), contextClean: !('$secrets' in ctx) };
 }
 const body = function* (input, ctx) { return yield* helper(input, ctx); };
-export default { automation: { check: { body } }, model: { example: { bodies: { create: body } } }, page: { example: { body } } };`);
+// a write callback receives its changes: the checked value rides in the one change's \`set\`
+const create = function* (changes, ctx) { return yield* helper(changes[0].set.token, ctx); };
+export default { automation: { check: { body } }, model: { example: { bodies: { create } } }, page: { example: { body } } };`);
 const noCalls: Bridge = {
 	cross: () => Effect.die('Configuration reads do not need model or facility authority.')
 };
@@ -39,7 +39,7 @@ const invocation = (kind: InvocationKind, value: string): Invocation => ({
 	id: `secret-${kind}`,
 	kind,
 	target: kind === 'automation' ? 'check' : 'example',
-	input: value,
+	input: kind === 'create' ? [{ before: null, set: { token: value }, after: null }] : value,
 	ctx: {
 		actor: { kind: 'system', run: 'secret-test', by: { platform: 'test' } },
 		now: '2026-10-31T00:00:00Z',

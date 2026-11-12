@@ -1,14 +1,8 @@
 import { Effect } from 'effect';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import { WebRead, type PortFailure } from '@norbital-ai/bolt/engine';
-import {
-	makeRequestPage,
-	publicAddresses,
-	WEB_PAGE_BYTE_LIMIT,
-	type Address
-} from '@norbital-ai/bolt/node';
+import { read_public_page } from '@norbital-ai/bolt/node';
 import { extractDocumentText } from './documents.ts';
-const requestPage = makeRequestPage();
 export type PublicPage = {
 	url: string;
 	body: string;
@@ -16,44 +10,17 @@ export type PublicPage = {
 	sha256?: string;
 	pageCount?: number;
 };
-const failure = (message: string) => new FacilityFailure({ kind: 'upstream', message });
-export const readPublicPage = Effect.fn('server.readPublicPage')(
-	function* (
-		url: string,
-		options: {
-			readonly resolve?: (hostname: string) => Promise<readonly Address[]>;
-			readonly request?: typeof requestPage;
-		} = {}
-	) {
-		if (url === '') return yield* Effect.fail(failure('A public page needs a URL.'));
-		let target = yield* Effect.try({
-			try: () => new URL(url),
-			catch: () => failure('A public page needs a valid URL.')
-		});
-		for (let redirects = 0; redirects <= 5; redirects++) {
-			const addresses = yield* publicAddresses(target, options.resolve);
-			const response = yield* (options.request ?? requestPage)(target, addresses);
-			if (response.status >= 300 && response.status < 400 && response.location) {
-				const location = response.location;
-				target = yield* Effect.try({
-					try: () => new URL(location, target),
-					catch: () => failure('The public page returned an invalid redirect URL.')
-				});
-				continue;
-			}
-			if (response.status < 200 || response.status >= 300)
-				return yield* Effect.fail(failure(`Public page returned HTTP ${response.status}.`));
-			const bytes =
-				typeof response.body === 'string' ? new TextEncoder().encode(response.body) : response.body;
-			if (bytes.byteLength > WEB_PAGE_BYTE_LIMIT)
-				return yield* Effect.fail(failure('Public page exceeds the 2 MiB limit.'));
-			return {
-				url: target.toString(),
-				contentType: response.contentType,
-				...(yield* extractDocumentText(bytes, response.contentType))
-			};
-		}
-		return yield* Effect.fail(failure('Public page exceeded five redirects.'));
+export const readPublicPage: (
+	url: string,
+	options?: Parameters<typeof read_public_page>[1]
+) => Effect.Effect<PublicPage, PortFailure> = Effect.fn('server.readPublicPage')(
+	function* (url: string, options: Parameters<typeof read_public_page>[1] = {}) {
+		const page = yield* read_public_page(url, options);
+		return {
+			url: page.url,
+			contentType: page.contentType,
+			...(yield* extractDocumentText(page.bytes, page.contentType))
+		};
 	},
 	(effect) =>
 		effect.pipe(
@@ -107,7 +74,7 @@ export const publicWeb = (
 					url: page.url,
 					title,
 					text,
-					...(page.contentType === undefined ? {} : { contentType: page.contentType }),
+					...(page.contentType === undefined ? {} : { content_type: page.contentType }),
 					...(page.sha256 === undefined ? {} : { sha256: page.sha256 }),
 					...(page.pageCount === undefined ? {} : { pages: page.pageCount }),
 					...(html === undefined ? {} : { html, links: linksOf(html, page.url) })

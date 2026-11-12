@@ -1,15 +1,17 @@
-import { model } from '../../../../../../../src/index.ts';
+import { model } from '../../../../.norbital/models/notices.ts';
 
-export default model('notices', {
+export default model({
 	description: 'Mirrored notices',
-	label: 'subject',
-	key: ['inbox', 'message_id'],
+	record_label: 'record.subject',
 	fields: {
 		message_id: { kind: 'text' },
 		subject: { kind: 'text' },
 		inbox: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'mail' } } }
 	},
-	read: 'all',
+	constraints: {
+		one_message: { unique: ['inbox', 'message_id'], import_key: true }
+	},
+	outputs: { default: { fields: 'all' } },
 	syncs: {
 		messages: {
 			with: 'mail',

@@ -36,7 +36,7 @@ const closure = (entries: ReadonlyArray<string>) =>
 
 const hashes = new Map<string, Effect.Effect<string>>();
 /** The modules' content key (absolute paths), computed once per process. */
-export const moduleHash = (...entries: ReadonlyArray<string>): Effect.Effect<string> => {
+export const module_hash = (...entries: ReadonlyArray<string>): Effect.Effect<string> => {
 	const key = entries.join('\0');
 	let cached = hashes.get(key);
 	if (cached === undefined) {

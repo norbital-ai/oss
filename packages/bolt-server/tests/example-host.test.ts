@@ -1,16 +1,16 @@
-// The example host file `env serve` runs: Colony's speech settings without a speak model still load it.
+// The example host accepts a local PGlite workspace with the optional model providers off.
 import { describe, expect, it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, FileSystem, Path } from 'effect';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { isOff } from '@norbital-ai/bolt/facilities';
-import { loadHost } from '@norbital-ai/bolt/node';
+import { is_off } from '@norbital-ai/bolt/facilities';
+import { load_host } from '@norbital-ai/bolt/tooling';
 
 const example = fileURLToPath(new URL('../example/norbital.host.ts', import.meta.url));
 
 describe('example/norbital.host.ts', () => {
-	it.live('loads a persistent localhost workspace with a speech key and no speak model', () =>
+	it.live('loads a persistent localhost workspace', () =>
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem,
 				path = yield* Path.Path;
@@ -28,12 +28,11 @@ describe('example/norbital.host.ts', () => {
 				BOLT_MASTER_KEY: randomBytes(32).toString('hex'),
 				BOLT_FILES_PROVIDER: 'local',
 				BOLT_FILES_ENDPOINT: path.join(dir, 'files'),
-				BOLT_TRANSACTIONAL_EMAIL: 'log',
-				BOLT_AI_SPEECH_ENDPOINT: 'https://openrouter.ai/api/v1',
-				BOLT_AI_SPEECH_CREDENTIAL: 'test'
+				BOLT_TRANSACTIONAL_EMAIL: 'log'
 			});
-			const { facilities } = yield* loadHost(example);
-			expect(isOff(facilities.intelligence.speech)).toBe(true);
+			// `serve`'s own loading: the module's shape is validated and `serving.close` runs with the scope
+			const { facilities } = yield* load_host(example);
+			expect(is_off(facilities.intelligence.system2)).toBe(true);
 		}).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
 	);
 });

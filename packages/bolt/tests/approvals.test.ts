@@ -1,8 +1,6 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
-import { IdValue } from '@norbital-ai/std/kind';
-import type { Id } from '../src/decl/values.ts';
-import { approvalFlow, snapshotOf } from '../src/decl/access/policy.ts';
+import { Verdict } from '../src/decl/access/policy.ts';
 import type { Authority, EngineActor } from '../src/engine/contracts.ts';
 import {
 	canApprove,
@@ -15,11 +13,8 @@ import {
 import { decisionsFor, moveOf, transition } from '../src/engine/approvals/machine.ts';
 import { rowApproval } from '../src/engine/approvals/lock.ts';
 import { inboxRequests } from '../src/engine/approvals/inbox.ts';
+import { Checkpoint } from '../src/engine/approvals/snapshot.ts';
 import { authority } from './write-fixture.ts';
-
-const MemberId = Schema.declare((value: unknown): value is Id<'sys_user'> =>
-	Schema.is(IdValue)(value)
-);
 
 const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' }> => ({
 	kind: 'member',
@@ -28,7 +23,7 @@ const actor = (id: string, team: string): Extract<EngineActor, { kind: 'member' 
 	phone: null,
 	external: false,
 	teams: [team],
-	teamPath: [team],
+	team_path: [team],
 	admin: false,
 	party: null
 });
@@ -52,6 +47,12 @@ const request: Request = {
 };
 
 describe('approval flows', () => {
+	it('keeps checkpoint storage keys stable while native rollback reads model names', () => {
+		const stored = { collection: 'orders', id: 'order', op: 'update', before: 3 };
+		const checkpoint = Schema.decodeUnknownSync(Checkpoint)(stored);
+		expect(checkpoint).toEqual({ model: 'orders', id: 'order', op: 'update', before: 3 });
+		expect(Schema.encodeSync(Checkpoint)(checkpoint)).toEqual(stored);
+	});
 	it('shows requesters their pending status with only withdraw, without exposing it to strangers', () => {
 		const row = {
 			id: 'request',
@@ -85,46 +86,38 @@ describe('approval flows', () => {
 	});
 	it('decodes held approval steps and rejects malformed stored metadata', () => {
 		const held = {
-			requestId: 'request',
+			request_id: 'request',
 			state: request.state,
 			step: request.step,
 			steps: request.route.steps,
 			by: 'Requester'
 		};
 		expect(rowApproval(held)).toEqual({
-			requestId: 'request',
+			request_id: 'request',
 			state: 'Pending',
 			step: 0,
 			steps: request.route.steps,
-			requestedBy: 'Requester'
+			requested_by: 'Requester'
 		});
 		expect(rowApproval({ ...held, steps: [] })).toBeUndefined();
 		expect(
 			rowApproval({ ...held, steps: [{ name: 'Manager', teams: [], users: [42] }] })
 		).toBeUndefined();
 	});
-	it('snapshots conditional named steps and direct allow or deny', () => {
-		expect(
-			snapshotOf(
-				approvalFlow()
-					.if(false, (flow) =>
-						flow.step('Manager', {
-							users: [Schema.decodeUnknownSync(MemberId)('0199a000-0000-7000-8000-000000000002')]
-						})
-					)
-					.else((flow) => flow.step('HR', { teams: ['finance'] }))
-					.supersededBy(['sales'])
-			)
-		).toEqual({
-			kind: 'steps',
-			steps: [{ name: 'HR', teams: ['finance'], users: [] }],
-			superseded_by: ['sales']
+	it('snapshots literal steps and refuses an empty route', () => {
+		const verdict = Verdict.approve({
+			steps: [{ name: 'HR', teams: ['finance'] }],
+			superseded_by: ['sales', 'sales']
 		});
-		expect(snapshotOf(approvalFlow().allow())).toEqual({ kind: 'allow' });
-		expect(snapshotOf(approvalFlow().deny('Not available'))).toEqual({
-			kind: 'deny',
-			message: 'Not available'
+		expect(Verdict.dataOf(verdict)).toEqual({
+			kind: 'approve',
+			flow: {
+				kind: 'steps',
+				steps: [{ name: 'HR', teams: ['finance'], users: [] }],
+				superseded_by: ['sales']
+			}
 		});
+		expect(() => Reflect.apply(Verdict.approve, undefined, [{ steps: [] }])).toThrow();
 	});
 	it('allows the named user or current step team, without inheriting parent authority', () => {
 		expect(canApprove(request, as('manager', 'staff'))).toBe(true);
@@ -133,7 +126,7 @@ describe('approval flows', () => {
 		expect(
 			canApprove(request, {
 				...as('other', 'staff'),
-				actor: { ...actor('other', 'staff'), teamPath: ['leadership', 'staff'] }
+				actor: { ...actor('other', 'staff'), team_path: ['leadership', 'staff'] }
 			})
 		).toBe(false);
 	});
@@ -223,7 +216,7 @@ describe('approval flows', () => {
 		expect(decisionsFor('Pending', roles)).toEqual([
 			{ decision: 'approve', reason: 'required' },
 			{ decision: 'reject', reason: 'required' },
-			{ decision: 'requestChanges', reason: 'required' }
+			{ decision: 'request_changes', reason: 'required' }
 		]);
 		expect(transition(request, 2, 'supersede', roles, '')).toMatchObject({ refused: 'reason' });
 	});
@@ -260,7 +253,7 @@ describe('approval flows', () => {
 	});
 	it('rejects terminal moves and requires reasons for rejection or requested changes', () => {
 		const roles = new Set(['approver'] as const);
-		for (const move of ['reject', 'requestChanges'] as const)
+		for (const move of ['reject', 'request_changes'] as const)
 			expect(transition(request, 2, move, roles, '')).toMatchObject({ refused: 'reason' });
 		expect(transition({ state: 'Approved', step: 1 }, 2, 'reject', roles, 'No')).toMatchObject({
 			refused: 'invalidMove'

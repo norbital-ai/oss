@@ -1,15 +1,16 @@
 <script lang="ts">
 	import { cn } from '../utils.js';
-	import { Dialog as DialogPrimitive } from 'bits-ui';
+	import PrimitiveOverlay from './dialog-primitive-overlay.svelte';
+	import type { ComponentProps } from 'svelte';
 
 	let {
 		ref = $bindable(null),
 		class: className,
 		...restProps
-	}: DialogPrimitive.OverlayProps = $props();
+	}: ComponentProps<typeof PrimitiveOverlay> = $props();
 </script>
 
-<DialogPrimitive.Overlay
+<PrimitiveOverlay
 	bind:ref
 	data-slot="dialog-overlay"
 	class={cn(

@@ -7,9 +7,9 @@ Crops media to a named aspect ratio (`square`, `portrait`, `landscape`, `widescr
 	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
 	/** Named media crops. `banner` is the compact overview / sheet hero (2:1). */
-	export type FrameRatio = 'square' | 'portrait' | 'landscape' | 'widescreen' | 'banner';
+	type FrameRatio = 'square' | 'portrait' | 'landscape' | 'widescreen' | 'banner';
 	/** The props of `Frame`. */
-	export interface FrameProps extends LayoutAttributes {
+	interface FrameProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: FrameRatio;
 		children: Snippet;

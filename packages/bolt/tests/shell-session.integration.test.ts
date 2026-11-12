@@ -5,18 +5,18 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result } from 'effect';
-import { decodeManifest, decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_manifest, decode_projected_manifest } from '../src/engine/manifest.ts';
 import { mint, sha256 } from '../src/engine/identity/session.ts';
-import { authorityOf } from '../src/shell/host.ts';
+import { authority_of } from '../src/shell/host.ts';
 import { HostIdentity } from '../src/engine/services.ts';
 import * as HttpServerRequest from 'effect/http/HttpServerRequest';
 import { COOKIES, SHELL } from '../src/shell/nav.ts';
 import { RateLimits } from '../src/protocol/http.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
-import { storedFileUrl } from '../src/page/file-ref.ts';
+import { stored_file_url } from '../src/page/file-ref.ts';
 
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en', apps: [], agent: { triage: false } },
 		models: {},
 		relationships: {},
@@ -27,10 +27,8 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
-		customFields: {}
+		custom_fields: {}
 	})
 );
 
@@ -44,7 +42,7 @@ describe('the session cookie', () => {
 						TestWorkspace.layer({
 							manifest,
 							host: {
-								publicUrl: 'http://127.0.0.1:4180',
+								public_url: 'http://127.0.0.1:4180',
 								workspace: () => ({ name: 'Local', handle: 'local' })
 							}
 						})
@@ -65,7 +63,7 @@ describe('the session cookie', () => {
 					expect(renewed).toMatch(/^bolt-session=/);
 					expect(renewed).toContain('; Path=/; HttpOnly; SameSite=Lax;');
 					expect(renewed).not.toMatch(/(?:^|;)\s*(?:Secure|Partitioned)(?:;|$)/i);
-					expect((yield* request(SHELL, renewed.split(';')[0]!)).status).toBe(200);
+					expect((yield* request(SHELL, renewed.split(';')[0] ?? '')).status).toBe(200);
 					expect((yield* request(SHELL, `${session}; ${session}`)).status).toBe(400);
 					expect((yield* request(SHELL, `__Secure-${session}`)).status).toBe(401);
 					const signedOut = yield* request('/__bolt/session/signout', session, 'POST');
@@ -103,11 +101,12 @@ describe('the session cookie', () => {
 			Effect.scoped(
 				Effect.gen(function* () {
 					const publicManifest = Result.getOrThrow(
-						decodeManifest({
+						decode_manifest({
 							...manifest,
 							models: {
 								photos: {
-									label: 'title',
+									description: 'Photos',
+									record_label: 'record.title',
 									fields: {
 										title: { kind: 'text' },
 										visible: { kind: 'bool' },
@@ -117,7 +116,7 @@ describe('the session cookie', () => {
 							},
 							exposures: {
 								photos: {
-									read: { photos: { fields: 'all' } },
+									outputs: { default: { photos: { fields: 'all' } } },
 									create: { columns: { photos: ['title', 'visible', 'image'] } }
 								}
 							},
@@ -126,9 +125,7 @@ describe('the session cookie', () => {
 									description: 'Visible photos',
 									grants: {
 										photos: {
-											read: {
-												photos: { where: { visible: { eq: true } }, fields: ['title', 'image'] }
-											}
+											outputs: { default: { scopes: { photos: { visible: { eq: true } } } } }
 										}
 									}
 								}
@@ -146,22 +143,21 @@ describe('the session cookie', () => {
 									description: 'Private app',
 									icon: 'x',
 									pages: { home: { title: 'Home' } }
-								}
-							},
-							kiosks: {
+								},
 								lobby: {
 									title: 'Lobby',
 									description: 'Public photos',
 									icon: 'x',
-									auth: 'none',
-									policies: ['viewer'],
+									shell: 'kiosk',
+									audience: { public: ['viewer'] },
 									pages: { home: { title: 'Home' } }
 								},
 								private: {
 									title: 'Private',
 									description: 'Members kiosk',
 									icon: 'x',
-									auth: 'members',
+									shell: 'kiosk',
+									audience: 'members',
 									policies: ['viewer'],
 									pages: { home: { title: 'Home' } }
 								}
@@ -173,12 +169,8 @@ describe('the session cookie', () => {
 					const bytes = new Uint8Array(
 						readFileSync(new URL('./fixtures/files/photo.png', import.meta.url))
 					);
-					const publicUpload = yield* t
-						.as(t.admin)
-						.upload('photos.image', { name: 'public.png', mime: 'image/png', bytes });
-					const privateUpload = yield* t
-						.as(t.admin)
-						.upload('photos.image', { name: 'private.png', mime: 'image/png', bytes });
+					const publicUpload = yield* (yield* t.as(t.admin)).upload('photos.image', { name: 'public.png', mime: 'image/png', bytes });
+					const privateUpload = yield* (yield* t.as(t.admin)).upload('photos.image', { name: 'private.png', mime: 'image/png', bytes });
 					if (publicUpload.kind !== 'committed' || privateUpload.kind !== 'committed')
 						throw new Error('Expected native stored-file uploads');
 					const visible = publicUpload.output;
@@ -198,7 +190,7 @@ describe('the session cookie', () => {
 					});
 					const request = (path: string, method = 'GET', headers: Record<string, string> = {}) =>
 						t.handle(new Request(`https://workspace.test${path}`, { method, headers }));
-					const appPath = storedFileUrl('', visible.id, { preview: 64 }, { app: 'gallery' });
+					const appPath = stored_file_url('', visible.id, { preview: 64 }, { app: 'gallery' });
 					const preview = yield* request(appPath);
 					expect(preview.status).toBe(200);
 					expect(preview.headers.get('content-type')).toBe('image/png');
@@ -213,19 +205,19 @@ describe('the session cookie', () => {
 						expect(dimensions.getUint32(offset)).toBeGreaterThan(0);
 						expect(dimensions.getUint32(offset)).toBeLessThanOrEqual(64);
 					}
-					const original = yield* request(storedFileUrl('', visible.id, {}, { app: 'gallery' }));
+					const original = yield* request(stored_file_url('', visible.id, {}, { app: 'gallery' }));
 					expect(original.status).toBe(200);
 					expect(original.headers.get('content-type')).toBe('image/png');
 					expect(new Uint8Array(yield* Effect.promise(() => original.arrayBuffer()))).toEqual(
 						bytes
 					);
-					expect((yield* request(storedFileUrl('', visible.id))).status).toBe(401);
+					expect((yield* request(stored_file_url('', visible.id))).status).toBe(401);
 					expect(
-						(yield* request(storedFileUrl('', hidden.id, { preview: 64 }, { app: 'gallery' })))
+						(yield* request(stored_file_url('', hidden.id, { preview: 64 }, { app: 'gallery' })))
 							.status
 					).toBe(404);
 					expect(
-						(yield* request(storedFileUrl('', visible.id, { preview: 512 }, { kiosk: 'lobby' })))
+						(yield* request(stored_file_url('', visible.id, { preview: 512 }, { kiosk: 'lobby' })))
 							.status
 					).toBe(200);
 					const administrator = randomUUID();
@@ -240,19 +232,19 @@ describe('the session cookie', () => {
 						]
 					});
 					const memberHeaders = { cookie: yield* t.session(administrator) };
-					expect((yield* request(storedFileUrl('', hidden.id), 'GET', memberHeaders)).status).toBe(
+					expect((yield* request(stored_file_url('', hidden.id), 'GET', memberHeaders)).status).toBe(
 						200
 					);
 					expect(
 						(yield* request(
-							storedFileUrl('', hidden.id, {}, { app: 'gallery' }),
+							stored_file_url('', hidden.id, {}, { app: 'gallery' }),
 							'GET',
 							memberHeaders
 						)).status
 					).toBe(404);
 					expect(
 						(yield* request(
-							storedFileUrl('', hidden.id, {}, { kiosk: 'lobby' }),
+							stored_file_url('', hidden.id, {}, { kiosk: 'lobby' }),
 							'GET',
 							memberHeaders
 						)).status
@@ -281,7 +273,7 @@ describe('the session cookie', () => {
 						{ kiosk: 'private' },
 						{ kiosk: 'unknown' }
 					])
-						expect((yield* request(storedFileUrl('', visible.id, {}, scope))).status).toBe(403);
+						expect((yield* request(stored_file_url('', visible.id, {}, scope))).status).toBe(403);
 					expect((yield* request(appPath, 'GET', { 'Bolt-App': 'gallery' })).status).toBe(200);
 					expect((yield* request('/__bolt/files/photos.image?app=gallery', 'PUT')).status).toBe(
 						401
@@ -297,7 +289,7 @@ describe('the session cookie', () => {
 					TestWorkspace.layer({
 						manifest,
 						host: {
-							publicUrl: 'https://acme.example/acme',
+							public_url: 'https://acme.example/acme',
 							workspace: () => ({ name: 'Acme', handle: 'acme' })
 						}
 					})
@@ -310,7 +302,7 @@ describe('the session cookie', () => {
 					params: [id]
 				});
 				const authority = (token: string) =>
-					authorityOf(
+					authority_of(
 						HttpServerRequest.fromWeb(
 							new Request(`https://acme.example${SHELL}`, {
 								headers: { cookie: `${COOKIES.session}=${encodeURIComponent(token)}` }
@@ -341,7 +333,7 @@ describe('the session cookie', () => {
 						TestWorkspace.layer({
 							manifest,
 							host: {
-								publicUrl: 'https://acme.example/acme',
+								public_url: 'https://acme.example/acme',
 								workspace: () => ({ name: 'Acme', handle: 'acme' })
 							}
 						})

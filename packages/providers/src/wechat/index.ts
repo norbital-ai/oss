@@ -1,9 +1,9 @@
-import { Cache, Effect, Exit, Option, Schema } from 'effect';
+import { Effect, Option, Schema } from 'effect';
 import { createDecipheriv, createHash } from 'node:crypto';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { answerFailure, ProviderUnavailable, type ProviderFailure } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable, type ProviderFailure } from '../errors.ts';
 import {
 	blobOf,
 	field,
@@ -14,6 +14,7 @@ import {
 	withFetch,
 	type Obj
 } from '../util.ts';
+import { tokenCache } from '../chat/token.ts';
 
 const API = 'https://api.weixin.qq.com';
 const IMAGE = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/bmp']);
@@ -76,7 +77,7 @@ export function wechat(): ProviderDef {
 						en: 'Under Server Configuration: paste this URL, choose a Token, generate an EncodingAESKey, set Message Encryption to Safe Mode, then enable it.',
 						zh: '在服务器配置中：粘贴此 URL，设置 Token，生成 EncodingAESKey，将消息加解密方式设为安全模式，然后启用。'
 					},
-					copy: 'webhookUrl'
+					copy: 'webhook_url'
 				},
 				{
 					text: {
@@ -133,7 +134,7 @@ export function wechat(): ProviderDef {
 						return answer;
 					})
 				);
-			const tokens = yield* Cache.makeWith(
+			const tokens = yield* tokenCache(
 				(value: Cred) =>
 					Effect.gen(function* () {
 						const answer = yield* call(
@@ -155,17 +156,12 @@ export function wechat(): ProviderDef {
 							token: answer.access_token,
 							ttl: Math.max(0, (Number(answer.expires_in ?? 7200) - 300) * 1000)
 						};
-					}),
-				{
-					capacity: 1,
-					timeToLive: (exit) =>
-						Exit.isSuccess(exit) && Number.isFinite(exit.value.ttl) ? exit.value.ttl : 0
-				}
+					})
 			);
 			const accessToken = (value: Cred, fresh = false) =>
 				Effect.gen(function* () {
-					if (fresh) yield* Cache.invalidate(tokens, value);
-					return (yield* Cache.get(tokens, value)).token;
+					if (fresh) yield* tokens.invalidate;
+					return yield* tokens.get(value);
 				});
 			const download = (request: HttpClientRequest.HttpClientRequest) =>
 				withFetch(
@@ -204,9 +200,7 @@ export function wechat(): ProviderDef {
 			});
 			const custom = Effect.fn('WeChat.custom')(function* (path: string, body: Json) {
 				if (cred === null)
-					return yield* Effect.fail(
-						new ProviderUnavailable({ message: 'the WeChat account is not connected' })
-					);
+					return yield* Effect.fail(notConnected('the WeChat account'));
 				const value = cred;
 				for (const fresh of [false, true]) {
 					const answer = yield* call(
@@ -243,7 +237,7 @@ export function wechat(): ProviderDef {
 							/^[A-Za-z0-9]{43}$/
 						)
 					};
-					yield* Cache.invalidateAll(tokens);
+					yield* tokens.invalidate;
 					yield* accessToken(value, true);
 					yield* hostCall('store WeChat credential', () =>
 						ctx.credentials.write(new Map([['credential', value]]))
@@ -254,7 +248,7 @@ export function wechat(): ProviderDef {
 				unpair: () =>
 					Effect.gen(function* () {
 						cred = null;
-						yield* Cache.invalidateAll(tokens);
+						yield* tokens.invalidate;
 					}),
 				close: Effect.void,
 				send: Effect.fn('WeChat.send')(function* (
@@ -262,9 +256,7 @@ export function wechat(): ProviderDef {
 					files: readonly OutboundAttachment[] = []
 				) {
 					if (cred === null)
-						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the WeChat account is not connected' })
-						);
+						return yield* Effect.fail(notConnected('the WeChat account'));
 					const value = cred;
 					const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
 						Effect.mapError(() => answerFailure('a WeChat message needs `to` and `text`', 400))
@@ -299,7 +291,7 @@ export function wechat(): ProviderDef {
 						});
 					}
 					// the API answers no id, and a retry of this message must name the same one
-					return { providerId: `wx-${m.id}` };
+					return { provider_id: `wx-${m.id}` };
 				}),
 				typing: (to: string, on: boolean) =>
 					custom('typing', { touser: to, command: on ? 'Typing' : 'CancelTyping' }),
@@ -424,7 +416,7 @@ export function wechatMessage(xml: string): { message: Obj; media: WechatMedia |
 		message: {
 			id,
 			thread: from,
-			sentAt: new Date(at * 1000).toISOString(),
+			sent_at: new Date(at * 1000).toISOString(),
 			from: { handle: from, name: null },
 			text:
 				type === 'location'
@@ -437,7 +429,7 @@ export function wechatMessage(xml: string): { message: Obj; media: WechatMedia |
 						: (xmlField(xml, 'Content') ?? ''),
 			group: false,
 			invocation: 'direct',
-			replyTo: null,
+			reply_to: null,
 			attachments: media === null ? [] : [{ name: media.name, mime, bytes: 0 }]
 		}
 	};

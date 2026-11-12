@@ -1,33 +1,30 @@
 /// <reference types="node" />
-// `nodeGuests`: a guest runner (`HostPorts.guests`, `GuestIsolatesPort`) as `node:vm` contexts in this process. Each call is one
+// `node_guests`: a guest runner (`HostPorts.guests`, `GuestIsolatesPort`) as `node:vm` contexts in this process. Each call is one
 // synchronous run under `timeout` of what is left of the session's CPU budget, its microtasks drained inside it; the
 // thread's CPU around it is the session's. A multi-tenant kernel brings its own isolates (Colony: isolated-vm).
-// ponytail: a vm context shares this process's heap and is no security boundary: no per-guest memory cap (`memoryMiB` is
+// ponytail: a vm context shares this process's heap and is no security boundary: no per-guest memory cap (`memory_mib` is
 // not enforced, `memory` never fails) and the guest runs operator-trusted code only. A host serving untrusted tenants
 // supplies native isolates.
 import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
-import { Predicate } from 'effect';
+import { Predicate, Schema } from 'effect';
+import { LIMITS, GuestTaken, type GuestProgram } from '@norbital-ai/bolt/engine';
+import type { HostFailure, HostPorts } from '@norbital-ai/bolt/host-api';
 import {
-	LIMITS,
-	type GuestIsolatesPort,
-	type GuestProgram,
-	type GuestSessionOptions,
-	type GuestTaken
-} from '@norbital-ai/bolt/engine';
-import type { HostFailure } from '@norbital-ai/bolt/host-api';
-import {
-	assetHook,
+	asset_hook,
 	digest,
-	moduleScript,
-	randomStream,
+	module_script,
+	random_stream,
 	type GuestHooks,
 	type ImportDeclaration
-} from '@norbital-ai/bolt/guest-hooks';
+} from '@norbital-ai/bolt/node';
+
+type GuestIsolatesPort = HostPorts['guests'];
+type GuestSessionOptions = Parameters<GuestIsolatesPort['open']>[1];
 
 type Prelude = {
 	readonly start: (...args: readonly unknown[]) => void;
-	readonly take: () => GuestTaken;
+	readonly take: () => unknown;
 	readonly give: (...args: readonly unknown[]) => void;
 };
 // The context's own copy of what crosses in: its arrays and Uint8Arrays, so the guest's `instanceof` holds.
@@ -55,27 +52,33 @@ const compiled = (key: string, filename: string, code: () => string) => {
 /** A guest context: `prelude` evaluated as an `evalClosure` body over `hooks`, whose answers cross in copied. */
 const guestContext = (prelude: string, hooks: GuestHooks) => {
 	const context = vm.createContext({}, { microtaskMode: 'afterEvaluate' });
-	const copy: (value: unknown) => unknown = COPY.runInContext(context);
+	const callback = Schema.declare((value: unknown): value is (...args: readonly unknown[]) => unknown => typeof value === 'function');
+	const copy = Schema.decodeUnknownSync(callback)(COPY.runInContext(context));
 	const [say, random, digestOf, asset] = hooks;
 	const make = compiled(
 		prelude,
 		'bolt:prelude',
 		() => `(function ($0, $1, $2, $3) {\n${prelude}\n})`
 	);
-	const api: Prelude = make.runInContext(context)(
+	const factory = Schema.decodeUnknownSync(callback)(make.runInContext(context));
+	const api: Prelude = Schema.decodeUnknownSync(Schema.Struct({ start: callback, take: callback, give: callback }))(factory(
 		say,
 		(n: unknown) => copy(random(n)),
 		(name: unknown, bytes: unknown) => copy(digestOf(name, structuredClone(bytes))),
 		(sha: unknown) => copy(asset(sha))
-	);
+	));
 	return { context, copy, api };
 };
 
 /** `work` as one run in `context`: its microtasks drain inside it, and past `timeout` ms it throws. */
 const within = <A>(context: vm.Context, timeout: number, work: () => A): A => {
-	Reflect.set(context, TURN, work);
+	const completed: { readonly value: A }[] = [];
+	Reflect.set(context, TURN, () => { completed.push({ value: work() }); });
 	try {
-		return RUN.runInContext(context, { timeout: Math.max(1, Math.ceil(timeout)) });
+		RUN.runInContext(context, { timeout: Math.max(1, Math.ceil(timeout)) });
+		const result = completed[0];
+		if (result === undefined) throw new Error('the guest slice did not complete');
+		return result.value;
 	} finally {
 		Reflect.deleteProperty(context, TURN);
 	}
@@ -95,7 +98,7 @@ const cpuSince = (from: NodeJS.CpuUsage) => {
 
 /** Console lines one turn carries; the rest are counted. */
 const LINES = 200;
-const failure = (code: 'cpuBudget' | 'interrupted', message: string): HostFailure => ({
+const failure = (code: 'cpu_budget' | 'interrupted', message: string): HostFailure => ({
 	_tag: 'HostFailure',
 	code,
 	phase: 'guest',
@@ -106,8 +109,8 @@ const refuseImport = (node: ImportDeclaration): string => {
 };
 
 export type NodeGuestsOptions = {
-	/** Each session's CPU budget, its module evaluation included (default `LIMITS.guestCpuMs`); past it, `cpuBudget`. */
-	readonly cpuMs?: number | undefined;
+	/** Each session's CPU budget, its module evaluation included (default `LIMITS.guestCpuMs`); past it, `cpu_budget`. */
+	readonly cpu_ms?: number | undefined;
 	/** Every run's CPU, by session. */
 	readonly meter?: ((session: string, nanos: bigint) => void) | undefined;
 };
@@ -120,10 +123,10 @@ type Session = {
 };
 
 /** A host's guest sessions: bolt-server's and `bolt dev`'s runner, and the test kit's. */
-export const nodeGuests = (options: NodeGuestsOptions = {}): GuestIsolatesPort => {
-	const budget = options.cpuMs ?? LIMITS.guestCpuMs,
+export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort => {
+	const budget = options.cpu_ms ?? LIMITS.guestCpuMs,
 		limit = BigInt(budget) * 1_000_000n;
-	const over = failure('cpuBudget', `the invocation used its ${budget} ms of guest CPU`);
+	const over = failure('cpu_budget', `the invocation used its ${budget} ms of guest CPU`);
 	const sessions = new Map<string, Session>();
 	/**
 	 * One run of the session; a failed run ends it. The vm watchdog counts wall time, so a run it stops is billed what
@@ -167,12 +170,20 @@ export const nodeGuests = (options: NodeGuestsOptions = {}): GuestIsolatesPort =
 			return session.api;
 		};
 		if (work !== undefined) run(id, signal, (session) => work(api(session), session.copy));
-		const taken = structuredClone(run(id, signal, (session) => api(session).take()));
-		const session = sessions.get(id);
-		const lines = session?.said.lines.splice(0) ?? [],
-			dropped = session?.said.dropped ?? 0;
-		if (session !== undefined) session.said.dropped = 0;
-		return { taken, lines, dropped };
+		try {
+			const taken = await Schema.decodeUnknownPromise(GuestTaken)(
+				structuredClone(run(id, signal, (session) => api(session).take()))
+			);
+			const session = sessions.get(id);
+			const lines = session?.said.lines.splice(0) ?? [],
+				dropped = session?.said.dropped ?? 0;
+			if (session !== undefined) session.said.dropped = 0;
+			return { taken, lines, dropped };
+		} catch (error) {
+			// A malformed guest answer ends its session just as a failed native slice does.
+			sessions.delete(id);
+			throw error;
+		}
 	};
 	return {
 		open: async (program: GuestProgram, session: GuestSessionOptions, signal: AbortSignal) => {
@@ -183,12 +194,12 @@ export const nodeGuests = (options: NodeGuestsOptions = {}): GuestIsolatesPort =
 					if (said.lines.length < LINES) said.lines.push([String(level), String(line)]);
 					else said.dropped++;
 				},
-				randomStream(session.seed),
+				random_stream(session.seed),
 				digest,
-				assetHook(program.assets)
+				asset_hook(program.assets)
 			]);
 			const module = compiled(program.source, 'guest.mjs', () =>
-				moduleScript(program.source, refuseImport)
+				module_script(program.source, refuseImport)
 			);
 			sessions.set(id, { context, copy, api: undefined, used: 0n, said });
 			run(id, signal, (opened) => {

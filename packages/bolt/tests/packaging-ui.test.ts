@@ -1,43 +1,37 @@
 import { it } from '@effect/vitest';
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import { describe, expect, vi } from 'vitest';
-import { bolt as shellClient, setCurrentBolt, shellApi, shellBolt } from '../src/shell/runtime.ts';
+import { shell_api, shell_bolt } from '../src/shell/runtime.ts';
 
-class ImportFailure extends Schema.TaggedError<ImportFailure>()('ImportFailure', {
-	cause: Schema.Defect()
-}) {}
-describe('$bolt', () => {
-	it.effect('imports before the shell boots and reads the booted client on use', () =>
+describe('page contexts', () => {
+	it.effect('keeps each boot’s locale and messages separate', () =>
 		Effect.gen(function* () {
-			setCurrentBolt(null);
-			const { bolt } = yield* Effect.tryPromise({
-				try: () => import('../src/page/index.ts'),
-				catch: (cause) => new ImportFailure({ cause })
-			});
-			expect(() => bolt.locale).toThrow('before the workspace shell booted');
-			const client = yield* shellBolt(
-				{
-					workspace: { name: 'Fixture', locale: 'ms', tz: 'UTC' },
-					actor: null,
-					name: null,
-					admin: false,
-					preview: null,
-					nav: [],
-					surfaces: { inbox: false, runs: false, settings: false, agent: false, studio: false },
-					inbox: 0,
-					kiosks: [],
-					push: null,
-					visitor: null,
-					catalog: {},
-					automations: {}
-				},
-				{ messages: { x: 'ms:x' } }
+			const boot = {
+				workspace: { name: 'Fixture', locale: 'ms', tz: 'UTC' },
+				actor: null,
+				name: null,
+				admin: false,
+				preview: null,
+				nav: [],
+				surfaces: { inbox: false, runs: false, settings: false, agent: false, studio: false },
+				inbox: 0,
+				kiosks: [],
+				push: null,
+				visitor: null,
+				catalog: {},
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} }
+			} satisfies Parameters<typeof shell_bolt>[0];
+			const first = yield* shell_bolt(boot, { messages: { x: 'ms:x' } });
+			const second = yield* shell_bolt(
+				{ ...boot, workspace: { ...boot.workspace, locale: 'en' } },
+				{ messages: { x: 'en:x' } }
 			);
-			setCurrentBolt(client);
-			yield* Effect.addFinalizer(() => Effect.sync(() => setCurrentBolt(null)));
-			expect(bolt.locale).toBe('ms');
-			expect(bolt.t).toBe(shellClient.t);
-			expect(shellClient.t('x')).toBe('ms:x');
+			expect(first.locale).toBe('ms');
+			expect(first.t('x')).toBe('ms:x');
+			expect(second.locale).toBe('en');
+			expect(second.t('x')).toBe('en:x');
 		})
 	);
 });
@@ -51,7 +45,7 @@ describe('bolt.runs', () => {
 					vi.unstubAllGlobals();
 				})
 			);
-			const api = shellApi(async (input) => {
+			const api = shell_api(async (input) => {
 				urls.push(String(input));
 				return new Response(JSON.stringify({ value: [] }));
 			});

@@ -1,18 +1,18 @@
 // What server code may cause beyond its own write (§3.3.9 effects, §5.8): runs, notices, and the automation-only I/O
 // facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
+import { Schema, type Effect } from 'effect';
 import type { Actor } from '../access/actor.ts';
-import type { StartableName } from '../access/policy.ts';
 import type { Eff } from '../ctx.ts';
 import type { OutputOf } from '../body.ts';
-import type { FacilityFailure, Unavailable as UnavailableFailure } from '../errors.ts';
+import type { ActRefused, FacilityFailure, Unavailable as UnavailableFailure } from '../errors.ts';
 import type { Checked, Exact, InputKind, InputOf, ValidInput, ValueOf } from '../fields.ts';
 import type {
 	AutomationName,
 	ModelName,
-	ExposureSpecOf,
 	Columns,
 	HostToolName,
 	InstanceId,
+	IntegrationName,
 	Is,
 	PolicyName,
 	TeamName
@@ -31,12 +31,12 @@ import type {
 	Vector
 } from '../values.ts';
 import type { ConversationOf, RequestOf, RequestResult, SendInput } from './integration.ts';
-import type { Finding } from './sync.ts';
-import type { Where } from '../where.ts';
+import type { BrowserSnapshot, BrowserStep } from './browser.ts';
+export type { BrowserSnapshot, BrowserStep } from './browser.ts';
+import type { AutomationInputOf } from './automation-input.ts';
 import type {
 	AiModelClass,
 	AutomationSpecOf,
-	ConnectionName,
 	DeclaredConvertTarget,
 	EmbeddingModelName,
 	IntegrationOf,
@@ -45,19 +45,19 @@ import type {
 
 // ── runs (rules 48–56) ──
 /** A started run: its id and the automation it runs. */
-export type RunHandle<A = StartableName> = { readonly id: Id<'sys_run'>; readonly automation: A };
+export type RunHandle<A = AutomationName> = { readonly id: Id<'sys_run'>; readonly automation: A };
 /** Where a run stands. */
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
 /**
  * Why a run started; `effect`: a model's `effect` after a committed write; `handoff`: an act that outlived the
  * person-wait, held by its run (compute model §3).
  */
-export type RunCause = 'cron' | 'webhook' | 'effect' | 'schedule' | 'start' | 'retry' | 'handoff';
+export type RunCause = 'cron' | 'effect' | 'schedule' | 'start' | 'retry' | 'handoff';
 /**
  * Who or what triggered an automation run (`sys_run.trigger`, `ctx.run.trigger`). It never grants authority: every run
  * executes as the reserved system identity holding its automation's `policies`. A `person` started it by hand (Run now,
  * the `start` callable, an envoy), `agent` set when Norbius started it in that conversation for them; else the `system`
- * did: a `cron` or `webhook`, a model `effect` after `verb` on `records`, or a `schedule` from another run's code (`by`,
+ * did: a `cron`, a model `effect` after `verb` on `records`, or a `schedule` from another run's code (`by`,
  * absent on a run queued before triggers were recorded).
  */
 export type RunTrigger =
@@ -66,18 +66,18 @@ export type RunTrigger =
 			readonly actor: Exclude<Actor, { kind: 'system' }>;
 			readonly agent?: { readonly conversation: string };
 	  }
-	| { readonly kind: 'system'; readonly cause: 'cron' | 'webhook' }
+	| { readonly kind: 'system'; readonly cause: 'cron' }
 	| {
 			readonly kind: 'system';
 			readonly cause: 'effect';
 			readonly model: ModelName;
-			readonly verb: 'created' | 'updated' | 'deleted';
+			readonly verb: 'create' | 'update' | 'delete';
 			readonly records: readonly string[];
 	  }
 	| {
 			readonly kind: 'system';
 			readonly cause: 'schedule';
-			readonly by?: { readonly automation: string; readonly run: Id<'sys_run'> };
+			readonly by?: { readonly automation: string } & ({ readonly run: Id<'sys_run'> } | { readonly invocation: string });
 	  };
 /** A run's trigger as the run ledger shows it: a person by reference and display name. */
 export type RunTriggerView =
@@ -89,12 +89,12 @@ export type RunTriggerView =
 			readonly agent?: true;
 	  };
 /**
- * A run as `$bolt.runs` and the run ledger show it: cause and trigger, status, due and start time, progress, result
+ * A run as `ctx.runs` and the run ledger show it: cause and trigger, status, due and start time, progress, result
  * and error. `trigger` is null on an effect's or platform run.
  */
 export type RunRow<O = unknown> = {
 	readonly id: Id<'sys_run'>;
-	readonly automation: StartableName;
+	readonly automation: string;
 	readonly cause: RunCause;
 	readonly trigger: RunTriggerView | null;
 	readonly status: RunStatus;
@@ -109,7 +109,7 @@ export type RunRow<O = unknown> = {
 		readonly row?: number;
 		readonly rows?: readonly number[];
 		readonly rule?: string;
-		readonly data?: { readonly requestId: RequestId };
+		readonly data?: { readonly request_id: RequestId };
 		readonly records?: readonly {
 			readonly model: string;
 			readonly id: string;
@@ -119,60 +119,36 @@ export type RunRow<O = unknown> = {
 	} | null;
 	readonly attempt_count: number;
 };
-/** The input a start or a schedule passes: the automation's declared input, else nothing (a sync run takes none). */
-type SyncOf<A> = A extends `${infer M}.sync.${infer S}`
-	? ExposureSpecOf<M> extends { syncs: infer X }
-		? X[S & keyof X]
-		: never
-	: never;
-type SyncModel<A> = A extends `${infer M}.sync.${string}` ? M : never;
-type SyncContext<X> = X extends { context: infer F } ? InputOf<F> : {};
-/** File syncs import a stored upload or export the view to a sheet or declared document target. */
-export type FileSyncStartInput<A> = (
-	| { readonly mode: 'import'; readonly file: Id<'sys_file'> }
-	| {
-			readonly mode: 'template' | 'export';
-			readonly format?: 'xlsx' | 'csv' | 'tsv' | 'json';
-			readonly to?: DeclaredConvertTarget;
-			readonly where?: Where<SyncModel<A>>;
-	  }
-) & { readonly context?: SyncContext<SyncOf<A>> };
-/** The typed input accepted when starting an automation or a model sync. */
+/** The input declared by an automation. Sync controls are native operations, never authored starts. */
 export type StartInput<A> = A extends AutomationName
 	? AutomationSpecOf<A> extends { input: infer I }
-		? InputOf<I>
+		? AutomationInputOf<I, false>
 		: { readonly [key: string]: never }
-	: SyncOf<A> extends { with: 'file' }
-		? FileSyncStartInput<A>
-		: { readonly [key: string]: never };
-/** The typed result recorded by an automation, or no result for a sync read. */
-export type StartOutput<A> = A extends AutomationName
-	? OutputOf<AutomationSpecOf<A>>
-	: SyncOf<A> extends { with: 'file' }
-		? | { readonly file: FileRef & { readonly bytes: number; readonly sha256: string } }
-			| { readonly applied: false; readonly findings: readonly Finding[] }
-			| {
-					readonly applied: true;
-					readonly created: number;
-					readonly updated: number;
-					readonly deleted: number;
-					readonly findings: readonly Finding[];
-			  }
-			| { readonly pendingApproval: true; readonly findings: readonly Finding[] }
-		: undefined;
-/** `ctx.schedule`: queues a run of an automation (or a sync's read) after the current write commits. */
+	: never;
+/** The result declared by an automation. */
+export type StartOutput<A> = A extends AutomationName ? OutputOf<AutomationSpecOf<A>> : never;
+/** Calls return their declared output; jobs return their durable handle. */
+type RunResult<A> = A extends AutomationName
+	? AutomationSpecOf<A> extends { mode: 'call' } ? StartOutput<A> : RunHandle<A>
+	: never;
+/** Code invokes a call in this request or queues a job, according to its declaration. */
+export interface Run {
+	<const A extends string>(automation: Is<A, AutomationName>, input: StartInput<A>): Eff<RunResult<A>, ActRefused>;
+}
+type JobName = { [A in AutomationName]: AutomationSpecOf<A> extends { mode: 'call' } ? never : A }[AutomationName];
+/** `ctx.schedule`: queues a job automation after the current write commits. */
 export interface Schedule {
 	/** Due at once without `at`; with `key`, a queued run under the same key is replaced (rule 51). */
 	<const A extends string>(
-		automation: Is<A, StartableName>,
+		automation: Is<A, JobName>,
 		input: StartInput<A>,
 		options?: { at?: Instant | { var: string }; key?: string }
 	): Eff<RunHandle<A>>;
 }
 
-// ── notices (§3.3.9, spec §2.2): one shape for a model's `notify` and `ctx.notify` ──
+// ── notices (§3.3.9, spec §2.2): one shape for `ctx.notify`, approval effects included ──
 /**
- * Whom a notice goes to: a team's members, one member, a policy's holders, or, in a model's `notify` for an approval
+ * Whom a notice goes to: a team's members, one member, a policy's holders, or, in an approval effect
  * event, the request's `'requester'` or the current step's `'approvers'` (teams and users); elsewhere those two resolve
  * to nobody.
  */
@@ -186,21 +162,24 @@ export type Recipient =
  * A file a notice carries: a stored file, or a document converted at delivery (after the commit, retried with the
  * delivery) from Markdown or HTML to a target `+workspace.ts` declares under `convert.to`.
  */
-export type NoticeAttachment =
+type NoticeAttachment =
 	FileRef | { document: ConvertSource; to: ConvertTarget; name: string };
 /**
- * One notice. The in-app inbox always gets it; `via` also sends it through those conversation connections (`bolt check`
- * refuses any other name) to each recipient's handle there. `link` defaults to the record the event is about; `once`
+ * One notice. The in-app inbox always gets it; `via` also sends it through persisted conversation instances
+ * to each recipient's handle there. `link` defaults to the record the event is about; `once`
  * delivers at most one notice per key.
  * @example
  * { title: 'New colour matching job', description: `${name} is waiting on the board.`, to: [{ team: 'colour_matchers' }],
- *   via: ['whatsapp'], attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }] }
+ *   via: [hotline.id], attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }] }
  */
+type ConversationDefinition = {
+	[D in IntegrationName]: [ConversationOf<D>] extends [never] ? never : D;
+}[IntegrationName];
 export type Notice = {
 	title: Msg;
 	description?: Msg;
 	to: readonly Recipient[];
-	via?: readonly ConnectionName[];
+	via?: readonly InstanceId<ConversationDefinition>[];
 	attachments?: readonly NoticeAttachment[];
 	link?: RecordRef;
 	once?: string;
@@ -226,24 +205,22 @@ type Out<O> = O & Checked<InputKind, O, Exact<O, ValidInput<O>>>;
  * uses the tab's sign-ins only where the site needs them. Fails `invalid` for anything else.
  */
 export type Browser = {
-	navigate: Call<[url: string, options?: { readonly find?: string }], Json>;
-	snapshot: Call<[options?: { readonly find?: string; readonly from?: number }], Json>;
-	act: Call<[steps: readonly Json[]], Json>;
+	navigate: Call<[url: string, options?: { readonly find?: string }], BrowserSnapshot>;
+	snapshot: Call<[options?: { readonly find?: string; readonly from?: number }], BrowserSnapshot>;
+	act: Call<[steps: readonly BrowserStep[]], BrowserSnapshot>;
 	evaluate: Call<[expression: string], Json>;
 	download: Call<[url: string, options: { readonly for: FileOwner }], FileRef>;
 	close: Call<[], void>;
 };
 /**
- * `browserStart(ctx, use)`: runs `use` with the run's browser; the tab closes when the run's scope exits,
+ * `browser_start(ctx, use)`: runs `use` with the run's browser; the tab closes when the run's scope exits,
  * including on failure or interruption. This is the only browser a run gets.
  */
-export const browserStart = <A>(
+export const browser_start = <A, E, R>(
 	ctx: { readonly browser: Browser },
-	use: (browser: Browser) => Eff<A>
-): Eff<A> => use(ctx.browser);
+	use: (browser: Browser) => Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> => use(ctx.browser);
 
-/** Where a send or request goes: a connection, or an instance id pinned to a definition. */
-export type InstanceTarget = ConnectionName | InstanceId;
 type SendPayload<N> =
 	IsUnion<N> extends true
 		? 'error: send names one connection'
@@ -252,10 +229,12 @@ type SendPayload<N> =
 			: SendInput<IntegrationOf<N>>;
 /**
  * Queues a message through one conversation instance (the outbox delivers it after the run's write commits); a
- * union-typed target is a type error (§3.3.9), and a member's personal instance refuses at run time.
+ * union-typed target is a type error (§3.3.9), and a member's personal instance refuses at run time. The returned id is
+ * queue admission, not provider acceptance. An unpaired account keeps it queued; read sys_message status/sent_at with
+ * an explicit output grant before recording delivery or a sent timestamp in a business model.
  */
 export type Send = <const N extends string>(
-	to: Is<N, InstanceTarget>,
+	to: Is<N, InstanceId>,
 	payload: SendPayload<N>
 ) => Eff<Id<'sys_message'>>;
 type RequestPayload<N, O> =
@@ -271,7 +250,7 @@ type RequestPayload<N, O> =
  */
 export interface Request {
 	<const N extends string, const O extends InputKind = { kind: 'json' }>(
-		to: Is<N, InstanceTarget>,
+		to: Is<N, InstanceId>,
 		op: RequestPayload<N, O>
 	): Eff<RequestResult<IntegrationOf<N>, O>, Failure>;
 }
@@ -283,7 +262,7 @@ export type WebPage = {
 	readonly url: string;
 	readonly title: string | null;
 	readonly text: string;
-	readonly contentType?: string;
+	readonly content_type?: string;
 	readonly sha256?: string;
 	readonly pages?: number;
 	readonly html?: string;
@@ -294,7 +273,7 @@ export type Web = { read: Call<[url: string, options?: { raw?: boolean }], WebPa
 
 // ── files (§5.8.1): handles by default, bytes only on request ──
 /** A file reference with its size in bytes and SHA-256. */
-export type FileMeta = FileRef & { readonly bytes: number; readonly sha256: string };
+type FileMeta = FileRef & { readonly bytes: number; readonly sha256: string };
 /**
  * What `ctx.files.image` reads from an image: format, size, SHA-256, the PDQ perceptual hash and EXIF (time taken, GPS, camera).
  */
@@ -305,7 +284,7 @@ export type ImageFacts = {
 	readonly sha256: string;
 	readonly pdq: string;
 	readonly exif: {
-		readonly takenAt?: Instant;
+		readonly taken_at?: Instant;
 		readonly gps?: Point;
 		readonly software?: string;
 		readonly make?: string;
@@ -316,40 +295,34 @@ type FileFieldOf<C> = {
 	[P in keyof Columns<C> & string]: Columns<C>[P] extends { kind: 'file' } ? P : never;
 }[keyof Columns<C> & string];
 /** Where a stored file belongs: a model's file field, or an automation's run (collected with it). */
-type FileOwner = { [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | StartableName;
-/** One worksheet: its name and rows of cell values. */
-type Sheet = {
-	readonly name: string;
-	readonly rows: readonly (readonly (string | number | boolean | null)[])[];
-};
+type FileOwner = { [C in ModelName]: `${C}.${FileFieldOf<C>}` }[ModelName] | AutomationName;
 /** `ctx.files`: stored files by reference; bytes only on request. */
 export type Files = {
 	meta: Call<[ref: FileRef], FileMeta>;
 	/** At most `max` bytes (default and ceiling 4MiB). */
 	get: Call<[ref: FileRef, options?: { max?: Size }], Uint8Array>;
 	url: Call<[ref: FileRef], string>;
-	text: Call<[ref: FileRef], string>;
-	table: Call<[ref: FileRef], readonly (readonly string[])[]>;
-	sheet: Call<[ref: FileRef], readonly Sheet[]>;
 	image: Call<[ref: FileRef], ImageFacts> &
-		Call<[ref: FileRef, derive: { jpeg: { maxEdge: number } }], FileRef>;
+		Call<[ref: FileRef, derive: { jpeg: { max_edge: number } }], FileRef>;
 	put: Call<[bytes: Uint8Array, options: { name: string; mime: string; for: FileOwner }], FileRef>;
 };
 
 // ── convert: markdown or HTML to a document the workspace declares (`workspace({ convert: { to } })`) ──
+export const PAPER_SIZES = ['A4', 'A3', 'Letter'] as const;
+export type PaperSize = (typeof PAPER_SIZES)[number];
 /**
  * What each conversion target takes beyond `to` and `name`: a `reference` document styles a Word, PowerPoint or
  * OpenDocument output (its fonts, headers, footers and page setup, as pandoc's reference-doc); a PDF sets its paper.
  */
-export type ConvertTargets = {
-	pdf: { page?: 'A4' | 'A3' | 'Letter'; landscape?: boolean };
+type ConvertTargets = {
+	pdf: { page?: PaperSize; landscape?: boolean };
 	docx: { reference?: FileRef };
 	pptx: { reference?: FileRef };
 	odt: { reference?: FileRef };
 	epub: {};
 	html: {};
 };
-/** A document format the converter can produce (`bolt.convert`, `ctx.convert.document`, notice attachments, file exports). */
+/** A document format the converter can produce (`ctx.convert.document`, notice attachments, file exports). */
 export type ConvertTarget = keyof ConvertTargets;
 /**
  * The source of a conversion: Markdown (pandoc's dialect, with pipe tables and front matter) or an HTML document. HTML is
@@ -357,18 +330,12 @@ export type ConvertTarget = keyof ConvertTargets;
  * by Typst.
  */
 export type ConvertSource =
-	{ readonly markdown: string } | { readonly html: string } | { readonly layoutHtml: string };
-/**
- * One declared target, its file name and its options, discriminated by `to`: `reference` only where the format takes
- * one, `page` only for PDF. What a page's `bolt.convert(source, request)` takes: the file it answers is the viewer's own
- * and short-lived (`bolt.fileUrl` downloads it), and calls count against the policy limit key `convert` (default `30/min`).
- */
-export type ConvertRequest = {
-	[T in DeclaredConvertTarget]: { to: T; name: string } & ConvertTargets[T];
-}[DeclaredConvertTarget];
+	{ readonly markdown: string } | { readonly html: string } | { readonly layout_html: string };
 export type PreviewPdfOptions = Pick<ConvertTargets['pdf'], 'page' | 'landscape'>;
-/** `ctx.convert.document`'s options: a `ConvertRequest` and the owner `for` the stored output belongs to. */
-export type ConvertOptions = ConvertRequest & { for: FileOwner };
+/** A declared target, its file name and options, and the owner of the stored output. */
+export type ConvertOptions = {
+	[T in DeclaredConvertTarget]: { to: T; name: string; for: FileOwner } & ConvertTargets[T];
+}[DeclaredConvertTarget];
 /**
  * `ctx.convert` (optional host capability): only the targets `+workspace.ts` declares under `convert.to` type-check, and
  * the host confirms at start that it serves them. The output is stored like `files.put`'s, owned by `for`.
@@ -404,21 +371,24 @@ export type IngestOptions = {
  * A document ingest's index, derived from its HTML: 1-based lines, the `<section data-page>` and `data-slide` counts, the
  * outline (headings, then page, slide and speaker sections at level 7) with line ranges, the table count and image names.
  */
-export type IngestIndex = {
-	readonly lines: number;
-	readonly pages: number;
-	readonly slides: number;
-	readonly outline: readonly {
-		readonly title: string;
-		readonly level: number;
-		readonly from: number;
-		readonly to: number;
-	}[];
-	readonly tables: number;
-	readonly images: readonly string[];
+export const IngestIndexSchema = Schema.Struct({
+	lines: Schema.Number,
+	pages: Schema.Number,
+	slides: Schema.Number,
+	outline: Schema.Array(
+		Schema.Struct({
+			title: Schema.String,
+			level: Schema.Number,
+			from: Schema.Number,
+			to: Schema.Number
+		})
+	),
+	tables: Schema.Number,
+	images: Schema.Array(Schema.String),
 	/** The PDF pages read for their text that hold none, as ranges. */
-	readonly noText?: string;
-};
+	no_text: Schema.optionalKey(Schema.String)
+});
+export type IngestIndex = typeof IngestIndexSchema.Type;
 /** One stretch of speech: its speaker (`S1`, `S2`, … across the whole file), start and end in seconds, and the words. */
 export type TranscriptSegment = {
 	readonly speaker: string;
@@ -428,7 +398,7 @@ export type TranscriptSegment = {
 };
 /** An audio ingest's transcript, read from its speaker sections: its length (the last end), speakers and segments. */
 export type Transcript = {
-	readonly durationMs: number;
+	readonly duration_ms: number;
 	readonly speakers: readonly string[];
 	readonly segments: readonly TranscriptSegment[];
 };
@@ -451,7 +421,7 @@ export type Ingest =
 /**
  * The model works in as many calls as it needs (continuing a cut answer, calling tools); each ends only after 60 s without a
  * token. A structured `output` is built by the model on a draft (`initial`, else empty) with `edit` (set, remove or append
- * at JSON Pointers whose segment for an item of a keyed list, `{ kind: 'list', key }`, is its key, not its index),
+ * at JSON Pointers whose segment for an item of a keyed list, `{ kind: 'object', many: true, key }`, is its key, not its index),
  * inspected with `read`, `find` and `diff` (changes since the start, keyed items matched by key), and handed in with
  * `submit`; a submission that does not match `output` or `rules` comes back with its problems and the model goes on until
  * one matches.
@@ -492,7 +462,7 @@ type InferRequest<O, Tools> = {
 			 *   prompt: `Match invoice ${inv.number} from ${inv.supplier}: ${JSON.stringify(inv.lines)}. Read open purchase_orders
 			 *     and goods_receipts for this supplier; compare quantities and unit prices line by line.`,
 			 *   output: { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text', optional: true },
-			 *     variances: { kind: 'list', of: { kind: 'text' } } } },
+			 *     variances: { kind: 'text', many: true } } },
 			 *   tools: ['read'],
 			 *   steps: 6
 			 * });
@@ -509,7 +479,7 @@ type InferRequest<O, Tools> = {
  * answer.
  */
 type InferSchemaOutput = {
-	readonly jsonSchema: Json;
+	readonly json_schema: Json;
 	readonly rules?: readonly { readonly expression: string; readonly message: string }[];
 };
 type InferSchemaRequest<Tools> = Omit<InferRequest<{ kind: 'text' }, Tools>, 'output'> & {
@@ -562,7 +532,7 @@ export type DecisionQuestion =
  * `ctx.ai.sys_1.decide`'s answers, each typed from its question literal (P36, P37): a choice's option key; a score's
  * continuous `score`, its most probable `level` (the level itself), and `probabilities`/`legend` keyed by level index.
  */
-export type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
+type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
 	[K in keyof Q]: Q[K] extends { type: 'choice'; criteria: infer O }
 		? {
 				type: 'choice';
@@ -585,7 +555,7 @@ interface Decide {
 	<const Q extends { readonly [id: string]: DecisionQuestion }>(request: {
 		state: DecisionState;
 		questions: Q;
-	}): Eff<{ answers: DecisionAnswers<Q>; costUsd: number }, Failure>;
+	}): Eff<{ answers: DecisionAnswers<Q>; cost_usd: number }, Failure>;
 }
 /**
  * `sys_1` decides from text/images; `sys_2` is the LLM; `embed` takes text and files. A result is a proposal: a write
@@ -603,26 +573,11 @@ export type Ai<Tools> = {
 		],
 		readonly Vector[]
 	>;
-	/** Text to speech (optional host capability, P19), stored like `files.put`'s output and owned by `for`. */
-	speak: Call<[text: string, options: SpeakOptions], FileRef>;
-};
-/** An audio format `ctx.ai.speak` writes. */
-export type SpeechFormat = 'mp3' | 'wav' | 'ogg';
-/**
- * `ctx.ai.speak`'s options: the owner `for` and file `name` (default `speech.<format>`), a provider `voice`, the `format`
- * (default mp3) and a `language` hint that providers reading the language from the text ignore.
- */
-export type SpeakOptions = {
-	for: FileOwner;
-	name?: string;
-	voice?: string;
-	format?: SpeechFormat;
-	language?: string;
 };
 /** A geocoding result: the point, a short label and the full address. */
 export type GeoHit = { readonly point: Point; readonly label: string; readonly address: string };
 /** Geocoding is optional (P19): an absent provider fails the call with `Unavailable`. */
 export type Geo = {
-	search(query: string): Eff<readonly GeoHit[], UnavailableFailure>;
-	reverse(point: Point): Eff<GeoHit, UnavailableFailure>;
+	search(query: string): Eff<readonly GeoHit[], Failure>;
+	reverse(point: Point): Eff<GeoHit, Failure>;
 };

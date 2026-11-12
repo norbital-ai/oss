@@ -1,10 +1,10 @@
+import { committed, single_act, type SentAct } from './act-envelope.ts';
 import { required, textOf } from './view-fixture.ts';
 import { confirmDialog, element } from './elements.ts';
 import {
 	viewFixture,
 	jsonArray,
 	jsonRecord,
-	type ActOptions,
 	type ReadOptions,
 	browser
 } from './view-fixture.ts';
@@ -42,12 +42,14 @@ const input = {
 } as const;
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' } },
 		update: { columns: ['title'], with: { lines: input } },
 		children: { lines: input }
 	},
 	lines: {
+		record_label: 'record.amount',
 		label: ['amount'],
 		fields: { amount: { kind: 'int' } },
 		relations: { job: { targets: ['jobs'] } },
@@ -56,8 +58,8 @@ const catalog = {
 		delete: true
 	}
 } satisfies NonNullable<KindsHost['catalog']>;
-async function fixture() {
-	const acts: { callable: string; input: Json; options: ActOptions }[] = [],
+async function fixture(cat: NonNullable<KindsHost['catalog']> = catalog) {
+	const acts: SentAct[] = [],
 		reads: { c: string; options: ReadOptions }[] = [];
 	const capabilities = (model: string, id: string): RecordCapabilities => ({
 		model,
@@ -68,14 +70,15 @@ async function fixture() {
 				? { title: { writable: true, proposal: false, reasons: [] } }
 				: {
 						amount: { writable: true, proposal: false, reasons: [] },
-						job: { writable: false, proposal: false, reasons: ['ownedParent'] }
+						job: { writable: false, proposal: false, reasons: ['owned_parent'] }
 					},
 		update: { allowed: true, proposal: false, reasons: [] },
 		delete: { allowed: true, proposal: false, reasons: [] },
 		moves: {},
-		proposalMoves: {}
+		proposal_moves: {}
 	});
 	const { bolt, script } = await viewFixture({
+		catalog: cat,
 		get: (_c, id) => ({ id, revision: 3, title: 'Job' }),
 		history: () => [],
 		read: (c, options) => {
@@ -99,11 +102,11 @@ async function fixture() {
 			};
 		},
 		capabilities,
-		act: (callable, input, options) => {
-			acts.push({ callable, input, options });
+		act: (body, key) => {
+			const { callable, input } = single_act(body);
+			acts.push({ callable, input, key });
 			return {
-				kind: 'committed',
-				output: null,
+				...committed(body),
 				records: [
 					{ model: 'jobs', id: 'j1', revision: 4 },
 					{ model: 'lines', id: 'l1', revision: 9 },
@@ -153,18 +156,18 @@ it.live(
 				yield* browser(() => settle());
 				assert.deepEqual(required(acts[0]).input, [
 					{
-						target: 'j1',
+						target: { id: 'j1', revision: 3 },
 						set: {
 							lines: {
 								update: [
-									{ target: 'l1', set: { amount: 2 } },
-									{ target: 'l2', set: { amount: 4 } }
+									{ target: { id: 'l1', revision: 7 }, set: { amount: 2 } },
+									{ target: { id: 'l2', revision: 8 }, set: { amount: 4 } }
 								]
 							}
 						}
 					}
 				]);
-				assert.deepEqual(required(acts[0]).options.observed, { l1: 7, l2: 8, j1: 3 });
+				assert.deepEqual(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 				assert.ok(reads.some(({ options }) => options.after === 'page2'));
 			} finally {
 				yield* browser(() => unmount(app));
@@ -219,8 +222,8 @@ it.live(
 				required(button(target, 'Save')).click();
 				yield* browser(() => settle());
 				assert.equal(required(acts[0]).callable, 'lines.update');
-				assert.deepEqual(required(acts[0]).input, [{ target: 'l1', set: { amount: 6 } }]);
-				assert.deepEqual(required(acts[0]).options.observed, { l1: 7 });
+				assert.deepEqual(required(acts[0]).input, [{ target: { id: 'l1', revision: 7 }, set: { amount: 6 } }]);
+				assert.deepEqual(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).target, { id: 'l1', revision: 7 });
 			} finally {
 				yield* browser(() => unmount(app));
 				target.remove();
@@ -236,9 +239,10 @@ it.live(
 			const contexts: (RecordParentContext | undefined)[] = [];
 			let parentRevision = 3;
 			const act = script.act;
-			script.act = (callable, input, options) => {
+			script.act = (body, key) => {
+				const { callable, input } = single_act(body);
 				parentRevision = 4;
-				return act(callable, input, options);
+				return act(body, key);
 			};
 			const original = capabilities;
 			script.capabilities = (model, id, parent) => {
@@ -252,8 +256,8 @@ it.live(
 					? result
 					: {
 							...result,
-							fields: { amount: { writable: false, proposal: false, reasons: ['noGrant'] } },
-							update: { allowed: false, proposal: false, reasons: ['noGrant'] }
+							fields: { amount: { writable: false, proposal: false, reasons: ['no_grant'] } },
+							update: { allowed: false, proposal: false, reasons: ['no_grant'] }
 						};
 			};
 			const nested: NonNullable<KindsHost['catalog']> = {
@@ -296,9 +300,9 @@ it.live(
 					jsonRecord(
 						jsonRecord(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).set).lines
 					).update,
-					[{ target: 'l1', set: { amount: 3 } }]
+					[{ target: { id: 'l1', revision: 7 }, set: { amount: 3 } }]
 				);
-				assert.deepEqual(required(acts[0]).options.observed, { l1: 7, j1: 3 });
+				assert.deepEqual(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 			} finally {
 				yield* browser(() => unmount(app));
 				target.remove();
@@ -346,9 +350,9 @@ it.live(
 				required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Save')).click();
 				yield* browser(() => settle());
 				assert.deepEqual(required(acts[0]).input, [
-					{ target: 'j1', set: { lines: { delete: ['l1'], create: [{ amount: 9 }] } } }
+					{ target: { id: 'j1', revision: 3 }, set: { lines: { delete: [{ id: 'l1', revision: 7 }], create: [{ amount: 9 }] } } }
 				]);
-				assert.deepEqual(required(acts[0]).options.observed, { l1: 7, j1: 3 });
+				assert.deepEqual(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 			} finally {
 				yield* browser(() => unmount(app));
 				target.remove();
@@ -358,7 +362,6 @@ it.live(
 
 it.live('link and unlink send explicit IDs and both original snapshots', () =>
 	Effect.gen(function* () {
-		const { bolt, script, capabilities, acts } = yield* browser(fixture);
 		const { owned, ...related } = input;
 		const child: ChildInput = { ...related, link: true, unlink: true };
 		const shown: NonNullable<KindsHost['catalog']> = {
@@ -373,6 +376,7 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 				update: { columns: ['amount', 'job'] }
 			}
 		};
+		const { bolt, script, capabilities, acts } = yield* browser(() => fixture(shown));
 		const originalRead = script.read,
 			originalGet = script.get,
 			originalCapabilities = capabilities;
@@ -420,9 +424,9 @@ it.live('link and unlink send explicit IDs and both original snapshots', () =>
 			required(button(element<HTMLElement>(target, '[data-record-foot]'), 'Save')).click();
 			yield* browser(() => settle());
 			assert.deepEqual(required(acts[0]).input, [
-				{ target: 'j1', set: { lines: { link: ['free'], unlink: ['l1'] } } }
+				{ target: { id: 'j1', revision: 3 }, set: { lines: { link: [{ id: 'free', revision: 11 }], unlink: [{ id: 'l1', revision: 7 }] } } }
 			]);
-			assert.deepEqual(required(acts[0]).options.observed, { free: 11, l1: 7, j1: 3 });
+			assert.deepEqual(jsonRecord(required(jsonArray(required(acts[0]).input)[0])).target, { id: 'j1', revision: 3 });
 		} finally {
 			yield* browser(() => unmount(app));
 			target.remove();

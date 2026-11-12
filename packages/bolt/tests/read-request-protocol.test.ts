@@ -1,7 +1,7 @@
 // The /q route's read request (P3): one JSON layer map per read, decoded and checked against the declarations before
 // the caller's one batch runs, answered per root.
 import { describe, expect, it } from '@effect/vitest';
-import { Effect, Result, Schema } from 'effect';
+import { Effect, Exit, Result, Schema } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import type { Json } from '../src/decl/values.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
@@ -10,16 +10,14 @@ import { BoltError } from '../src/protocol/errors.ts';
 import { Manifest, Reads, type ReadsShape } from '../src/engine/services.ts';
 import { BoltRoutes, RateLimits } from '../src/protocol/http.ts';
 import { decodeRead, type ReadIR } from '../src/protocol/reads.ts';
-import { catalogOf } from '../src/engine/access/pred.ts';
-import { decodeReadRequest, planReadRequest } from '../src/protocol/read-request.ts';
+import { catalog_of } from '../src/engine/access/pred.ts';
+import { decode_read_request, plan_read_request } from '../src/protocol/read-request.ts';
 import { QReply, type QBody } from '../src/protocol/schema.ts';
 import { manifest, rep } from './query.fixture.ts';
 
 const db = TenantDb.typed({
 	read: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol database read')),
 	write: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol database write')),
-	session: () =>
-		Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 	transaction: () => Effect.fail(DbError.make('XX000', 'Unexpected protocol transaction'))
 });
 const request = (body: QBody) =>
@@ -67,8 +65,11 @@ describe('native /q read requests', () => {
 								m: 'query',
 								a: [
 									{
-										accounts: { where: { region: { eq: 'north' } }, fields: ['name'] },
-										'accounts.orders': { where: { status: { eq: 'open' } }, fields: ['status'] },
+										accounts: {
+											where: { region: { eq: 'north' } },
+											fields: ['name'],
+											orders: { where: { status: { eq: 'open' } }, fields: ['status'] }
+										},
 										notes: { limit: 5 }
 									}
 								]
@@ -105,10 +106,11 @@ describe('native /q read requests', () => {
 				{ accounts: { bogus: true } }, // an unknown option
 				{ accounts: { limit: 10_001 } }, // past the largest list
 				{ nope: {} }, // no model
-				{ 'accounts.secret': {} }, // a path the root does not declare
-				{ 'orders.lines.order.account.orders.lines': {} }, // a sixth level
-				{ 'accounts.orders': { after: 'cursor' } }, // a cursor below a root
-				{ 'accounts.orders': { asOf: '2026-09-01T00:00:00.000Z' } } // as-of below a root
+				{ accounts: { secret: {} } }, // a path the root does not declare
+				{ 'accounts.orders': {} }, // retired dotted author roots
+				{ orders: { lines: { order: { account: { orders: { lines: {} } } } } } }, // a sixth level
+				{ accounts: { orders: { after: 'cursor' } } }, // a cursor below a root
+				{ accounts: { orders: { as_of: '2026-09-01T00:00:00.000Z' } } } // as-of below a root
 			];
 			for (const body of refused) {
 				const result = yield* Effect.result(
@@ -141,12 +143,12 @@ describe('native /q read requests', () => {
 	);
 });
 
-describe('decodeReadRequest and planReadRequest', () => {
+describe('decode_read_request and plan_read_request', () => {
 	it('refuses search with aggregate rather than silently counting every row', () => {
 		for (const search of ['missing-catalogue-value', { semantic: 'missing-catalogue-value' }]) {
 			const plan = Result.flatMap(
-				decodeReadRequest({ accounts: { search, aggregate: { count: true } } }),
-				(json) => planReadRequest(json, manifest.exposures)
+				decode_read_request({ accounts: { search, aggregate: { count: true } } }),
+				(json) => plan_read_request(json, manifest.exposures)
 			);
 			expect(plan).toEqual(
 				Result.fail(
@@ -157,47 +159,54 @@ describe('decodeReadRequest and planReadRequest', () => {
 		expect(
 			Result.isSuccess(
 				Result.flatMap(
-					decodeReadRequest({
+					decode_read_request({
 						accounts: { where: { name: { eq: 'North' } }, aggregate: { count: true } }
 					}),
-					(json) => planReadRequest(json, manifest.exposures)
+					(json) => plan_read_request(json, manifest.exposures)
 				)
 			)
 		).toBe(true);
 	});
-	it('takes an empty history options object as options, not as an at value', () => {
-		const cat = catalogOf(manifest);
-		expect(
-			Result.getOrThrow(
-				decodeRead(cat, 'history', ['accounts', 'account-a', {}])
-			)
-		).toEqual({ kind: 'history', model: 'accounts', id: 'account-a' });
-		expect(
-			Result.getOrThrow(
-				decodeRead(cat, 'history', ['accounts', 'account-a', { at: { revision: 2 } }])
-			)
-		).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
-		// an older page may still pass the at value itself
-		expect(
-			Result.getOrThrow(
-				decodeRead(cat, 'history', ['accounts', 'account-a', { revision: 2 }])
-			)
-		).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
-	});
+	it.effect('takes an empty history options object as options, not as an at value', () =>
+		Effect.gen(function* () {
+			const cat = catalog_of(manifest);
+			expect(yield* decodeRead(cat, 'history', ['accounts', 'account-a', {}])).toEqual({
+				kind: 'history',
+				model: 'accounts',
+				id: 'account-a'
+			});
+			expect(
+				yield* decodeRead(cat, 'history', ['accounts', 'account-a', { at: { revision: 2 } }])
+			).toMatchObject({ at: { _tag: 'Revision', revision: 2 } });
+			// Retired direct points and scalar at values cannot silently bypass the options contract.
+			for (const options of [
+				{ revision: 2 },
+				{ at: 2 },
+				{ at: '2026-09-01T00:00:00.000Z' },
+				{ at: { revision: 2, before: 'request' } },
+				{ output: 'default', extra: true }
+			])
+				expect(
+					Exit.isFailure(
+						yield* Effect.exit(decodeRead(cat, 'history', ['accounts', 'account-a', options]))
+					)
+				).toBe(true);
+		})
+	);
 	it('refuses a function value: a read request is JSON only', () => {
-		expect(Result.isFailure(decodeReadRequest({ accounts: { where: { name: () => 'x' } } }))).toBe(
-			true
-		);
-		expect(Result.isFailure(decodeReadRequest({ accounts: { limit: () => 1 } }))).toBe(true);
 		expect(
-			Result.isSuccess(decodeReadRequest({ accounts: { where: { name: { eq: 'x' } } } }))
+			Result.isFailure(decode_read_request({ accounts: { where: { name: () => 'x' } } }))
+		).toBe(true);
+		expect(Result.isFailure(decode_read_request({ accounts: { limit: () => 1 } }))).toBe(true);
+		expect(
+			Result.isSuccess(decode_read_request({ accounts: { where: { name: { eq: 'x' } } } }))
 		).toBe(true);
 	});
 
-	it('fills the implied parents of a deep layer and groups the paths by root', () => {
+	it('lowers nested relation nodes to native paths grouped by root', () => {
 		const plan = Result.flatMap(
-			decodeReadRequest({ 'accounts.orders.lines': { limit: 3 }, notes: {} }),
-			(json) => planReadRequest(json, manifest.exposures)
+			decode_read_request({ accounts: { orders: { lines: { limit: 3 } } }, notes: {} }),
+			(json) => plan_read_request(json, manifest.exposures)
 		);
 		expect(plan).toEqual(
 			Result.succeed({
@@ -205,8 +214,8 @@ describe('decodeReadRequest and planReadRequest', () => {
 				notes: { notes: {} }
 			})
 		);
-		const outside = Result.flatMap(decodeReadRequest({ 'notes.about': {} }), (json) =>
-			planReadRequest(json, manifest.exposures)
+		const outside = Result.flatMap(decode_read_request({ notes: { about: {} } }), (json) =>
+			plan_read_request(json, manifest.exposures)
 		);
 		expect(outside).toEqual(Result.fail("'notes.about' is not a read layer notes declares"));
 	});

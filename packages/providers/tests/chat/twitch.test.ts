@@ -4,7 +4,7 @@ import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
 import { chatProvider } from '../../src/chat/adapter.ts';
 import { twitch } from '../../src/chat/twitch/index.ts';
-import { host } from '../kit.ts';
+import { required, host } from '../kit.ts';
 import { connected, json, platformApi, webhook, type Call } from './kit.ts';
 
 const settings = {
@@ -67,7 +67,7 @@ describe('Twitch', () => {
 				body = chat(),
 				sent = headers(body);
 			expect(h.status).toMatchObject({ state: 'connected', account: 'norbot' });
-			expect((yield* h.link.webhook!(webhook(body, sent))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, sent))).status).toBe(200);
 			const at = sent['twitch-eventsub-message-timestamp'].replace('123456Z', 'Z');
 			expect(h.events[0]).toMatchObject({
 				kind: 'messages',
@@ -76,7 +76,7 @@ describe('Twitch', () => {
 						id: 'm1',
 						thread: '42',
 						text: 'hello',
-						sentAt: at,
+						sent_at: at,
 						from: { handle: '7', name: 'Mei' },
 						title: 'Streamer',
 						group: true,
@@ -101,11 +101,11 @@ describe('Twitch', () => {
 					message_id: 'm3',
 					reply: { parent_message_id: 'out1', parent_user_id: '9' }
 				});
-			yield* h.link.webhook!(webhook(mentioned, headers(mentioned)));
-			yield* h.link.webhook!(webhook(replied, headers(replied)));
-			yield* h.link.webhook!(webhook(whisper, headers(whisper)));
+			yield* required(h.link.webhook)(webhook(mentioned, headers(mentioned)));
+			yield* required(h.link.webhook)(webhook(replied, headers(replied)));
+			yield* required(h.link.webhook)(webhook(whisper, headers(whisper)));
 			expect(h.events[0]).toMatchObject({ messages: [{ invocation: 'mention' }] });
-			expect(h.events[1]).toMatchObject({ messages: [{ invocation: 'reply', replyTo: 'out1' }] });
+			expect(h.events[1]).toMatchObject({ messages: [{ invocation: 'reply', reply_to: 'out1' }] });
 			expect(h.events[2]).toMatchObject({
 				messages: [{ id: 'w1', thread: 'whisper:7', text: 'psst', invocation: 'direct' }]
 			});
@@ -117,8 +117,8 @@ describe('Twitch', () => {
 			const h = yield* connected(twitch, settings),
 				own = chat({ chatter_user_id: '9' }),
 				copy = chat({ source_broadcaster_user_id: '43' });
-			yield* h.link.webhook!(webhook(own, headers(own)));
-			yield* h.link.webhook!(webhook(copy, headers(copy)));
+			yield* required(h.link.webhook)(webhook(own, headers(own)));
+			yield* required(h.link.webhook)(webhook(copy, headers(copy)));
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -127,7 +127,7 @@ describe('Twitch', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(twitch, settings),
 				body = JSON.stringify({ challenge: 'pogchamp', subscription: { type: 'channel.chat.message' } });
-			const answered = yield* h.link.webhook!(
+			const answered = yield* required(h.link.webhook)(
 				webhook(body, headers(body, 'webhook_callback_verification'))
 			);
 			expect(yield* Effect.promise(() => answered.text())).toBe('pogchamp');
@@ -139,7 +139,7 @@ describe('Twitch', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(twitch, settings),
 				body = JSON.stringify({ subscription: { type: 'channel.chat.message', status: 'revoked' } });
-			expect((yield* h.link.webhook!(webhook(body, headers(body, 'revocation')))).status).toBe(200);
+			expect((yield* required(h.link.webhook)(webhook(body, headers(body, 'revocation')))).status).toBe(200);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -148,7 +148,7 @@ describe('Twitch', () => {
 			yield* platformApi(answer);
 			const h = yield* connected(twitch, settings),
 				body = chat();
-			const forged = yield* h.link.webhook!(
+			const forged = yield* required(h.link.webhook)(
 				webhook(body, {
 					...headers(body),
 					'twitch-eventsub-message-signature': 'sha256=forged'
@@ -157,7 +157,7 @@ describe('Twitch', () => {
 			expect(forged.status).toBe(401);
 			const stale = new Date(Date.now() - 11 * 60 * 1000).toISOString();
 			expect(
-				(yield* h.link.webhook!(webhook(body, headers(body, 'notification', stale)))).status
+				(yield* required(h.link.webhook)(webhook(body, headers(body, 'notification', stale)))).status
 			).toBe(401);
 			expect(h.events).toEqual([]);
 		})
@@ -169,7 +169,7 @@ describe('Twitch', () => {
 					emit: () => Promise.reject(new Error('the store refused'))
 				}),
 				body = chat();
-			expect((yield* h.link.webhook!(webhook(body, headers(body)))).status).toBe(500);
+			expect((yield* required(h.link.webhook)(webhook(body, headers(body)))).status).toBe(500);
 		})
 	);
 	it.live('sends one clipped line to chat as the bot, on the app token', () =>
@@ -177,8 +177,8 @@ describe('Twitch', () => {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(twitch, settings);
 			expect(
-				yield* h.link.send!({ to: '42', text: `line one\nline two ${'x'.repeat(600)}` }, [])
-			).toMatchObject({ providerId: 'out1' });
+				yield* required(h.link.send)({ to: '42', text: `line one\nline two ${'x'.repeat(600)}` }, [])
+			).toMatchObject({ provider_id: 'out1' });
 			const call = api.calls.at(-1),
 				sent = JSON.parse(call?.body ?? '');
 			expect(call?.url).toBe('https://api.twitch.tv/helix/chat/messages');
@@ -201,7 +201,7 @@ describe('Twitch', () => {
 					: answer(call)
 			);
 			const h = yield* connected(twitch, settings);
-			const failure = yield* Effect.flip(h.link.send!({ to: '42', text: 'hi' }, []));
+			const failure = yield* Effect.flip(required(h.link.send)({ to: '42', text: 'hi' }, []));
 			expect(failure.message).toContain('followers only');
 		})
 	);
@@ -209,8 +209,8 @@ describe('Twitch', () => {
 		Effect.gen(function* () {
 			const api = yield* platformApi(answer);
 			const h = yield* connected(twitch, settings);
-			expect(yield* h.link.send!({ id: 'k1', to: 'whisper:7', text: 'hi' }, [])).toMatchObject({
-				providerId: 'k1'
+			expect(yield* required(h.link.send)({ id: 'k1', to: 'whisper:7', text: 'hi' }, [])).toMatchObject({
+				provider_id: 'k1'
 			});
 			const call = api.calls.at(-1);
 			expect(call?.url).toBe('https://api.twitch.tv/helix/whispers?from_user_id=9&to_user_id=7');
@@ -223,7 +223,7 @@ describe('Twitch', () => {
 			yield* platformApi(answer);
 			const { userAccessToken: _dropped, ...rest } = settings;
 			const h = yield* connected(twitch, rest);
-			const failure = yield* Effect.flip(h.link.send!({ to: 'whisper:7', text: 'hi' }, []));
+			const failure = yield* Effect.flip(required(h.link.send)({ to: 'whisper:7', text: 'hi' }, []));
 			expect(failure.message).toContain('user token');
 		})
 	);
@@ -243,7 +243,7 @@ describe('Twitch', () => {
 				return answer(call);
 			});
 			const h = yield* connected(twitch, settings);
-			yield* h.link.send!({ to: '42', text: 'hi' }, []);
+			yield* required(h.link.send)({ to: '42', text: 'hi' }, []);
 			expect(minted).toBe(2);
 			expect(api.calls.at(-1)?.headers.get('authorization')).toBe('Bearer app-2');
 		})
@@ -252,7 +252,7 @@ describe('Twitch', () => {
 		Effect.gen(function* () {
 			yield* platformApi(() => json({ message: 'invalid client secret' }, 403));
 			const h = yield* host(chatProvider(twitch), fetch);
-			yield* Effect.flip(h.link.pair!(settings));
+			yield* Effect.flip(required(h.link.pair)(settings));
 			expect(h.values.size).toBe(0);
 		})
 	);
@@ -260,7 +260,7 @@ describe('Twitch', () => {
 		Effect.gen(function* () {
 			yield* platformApi(answer);
 			const h = yield* host(chatProvider(twitch), fetch);
-			yield* Effect.flip(h.link.pair!({ ...settings, webhookSecret: 'short' }));
+			yield* Effect.flip(required(h.link.pair)({ ...settings, webhookSecret: 'short' }));
 			expect(h.values.size).toBe(0);
 		})
 	);

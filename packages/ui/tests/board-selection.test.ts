@@ -1,3 +1,4 @@
+import { committed, single_act } from './act-envelope.ts';
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
@@ -9,7 +10,8 @@ import type { BoardProps } from '../src/board/Board.svelte';
 import type { Row } from '../src/model/types.ts';
 import type { ViewBolt } from '../src/client/contract.ts';
 import type { ToolbarItem } from '../src/model/ViewToolbar.svelte';
-import { fromWhere, matches } from '../src/filter/filter.ts';
+import { fromWhere } from '../src/filter/where.ts';
+import { matches } from '../src/filter/local.ts';
 import { confirmDialog, element } from './elements.ts';
 
 import {
@@ -28,6 +30,7 @@ const { default: Board } = await import('../src/board/Board.svelte');
 const { toasts } = await import('../src/toast/toast.svelte.ts');
 const catalog = {
 	jobs: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: {
 			title: { kind: 'text' },
@@ -38,9 +41,9 @@ const catalog = {
 	}
 } satisfies NonNullable<KindsHost['catalog']>;
 const rows = [
-	{ id: 'a', title: 'In scope A', group: 'mine', status: 'todo' },
-	{ id: 'b', title: 'In scope B', group: 'mine', status: 'todo' },
-	{ id: 'c', title: 'In scope C', group: 'mine', status: 'done' }
+	{ id: 'a', revision: 1, title: 'In scope A', group: 'mine', status: 'todo' },
+	{ id: 'b', revision: 1, title: 'In scope B', group: 'mine', status: 'todo' },
+	{ id: 'c', revision: 1, title: 'In scope C', group: 'mine', status: 'done' }
 ];
 const mounted: (() => Promise<void>)[] = [];
 const settle = async () => {
@@ -79,7 +82,7 @@ async function show({
 	card = ['title'],
 	lanes,
 	where,
-	initialFilter,
+	initial_filter,
 	exposure = catalog
 }: {
 	input?: readonly Row[];
@@ -89,13 +92,21 @@ async function show({
 	card?: BoardProps['card'];
 	lanes?: BoardProps['lanes'];
 	where?: BoardProps['where'];
-	initialFilter?: BoardProps['initialFilter'];
+	initial_filter?: BoardProps['initial_filter'];
 	exposure?: NonNullable<KindsHost['catalog']>;
 } = {}) {
 	const reads: ReadOptions[] = [];
-	const acts: { callable: string; input: Parameters<ViewScript['act']>[1] }[] = [];
+	const acts: ReturnType<typeof single_act>[] = [];
 	const fixture = await viewFixture({
+		catalog: exposure,
 		...script,
+		get: (model, id, layers, options) => {
+			if (script.get !== undefined) return script.get(model, id, layers, options);
+			const row = input.find((row) => row.id === id);
+			return row === undefined ? null : Object.fromEntries(
+				Object.entries(row).filter(([field]) => field === 'id' || field === 'revision' || options?.fields === undefined || options.fields.includes(field))
+			);
+		},
 		read: (model, options) => {
 			assert.equal(model, 'jobs');
 			reads.push(options);
@@ -112,15 +123,10 @@ async function show({
 				next: null
 			};
 		},
-		act: (callable, input, options) => {
+		act: (body, key) => {
+			const { callable, input } = single_act(body);
 			acts.push({ callable, input });
-			return (
-				script.act?.(callable, input, options) ?? {
-					kind: 'committed',
-					output: null,
-					records: []
-				}
-			);
+			return script.act?.(body, key) ?? committed(body);
 		}
 	});
 	const target = document.body.appendChild(document.createElement('div'));
@@ -136,9 +142,9 @@ async function show({
 				by: 'status',
 				card,
 				...(lanes === undefined ? {} : { lanes }),
-				pageSize: 1,
+				page_size: 1,
 				...(where === undefined ? {} : { where }),
-				...(initialFilter === undefined ? {} : { initialFilter }),
+				...(initial_filter === undefined ? {} : { initial_filter }),
 				toolbar:
 					toolbar === false
 						? false
@@ -202,12 +208,9 @@ it.live(
 						{
 							icon: 'lucide:check',
 							name: 'Mark reviewed',
-							requiresSelection: true,
+							requires_selection: true,
 							run: (ids) =>
-								bolt.act(
-									'jobs.update',
-									ids.map((target) => ({ target, set: { reviewed: true } }))
-								)
+								bolt.act({ 'jobs.update': ids.map((id) => ({ target: { id, revision: 1 }, set: { reviewed: true } })) })
 						}
 					]
 				})
@@ -225,7 +228,7 @@ it.live(
 			assert.deepEqual(acts, [
 				{
 					callable: 'jobs.update',
-					input: ['a', 'c', 'b'].map((target) => ({ target, set: { reviewed: true } }))
+					input: ['a', 'c', 'b'].map((id) => ({ target: { id, revision: 1 }, set: { reviewed: true } }))
 				}
 			]);
 			assert.equal(target.querySelector('[data-selected-count]'), null);
@@ -242,7 +245,7 @@ it.live(
 			// the in-app confirmation (never `window.confirm`, which WebViews suppress): its title, then the answer
 			const answer = async (accept: boolean) => {
 				await vi.waitFor(() => assert.ok(confirmDialog()));
-				const asked = confirmDialog()!;
+				const asked = required(confirmDialog());
 				confirmations.push(asked.title);
 				asked.answer(accept);
 				await settle();
@@ -251,10 +254,10 @@ it.live(
 				show({
 					toolbar: { delete: true },
 					script: {
-						act: () =>
+						act: (body) =>
 							refuse
 								? { kind: 'refused', code: 'forbidden', message: 'Deletion is locked' }
-								: { kind: 'committed', output: null, records: [] }
+								: committed(body)
 					}
 				})
 			);
@@ -282,8 +285,8 @@ it.live(
 			yield* browser(() => press('delete'));
 			yield* browser(() => answer(true));
 			assert.deepEqual(acts, [
-				{ callable: 'jobs.delete', input: [{ target: 'c' }] },
-				{ callable: 'jobs.delete', input: [{ target: 'c' }] }
+				{ callable: 'jobs.delete', input: [{ target: { id: 'c', revision: 1 } }] },
+				{ callable: 'jobs.delete', input: [{ target: { id: 'c', revision: 1 } }] }
 			]);
 			assert.deepEqual(confirmations, [
 				'Delete 1 records?',
@@ -302,16 +305,16 @@ it.live('select loaded and all matching preserve author and viewer scope across 
 			show({
 				input: [
 					...rows,
-					{ id: 'hidden', title: 'Other title', group: 'mine', status: 'done' },
-					{ id: 'outside', title: 'In scope outside', group: 'theirs', status: 'todo' }
+					{ id: 'hidden', revision: 1, title: 'Other title', group: 'mine', status: 'done' },
+					{ id: 'outside', revision: 1, title: 'In scope outside', group: 'theirs', status: 'todo' }
 				],
 				where: { group: { eq: 'mine' } },
-				initialFilter: { title: { like: '%In%scope%' } },
+				initial_filter: { title: { like: '%In%scope%' } },
 				actions: () => [
 					{
 						icon: 'lucide:download',
 						name: 'Use selection',
-						requiresSelection: true,
+						requires_selection: true,
 						run: (ids) => void picked.push(ids)
 					}
 				]

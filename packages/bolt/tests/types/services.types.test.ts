@@ -1,11 +1,10 @@
 import type { ImportStart } from '../../src/protocol/schema.ts';
 // Type corpus for the engine service contracts (K2): each pinned member's parameters and answer, exactly. Never run,
 // only checked (`tsgo -p tests/tsconfig.json`): a Shape that drifts from its pin is a type error on its line.
-import type { Effect, Option, Result, Stream } from 'effect';
+import type { Effect, Option, Stream } from 'effect';
 import type { Json } from '../../src/decl/values.ts';
 import type { FacilityFailure, Unavailable } from '../../src/decl/errors.ts';
 import type { Frame } from '../../src/protocol/schema.ts';
-import type { Pred } from '@norbital-ai/store';
 import type { ReadIR } from '../../src/protocol/reads.ts';
 import type {
 	AiRequest,
@@ -20,7 +19,6 @@ import type {
 	GuestOutcome,
 	Invocation,
 	Outcome,
-	QueuedRun,
 	Reader
 } from '../../src/engine/contracts.ts';
 import type { EngineError, IdentityRefusal } from '../../src/engine/errors.ts';
@@ -28,10 +26,9 @@ import type { BoltError } from '../../src/protocol/errors.ts';
 import type { EngineManifest } from '../../src/engine/manifest.ts';
 import type { Holder } from '../../src/engine/access/authority.ts';
 import type { DeliveryReport } from '../../src/engine/conversations/status.ts';
-import type { DecisionResult } from '../../src/engine/decisions/index.ts';
-import type { Chain } from '../../src/engine/write/sql.ts';
+import type { DecisionResult } from '../../src/engine/decision.ts';
 import type { Verb } from '../../src/engine/write/act.ts';
-import type { DeadlineTimer, DeadlineEntry } from '../../src/engine/runs/deadlines.ts';
+import type { DeadlineTimer } from '../../src/engine/runs/deadlines.ts';
 import type { OpenAiChat } from '../../src/engine/agent/openai-chat.ts';
 import type { AiEvent } from '../../src/engine/ports.ts';
 import type { PortFailure } from '../../src/engine/port.ts';
@@ -46,7 +43,7 @@ import type {
 	ApprovalsShape,
 	Authenticated,
 	Bridge,
-	Callable,
+	ParsedCallable,
 	Callables,
 	CallablesShape,
 	CallResult,
@@ -57,7 +54,6 @@ import type {
 	DeadlinesShape,
 	Decisions,
 	DecisionsShape,
-	Enqueue,
 	Envoys,
 	EnvoysShape,
 	Facilities,
@@ -73,11 +69,8 @@ import type {
 	LiveShape,
 	LiveView,
 	Manifest,
-	MessageStore,
 	Outbound,
 	OutboundShape,
-	OwnPredSql,
-	ParseCallable,
 	Reads,
 	ReadsShape,
 	RetrySpec,
@@ -87,7 +80,6 @@ import type {
 	RunRest,
 	Runs,
 	RunsShape,
-	RunTime,
 	ShapeOf,
 	Telemetry,
 	TelemetryShape,
@@ -162,7 +154,7 @@ is<
 		| 'bindings'
 		| 'invocationId'
 		| 'observed'
-		| 'onConflict'
+		| 'on_conflict'
 		| 'rate'
 		| 'restored'
 		| 'readGuards'
@@ -181,24 +173,17 @@ is<
 >();
 
 // ── callables ──
-is<Eq<Callable['_tag'], 'Verb' | 'Automation' | 'Sync'>>();
+is<Eq<ParsedCallable['_tag'], 'Verb' | 'Automation'>>();
 is<Eq<'action' extends keyof CallablesShape ? true : false, false>>();
 is<
 	Eq<
-		Extract<Callable, { _tag: 'Verb' }>,
+		Extract<ParsedCallable, { _tag: 'Verb' }>,
 		{ readonly _tag: 'Verb'; readonly model: string; readonly verb: Verb }
 	>
 >();
 is<Eq<Answer<CallablesShape['acts']>, Effect.Effect<CallResult, EngineError>>>();
 // declared queries are gone: callables only write and start
 is<Eq<'query' extends keyof CallablesShape ? true : false, false>>();
-is<
-	Eq<
-		ParseCallable,
-		(callable: string, manifest: EngineManifest) => Result.Result<Callable, BoltError>
-	>
->();
-
 // ── identity ──
 is<Eq<Args<IdentityShape['authenticate']>, [token: string]>>();
 is<Eq<Answer<IdentityShape['authenticate']>, Effect.Effect<Authenticated, IdentityRefusal>>>();
@@ -249,7 +234,7 @@ is<Eq<DeadlinesShape['announce'], (notLaterThan: string) => Effect.Effect<void>>
 is<Eq<keyof LinksShape, 'open' | 'close' | 'changed' | 'typing' | 'status' | 'send' | 'request'>>();
 is<Eq<Answer<LinksShape['typing']>, Effect.Effect<void, FacilityFailure | Unavailable>>>();
 is<
-	Eq<keyof OutboundShape, 'deliver' | 'resume' | 'delivered' | 'replied' | 'activate' | 'handlers'>
+	Eq<keyof OutboundShape, 'deliver' | 'resume' | 'reference' | 'delivered' | 'activate' | 'handlers'>
 >();
 is<
 	Eq<
@@ -257,7 +242,7 @@ is<
 		[instance: string, providerId: string, report: DeliveryReport]
 	>
 >();
-is<Eq<Answer<OutboundShape['delivered']>, Effect.Effect<Option.Option<Outcome>, EngineError>>>();
+is<Eq<Answer<OutboundShape['delivered']>, Effect.Effect<void, EngineError>>>();
 is<Eq<Args<SyncsShape['invalidate']>, [instance: string, sync: string, partition: string]>>();
 is<Eq<keyof ApprovalsShape, 'decide' | 'view' | 'list'>>();
 is<
@@ -285,20 +270,7 @@ is<
 is<
 	Eq<
 		Exclude<CrossCall['_tag'], FacilityCall['_tag']>,
-		| 'read'
-		| 'act'
-		| 'acts'
-		| 'schedule'
-		| 'notify'
-		| 'send'
-		| 'request'
-		| 'progress'
-		| 'withdraw'
-		| 'transactionBegin'
-		| 'transactionRead'
-		| 'transactionAct'
-		| 'transactionFinish'
-		| 'transactionAbort'
+		'read' | 'act' | 'run' | 'schedule' | 'notify' | 'send' | 'request' | 'progress' | 'withdraw'
 	>
 >();
 is<
@@ -309,7 +281,7 @@ is<
 		true
 	>
 >();
-is<Eq<Extract<CrossCall, { _tag: 'act' }>['callable'], Callable>>();
+is<Eq<Extract<CrossCall, { _tag: 'act' }>['outputs'], readonly string[]>>();
 
 // ── facilities, decisions ──
 is<Eq<keyof FacilitiesShape, 'dispatch' | 'fileLoader' | 'loggedTransport'>>();
@@ -318,19 +290,8 @@ is<
 	Eq<Answer<DecisionsShape['decide']>, Effect.Effect<DecisionResult, FacilityFailure | Unavailable>>
 >();
 
-// ── pinned helpers ──
-is<
-	Eq<Enqueue, (chain: Chain, rows: readonly QueuedRun[] | { readonly select: string }) => string>
->();
-is<Eq<keyof RunTime, 'duration' | 'offsetMs' | 'dueAt' | 'backoffMs' | 'BUCKET_MS'>>();
-is<Eq<RunTime['dueAt'], (now: number, at: number) => number>>();
-is<
-	Eq<keyof MessageStore, 'post' | 'claim' | 'stream' | 'settle' | 'cancel' | 'deliver' | 'mark'>
->();
-is<Eq<OwnPredSql, (pred: Pred, row: string, chain: Chain, twoValued: boolean) => string>>();
-
 // ── native deadline and streaming AI signatures ──
-is<Eq<DeadlineTimer<string>['takeDue'], Effect.Effect<DeadlineEntry<string> | undefined>>>();
+is<Eq<DeadlineTimer<string>['armedFor'], Effect.Effect<number | undefined>>>();
 is<Eq<Answer<DeadlineTimer<string>['announce']>, Effect.Effect<boolean>>>();
 // AI is a native stream; cancellation belongs to its consuming fiber.
 declare const chat: OpenAiChat;

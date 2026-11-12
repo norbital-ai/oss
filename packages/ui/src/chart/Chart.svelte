@@ -6,9 +6,12 @@ numbers (`count`, `sum.amount`).
 <Chart of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ViewSource } from '../read/source.js';
 	/** `of` is an aggregate's page of buckets, a declared query's rows or page, or rows; `y` names numbers (`count`, `sum.amount`). */
-	export type ChartProps = {
+	type ChartProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: ViewSource;
 		x: string;
 		y: string | readonly string[];
@@ -23,13 +26,14 @@ numbers (`count`, `sum.amount`).
 
 <script lang="ts">
 	import { curveStepAfter } from 'd3-shape';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { humanize, msg } from '../text/messages.js';
 	import { series } from './series.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import { sourceState } from '../read/source.js';
 
 	let {
+		ctx,
 		of,
 		x,
 		y,
@@ -39,7 +43,7 @@ numbers (`count`, `sum.amount`).
 		stack = false,
 		title
 	}: ChartProps = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	// Bottom holds the x tick labels (32) and the legend beneath them (32).
 	const numericPadding = { top: 12, right: 16, bottom: 64, left: 64 };
 	// Band/point x scales show every category by default; thin them to one label per 80px like layerchart's continuous axes.
@@ -56,26 +60,26 @@ numbers (`count`, `sum.amount`).
 		'var(--chart-5, #f59e0b)'
 	];
 	const lines = $derived(
-		ys.map((key, i) => ({
-			key,
-			label: humanize(key),
-			value: key,
-			color: COLORS[i % COLORS.length]!
-		}))
+		ys.map((key, i) => {
+			const color = COLORS[i % COLORS.length];
+			if (color === undefined) throw new Error('The chart series has no palette color.');
+			return { key, label: humanize(key), value: key, color };
+		})
 	);
 </script>
 
 <figure class="flex min-w-0 flex-col gap-2" data-view="chart">
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
-	<ReadGate state={read} what={title ?? msg(bolt, 'chart.data', 'this chart')}>
+	<ReadGate {ctx} state={read} what={title ?? msg(bolt, 'chart.data')}>
 		{#snippet children(value)}
 			{@const data = series(value, x, ys)}
+			{@const first_y = ys[0]}
 			{#if data.length === 0}
 				<p
 					class="text-muted-foreground rounded-md border border-dashed p-4 text-sm"
 					data-read="empty"
 				>
-					{msg(bolt, 'chart.empty', 'No data')}
+					{msg(bolt, 'chart.empty')}
 				</p>
 			{:else}
 				{#await loadPlots()}
@@ -84,7 +88,7 @@ numbers (`count`, `sum.amount`).
 					{#if kind === 'donut'}
 						<div class="h-56">
 							<PieChart
-								data={data.map((d) => ({ key: String(d[x]), value: Number(d[ys[0]!] ?? 0) }))}
+								data={data.map((d) => ({ key: String(d[x]), value: first_y === undefined ? 0 : Number(d[first_y] ?? 0) }))}
 								key="key"
 								value="value"
 								label="key"
@@ -147,7 +151,7 @@ numbers (`count`, `sum.amount`).
 					{/if}
 				{:catch}
 					<p class="text-muted-foreground rounded-md border border-dashed p-4 text-sm" role="alert">
-						{msg(bolt, 'chart.unavailable', 'The chart could not load. Reload to try again.')}
+						{msg(bolt, 'chart.unavailable')}
 					</p>
 				{/await}
 			{/if}

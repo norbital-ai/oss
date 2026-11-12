@@ -15,7 +15,7 @@ const ReadError = Schema.Struct({
 const decodeRead = Schema.decodeUnknownOption(ReadError);
 
 /** The declared-read failure wire value; malformed answers remain engine defects. */
-export const readFailure = (error: unknown): Option.Option<ReadFailed> =>
+export const read_failure = (error: unknown): Option.Option<ReadFailed> =>
 	Option.map(
 		decodeRead(error),
 		(value) => new ReadFailed({ code: value.code, message: value.message })

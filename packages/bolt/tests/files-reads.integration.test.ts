@@ -1,43 +1,50 @@
-// `ctx.files.image/text/table/sheet` (§5.8.1): the engine reads a stored file host-side, over real small files.
+// `ctx.files.get` and `ctx.files.image` (§5.8.1): the engine reads a stored file host-side, over real small files.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect } from '@effect/vitest';
 import { Effect, Layer, Schema } from 'effect';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, json, routeFixture } from './support/route-fixture.ts';
+import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		docs: {
 			description: 'A document',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, file: { kind: 'file', accept: ['*/*'], max: '1MiB' } }
 		}
 	},
 	relationships: {},
 	exposures: {
-		docs: { read: { docs: { fields: 'all' } }, create: { columns: { docs: ['title', 'file'] } } }
+		docs: {
+			outputs: { default: { docs: { fields: 'all' } } },
+			create: { columns: { docs: ['title', 'file'] } }
+		}
 	},
 	integrations: {},
 	teams: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	policies: {
-		ops: { description: 'Ops', grants: { docs: { read: true } }, automations: ['read'] }
+		ops: {
+			description: 'Ops',
+			grants: { docs: { outputs: { default: {} } } },
+			capabilities: { automations: ['read'] }
+		}
 	},
 	automations: {
 		read: {
 			description: 'Reads a stored file',
 			policies: ['ops'],
-			input: { ref: { kind: 'json' }, how: { kind: 'text' } }
+			input: { ref: { kind: 'json' }, how: { kind: 'text' } },
+			output: { kind: 'json' }
 		}
 	},
 	needs: []
@@ -45,8 +52,9 @@ const manifest = {
 
 const guest = program(`import { Effect, Result } from 'effect';
 export default { automation: { read: { body: function* ({ ref, how }, ctx) {
-	if (how === 'jpeg') { const small = yield* ctx.files.image(ref, { jpeg: { maxEdge: 40 } }); return { small, facts: yield* ctx.files.image(small) }; }
-	const result = yield* Effect.result(ctx.files[how](ref));
+	if (how === 'jpeg') { const small = yield* ctx.files.image(ref, { jpeg: { max_edge: 40 } }); return { small, facts: yield* ctx.files.image(small) }; }
+	if (how === 'get') return new TextDecoder('utf-8', { fatal: true }).decode(yield* ctx.files.get(ref));
+	const result = yield* Effect.result(ctx.files.image(ref));
 	return Result.isSuccess(result) ? result.success : result.failure;
 } } } };`);
 
@@ -58,8 +66,8 @@ const read = (name: string, mime: string, how: string) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const t = yield* TestWorkspace,
-				route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()),
-				admin = t.as(t.admin).authority;
+				route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>()),
+				admin = (yield* t.as(t.admin)).authority;
 			const up = yield* Schema.decodeUnknownEffect(
 				Schema.Struct({
 					id: Schema.String,
@@ -84,18 +92,17 @@ const read = (name: string, mime: string, how: string) =>
 					)
 				)
 			);
-			yield* actReply(route, admin, {
-				callable: 'docs.create',
-				input: [{ title: name, file: up }],
-				issuedAt: t.clock.now()
+			yield* act_reply(route, admin, {
+				acts: { 'docs.create': [{ title: name, file: up }] },
+				issued_at: t.clock.now()
 			});
 			const id = uuidv7(Date.parse(t.clock.now()));
-			yield* actReply(route, t.as(t.member(['ops'])).authority, {
-				callable: 'start',
+			yield* act_reply(route, (yield* t.as(t.member(['ops']))).authority, {
+				callable: 'run',
 				input: { automation: 'read', input: { ref: up, how }, id },
-				issuedAt: t.clock.now()
+				issued_at: t.clock.now()
 			});
-			yield* t.runDue();
+			yield* t.run_due();
 			const [run] = yield* t.db.rows(
 				Schema.Struct({ state: Schema.String, output: Schema.Json, error: Schema.Json }),
 				{ text: 'SELECT state, output, error FROM sys_run WHERE id = $1', params: [id] }
@@ -124,7 +131,7 @@ layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, gues
 						sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
 						pdq: expect.stringMatching(/^[0-9a-f]{64}$/),
 						exif: {
-							takenAt: expect.stringMatching(/^2026-07-0[34]T/),
+							taken_at: expect.stringMatching(/^2026-07-0[34]T/),
 							gps: { lat: expect.closeTo(1.2917, 3), lng: expect.closeTo(103.85, 3) },
 							software: 'Adobe Photoshop 25.0',
 							make: 'Acme',
@@ -156,33 +163,11 @@ layer(Layer.unwrap(Effect.map(guest, (g) => TestWorkspace.layer({ manifest, gues
 				})
 		);
 
-		it.effect('text as UTF-8, CSV and xlsx as tables, xlsx as typed sheets', () =>
+		it.effect('reads stored UTF-8 bytes', () =>
 			Effect.gen(function* () {
-				expect(yield* read('items.csv', 'text/csv', 'text')).toBe(
+				expect(yield* read('items.csv', 'text/csv', 'get')).toBe(
 					'name,qty\r\n"Bolt, M8",4\r\n"say ""hi""",2\r\n'
 				);
-				expect(yield* read('items.csv', 'text/csv', 'table')).toEqual([
-					['name', 'qty'],
-					['Bolt, M8', '4'],
-					['say "hi"', '2']
-				]);
-				expect(yield* read('photo.png', 'image/png', 'text')).toMatchObject({ kind: 'invalid' });
-				const xlsx = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-				expect(yield* read('items.xlsx', xlsx, 'table')).toEqual([
-					['name', 'qty', 'ok'],
-					['Bolt, M8', '4', 'true'],
-					['Nut', '2.5', 'false']
-				]);
-				expect(yield* read('items.xlsx', xlsx, 'sheet')).toEqual([
-					{
-						name: 'Stock',
-						rows: [
-							['name', 'qty', 'ok'],
-							['Bolt, M8', 4, true],
-							['Nut', 2.5, false]
-						]
-					}
-				]);
 			})
 		);
 	}

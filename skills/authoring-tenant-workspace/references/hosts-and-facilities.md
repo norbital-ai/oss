@@ -26,8 +26,8 @@ The build records needs from declarations. Needs are never config or secrets.
 | `challenge` | an app with `challenge: 'turnstile'` | `transactional.challenge` |
 | `system1`, `system2` | an `ai` block | `intelligence.system1`, `.system2` |
 | `embed` | `ai.embeddings` | `intelligence.embed` |
-| `webhooks` | an integration, connection or webhook automation | `ports.webhooks` |
-| `outbound` | an integration, connection or secret | `ports.outbound` |
+| `webhooks` | an integration definition | `ports.webhooks` |
+| `outbound` | an integration definition or declared secret | `ports.outbound` |
 
 - Activation refuses a need whose member is `off` and names every unmet member. Nothing starts half-working.
 - `mail` is needed by every bundle. Other members may be `off`; a call answers `Unavailable`.

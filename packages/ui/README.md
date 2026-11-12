@@ -5,7 +5,7 @@ Svelte views, field inputs, primitives, design tokens and layout primitives for 
 See the [UI package overview](./docs/README.md) for goals, layering, and styling boundaries.
 
 Public entries: `.` (views, inputs, editors, primitives), `./layout`, `./brand` (brand and access
-artwork), `./capture` (`CaptureKit`, so its face engine loads only in pages that import it), `./effect`
+artwork), `./effect`
 (the mounted Svelte Effect edge) and `./base.css`; `./assets/*` holds the logo and favicons.
 
 ```svelte
@@ -54,7 +54,7 @@ field is one control high: its reset or clear button is an adornment at the cont
 hover or focus; a list cell's expand mark shows on its cell's hover or focus.
 
 **Datatypes in JSON Schema.** `StructuredData` (forms, tables and popover cells alike) picks a
-datatype's control at one dispatch, `jsonSchemaKind`: explicitly by `format: '<datatype>'`
+datatype's control at one dispatch, `json_schema_kind`: explicitly by `format: '<datatype>'`
 (`period`, `point`, `money`, `duration`, `currency`; `x-norbital.datatype` for a custom one), else
 implicitly when an object's shape is exactly a datatype's (std's `DATATYPE_SHAPES`: a date or
 instant period, a point). A native kind in a list cell keeps its own editor and renderer; only a

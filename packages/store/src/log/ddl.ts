@@ -1,9 +1,8 @@
 import { Effect } from 'effect';
+import { q, literal as lit } from '@norbital-ai/std/sql';
 import {
-	logLiteral as lit,
-	logName as q,
-	logPath,
-	logSpec,
+	log_path,
+	log_spec,
 	type AppendOnlyLogSpec
 } from './spec.ts';
 
@@ -11,21 +10,21 @@ const eventContract = (spec: AppendOnlyLogSpec) =>
 	[
 		"jsonb_typeof(event)='object'",
 		`event ?& ARRAY[${spec.envelope.required.map(lit).join(',')}]`,
-		`${logPath(spec.envelope.id)}=id`,
-		...spec.envelope.nonempty.map((field) => `coalesce(length(${logPath(field)}),0)>0`),
+		`${log_path(spec.envelope.id)}=id`,
+		...spec.envelope.nonempty.map((field) => `coalesce(length(${log_path(field)}),0)>0`),
 		...spec.envelope.enums.map(
-			(entry) => `${logPath(entry.path)} IN (${entry.values.map(lit).join(',')})`
+			(entry) => `${log_path(entry.path)} IN (${entry.values.map(lit).join(',')})`
 		),
 		...spec.envelope.objects.map(
-			(field) => `jsonb_typeof(${logPath(field, 'event', false)})='object'`
+			(field) => `jsonb_typeof(${log_path(field, 'event', false)})='object'`
 		),
-		`occurred_at=(${logPath(spec.envelope.at)})::timestamptz`
+		`occurred_at=(${log_path(spec.envelope.at)})::timestamptz`
 	].join('\nAND ');
 
 /** All native invariants derive from the serializable declaration, including privileged maintenance. */
-export const logDdl = (input: AppendOnlyLogSpec) =>
+export const log_ddl = (input: AppendOnlyLogSpec) =>
 	Effect.gen(function* () {
-		const spec = yield* logSpec(input);
+		const spec = yield* log_spec(input);
 		const ns = q(spec.namespace),
 			event = `${ns}.event`,
 			retired = `${ns}.tenant_retirement`,
@@ -36,7 +35,7 @@ export const logDdl = (input: AppendOnlyLogSpec) =>
 		const scopes = scope.join(','),
 			prefix = scope.length === 0 ? '' : `${scopes},`;
 		const retain = `statement_timestamp()-interval '${spec.retention.days} days'`;
-		const path = (parts: readonly string[]) => logPath(parts);
+		const path = (parts: readonly string[]) => log_path(parts);
 		const contract = eventContract(spec);
 		const sql = [
 			'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public',
@@ -56,7 +55,7 @@ id text NOT NULL CHECK (id<>''),
 occurred_at timestamptz NOT NULL CHECK (isfinite(occurred_at)),
 recorded_at timestamptz NOT NULL DEFAULT clock_timestamp() CHECK (isfinite(recorded_at)),
 event jsonb NOT NULL CONSTRAINT event_check CHECK ((${contract}) IS TRUE),
-payload_bytes integer GENERATED ALWAYS AS (octet_length((${logPath(spec.envelope.payload, 'event', false)})::text)) STORED NOT NULL,
+payload_bytes integer GENERATED ALWAYS AS (octet_length((${log_path(spec.envelope.payload, 'event', false)})::text)) STORED NOT NULL,
 document text GENERATED ALWAYS AS (event::text) STORED,
 PRIMARY KEY (${prefix}id))`,
 			`REVOKE ALL ON TABLE ${event} FROM PUBLIC`
@@ -128,7 +127,7 @@ BEGIN
 ${fence}
 FOR item IN SELECT value FROM jsonb_array_elements(p_events) LOOP
  INSERT INTO ${event} AS existing (${prefix}id,occurred_at,event)
- VALUES (${scopeArgs.length === 0 ? '' : `${scopeArgs.join(',')},`}${logPath(spec.envelope.id, 'item')},(${logPath(spec.envelope.at, 'item')})::timestamptz,item)
+ VALUES (${scopeArgs.length === 0 ? '' : `${scopeArgs.join(',')},`}${log_path(spec.envelope.id, 'item')},(${log_path(spec.envelope.at, 'item')})::timestamptz,item)
  ON CONFLICT (${prefix}id) DO UPDATE SET id=EXCLUDED.id WHERE existing.event=EXCLUDED.event RETURNING existing.id INTO written;
  IF written IS NULL THEN RAISE EXCEPTION USING ERRCODE='BA102', MESSAGE='Log event id already has different content'; END IF;
 END LOOP;
@@ -178,30 +177,3 @@ END $$`,
 			return `${statement.slice(0, start)} AS ${lit(statement.slice(start + marker.length, end))}${statement.slice(end + 2)}`;
 		});
 	});
-
-/** Non-destructive adoption of the former native log layout; immutable migration files preserve its exact prefix. */
-export const logNativeUpgrade = (input: AppendOnlyLogSpec) =>
-	Effect.gen(function* () {
-		const spec = yield* logSpec(input),
-			ddl = yield* logDdl(spec),
-			table = `${q(spec.namespace)}.event`;
-		return [
-			`ALTER TABLE ${table} DROP CONSTRAINT event_check`,
-			`ALTER TABLE ${table} ADD CONSTRAINT event_check CHECK ((${eventContract(spec)}) IS TRUE) NOT VALID`,
-			`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS event_recorded_at_check`,
-			`ALTER TABLE ${table} ADD CONSTRAINT event_recorded_at_check CHECK (isfinite(recorded_at)) NOT VALID`,
-			...ddl.filter(
-				(sql) => sql.startsWith('REVOKE ') || sql.startsWith('CREATE OR REPLACE FUNCTION ')
-			),
-			`DROP TRIGGER immutable ON ${table}`,
-			`DROP TRIGGER immutable_truncate ON ${table}`,
-			...ddl.filter((sql) => sql.startsWith('CREATE TRIGGER '))
-		];
-	});
-
-/** Run in a later transaction: validation permits concurrent reads and ordinary writes. */
-export const logNativeValidation = (input: AppendOnlyLogSpec) =>
-	Effect.map(logSpec(input), (spec) => [
-		`ALTER TABLE ${q(spec.namespace)}.event VALIDATE CONSTRAINT event_check`,
-		`ALTER TABLE ${q(spec.namespace)}.event VALIDATE CONSTRAINT event_recorded_at_check`
-	]);

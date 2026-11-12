@@ -20,7 +20,7 @@ const close = (client: Client) =>
 		Effect.ignore
 	);
 
-export const mcpPort: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(function* () {
+export const mcp_port: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(function* () {
 	const sessions = new Map<string, Client>();
 	yield* Effect.addFinalizer(() =>
 		Effect.forEach(sessions.values(), close, { discard: true }).pipe(
@@ -73,10 +73,10 @@ export const mcpPort: Effect.Effect<McpPort, never, Scope.Scope> = Effect.gen(fu
 		const listed = yield* Port.attempt('mcp', (signal) => client.listTools(undefined, { signal }));
 		return yield* Effect.forEach(listed.tools, (tool) =>
 			Schema.decodeUnknownEffect(Schema.Json)(tool.inputSchema).pipe(
-				Effect.map((inputSchema) => ({
+				Effect.map((input_schema) => ({
 					name: tool.name,
 					description: tool.description ?? '',
-					inputSchema
+					input_schema
 				})),
 				Effect.mapError(Port.failure('mcp'))
 			)

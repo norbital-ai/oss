@@ -15,10 +15,10 @@
 
 <MarkdownEditor
 	value={text}
-	onChange={(value) => (text = value)}
+	on_change={(value) => (text = value)}
 	{mentions}
 	commands={commands ?? []}
-	commandStart="word"
+	command_start="word"
 	aria-label="Message"
 	{onkeydown}
 />

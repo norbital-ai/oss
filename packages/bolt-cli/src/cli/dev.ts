@@ -1,25 +1,25 @@
 /// <reference types="node" />
 // `bolt dev` untethered: the workspace's `norbital.host.ts` (or `--host=<file>`) default-exports every facility
 // (`satisfies Facilities`) and optionally its `serving` parts. Each build is migrated on the host's own database and
-// served through `serveRelease` on this package's `nodeGuests` runner, the path bolt-server takes: integration links,
+// served through `serve_release` on this package's `node_guests` runner, the path bolt-server takes: integration links,
 // `activate` (whose needs check is the only gate), deadline wakes and crons. The internal SPA is served from source by a
 // Vite dev server, so a page edit is a hot update; a model edit rebuilds the manifest and guest only.
 import { Effect, FileSystem, Option, Path, Scope, ScopedRef } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
-import { nodeGuests } from '../guests.ts';
+import { node_guests } from '../guests.ts';
 import { clientDevServer } from '../compiler/artifact/client.ts';
+import { artifact_port } from '@norbital-ai/bolt/node';
 import {
-	artifactPort,
 	call,
-	loadHost,
-	serveRelease,
-	nodePorts,
-	responseError
+	load_host,
+	serve_release,
+	node_ports,
+	response_error
 } from '@norbital-ai/bolt/tooling';
 import { HOST_API } from '@norbital-ai/bolt/host-api';
-import { clientPage } from '@norbital-ai/bolt/engine';
+import { client_page } from '@norbital-ai/bolt/protocol';
 import { buildWorkspace, ToolFailure, watchWorkspace, type Built, type Log } from './build.ts';
 
 /**
@@ -97,10 +97,10 @@ export const dev = Effect.fn('bolt.dev')(function* (
 	options: { readonly port: number; readonly log: Log }
 ) {
 	const path = yield* Path.Path;
-	const { facilities, serving } = yield* loadHost(hostFile);
-	const publicUrl = `http://127.0.0.1:${options.port}`;
-	const native = yield* nodePorts();
-	const guests = nodeGuests();
+	const { facilities, serving } = yield* load_host(hostFile);
+	const public_url = `http://127.0.0.1:${options.port}`;
+	const native = yield* node_ports();
+	const guests = node_guests();
 	const watching = {
 		log: options.log,
 		spaServed: true
@@ -110,7 +110,7 @@ export const dev = Effect.fn('bolt.dev')(function* (
 		Effect.gen(function* () {
 			const release = {
 				id: built.artifact.artifact.hash,
-				artifact: artifactPort(built.artifact.dir)
+				artifact: artifact_port(built.artifact.dir)
 			};
 			const branch = yield* call((signal) =>
 				HOST_API.branch(
@@ -119,10 +119,10 @@ export const dev = Effect.fn('bolt.dev')(function* (
 				)
 			);
 			yield* call((signal) => branch.schema.migrate({ signal }));
-			const served = yield* serveRelease({
+			const served = yield* serve_release({
 				scope: 'dev',
 				release,
-				publicUrl,
+				public_url,
 				facilities,
 				serving,
 				// the untethered loop runs guest code as bolt-server does: `node:vm` contexts in this process
@@ -156,7 +156,7 @@ export const dev = Effect.fn('bolt.dev')(function* (
 		const request = yield* HttpServerRequest.toWeb(incoming);
 		const address = Option.getOrElse(incoming.remoteAddress, () => '127.0.0.1');
 		const { workspace, links, built } = yield* ScopedRef.get(active);
-		const pathname = new URL(incoming.url, publicUrl).pathname;
+		const pathname = new URL(incoming.url, public_url).pathname;
 		const response = yield* pathname.startsWith('/hooks/integration/') ||
 		pathname === '/hooks/oauth/callback'
 			? call(() => links.hook(request))
@@ -178,12 +178,12 @@ export const dev = Effect.fn('bolt.dev')(function* (
 							(await workspace.render(request, { address, signal }))
 					);
 		if (response !== null) return HttpServerResponse.fromWeb(response);
-		const page = yield* clientPage(built.artifact.dir, pathname, built.artifact.manifest);
+		const page = yield* client_page(built.artifact.dir, pathname, built.artifact.manifest);
 		if (page === undefined) return HttpServerResponse.empty({ status: 404 });
 		return page.document
 			? HttpServerResponse.text(client.document, { headers: page.headers })
 			: yield* HttpServerResponse.file(page.file, { headers: page.headers });
-	}).pipe(Effect.catch((error) => Effect.succeed(responseError(error))));
+	}).pipe(Effect.catch((error) => Effect.succeed(response_error(error))));
 	const bolt = yield* NodeHttpServer.makeHandler(app, { scope: yield* Effect.scope }).pipe(
 		Effect.provide(NodeHttpServer.layerHttpServices)
 	);
@@ -206,7 +206,7 @@ export const dev = Effect.fn('bolt.dev')(function* (
 				server.close(() => resume(Effect.void));
 			})
 	);
-	options.log(`dev ready (untethered, ${hostFile}): ${publicUrl}`);
+	options.log(`dev ready (untethered, ${hostFile}): ${public_url}`);
 	const io = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 	yield* watchWorkspace(
 		root,

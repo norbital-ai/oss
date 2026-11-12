@@ -21,12 +21,12 @@ const From = Schema.Struct({
 /** Provider input is decoded once at ingest; invalid optional metadata has the previous absent-field meaning. */
 export const InboundMessage = Schema.Struct({
 	id: Schema.NonEmptyString,
-	sentAt: tolerant(Schema.NonEmptyString),
-	sourceAt: tolerant(Schema.NonEmptyString),
+	sent_at: tolerant(Schema.NonEmptyString),
+	source_at: tolerant(Schema.NonEmptyString),
 	thread: tolerant(Schema.NonEmptyString),
 	from: tolerant(From),
 	text: tolerant(Schema.String),
-	replyTo: tolerant(Schema.NonEmptyString),
+	reply_to: tolerant(Schema.NonEmptyString),
 	group: tolerant(Schema.Boolean),
 	deleted: tolerant(Schema.Boolean),
 	version: tolerant(Schema.NonEmptyString),
@@ -40,12 +40,12 @@ export const InboundMessage = Schema.Struct({
 const Normalized = Schema.Struct({
 	id: Schema.String,
 	thread: Schema.String,
-	sentAt: Schema.String,
-	sourceAt: Schema.NullOr(Schema.String),
+	sent_at: Schema.String,
+	source_at: Schema.NullOr(Schema.String),
 	sender: Schema.String,
-	senderName: Schema.NullOr(Schema.String),
+	sender_name: Schema.NullOr(Schema.String),
 	text: Schema.String,
-	replyTo: Schema.NullOr(Schema.String),
+	reply_to: Schema.NullOr(Schema.String),
 	group: Schema.Boolean,
 	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
 	version: Schema.String,
@@ -82,21 +82,21 @@ export function normalizeInbound(
 	history: boolean,
 	now: string
 ): Inbound | null {
-	const sentAt = iso(raw.sentAt),
+	const sent_at = iso(raw.sent_at),
 		thread = raw.thread ?? null;
-	if (raw.deleted === true && (thread === null || sentAt === null))
+	if (raw.deleted === true && (thread === null || sent_at === null))
 		return {
 			id: raw.id,
 			thread: '',
-			sentAt: sentAt ?? now,
-			sourceAt: sourceInstant(raw.sourceAt),
+			sent_at: sent_at ?? now,
+			source_at: sourceInstant(raw.source_at),
 			sender: '',
-			senderName: null,
+			sender_name: null,
 			text: '',
-			replyTo: null,
+			reply_to: null,
 			group: false,
 			invocation: 'ambient',
-			version: sentAt ?? now,
+			version: sent_at ?? now,
 			deleted: true,
 			history,
 			attachments: [],
@@ -105,7 +105,7 @@ export function normalizeInbound(
 			references: [],
 			title: null
 		};
-	if (sentAt === null) return null;
+	if (sent_at === null) return null;
 	const attachments = (raw.attachments ?? []).flatMap((value) => Option.toArray(attachment(value)));
 	const participants = raw.participants?.flatMap((value) =>
 		Option.toArray(participant(value)).map((person) => ({
@@ -115,9 +115,9 @@ export function normalizeInbound(
 	);
 	const facts = {
 		...(participants === undefined ? {} : { participants }),
-		sentAt,
-		sourceAt: sourceInstant(raw.sourceAt),
-		version: iso(raw.version) ?? sentAt,
+		sent_at,
+		source_at: sourceInstant(raw.source_at),
+		version: iso(raw.version) ?? sent_at,
 		deleted: raw.deleted === true,
 		history,
 		attachments
@@ -145,9 +145,9 @@ export function normalizeInbound(
 			id: raw.id,
 			thread: thread ?? chain[0] ?? references[0] ?? raw.id,
 			sender: address.toLowerCase(),
-			senderName: raw.from?.name ?? null,
+			sender_name: raw.from?.name ?? null,
 			text: raw.text ?? '',
-			replyTo: null,
+			reply_to: null,
 			group: false,
 			invocation: 'direct',
 			email,
@@ -169,9 +169,9 @@ export function normalizeInbound(
 		id: raw.id,
 		thread,
 		sender,
-		senderName: raw.from?.name ?? null,
+		sender_name: raw.from?.name ?? null,
 		text: raw.text ?? '',
-		replyTo: raw.replyTo ?? null,
+		reply_to: raw.reply_to ?? null,
 		group,
 		invocation,
 		mentions: (raw.mentions ?? []).filter(Predicate.isString),

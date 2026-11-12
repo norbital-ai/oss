@@ -26,7 +26,7 @@ it('an enabled trigger keeps its action and opens its hint on a tap where nothin
 it('a disabled trigger lets the tap through to the box around it', async () => {
 	vi.spyOn(noHover, 'current', 'get').mockReturnValue(true);
 	const target = document.body.appendChild(document.createElement('div'));
-	const view = mount(Button, { target, props: { disabled: true, disabledMessage: 'Locked' } });
+	const view = mount(Button, { target, props: { disabled: true, disabled_message: 'Locked' } });
 	flushSync();
 	target.querySelector('button')?.parentElement?.click();
 	await settle();

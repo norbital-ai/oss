@@ -1,3 +1,4 @@
+import { committed, single_act } from './act-envelope.ts';
 import './dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, it } from '@effect/vitest';
@@ -30,6 +31,7 @@ afterEach(async () => {
 
 const declared: NonNullable<KindsHost['catalog']> = {
 	jobs: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: { name: { kind: 'text' } },
 		update: { columns: ['name'] },
@@ -38,31 +40,31 @@ const declared: NonNullable<KindsHost['catalog']> = {
 	}
 };
 const bare: NonNullable<KindsHost['catalog']> = {
-	jobs: { label: ['name'], fields: { name: { kind: 'text' } } }
+	jobs: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } }
 };
 
 async function show({
 	catalog,
-	act = () => ({ kind: 'committed', output: null, records: [] }),
+	act = committed,
 	actions
 }: {
 	catalog: NonNullable<KindsHost['catalog']>;
 	act?: ViewScript['act'];
 	actions?: readonly ToolbarItem[];
 }) {
-	const acts: { callable: string; input: Parameters<ViewScript['act']>[1] }[] = [];
+	const acts: ReturnType<typeof single_act>[] = [];
 	const { bolt } = await viewFixture({
-		read: () => ({
-			rows: [
-				{ id: 'job-a', name: 'A' },
-				{ id: 'job-b', name: 'B' }
-			],
+		catalog,
+		get: (_model, id) => id === 'job-a' ? { id, revision: 1, name: 'A' } : id === 'job-b' ? { id, revision: 2, name: 'B' } : null,
+		read: (_model, options) => ({
+			rows: ['job-a', 'job-b'].map((id, index) => ({ id, revision: index + 1, ...(options.fields?.length === 0 ? {} : { name: index === 0 ? 'A' : 'B' }) })),
 			next: null
 		}),
 		aggregate: () => ({ count: 2 }),
-		act: (callable, input, options) => {
+		act: (body, key) => {
+			const { callable, input } = single_act(body);
 			acts.push({ callable, input });
-			return act(callable, input, options);
+			return act(body, key);
 		}
 	});
 	const target = document.body.appendChild(document.createElement('div'));
@@ -163,7 +165,7 @@ it.live(
 						{
 							icon: 'lucide:check',
 							name: 'Approve',
-							requiresSelection: true,
+							requires_selection: true,
 							run: (ids) => {
 								ran.push(ids);
 							}
@@ -191,10 +193,10 @@ it.live('bulk delete confirms, deletes each record, and reports a partial refusa
 		const { target, acts } = yield* browser(() =>
 			show({
 				catalog: declared,
-				act: (_callable, input) =>
-					JSON.stringify(input) === JSON.stringify([{ target: 'job-b' }])
+				act: (body) =>
+					JSON.stringify(single_act(body).input) === JSON.stringify([{ target: { id: 'job-b', revision: 2 } }])
 						? { kind: 'refused', code: 'forbidden', message: 'Job B is invoiced' }
-						: { kind: 'committed', output: null, records: [] }
+						: committed(body)
 			})
 		);
 		yield* browser(() => selectAll(target));
@@ -207,8 +209,8 @@ it.live('bulk delete confirms, deletes each record, and reports a partial refusa
 		asked.answer(true);
 		yield* browser(settle);
 		assert.deepEqual(acts, [
-			{ callable: 'jobs.delete', input: [{ target: 'job-a' }] },
-			{ callable: 'jobs.delete', input: [{ target: 'job-b' }] }
+			{ callable: 'jobs.delete', input: [{ target: { id: 'job-a', revision: 1 } }] },
+			{ callable: 'jobs.delete', input: [{ target: { id: 'job-b', revision: 2 } }] }
 		]);
 		assert.deepEqual(
 			toasts.map((t) => [t.tone, t.text]),

@@ -3,11 +3,14 @@
 Shows any stored or input value by its kind; readonly form values stay copyable.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Array as Arr } from 'effect';
 	import type { Value, Kind } from './kind.js';
 
 	/** A value and its declared kind, with optional row/relation context for labels and currency; readonly output remains copyable. */
 	export type ShowProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		kind: Kind;
 		value: Value | undefined;
 		name?: string;
@@ -22,25 +25,25 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 
 <script lang="ts">
 	import { Schema } from 'effect';
-	import { inputSchema } from '@norbital-ai/std/kind';
-	import { useEnumText } from '../model/context.js';
+	import { input_schema } from '@norbital-ai/std/kind';
+	import { use_enum_text } from '../model/context.js';
 	import Badge from '../primitives/badge/badge.svelte';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import ReadonlyMarkdown from '../editors/readonly-markdown.svelte';
 	import CodeEditor from '../editors/code-editor.svelte';
 	import Icon from '@iconify/svelte';
-	import { cn, uiText } from '../primitives/utils.js';
-	import { fieldEntry } from './builtin/index.js';
-	import { useKinds } from './context.js';
-	import { arcOf, currencyOf, format, shownKind, valueObject } from './kind.js';
+	import { cn, ui_text } from '../primitives/utils.js';
+	import { field_entry } from './builtin/index.js';
+	import { arcOf, currencyOf, format, shownKind, value_object } from './kind.js';
 	import { KINDS } from './registry.js';
 	import Self from './show.svelte';
 	import StateBadge from './state-badge.svelte';
 	import StructuredData from './structured-data.svelte';
-	import { isJsonSchemaDocument } from './json-schema.js';
+	import { is_json_schema_document } from './json-schema.js';
 	import Picker from './picker.svelte';
 
 	let {
+		ctx,
 		kind: declared,
 		value,
 		name = '',
@@ -51,9 +54,9 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		address,
 		id
 	}: ShowProps = $props();
-	const host = useKinds();
-	const t = uiText();
-	const words = useEnumText();
+	const host = $derived(ctx.ui.kinds);
+	const t = ui_text();
+	const words = use_enum_text(() => ctx);
 	const kind = $derived(shownKind(declared));
 	const v = $derived(value ?? null);
 	const text = $derived(
@@ -63,17 +66,17 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 			currency: kind.kind === 'money' ? currencyOf(kind, row, host.currency) : undefined
 		})
 	);
-	const field = $derived(fieldEntry(kind, host));
+	const field = $derived(field_entry(kind, host));
 	const shape = $derived(
 		kind.kind === 'custom' && field?.entry.renderer === undefined
 			? field?.entry.shape
 			: kind.kind === 'json'
 				? kind.shape
 				: kind.kind === 'union' && 'of' in kind
-					? kind.of.find((arm) => Schema.is(inputSchema(arm))(value))
+					? kind.of.find((arm) => Schema.is(input_schema(arm))(value))
 					: undefined
 	);
-	const object = $derived(valueObject(v) ? v : null);
+	const object = $derived(value_object(v) ? v : null);
 	const numeric = $derived(KINDS[kind.kind].numeric);
 </script>
 
@@ -95,17 +98,19 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 
 {#if v === null || (readonly && Arr.isArray<Value>(v) && v.length === 0)}
 	<span {id} class={cn('text-muted-foreground', className)}>{t('none')}</span>
-{:else if readonly && (relation !== undefined || kind.kind === 'id')}
+{:else if readonly && (relation !== undefined || kind.kind === 'ref')}
 	{@const arc = arcOf(v)}
-	<Picker
-		of={arc?.model ?? relation?.targets[0] ?? (kind.kind === 'id' ? kind.of : '')}
+	<Picker {ctx}
+		of={arc?.model ??
+			relation?.targets[0] ??
+			(kind.kind === 'ref' && typeof kind.to === 'string' ? kind.to : '')}
 		value={arc?.id ?? String(v)}
-		onChange={() => {}}
+		on_change={() => {}}
 		{id}
 		readonly
 	/>
 {:else if kind.kind === 'state' && typeof v === 'string'}
-	<StateBadge state={v} label={words(v, name)} class={className} />
+	<StateBadge {ctx} state={v} label={words(v, name)} class={className} />
 {:else if kind.kind === 'enum' && (typeof v === 'string' || Arr.isArray<Value>(v))}
 	<span {id} class={cn('inline-flex flex-wrap gap-1', className)} data-enum-list>
 		{#each Arr.isArray<Value>(v) ? v.map(String) : [v] as item (item)}<Badge
@@ -122,7 +127,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 			language="javascript"
 			wrap
 			readonly
-			minHeight="2.25rem"
+			min_height="2.25rem"
 			value={v}
 			aria-label={name}
 		/>
@@ -142,6 +147,7 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	{@const where = address === undefined ? null : (row[address] ?? null)}
 	<span {id} class={cn('min-w-0', readonly && 'text-sm', className)}
 		><Renderer
+			{ctx}
 			view={{
 				mode: 'show',
 				...(readonly ? {} : { dense: true as const }),
@@ -157,11 +163,11 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 	>
 {:else if shape !== undefined}
 	<div {id} class={cn('min-w-0', className)}>
-		<StructuredData kind={shape} value={v} mode="view" {name} {row} />
+		<StructuredData {ctx} kind={shape} value={v} mode="view" {name} {row} />
 	</div>
 {:else if kind.kind === 'union' && 'arms' in kind && object !== null}
 	{@const arm = kind.arms[String(object[kind.by])] ?? {}}
-	<Self
+	<Self {ctx}
 		kind={{ kind: 'object', fields: { [kind.by]: { kind: 'text' }, ...arm } }}
 		value={v}
 		{name}
@@ -170,15 +176,15 @@ Shows any stored or input value by its kind; readonly form values stay copyable.
 		{id}
 		class={className}
 	/>
-{:else if ((kind.kind === 'object' || kind.kind === 'record') && object !== null) || (kind.kind === 'list' && Arr.isArray<Value>(v))}
+{:else if ((kind.kind === 'object' || kind.kind === 'record') && object !== null) || (kind.many === true && Arr.isArray<Value>(v))}
 	<div {id} class={cn('min-w-0', className)}>
-		<StructuredData {kind} value={v} mode="view" {name} {row} />
+		<StructuredData {ctx} {kind} value={v} mode="view" {name} {row} />
 	</div>
-{:else if kind.kind === 'json' && isJsonSchemaDocument(v)}
-	<StructuredData schema={v} mode="schema" {name} {id} />
+{:else if kind.kind === 'json' && is_json_schema_document(v)}
+	<StructuredData {ctx} schema={v} mode="schema" {name} {id} />
 {:else if kind.kind === 'json' || kind.kind === 'custom'}
 	<div {id} class={cn('min-w-0', className)}>
-		<StructuredData value={v} mode="view" {name} {row} />
+		<StructuredData {ctx} value={v} mode="view" {name} {row} />
 	</div>
 {:else if readonly}
 	<CopyText {id} {text} class={numeric ? 'tabular-nums' : undefined}>{@render inline()}</CopyText>

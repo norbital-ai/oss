@@ -1,11 +1,12 @@
-import { getContext, setContext } from 'svelte';
 import { Predicate } from 'effect';
-import type { Json } from '@norbital-ai/std/wire';
-import type { ViewBolt } from './contract.js';
-import { useKinds, type ModelExposure } from '../kinds/context.js';
-export const BOLT = Symbol('ui.views.bolt');
-/** Hands the page's client to every view beneath; the shell calls it once per page. */
-export const provideBolt = (bolt: ViewBolt) => setContext(BOLT, bolt);
+import { encode_wire, type Json } from '@norbital-ai/std/wire';
+import type { Value } from '@norbital-ai/std/kind';
+import type { UiContext, ViewBolt } from './contract.js';
+import type { ModelExposure } from '../kinds/context.js';
+const withOutput = (layer: Json, output: string | undefined): Json =>
+	output !== undefined && Predicate.isObject(layer) && layer['output'] === undefined
+		? { ...layer, output }
+		: layer;
 /**
  * A view's read request with each root that names no `output` reading the one the catalog gives the caller's views
  * (`ModelExposure.output`; absent: `default`).
@@ -17,37 +18,32 @@ export const withOutputs = (
 	Object.fromEntries(
 		Object.entries(request).map(([path, layer]) => {
 			const output = path.includes('.') ? undefined : catalog?.[path]?.output;
-			return [
-				path,
-				output !== undefined && Predicate.isObject(layer) && layer['output'] === undefined
-					? { ...layer, output }
-					: layer
-			];
+			return [path, withOutput(layer, output)];
 		})
 	);
-/** The host client when present, its reads in the caller's view outputs; controlled local views can render without one. */
-export const useOptionalBolt = (): ViewBolt | undefined => {
-	const bolt = getContext<ViewBolt | undefined>(BOLT),
-		catalog = useKinds().catalog;
-	if (bolt === undefined) return undefined;
-	// every member reads through the host's own client; `query` and `aggregate` gain the views' outputs
-	return new Proxy(bolt, {
-		get: (target, key) => {
+/** `ctx`'s view client, its reads in the caller's view outputs; controlled local views render without one. */
+export const optional_bolt_of = (ctx: UiContext): ViewBolt | undefined => {
+	const first = ctx.ui.bolt;
+	if (first === undefined) return undefined;
+	// every member reads through the host's current client; `query` and `aggregate` gain the views' outputs
+	return new Proxy(first, {
+		get: (_target, key) => {
+			const target = ctx.ui.bolt ?? first,
+				catalog = ctx.ui.kinds.catalog;
 			if (key === 'query')
 				return (request: { readonly [path: string]: Json }) =>
 					target.query(withOutputs(request, catalog));
 			if (key === 'aggregate')
-				return (model: string, args: Json) =>
-					target.aggregate(model, withOutputs({ [model]: args }, catalog)[model]);
+				return (model: string, args: Value) =>
+					target.aggregate(model, withOutput(encode_wire(args), catalog?.[model]?.output));
 			const value: unknown = Reflect.get(target, key);
 			return typeof value === 'function' ? value.bind(target) : value;
 		}
 	});
 };
-/** The shell client for native reads, actions and translated text. Capture it during component initialization; eagerly registered renderers can avoid importing `$bolt` before boot. */
-export function useBolt(): ViewBolt {
-	const bolt = useOptionalBolt();
-	if (bolt === undefined)
-		throw new Error('A view needs the shell: call provideBolt(bolt) above it.');
+/** `ctx`'s view client for native reads, actions and translated text. */
+export function bolt_of(ctx: UiContext): ViewBolt {
+	const bolt = optional_bolt_of(ctx);
+	if (bolt === undefined) throw new Error('A view needs the shell: pass the page ctx with its ui.bolt.');
 	return bolt;
 }

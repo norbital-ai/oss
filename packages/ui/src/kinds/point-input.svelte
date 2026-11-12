@@ -4,19 +4,22 @@ Edits a `point`: a compact trigger opens address suggestions and the map. Typed 
 and the browser's location also set the point.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Value, Point } from './kind.js';
 
 	/**
 	 * A `point` field (P19, rule 69). Typing an address geocodes it (the host's geocoder, else the keyless default) and the
 	 * map and value follow the best match; typed "lat, lng" is taken as is. A pick on the map, a marker drag or "use my
 	 * location" set the point and look up its address. `address` is the sibling text field's value, shown in the trigger;
-	 * `onAddress` receives what the box holds (`Field address="<field>"` wires both).
+	 * `on_address` receives what the box holds (`Field address="<field>"` wires both).
 	 */
 	export type PointInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: Value;
-		onChange(next: Point | null): void;
+		on_change(next: Point | null): void;
 		address?: string | null;
-		onAddress?(address: string | null): void;
+		on_address?(address: string | null): void;
 		id?: string;
 		disabled?: boolean;
 		invalid?: boolean;
@@ -32,24 +35,25 @@ and the browser's location also set the point.
 	import Input from '../primitives/input/input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { CONTROL_ICON, SELECT_TRIGGER } from './classes.js';
-	import { cn, uiText } from '../primitives/utils.js';
-	import { photonGeocoder, regionOf, useKinds, type Geocoder } from './context.js';
+	import { cn, ui_text } from '../primitives/utils.js';
+	import { photon_geocoder, regionOf, type Geocoder } from './context.js';
 	import { formatPoint, isPoint, parsePoint } from './kind.js';
 	import PointMap from './point-map.svelte';
 
 	let {
+		ctx,
 		value,
-		onChange,
+		on_change,
 		address = null,
-		onAddress,
+		on_address,
 		id,
 		disabled = false,
 		invalid = false,
 		map = true
 	}: PointInputProps = $props();
-	const host = useKinds();
-	const geocoder: Geocoder = host.geocoder ?? photonGeocoder;
-	const t = uiText();
+	const host = $derived(ctx.ui.kinds);
+	const geocoder: Geocoder = $derived(host.geocoder ?? photon_geocoder);
+	const t = ui_text();
 	const uid = $props.id();
 	const point = $derived(((v) => (isPoint(v) ? v : null))(value));
 
@@ -94,8 +98,8 @@ and the browser's location also set the point.
 		const n = ++asked;
 		const at = parsePoint(q);
 		if (at !== null) {
-			onChange(at);
-			onAddress?.(null);
+			on_change(at);
+			on_address?.(null);
 			start(
 				Effect.sleep(600).pipe(
 					Effect.flatMap(() => reverse(at)),
@@ -103,7 +107,7 @@ and the browser's location also set the point.
 						Effect.sync(() => {
 							if (n === asked && name) {
 								looked = name;
-								onAddress?.(name);
+								on_address?.(name);
 							}
 						})
 					)
@@ -111,9 +115,9 @@ and the browser's location also set the point.
 			);
 			return;
 		}
-		onAddress?.(q.trim() === '' ? null : q);
+		on_address?.(q.trim() === '' ? null : q);
 		if (q.trim() === '') {
-			onChange(null);
+			on_change(null);
 			start(Effect.void);
 			return;
 		}
@@ -138,7 +142,7 @@ and the browser's location also set the point.
 						hits = [...found.slice(0, 5)];
 						failed = false;
 						active = 0;
-						if (hits[0] !== undefined) onChange(hits[0].point);
+						if (hits[0] !== undefined) on_change(hits[0].point);
 					})
 				),
 				Effect.catch(() =>
@@ -159,14 +163,14 @@ and the browser's location also set the point.
 	}
 	function preview(i: number) {
 		active = i;
-		if (hits[i]) onChange(hits[i].point);
+		if (hits[i]) on_change(hits[i].point);
 	}
 	function choose(hit: Hit) {
 		asked++;
 		hits = [];
 		text = hit.address;
-		onChange(hit.point);
-		onAddress?.(hit.address);
+		on_change(hit.point);
+		on_address?.(hit.address);
 		looked = hit.address;
 		open = false;
 	}
@@ -174,7 +178,7 @@ and the browser's location also set the point.
 	function set(p: Point) {
 		const n = ++asked;
 		hits = [];
-		onChange(p);
+		on_change(p);
 		looked = null;
 		text = formatPoint(p);
 		start(
@@ -183,7 +187,7 @@ and the browser's location also set the point.
 					Effect.sync(() => {
 						if (n !== asked || !name) return;
 						looked = text = name;
-						onAddress?.(name);
+						on_address?.(name);
 					})
 				)
 			)
@@ -336,7 +340,7 @@ and the browser's location also set the point.
 			{:else if failed}<p class="text-xs text-muted-foreground">
 					{t('addressSearchUnavailable')}
 				</p>{/if}
-			{#if map}<PointMap value={point} onPick={set} {disabled} class="h-48 sm:h-56" />{/if}
+			{#if map}<PointMap {ctx} value={point} on_pick={set} {disabled} class="h-48 sm:h-56" />{/if}
 			{#if point !== null}<p class="text-meta tabular-nums">{formatPoint(point)}</p>{/if}
 			{#if locateError}<p class="text-xs text-muted-foreground">{t('locationDenied')}</p>{/if}
 		</Popover.Content>

@@ -4,24 +4,21 @@
 // catalogue and names, and reserved against a workspace. The expectations below cover the native schema contract.
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { format, resolveConfig } from 'prettier';
 import { describe, expect, it } from '@effect/vitest';
 import { discover } from '../../bolt-cli/src/compiler/discover.ts';
 import { ROLES } from '../src/decl/layout.ts';
 import { load, manifestErrors, spec, type Manifest } from '../../bolt-cli/src/compiler/load.ts';
-import { modelParts, systemIndex } from '../../bolt-cli/src/compiler/names.ts';
+import { split_system_model } from '../src/decl/model-data.ts';
 import { Effect, FileSystem, Layer, Result, Schema } from 'effect';
 import * as NodeFileSystem from '@effect/platform-node/NodeFileSystem';
 import * as NodePath from '@effect/platform-node/NodePath';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { RANK, schemaObjects } from '@norbital-ai/store';
+import { RANK, schema_objects, schema_snapshot } from '@norbital-ai/store';
 import { engineObjects } from '../src/engine/schema/engine.ts';
-import { plan, schemaSlice } from '../src/engine/schema/plan.ts';
+import { plan, schema_slice } from '../src/engine/schema/plan.ts';
 import { catalog } from '../src/protocol/catalog.ts';
-import { storeSync } from '../src/protocol/errors.ts';
-import { decodeIdentity } from '../src/engine/write/pack.ts';
+import { decode_identity } from '../src/engine/write/pack.ts';
 import { SYSTEM } from '../src/system/index.ts';
-import { Port } from '../src/engine/port.ts';
 import { install } from '../src/decl/runtime/guest.ts';
 
 // the fixtures' generator bodies attach through the guest edge, as `bolt check` installs it
@@ -39,11 +36,9 @@ const EMPTY: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 
@@ -54,6 +49,18 @@ type Shape = {
 	indexes?: readonly string[];
 	fks?: readonly string[];
 	checks?: readonly string[];
+};
+const shape_lists: readonly (keyof Omit<Shape, 'key' | 'columns'>)[] = [
+	'unique',
+	'indexes',
+	'fks',
+	'checks'
+];
+const capture = (match: readonly string[], position: number): string => {
+	const value = match[position];
+	if (value === undefined)
+		throw new Error(`Missing native SQL/source capture ${position}: ${match[0]}`);
+	return value;
 };
 /** A system table as the planner renders it: its key, each column's type, NOT NULL and default, and its constraints and indexes. */
 function rendered(): { [table: string]: Shape } {
@@ -68,7 +75,7 @@ function rendered(): { [table: string]: Shape } {
 	const bare = (s: string) =>
 		s.replaceAll('"', '').replace(/(bolt_record_label_\w+)_([0-9a-f]{8})/g, '$1_HASH');
 	const lit = (d: string) => d.replace(/^'(.*)'::\w+$/, '$1').replace(/^\((.*)\)$/, '$1');
-	for (const o of storeSync(schemaObjects(schemaSlice(EMPTY))).sort(
+	for (const o of [...Effect.runSync(schema_objects(schema_slice(EMPTY)))].sort(
 		(a, b) => RANK[a.rank] - RANK[b.rank]
 	)) {
 		if (!Object.hasOwn(SYSTEM.models, o.table) || o.id.startsWith('source:')) continue;
@@ -83,27 +90,32 @@ function rendered(): { [table: string]: Shape } {
 		for (const sql of o.create) {
 			let m = /^create table "\w+" \((.*)\)$/.exec(sql);
 			if (m) {
-				t.key = bare(m[1]!);
+				t.key = bare(capture(m, 1));
 				continue;
 			}
 			m = /^alter table "\w+" add column "?(\w+)"? (.*)$/.exec(sql);
 			if (m) {
-				const d = / default (.*)$/.exec(m[2]!);
-				t.columns[m[1]!] =
-					d === null ? bare(m[2]!) : `${m[2]!.slice(0, d.index)} default ${lit(d[1]!)}`;
+				const definition = capture(m, 2);
+				const d = / default (.*)$/.exec(definition);
+				t.columns[capture(m, 1)] =
+					d === null
+						? bare(definition)
+						: `${definition.slice(0, d.index)} default ${lit(capture(d, 1))}`;
 				continue;
 			}
 			m = /^alter table "\w+" alter column "(\w+)" set not null$/.exec(sql);
 			if (m) {
-				const c = t.columns[m[1]!]!,
-					d = c.indexOf(' default ');
-				t.columns[m[1]!] = d < 0 ? `${c} not null` : `${c.slice(0, d)} not null${c.slice(d)}`;
+				const column = capture(m, 1),
+					c = t.columns[column];
+				if (c === undefined) throw new Error(`NOT NULL precedes the native column: ${sql}`);
+				const d = c.indexOf(' default ');
+				t.columns[column] = d < 0 ? `${c} not null` : `${c.slice(0, d)} not null${c.slice(d)}`;
 				continue;
 			}
 			if (/ set default /.test(sql)) continue;
 			m = /^alter table "\w+" add constraint "\w+" (.*)$/.exec(sql);
 			if (m) {
-				const d = bare(m[1]!);
+				const d = bare(capture(m, 1));
 				if (d.startsWith('unique ')) t.unique.push(d.slice(7));
 				else if (d.startsWith('foreign key ')) t.fks.push(d.slice(12));
 				else t.checks.push(d.replace(/^check /, ''));
@@ -115,7 +127,7 @@ function rendered(): { [table: string]: Shape } {
 			if (/^create function "bolt_record_label_/.test(sql)) continue;
 			m = /^create (unique )?index "\w+" on "\w+" (.*)$/.exec(sql);
 			if (m) {
-				(m[1] === undefined ? t.indexes : t.unique).push(bare(m[2]!));
+				(m[1] === undefined ? t.indexes : t.unique).push(bare(capture(m, 2)));
 				continue;
 			}
 			throw new Error(`unparsed: ${sql}`);
@@ -127,7 +139,7 @@ function rendered(): { [table: string]: Shape } {
 			{
 				key: v.key,
 				columns: v.columns,
-				...(['unique', 'indexes', 'fks', 'checks'] as const).reduce(
+				...shape_lists.reduce(
 					(a, x) => (v[x].length === 0 ? a : { ...a, [x]: [...v[x]].sort() }),
 					{}
 				)
@@ -161,10 +173,10 @@ const EXPECTED: { [table: string]: Shape } = {
 		unique: ["(collection_name, record_id) where (status = 'ONGOING'::text)"],
 		indexes: ['using gin (bolt_search)'],
 		checks: [
-			"((approver_teams is null or store_json_valid(approver_teams, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
-			"((approver_users is null or store_json_valid(approver_users, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
-			"((step_names is null or store_json_valid(step_names, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
-			"((superseder_teams is null or store_json_valid(superseder_teams, '{kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"((approver_teams is null or store_json_valid(approver_teams, '{kind:json,shape:{kind:text,many:true}}'::jsonb) is true))",
+			"((approver_users is null or store_json_valid(approver_users, '{kind:json,shape:{kind:text,many:true}}'::jsonb) is true))",
+			"((step_names is null or store_json_valid(step_names, '{kind:json,shape:{kind:text,many:true}}'::jsonb) is true))",
+			"((superseder_teams is null or store_json_valid(superseder_teams, '{kind:json,shape:{kind:text,many:true}}'::jsonb) is true))",
 			"(action in ('create', 'update', 'delete'))",
 			'(isfinite(closed_at))',
 			'(isfinite(created_at))',
@@ -175,9 +187,13 @@ const EXPECTED: { [table: string]: Shape } = {
 		key: 'id text primary key',
 		columns: {
 			user_id: 'text not null',
-			approval_request_id: 'uuid not null'
+			approval_request_id: 'uuid not null',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_requestor_HASH(user_id)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_requestor_HASH(user_id), ''))) stored"
 		},
-		indexes: ['(approval_request_id)'],
+		indexes: ['(approval_request_id)', 'using gin (bolt_search)'],
 		fks: [
 			'(approval_request_id) references approval_request (id) on delete restrict on update restrict'
 		]
@@ -193,10 +209,14 @@ const EXPECTED: { [table: string]: Shape } = {
 			last_used_at: 'timestamptz',
 			revision: 'int not null default 1',
 			created_at: 'timestamptz not null default now()',
-			created_by: 'text'
+			created_by: 'text',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_api_key_HASH(name)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_api_key_HASH(name), ''))) stored"
 		},
 		unique: ['(prefix)'],
-		indexes: ['(created_by)'],
+		indexes: ['(created_by)', 'using gin (bolt_search)'],
 		fks: ['(created_by) references sys_user (id) on delete restrict on update restrict'],
 		checks: ['(isfinite(created_at))', '(isfinite(last_used_at))', '(isfinite(revoked_at))']
 	},
@@ -205,15 +225,24 @@ const EXPECTED: { [table: string]: Shape } = {
 		columns: {
 			code_mac: 'text not null',
 			attempts: 'int not null default 0',
-			expires_at: 'timestamptz not null'
+			expires_at: 'timestamptz not null',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_challenge_HASH(address_mac)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_challenge_HASH(address_mac), ''))) stored"
 		},
+		indexes: ['using gin (bolt_search)'],
 		checks: ['(isfinite(expires_at))']
 	},
 	sys_config: {
 		key: 'key text primary key',
 		columns: {
-			value: 'text not null'
-		}
+			value: 'text not null',
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_config_HASH(key)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_config_HASH(key), ''))) stored"
+		},
+		indexes: ['using gin (bolt_search)']
 	},
 	sys_conversation: {
 		key: 'id text primary key',
@@ -226,6 +255,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			kind: 'text',
 			participants: 'jsonb',
 			parent: 'text',
+			restart_from: 'text',
+			restart_at: 'text',
 			run: 'text',
 			inputs: 'jsonb not null default []',
 			outputs: 'jsonb not null default []',
@@ -237,9 +268,13 @@ const EXPECTED: { [table: string]: Shape } = {
 			read: 'jsonb not null default {}',
 			revision: 'int not null default 1',
 			updated_at: 'timestamptz not null default now()',
-			integration: 'text'
+			integration: 'text',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_conversation_HASH(title)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_conversation_HASH(title), ''))) stored"
 		},
-		indexes: ['(integration)'],
+		indexes: ['(integration)', 'using gin (bolt_search)'],
 		fks: ['(integration) references sys_integration (id) on delete cascade on update restrict'],
 		checks: [
 			"((goals is null or store_json_valid(goals, '{kind:json,optional:true}'::jsonb) is true))",
@@ -263,19 +298,24 @@ const EXPECTED: { [table: string]: Shape } = {
 			group_messages: 'text not null default mention_or_reply',
 			delegation: 'text not null default disabled',
 			triage: 'boolean not null default false',
+			triage_scope: 'text not null default all',
 			dm: 'text not null default union',
 			active: 'boolean not null default true',
 			created_at: 'timestamptz not null default now()',
-			revision: 'int not null default 1'
+			revision: 'int not null default 1',
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_envoy_HASH(name)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_envoy_HASH(name), ''))) stored"
 		},
-		indexes: ['using gin (policies)'],
+		indexes: ['using gin (bolt_search)', 'using gin (policies)'],
 		checks: [
 			"(audience in ('private', 'public'))",
 			"(delegation in ('enabled', 'disabled'))",
 			"(dm in ('union', 'envoy'))",
 			"(group_messages in ('disabled', 'mention_or_reply', 'all'))",
 			'(isfinite(created_at))',
-			"(not jsonb_path_exists(to_jsonb(policies), 'strict $[*] ? (@.type() != string)'))"
+			"(not jsonb_path_exists(to_jsonb(policies), 'strict $[*] ? (@.type() != string)'))",
+			"(triage_scope in ('dm', 'group', 'all'))"
 		]
 	},
 	sys_file: {
@@ -291,8 +331,12 @@ const EXPECTED: { [table: string]: Shape } = {
 			created_at: 'timestamptz not null',
 			created_by: 'text',
 			updated_at: 'timestamptz',
-			updated_by: 'text'
+			updated_by: 'text',
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_file_HASH(name)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_file_HASH(name), ''))) stored"
 		},
+		indexes: ['using gin (bolt_search)'],
 		checks: ['(isfinite(created_at))', '(isfinite(updated_at))']
 	},
 	sys_inbox: {
@@ -304,10 +348,18 @@ const EXPECTED: { [table: string]: Shape } = {
 			headers: 'jsonb',
 			body: 'jsonb',
 			consumed_at: 'timestamptz',
-			instance: 'text not null'
+			instance: 'text not null',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_inbox_HASH(delivery)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_inbox_HASH(delivery), ''))) stored"
 		},
 		unique: ['nulls not distinct (sync, instance, delivery)'],
-		indexes: ['(instance)', '(sync, instance, received_at) where (consumed_at is null)'],
+		indexes: [
+			'(instance)',
+			'(sync, instance, received_at) where (consumed_at is null)',
+			'using gin (bolt_search)'
+		],
 		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict'],
 		checks: [
 			"((body is null or store_json_valid(body, '{kind:json,optional:true}'::jsonb) is true))",
@@ -321,7 +373,6 @@ const EXPECTED: { [table: string]: Shape } = {
 		columns: {
 			integration: 'text not null',
 			name: 'text not null',
-			named: 'boolean not null default false',
 			envoy: 'text',
 			active: 'boolean not null default true',
 			configuration: 'jsonb not null default {}',
@@ -329,15 +380,21 @@ const EXPECTED: { [table: string]: Shape } = {
 			status: 'jsonb',
 			epoch: 'text',
 			revision: 'int not null default 1',
-			owner: 'text'
+			updated_at: 'timestamptz not null default now()',
+			owner: 'text',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_integration_HASH(name)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_integration_HASH(name), ''))) stored"
 		},
 		unique: ['(owner, integration) where (owner is not null)'],
-		indexes: ['(owner)'],
+		indexes: ['(owner)', 'using gin (bolt_search)'],
 		fks: ['(owner) references sys_user (id) on delete restrict on update restrict'],
 		checks: [
 			"((configuration is null or store_json_valid(configuration, '{default:{},kind:json}'::jsonb) is true))",
 			"((import_start is null or store_json_valid(import_start, '{kind:json,optional:true}'::jsonb) is true))",
-			"((status is null or store_json_valid(status, '{kind:json,optional:true}'::jsonb) is true))"
+			"((status is null or store_json_valid(status, '{kind:json,optional:true}'::jsonb) is true))",
+			'(isfinite(updated_at))'
 		]
 	},
 	sys_invitation: {
@@ -352,9 +409,13 @@ const EXPECTED: { [table: string]: Shape } = {
 			accepted_at: 'timestamptz',
 			revoked_at: 'timestamptz',
 			revision: 'int not null default 1',
-			invited_by: 'text'
+			invited_by: 'text',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_invitation_HASH(email)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_invitation_HASH(email), ''))) stored"
 		},
-		indexes: ['(invited_by)', '(lower(email))', '(phone)'],
+		indexes: ['(invited_by)', '(lower(email))', '(phone)', 'using gin (bolt_search)'],
 		fks: ['(invited_by) references sys_user (id) on delete restrict on update restrict'],
 		checks: [
 			'((email is not null or phone is not null))',
@@ -380,6 +441,7 @@ const EXPECTED: { [table: string]: Shape } = {
 			author: 'text',
 			meta: 'jsonb',
 			supersedes: 'text',
+			copied_from: 'text',
 			turn: 'text',
 			read_by: 'text',
 			delivered_turn: 'text',
@@ -409,7 +471,11 @@ const EXPECTED: { [table: string]: Shape } = {
 			epoch: 'text',
 			delivery: 'jsonb not null default []',
 			presume_at: 'timestamptz',
-			integration: 'text'
+			integration: 'text',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_message_HASH(preview)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_message_HASH(preview), ''))) stored"
 		},
 		indexes: [
 			"(conversation) where (state = 'pending'::text)",
@@ -417,7 +483,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			'(conversation, seq)',
 			'(integration)',
 			'(integration, provider_id)',
-			"(seq) where (status in ('queued'::text, 'sending'::text))"
+			"(seq) where (status in ('queued'::text, 'sending'::text))",
+			'using gin (bolt_search)'
 		],
 		fks: ['(integration) references sys_integration (id) on delete cascade on update restrict'],
 		checks: [
@@ -449,10 +516,14 @@ const EXPECTED: { [table: string]: Shape } = {
 			once: 'text',
 			at: 'timestamptz not null',
 			member: 'text',
-			read_at: 'timestamptz'
+			read_at: 'timestamptz',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_notification_HASH(title)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_notification_HASH(title), ''))) stored"
 		},
 		unique: ['(once)'],
-		indexes: ['(member, at) where (member is not null)'],
+		indexes: ['(member, at) where (member is not null)', 'using gin (bolt_search)'],
 		checks: [
 			"((attachments is null or store_json_valid(attachments, '{default:[],kind:json}'::jsonb) is true))",
 			"((link is null or store_json_valid(link, '{kind:json,optional:true}'::jsonb) is true))",
@@ -469,7 +540,9 @@ const EXPECTED: { [table: string]: Shape } = {
 			model: 'text not null',
 			record: 'text not null',
 			op: 'text not null',
+			delivery_op: 'text',
 			record_revision: 'int not null',
+			preserve_local: 'boolean not null default false',
 			image: 'jsonb',
 			changed: 'jsonb not null default []',
 			key: 'text not null',
@@ -483,7 +556,10 @@ const EXPECTED: { [table: string]: Shape } = {
 			result: 'jsonb',
 			at: 'timestamptz not null',
 			instance: 'text not null',
-			writer: 'text'
+			writer: 'text',
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_outbox_HASH(key)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_outbox_HASH(key), ''))) stored"
 		},
 		unique: [
 			'(key)',
@@ -493,18 +569,21 @@ const EXPECTED: { [table: string]: Shape } = {
 			'(instance)',
 			"(next_attempt_at) where (status = 'queued'::text)",
 			"(sync) where (status = 'dead'::text)",
+			'(sync, instance, record, record_revision)',
 			"(sync, record, seq) where (status in ('queued'::text, 'sending'::text))",
-			'(writer)'
+			'(writer)',
+			'using gin (bolt_search)'
 		],
 		fks: [
 			'(instance) references sys_integration (id) on delete cascade on update restrict',
 			'(writer) references sys_user (id) on delete set null on update restrict'
 		],
 		checks: [
-			"((changed is null or store_json_valid(changed, '{default:[],kind:json,shape:{kind:list,of:{kind:text}}}'::jsonb) is true))",
+			"((changed is null or store_json_valid(changed, '{default:[],kind:json,shape:{kind:text,many:true}}'::jsonb) is true))",
 			"((error is null or store_json_valid(error, '{kind:json,optional:true}'::jsonb) is true))",
 			"((image is null or store_json_valid(image, '{kind:json,optional:true}'::jsonb) is true))",
 			"((result is null or store_json_valid(result, '{kind:json,optional:true}'::jsonb) is true))",
+			"(delivery_op in ('create', 'update', 'delete'))",
 			'(isfinite(acked_at))',
 			'(isfinite(at))',
 			'(isfinite(claimed_at))',
@@ -534,10 +613,18 @@ const EXPECTED: { [table: string]: Shape } = {
 			results: 'jsonb not null default []',
 			actor: 'text',
 			starter: 'jsonb',
-			trigger: 'jsonb'
+			trigger: 'jsonb',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_run_HASH(automation)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_run_HASH(automation), ''))) stored"
 		},
 		unique: ['(key)'],
-		indexes: ["(due_at) where (state = 'queued'::text)"],
+		indexes: [
+			'(automation, state)',
+			"(due_at) where (state = 'queued'::text)",
+			'using gin (bolt_search)'
+		],
 		checks: [
 			"((error is null or store_json_valid(error, '{kind:json,optional:true}'::jsonb) is true))",
 			"((input is null or store_json_valid(input, '{kind:json}'::jsonb) is true))",
@@ -561,10 +648,14 @@ const EXPECTED: { [table: string]: Shape } = {
 			refreshed_at: 'timestamptz not null',
 			agent: 'text',
 			user: 'text not null',
-			impersonated_by: 'text'
+			impersonated_by: 'text',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_session_HASH(via)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_session_HASH(via), ''))) stored"
 		},
 		unique: ['(token_hash)'],
-		indexes: ['(impersonated_by)', '(user)'],
+		indexes: ['(impersonated_by)', '(user)', 'using gin (bolt_search)'],
 		fks: [
 			'(impersonated_by) references sys_user (id) on delete restrict on update restrict',
 			'(user) references sys_user (id) on delete cascade on update restrict'
@@ -591,10 +682,13 @@ const EXPECTED: { [table: string]: Shape } = {
 			last_read_at: 'timestamptz',
 			last_change_at: 'timestamptz',
 			last_hint_at: 'timestamptz',
-			instance: 'text not null'
+			instance: 'text not null',
+			bolt_record_label: 'text generated always as (bolt_record_label_sys_sync_HASH(sync)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_sync_HASH(sync), ''))) stored"
 		},
 		unique: ['nulls not distinct (sync, instance, partition)'],
-		indexes: ['(instance)'],
+		indexes: ['(instance)', 'using gin (bolt_search)'],
 		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict'],
 		checks: [
 			"((cursor is null or store_json_valid(cursor, '{kind:json,optional:true}'::jsonb) is true))",
@@ -611,18 +705,22 @@ const EXPECTED: { [table: string]: Shape } = {
 		columns: {
 			sync: 'text not null',
 			partition: 'text not null default ',
-			remote_id: 'text not null',
+			remote_id: 'text',
 			record: 'text not null',
 			remote_version: 'text',
 			cycle: 'int not null',
 			acked_revision: 'int',
-			instance: 'text not null'
+			instance: 'text not null',
+			bolt_record_label:
+				'text generated always as (bolt_record_label_sys_sync_row_HASH(remote_id)) stored',
+			bolt_search:
+				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_sync_row_HASH(remote_id), ''))) stored"
 		},
 		unique: [
 			'nulls not distinct (sync, instance, record)',
-			'nulls not distinct (sync, instance, remote_id)'
+			'(sync, instance, remote_id) where (remote_id is not null)'
 		],
-		indexes: ['(instance)', '(sync, instance, partition, cycle)'],
+		indexes: ['(instance)', '(sync, instance, partition, cycle)', 'using gin (bolt_search)'],
 		fks: ['(instance) references sys_integration (id) on delete cascade on update restrict']
 	},
 	sys_user: {
@@ -647,8 +745,8 @@ const EXPECTED: { [table: string]: Shape } = {
 			bolt_search:
 				"tsvector generated always as (bolt_search_document(coalesce(bolt_record_label_sys_user_HASH(name), '') || ' ' || coalesce(name::text, '') || ' ' || coalesce(email::text, ''))) stored"
 		},
-		indexes: ['using gin (bolt_search)'],
 		unique: ['(lower(email))', '(phone_key)'],
+		indexes: ['using gin (bolt_search)'],
 		checks: [
 			"((coalesce(admin = false, false) or coalesce(kind = 'staff'::text, false)))",
 			"((party is null or store_json_valid(party, '{kind:json,optional:true}'::jsonb) is true))",
@@ -661,38 +759,55 @@ const EXPECTED: { [table: string]: Shape } = {
 };
 
 describe('the built-in layer is compiled as a workspace is', () => {
-	it('approval requests and users declare text search and install their native GIN indexes', () => {
-		expect(SYSTEM.models.approval_request?.search?.text).toEqual(['collection_name']);
-		expect(SYSTEM.models.sys_user?.search?.text).toEqual(['name', 'email']);
-		const objects = storeSync(schemaObjects(schemaSlice(EMPTY)));
-		for (const table of ['approval_request', 'sys_user'])
-			expect(
-				objects.some(
-					(object) => object.table === table && object.create.some((sql) => /USING gin/i.test(sql))
-				)
-			).toBe(true);
-	});
 	it.effect(
-		'src/system/index.ts is the systemIndex of the discovered paths, and loading them gives SYSTEM',
+		'approval requests and users declare text search and install their native GIN indexes',
+		() =>
+			Effect.gen(function* () {
+				expect(SYSTEM.models.approval_request?.search?.text).toEqual(['collection_name']);
+				expect(SYSTEM.models.sys_user?.search?.text).toEqual(['name', 'email']);
+				const objects = yield* schema_objects(schema_slice(EMPTY));
+				for (const table of ['approval_request', 'sys_user'])
+					expect(
+						objects.some(
+							(object) =>
+								object.table === table && object.create.some((sql) => /USING gin/i.test(sql))
+						)
+					).toBe(true);
+			})
+	);
+	it.effect(
+		'src/system/index.ts imports exactly the discovered declarations, and loading them gives SYSTEM',
 		() =>
 			Effect.gen(function* () {
 				const { files, errors } = yield* discover(ROOT, 'system');
 				const fs = yield* FileSystem.FileSystem;
 				expect(errors).toEqual([]);
-				const file = join(ROOT, 'src/system/index.ts');
-				const options = yield* Effect.tryPromise({
-					try: () => resolveConfig(file),
-					catch: Port.failure('fixture.format')
-				}).pipe(Effect.orDie);
+				const index = yield* fs.readFileString(join(ROOT, 'src/system/index.ts'));
+				const imports = [...index.matchAll(/^import [mi]_\w+ from '\.\/([^']+)';$/gm)].map(
+					(match) => capture(match, 1)
+				);
+				expect(imports.sort()).toEqual(
+					files.map(({ path }) => path.slice('src/system/'.length)).sort()
+				);
+				expect(
+					files
+						.filter(({ role }) => role === 'model')
+						.map(({ name }) => name)
+						.sort()
+				).toEqual(Object.keys(SYSTEM.models).sort());
+				expect(
+					files
+						.filter(({ role }) => role === 'integration_definition')
+						.map(({ name }) => name)
+						.sort()
+				).toEqual(Object.keys(SYSTEM.integrations).sort());
 				const loaded = yield* load(ROOT, files);
-				const generated = yield* Effect.tryPromise({
-					try: () => format(systemIndex(files, loaded.manifest), { ...options, filepath: file }),
-					catch: Port.failure('fixture.format')
-				}).pipe(Effect.orDie);
-				expect(generated).toBe(yield* fs.readFileString(file));
 				expect(loaded.errors).toEqual([]);
 				expect(manifestErrors(loaded.manifest, 'system')).toEqual([]);
-				const parts = modelParts(loaded.manifest.model);
+				// lowered as src/system/index.ts lowers them: built-in tables carry their physical `table`
+				const parts = Object.entries(loaded.manifest.model).map(
+					([name, d]) => [name, split_system_model(name, spec(d))] as const
+				);
 				expect(
 					JSON.parse(
 						JSON.stringify({
@@ -749,73 +864,97 @@ describe('the schema plan renders the built-in native contract', () => {
 	for (const [table, shape] of Object.entries(EXPECTED))
 		it(table, () => {
 			const sorted = Object.fromEntries(
-				(['unique', 'indexes', 'fks', 'checks'] as const).flatMap((x) =>
-					shape[x] === undefined ? [] : [[x, [...shape[x]!].sort()]]
-				)
+				shape_lists.flatMap((x) => {
+					const values = shape[x];
+					return values === undefined ? [] : [[x, [...values].sort()]];
+				})
 			);
 			expect(now[table]).toEqual({ ...shape, ...sorted });
 		});
 
-	it('guards every system table with its native row rules', () => {
-		const triggers = storeSync(schemaObjects(schemaSlice(EMPTY)))
-			.filter((o) => o.id.startsWith('trigger:') && Object.hasOwn(SYSTEM.models, o.table))
-			.map((o) => o.id)
-			.sort();
-		expect(triggers).toEqual(
-			Object.keys(SYSTEM.models)
-				.map((table) => `trigger:${table}.store_row_rules`)
-				.sort()
-		);
-	});
+	it.effect('guards every system table with its native row rules', () =>
+		Effect.gen(function* () {
+			const triggers = (yield* schema_objects(schema_slice(EMPTY)))
+				.filter((o) => o.id.startsWith('trigger:') && Object.hasOwn(SYSTEM.models, o.table))
+				.map((o) => o.id)
+				.sort();
+			expect(triggers).toEqual(
+				Object.keys(SYSTEM.models)
+					.map((table) => `trigger:${table}.store_row_rules`)
+					.sort()
+			);
+		})
+	);
 
-	it("the empty-database plan creates the layer's tables and the engine's private objects; the same slice plans no step", () => {
-		const p = storeSync(plan(null, EMPTY));
-		for (const t of Object.keys(SYSTEM.models))
-			expect(p.steps.some((s) => s.id === `create:table:${t}`)).toBe(true);
-		expect(p.steps.filter((s) => s.id.startsWith('create:engine:'))).toHaveLength(
-			engineObjects().length
-		);
-		expect(storeSync(plan(p.slice, EMPTY)).steps).toEqual([]);
-	});
+	it.effect(
+		"the empty-database plan creates the layer's tables and the engine's private objects; the same slice plans no step",
+		() =>
+			Effect.gen(function* () {
+				const p = yield* plan(null, EMPTY);
+				for (const t of Object.keys(SYSTEM.models))
+					expect(p.steps.some((s) => s.id === `create:table:${t}`)).toBe(true);
+				expect(p.steps.filter((s) => s.id.startsWith('create:engine:'))).toHaveLength(
+					engineObjects().length
+				);
+				expect((yield* plan(yield* schema_snapshot(p.slice), EMPTY)).steps).toEqual([]);
+			})
+	);
 
-	it('an FK to a system table takes its key type: text to sys_user, uuid to approval_request; a workspace model uuid', () => {
-		const m: EngineManifest = {
-			...EMPTY,
-			models: { notes: { description: 'n', label: 'body', fields: { body: { kind: 'text' } } } },
-			relationships: {
-				'notes.owner': { to: 'sys_user' },
-				'notes.request': { to: 'approval_request', optional: true },
-				'notes.parent': { to: 'notes', optional: true }
-			}
-		};
-		const col = (c: string) =>
-			storeSync(schemaObjects(schemaSlice(m))).find((o) => o.id === `column:notes.${c}`)!.create[0];
-		expect([col('owner'), col('request'), col('parent')]).toEqual([
-			'alter table "notes" add column "owner" text',
-			'alter table "notes" add column "request" uuid',
-			'alter table "notes" add column "parent" uuid'
-		]);
-	});
+	it.effect(
+		'an FK to a system table takes its key type: text to sys_user, uuid to approval_request; a workspace model uuid',
+		() =>
+			Effect.gen(function* () {
+				const m: EngineManifest = {
+					...EMPTY,
+					models: {
+						notes: {
+							description: 'n',
+							record_label: 'record.body',
+							fields: { body: { kind: 'text' } }
+						}
+					},
+					relationships: {
+						'notes.owner': { to: 'sys_user' },
+						'notes.request': { to: 'approval_request', optional: true },
+						'notes.parent': { to: 'notes', optional: true }
+					}
+				};
+				const objects = yield* schema_objects(schema_slice(m));
+				const col = (c: string) => objects.find((o) => o.id === `column:notes.${c}`)?.create[0];
+				expect([col('owner'), col('request'), col('parent')]).toEqual([
+					'alter table "notes" add column "owner" text',
+					'alter table "notes" add column "request" uuid',
+					'alter table "notes" add column "parent" uuid'
+				]);
+			})
+	);
 
-	it('a system table has no engine columns or approval index, and its uniques are plain (an on-conflict arbiter)', () => {
-		const run = storeSync(schemaObjects(schemaSlice(EMPTY))).filter((o) => o.table === 'sys_run');
-		expect(run.some((o) => o.id.includes('__approval__'))).toBe(false);
-		expect(run.flatMap((o) => o.create).filter((s) => s.includes('deferrable'))).toEqual([]);
-	});
+	it.effect(
+		'a system table has no engine columns or approval index, and its uniques are plain (an on-conflict arbiter)',
+		() =>
+			Effect.gen(function* () {
+				const run = (yield* schema_objects(schema_slice(EMPTY))).filter(
+					(o) => o.table === 'sys_run'
+				);
+				expect(run.some((o) => o.id.includes('__approval__'))).toBe(false);
+				expect(run.flatMap((o) => o.create).filter((s) => s.includes('deferrable'))).toEqual([]);
+			})
+	);
 });
 
 describe('the catalogue reads the system models from their declarations', () => {
 	const cat = catalog(EMPTY);
 	it('exposes every system model with its declared fields and relationships', () => {
 		expect([...cat.exposures.keys()].sort()).toEqual(Object.keys(SYSTEM.exposures).sort());
-		const user = cat.models.get('sys_user')!;
+		const user = cat.models.get('sys_user');
+		if (user === undefined) throw new Error('Missing sys_user in the system catalogue');
 		expect(user.fields.get('email')).toMatchObject({ email: true, pg: 'text' });
 		expect(user.fields.get('id')).toMatchObject({ pg: 'text' });
 		expect(user.fields.has('approval_id')).toBe(false);
 		expect(user.one.has('team')).toBe(false);
 		expect(user.fields.get('team')).toMatchObject({ kind: 'text', team: true, pg: 'text' });
-		expect(cat.models.get('approval_request')!.fields.get('id')).toMatchObject({ pg: 'uuid' });
-		expect(cat.exposures.get('sys_api_key')!.fields).toEqual(
+		expect(cat.models.get('approval_request')?.fields.get('id')).toMatchObject({ pg: 'uuid' });
+		expect(cat.exposures.get('sys_api_key')?.fields).toEqual(
 			new Set([
 				'name',
 				'prefix',
@@ -879,7 +1018,7 @@ describe('a workspace cannot reach into the built-in layer', () => {
 					name: 'notes',
 					spec: {
 						description: 'Notes',
-						label: 'body',
+						record_label: 'record.body',
 						fields: { body: { kind: 'text' } },
 						table: { primary: 'text' }
 					}
@@ -891,12 +1030,12 @@ describe('a workspace cannot reach into the built-in layer', () => {
 	});
 });
 
-describe('a seed pack seeds run-time instances, never a connection', () => {
-	const m: EngineManifest = { ...EMPTY, connections: { mail: { integration: 'email' } } };
+describe('a seed pack seeds runtime accounts of defined integrations', () => {
+	const m: EngineManifest = EMPTY;
 	const decode = (row: { [field: string]: string | boolean }) => {
 		return Result.match(
 			Result.try({
-				try: () => decodeIdentity(m, { sys_integration: [row] }),
+				try: () => decode_identity(m, { sys_integration: [row] }),
 				catch: (error) => (error instanceof Error ? error.message : String(error))
 			}),
 			{
@@ -905,14 +1044,12 @@ describe('a seed pack seeds run-time instances, never a connection', () => {
 			}
 		);
 	};
-	it('admits an unnamed instance of a defined integration; refuses a slot, a named row, an envoy, an unknown definition and a row without an id', () => {
+	it('admits an arbitrary runtime account id; refuses named metadata, envoy deployment, an unknown definition and a row without an id', () => {
 		const id = '0199a000-0000-7000-8000-000000000001';
 		expect(
 			decode({ id, integration: 'whatsapp', name: 'Sales line', owner: 'u1', active: false })
 		).toBeNull();
-		expect(decode({ id: 'mail', integration: 'email', name: 'Mail' })).toMatch(
-			/'mail' is a connection of \+workspace\.ts/
-		);
+		expect(decode({ id: 'mail', integration: 'email', name: 'Mail' })).toBeNull();
 		expect(decode({ id, integration: 'whatsapp', name: 'x', named: true })).toMatch(
 			/'named' is not seeded/
 		);
@@ -937,7 +1074,7 @@ describe('a seed pack seeds run-time instances, never a connection', () => {
 		};
 		const id = '0199a000-0000-7000-8000-000000000001';
 		expect(
-			decodeIdentity(erp, {
+			decode_identity(erp, {
 				sys_integration: [
 					{ id, integration: 'erp', name: 'Ledger', configuration: { region: 'sg' } }
 				]
@@ -946,11 +1083,13 @@ describe('a seed pack seeds run-time instances, never a connection', () => {
 			{ id, integration: 'erp', name: 'Ledger', configuration: { lag: 15, region: 'sg' } }
 		]);
 		// a null is absent, so the default fills it: a body reads every defaulted field present, an optional one may be null
+		const definition = erp.integrations['erp'];
+		if (definition === undefined) throw new Error('Missing ERP fixture definition');
 		const note: EngineManifest = {
 			...erp,
 			integrations: {
 				erp: {
-					...erp.integrations['erp']!,
+					...definition,
 					configuration: {
 						lag: { kind: 'int', default: 15 },
 						note: { kind: 'text', optional: true, default: 'x' }
@@ -959,14 +1098,14 @@ describe('a seed pack seeds run-time instances, never a connection', () => {
 			}
 		};
 		expect(
-			decodeIdentity(note, {
+			decode_identity(note, {
 				sys_integration: [
 					{ id, integration: 'erp', name: 'Ledger', configuration: { lag: null, note: null } }
 				]
 			})['sys_integration']
 		).toEqual([{ id, integration: 'erp', name: 'Ledger', configuration: { lag: 15, note: null } }]);
 		expect(() =>
-			decodeIdentity(erp, {
+			decode_identity(erp, {
 				sys_integration: [
 					{ id, integration: 'erp', name: 'Ledger', configuration: { lag: 'soon' } }
 				]

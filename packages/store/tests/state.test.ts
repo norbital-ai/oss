@@ -1,7 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
-import { Effect } from 'effect';
-import { build, compileWrite, schema, store, table } from '../src/index.ts';
+import { Effect, Schema } from 'effect';
+import { build, constraint_index, schema, store, table, type Sql } from '../src/index.ts';
 import { database, required, run, script } from './support.ts';
+import { compile_write } from '../src/write/sql.ts';
 
 const declaration = schema({
 	ticket: table({
@@ -12,16 +13,20 @@ const declaration = schema({
 			title: { kind: 'text' },
 			note: { kind: 'text', optional: true },
 			checked_at: { kind: 'instant', optional: true },
-			labels: { kind: 'list', of: { kind: 'text' }, default: [] },
+			labels: { kind: 'text', many: true, default: [] },
 			status: {
 				kind: 'state',
 				initial: 'draft',
 				states: {
 					draft: { to: ['review'] },
-					review: { to: ['draft', 'done'], edit: ['note'] },
-					done: { edit: 'none' }
+					review: { to: ['draft', 'done'] },
+					done: {}
 				}
 			}
+		},
+		locks: {
+			review: { where: { status: { eq: 'review' } }, except: ['status', 'note'] },
+			done: { where: { status: { eq: 'done' } } }
 		}
 	})
 });
@@ -29,7 +34,36 @@ const db = store(declaration);
 const fresh = Effect.gen(function* () {
 	const pg = yield* database;
 	yield* script(pg, `${(yield* build(declaration)).join(';\n')};`);
-	return run(pg);
+	return { pg, execute: run(pg) };
+});
+const locked = Effect.fnUntraced(function* (
+	pg: Effect.Success<typeof database>,
+	statement: Sql,
+	column: string,
+	rule: 'review' | 'done'
+) {
+	const error = yield* Effect.flip(
+		Effect.tryPromise({
+			try: () =>
+				pg.query(
+					statement.text,
+					statement.params.map((value) =>
+						value !== null && typeof value === 'object' ? JSON.stringify(value) : value
+					)
+				),
+			catch: (cause: unknown) => cause
+		})
+	);
+	const native = yield* Schema.decodeUnknownEffect(
+		Schema.Struct({ code: Schema.String, column: Schema.String, constraint: Schema.String })
+	)(error);
+	expect(native).toMatchObject({ code: '23514', column });
+	expect((yield* constraint_index(declaration)).get(native.constraint)).toMatchObject({
+		model: 'ticket',
+		kind: 'locked',
+		fields: [],
+		rule
+	});
 });
 
 describe('standalone state rules', () => {
@@ -37,7 +71,7 @@ describe('standalone state rules', () => {
 		'defaults every create to its initial state and refuses noninitial creates before emitting SQL',
 		() =>
 			Effect.gen(function* () {
-				const execute = yield* fresh;
+				const { execute } = yield* fresh;
 				const created = yield* execute(
 					yield* db.create('ticket', [
 						{ code: 'A', title: 'A' },
@@ -46,7 +80,7 @@ describe('standalone state rules', () => {
 				);
 				expect(created.map((row) => row.status)).toEqual(['draft', 'draft']);
 				const refusal = yield* Effect.flip(
-					compileWrite(db.catalog, {
+					compile_write(db.catalog, {
 						kind: 'create',
 						table: 'ticket',
 						rows: [
@@ -56,7 +90,7 @@ describe('standalone state rules', () => {
 						select: { fields: null, relations: {} }
 					})
 				);
-				expect(refusal).toMatchObject({ code: 'invalidInput', phase: 'admission' });
+				expect(refusal).toMatchObject({ code: 'invalid_input', phase: 'admission' });
 				expect(refusal.message).toContain("'status' = 'draft'");
 				expect((yield* execute(yield* db.read('ticket', { all: true }))).rows).toHaveLength(2);
 			})
@@ -64,7 +98,7 @@ describe('standalone state rules', () => {
 
 	it.effect('refuses an entire mixed batch when one state transition is undeclared', () =>
 		Effect.gen(function* () {
-			const execute = yield* fresh;
+			const { execute } = yield* fresh;
 			const rows = yield* execute(
 				yield* db.create('ticket', [
 					{ code: 'A', title: 'A' },
@@ -86,9 +120,9 @@ describe('standalone state rules', () => {
 					})
 				)
 			);
-			expect(refusal).toMatchObject({ code: 'invalidInput', phase: 'admission' });
+			expect(refusal).toMatchObject({ code: 'invalid_input', phase: 'admission' });
 			expect(
-				(yield* execute(yield* db.read('ticket', { orderBy: 'code', all: true }))).rows.map(
+				(yield* execute(yield* db.read('ticket', { order_by: 'code', all: true }))).rows.map(
 					(row) => [row.code, row.status, row.revision]
 				)
 			).toEqual([
@@ -99,46 +133,54 @@ describe('standalone state rules', () => {
 	);
 
 	it.effect(
-		'enforces edit lists and atomic edits against the stored state, while permitting unchanged values',
+		'enforces predicate locks and atomic edits against the stored row, while permitting unchanged values',
 		() =>
 			Effect.gen(function* () {
-				const execute = yield* fresh;
+				const { pg, execute } = yield* fresh;
 				const row = required(
 					(yield* execute(yield* db.create('ticket', { code: 'A', title: 'A' })))[0]
 				);
 				yield* execute(
 					yield* db.update('ticket', { key: { id: row.id }, set: { status: 'review' } })
 				);
-				const edit = yield* Effect.flip(
-					execute(
-						yield* db.update('ticket', {
-							key: { id: row.id },
-							set: { title: 'blocked', note: 'also rolled back' }
-						})
-					)
+				yield* locked(
+					pg,
+					(yield* db.update('ticket', {
+						key: { id: row.id },
+						set: { title: 'blocked', note: 'also rolled back' }
+					})).sql,
+					'title',
+					'review'
 				);
-				expect(edit.code).toBe('forbidden');
-				const atomic = yield* Effect.flip(
-					execute(
-						yield* db.update('ticket', {
-							key: { id: row.id },
-							set: { labels: { $append: ['blocked'] } }
-						})
-					)
+				yield* locked(
+					pg,
+					(yield* db.update('ticket', {
+						key: { id: row.id },
+						set: { labels: { $append: ['blocked'] } }
+					})).sql,
+					'labels',
+					'review'
 				);
-				expect(atomic.code).toBe('forbidden');
-				const clock = yield* Effect.flip(
-					execute(
-						yield* db.update('ticket', {
-							key: { id: row.id },
-							set: { note: 'also rolled back' },
-							now: ['checked_at']
-						})
-					)
+				yield* locked(
+					pg,
+					(yield* db.update('ticket', {
+						key: { id: row.id },
+						set: { note: 'also rolled back' },
+						now: ['checked_at']
+					})).sql,
+					'checked_at',
+					'review'
 				);
-				expect(clock.code).toBe('forbidden');
+				expect(yield* execute(yield* db.get('ticket', { id: row.id }))).toMatchObject({
+					title: 'A',
+					note: null,
+					labels: [],
+					checked_at: null,
+					status: 'review',
+					revision: 2
+				});
 				const managed = yield* Effect.flip(
-					compileWrite(db.catalog, {
+					compile_write(db.catalog, {
 						kind: 'update',
 						table: 'ticket',
 						where: { t: 'const', value: true },
@@ -167,17 +209,26 @@ describe('standalone state rules', () => {
 				yield* execute(
 					yield* db.update('ticket', { key: { id: row.id }, set: { status: 'done' } })
 				);
-				const sealed = yield* Effect.flip(
-					execute(yield* db.update('ticket', { key: { id: row.id }, set: { note: 'blocked' } }))
+				yield* locked(
+					pg,
+					(yield* db.update('ticket', { key: { id: row.id }, set: { note: 'blocked' } })).sql,
+					'note',
+					'done'
 				);
-				expect(sealed.code).toBe('forbidden');
-				expect((yield* execute(yield* db.get('ticket', { id: row.id })))?.note).toBe('allowed');
+				expect(yield* execute(yield* db.get('ticket', { id: row.id }))).toMatchObject({
+					title: 'A',
+					note: 'allowed',
+					labels: [],
+					checked_at: null,
+					status: 'done',
+					revision: 4
+				});
 			})
 	);
 
 	it.effect('does not partly update a stateful batch when one observed revision moved', () =>
 		Effect.gen(function* () {
-			const execute = yield* fresh;
+			const { execute } = yield* fresh;
 			const rows = yield* execute(
 				yield* db.create('ticket', [
 					{ code: 'A', title: 'A' },
@@ -200,7 +251,7 @@ describe('standalone state rules', () => {
 			);
 			expect(stale.code).toBe('stale');
 			expect(
-				(yield* execute(yield* db.read('ticket', { orderBy: 'code', all: true }))).rows.map(
+				(yield* execute(yield* db.read('ticket', { order_by: 'code', all: true }))).rows.map(
 					(row) => [row.title, row.note, row.revision, row.checked_at]
 				)
 			).toEqual([
@@ -212,7 +263,7 @@ describe('standalone state rules', () => {
 
 	it.effect('refuses mutating stateful upserts and permits validated keep-only inserts', () =>
 		Effect.gen(function* () {
-			const execute = yield* fresh;
+			const { execute } = yield* fresh;
 			yield* execute(yield* db.create('ticket', { code: 'A', title: 'A' }));
 			const unsupported = yield* Effect.flip(
 				db.upsert(
@@ -224,7 +275,7 @@ describe('standalone state rules', () => {
 					{ on: ['code'] }
 				)
 			);
-			expect(unsupported).toMatchObject({ code: 'invalidInput', phase: 'admission' });
+			expect(unsupported).toMatchObject({ code: 'invalid_input', phase: 'admission' });
 			expect(unsupported.message).toContain("update: 'keep'");
 			const clock = yield* Effect.flip(
 				db.upsert(
@@ -233,7 +284,7 @@ describe('standalone state rules', () => {
 					{ on: ['code'], update: 'keep', now: ['checked_at'] }
 				)
 			);
-			expect(clock).toMatchObject({ code: 'invalidInput', phase: 'admission' });
+			expect(clock).toMatchObject({ code: 'invalid_input', phase: 'admission' });
 			const initial = yield* Effect.flip(
 				db.upsert(
 					'ticket',
@@ -244,7 +295,7 @@ describe('standalone state rules', () => {
 					{ on: ['code'], update: 'keep', actor: 'writer', when: { status: { eq: 'draft' } } }
 				)
 			);
-			expect(initial).toMatchObject({ code: 'invalidInput', phase: 'admission' });
+			expect(initial).toMatchObject({ code: 'invalid_input', phase: 'admission' });
 			yield* execute(
 				yield* db.upsert(
 					'ticket',
@@ -256,7 +307,7 @@ describe('standalone state rules', () => {
 				)
 			);
 			expect(
-				(yield* execute(yield* db.read('ticket', { orderBy: 'code', all: true }))).rows.map(
+				(yield* execute(yield* db.read('ticket', { order_by: 'code', all: true }))).rows.map(
 					(row) => [row.code, row.title, row.status]
 				)
 			).toEqual([

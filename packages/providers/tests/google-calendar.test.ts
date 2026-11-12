@@ -7,7 +7,7 @@ import { Effect, Exit, Fiber, FiberSet, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import type { DriverEvent, DriverOpen, DriverPage, Json } from '@norbital-ai/bolt/engine';
 import { googleCalendar } from '../src/google-calendar/index.ts';
-import { fakeFetch, host, json, until, type Host, type HostOptions, type Route } from './kit.ts';
+import { required, fakeFetch, host, json, until, type Host, type HostOptions, type Route } from './kit.ts';
 
 const NOW = Date.parse('2026-10-12T08:00:00Z');
 const HOOK = 'https://host.example/acme/hooks/integration/desk',
@@ -28,7 +28,7 @@ const definition: DriverOpen['definition'] = {
 const fixture = Effect.fn('CalendarTest.fixture')(function* (
 	routes: Route[] = [],
 	stored: { [name: string]: Json } = { token: TOKEN },
-	webhookUrl = HOOK,
+	webhook_url = HOOK,
 	beforeWrite?: HostOptions['write'],
 	syncs: DriverOpen['syncs'] = [{ name: 'calendar_entries.sync.events', partitions: 'calendars' }]
 ) {
@@ -37,8 +37,8 @@ const fixture = Effect.fn('CalendarTest.fixture')(function* (
 		stateFails = false;
 	const fetch = fakeFetch(routes);
 	const h = yield* host(googleCalendar(), fetch, stored, {
-		webhookUrl,
-		redirectUrl: REDIRECT,
+		webhook_url,
+		redirect_url: REDIRECT,
 		definition,
 		syncs,
 		configuration: { calendars: ['visits@example.com'] },
@@ -69,7 +69,7 @@ const read = (
 	cursor: Json | null,
 	partition = 'visits@example.com'
 ): Effect.Effect<DriverPage, import('../src/errors.ts').ProviderFailure> =>
-	f.link.read!('calendar_entries.sync.events', partition, cursor);
+	required(f.link.read)('calendar_entries.sync.events', partition, cursor);
 const invalidations = (h: Host) =>
 	h.events.filter(
 		(e): e is Extract<DriverEvent, { kind: 'invalidate' }> => e.kind === 'invalidate'
@@ -143,7 +143,7 @@ describe('the Google Calendar link', () => {
 							)
 						: undefined
 			]);
-			expect(yield* f.link.discover!()).toEqual([
+			expect(yield* required(f.link.discover)()).toEqual([
 				{ id: 'visits@example.com', label: 'Visits' },
 				{ id: 'team@example.com', label: 'Team' }
 			]);
@@ -215,7 +215,7 @@ describe('the Google Calendar link', () => {
 					more: false,
 					snapshot: 'end'
 				});
-				expect(new URL(f.fetch.calls[1]!.url).searchParams.get('pageToken')).toBe('next-page');
+				expect(new URL(required(f.fetch.calls[1]).url).searchParams.get('pageToken')).toBe('next-page');
 				expect(f.h.writes).toEqual([]);
 				yield* f.link.close ?? Effect.void;
 			})
@@ -334,7 +334,7 @@ describe('the Google Calendar link', () => {
 				[{ name: 'calendar_entries.sync.events' }]
 			);
 			yield* read(f, null, '');
-			expect(new URL(f.fetch.calls[0]!.url).pathname).toBe('/calendar/v3/calendars/primary/events');
+			expect(new URL(required(f.fetch.calls[0]).url).pathname).toBe('/calendar/v3/calendars/primary/events');
 			yield* f.link.close ?? Effect.void;
 		})
 	);
@@ -343,10 +343,10 @@ describe('the Google Calendar link', () => {
 		({ calendar, syncs }) =>
 			Effect.gen(function* () {
 				const f = yield* fixture([watchResponse], { token: TOKEN }, HOOK, undefined, syncs);
-				yield* f.link.renew!();
+				yield* required(f.link.renew)();
 				const calls = f.fetch.calls.filter((call) => call.url.endsWith('/events/watch'));
 				expect(calls).toHaveLength(1);
-				expect(new URL(calls[0]!.url).pathname).toBe(
+				expect(new URL(required(calls[0]).url).pathname).toBe(
 					`/calendar/v3/calendars/${encodeURIComponent(calendar)}/events/watch`
 				);
 				expect(invalidations(f.h)).toEqual(
@@ -357,7 +357,7 @@ describe('the Google Calendar link', () => {
 					}))
 				);
 				const before = invalidations(f.h).length;
-				expect(yield* f.link.webhook!(notification(registration(f)))).toMatchObject({
+				expect(yield* required(f.link.webhook)(notification(registration(f)))).toMatchObject({
 					status: 204
 				});
 				expect(invalidations(f.h).slice(before)).toEqual(
@@ -377,7 +377,7 @@ describe('the Google Calendar link', () => {
 				{ name: 'calendar_entries.sync.events', partitions: 'calendars' },
 				{ name: 'calendar_defaults.sync.events' }
 			]);
-			yield* f.link.renew!();
+			yield* required(f.link.renew)();
 			const watches = f.fetch.calls.filter((call) => call.url.endsWith('/events/watch'));
 			expect(watches).toHaveLength(2);
 			const expected = [
@@ -400,7 +400,7 @@ describe('the Google Calendar link', () => {
 				if (call === undefined) throw new Error(`No watch registered for ${calendar}.`);
 				f.h.events.splice(0);
 				expect(
-					yield* f.link.webhook!(notification(Schema.decodeUnknownSync(WatchRequest)(call.body)))
+					yield* required(f.link.webhook)(notification(Schema.decodeUnknownSync(WatchRequest)(call.body)))
 				).toMatchObject({ status: 204 });
 				expect(invalidations(f.h)).toEqual([{ kind: 'invalidate', sync, partition }]);
 			}
@@ -420,7 +420,7 @@ describe('the Google Calendar link', () => {
 							const watch = Schema.decodeUnknownSync(WatchRequest)(call.body);
 							if (f === undefined) throw new Error('fixture has not opened');
 							expect(JSON.stringify(states(f.h))).toContain(watch.id);
-							expect(await run(f.link.webhook!(notification(watch)))).toMatchObject({
+							expect(await run(required(f.link.webhook)(notification(watch)))).toMatchObject({
 								status: 204
 							});
 							return json({
@@ -431,7 +431,7 @@ describe('the Google Calendar link', () => {
 						})();
 					}
 				]);
-				expect(yield* f.link.renew!()).toBe(new Date(NOW + 3_300_000).toISOString());
+				expect(yield* required(f.link.renew)()).toBe(new Date(NOW + 3_300_000).toISOString());
 				// the first notification, then the registration's reconciliation
 				expect(invalidations(f.h)).toEqual([
 					{
@@ -454,12 +454,12 @@ describe('the Google Calendar link', () => {
 		() =>
 			Effect.gen(function* () {
 				const f = yield* fixture([watchResponse]);
-				yield* f.link.renew!();
+				yield* required(f.link.renew)();
 				const watch = registration(f);
 				const before = invalidations(f.h).length;
 				for (const message of ['9007199254740992', '9007199254740993'])
 					expect(
-						yield* f.link.webhook!(
+						yield* required(f.link.webhook)(
 							notification(watch, message, 'exists', 'google-resource', {
 								'x-goog-resource-uri': 'https://evil.example/secrets'
 							})
@@ -473,7 +473,7 @@ describe('the Google Calendar link', () => {
 					notification(watch, '2', 'exists', 'another-resource'),
 					notification(watch, '1.5', 'exists')
 				])
-					expect(yield* f.link.webhook!(request)).toMatchObject({ status: 403 });
+					expect(yield* required(f.link.webhook)(request)).toMatchObject({ status: 403 });
 				yield* f.link.close ?? Effect.void;
 			})
 	);
@@ -482,14 +482,14 @@ describe('the Google Calendar link', () => {
 		() =>
 			Effect.gen(function* () {
 				const f = yield* fixture([watchResponse]);
-				yield* f.link.renew!();
+				yield* required(f.link.renew)();
 				const request = () => notification(registration(f), '22', 'exists');
 				f.queueFails(true);
-				expect(yield* Effect.flip(f.link.webhook!(request()))).toMatchObject({
+				expect(yield* Effect.flip(required(f.link.webhook)(request()))).toMatchObject({
 					message: expect.stringContaining('queue unavailable')
 				});
 				f.queueFails(false);
-				expect(yield* f.link.webhook!(request())).toMatchObject({ status: 204 });
+				expect(yield* required(f.link.webhook)(request())).toMatchObject({ status: 204 });
 				yield* f.link.close ?? Effect.void;
 			})
 	);
@@ -505,14 +505,14 @@ describe('the Google Calendar link', () => {
 							})
 						: undefined
 			]);
-			yield* f.link.renew!();
+			yield* required(f.link.renew)();
 			yield* f.now(NOW + 3_350_000);
-			yield* f.link.renew!();
+			yield* required(f.link.renew)();
 			const first = registration(f),
 				second = registration(f, 1);
 			expect(first.id).not.toBe(second.id);
 			for (const watch of [first, second])
-				expect(yield* f.link.webhook!(notification(watch, '20', 'exists'))).toMatchObject({
+				expect(yield* required(f.link.webhook)(notification(watch, '20', 'exists'))).toMatchObject({
 					status: 204
 				});
 			expect(f.fetch.calls.every((call) => call.url.endsWith('/events/watch'))).toBe(true);
@@ -522,7 +522,7 @@ describe('the Google Calendar link', () => {
 	it.effect('restores the watches after a restart and stops them on unpair', () =>
 		Effect.gen(function* () {
 			const first = yield* fixture([watchResponse]);
-			yield* first.link.renew!();
+			yield* required(first.link.renew)();
 			const watch = registration(first);
 			yield* first.link.close ?? Effect.void;
 			const second = yield* fixture(
@@ -532,16 +532,16 @@ describe('the Google Calendar link', () => {
 				],
 				Object.fromEntries(first.h.values)
 			);
-			expect(yield* second.link.webhook!(notification(watch, '33', 'exists'))).toMatchObject({
+			expect(yield* required(second.link.webhook)(notification(watch, '33', 'exists'))).toMatchObject({
 				status: 204
 			});
-			yield* second.link.unpair!();
+			yield* required(second.link.unpair)();
 			expect(second.fetch.calls.map((call) => new URL(call.url).pathname)).toEqual([
 				'/calendar/v3/channels/stop',
 				'/revoke'
 			]);
 			expect(second.h.values.get('state')).toEqual({ watches: [] });
-			expect(yield* second.link.webhook!(notification(watch, '34', 'exists'))).toMatchObject({
+			expect(yield* required(second.link.webhook)(notification(watch, '34', 'exists'))).toMatchObject({
 				status: 403
 			});
 			yield* second.link.close ?? Effect.void;
@@ -553,12 +553,12 @@ describe('the Google Calendar link', () => {
 			Effect.gen(function* () {
 				const f = yield* fixture([watchResponse]);
 				f.stateFails(true);
-				expect(yield* Effect.flip(f.link.renew!())).toMatchObject({
+				expect(yield* Effect.flip(required(f.link.renew)())).toMatchObject({
 					message: expect.stringContaining('sealed store unavailable')
 				});
 				expect(f.fetch.calls).toEqual([]);
 				f.stateFails(false);
-				yield* f.link.renew!();
+				yield* required(f.link.renew)();
 				expect(f.fetch.calls).toHaveLength(1);
 				expect(f.h.values.get('state')).toMatchObject({
 					watches: [{ phase: 'active', reconcile: false }]
@@ -570,7 +570,7 @@ describe('the Google Calendar link', () => {
 		Effect.gen(function* () {
 			const first = yield* fixture([watchResponse]);
 			first.queueFails(true);
-			expect(yield* Effect.flip(first.link.renew!())).toMatchObject({
+			expect(yield* Effect.flip(required(first.link.renew)())).toMatchObject({
 				message: expect.stringContaining('queue unavailable')
 			});
 			expect(first.h.values.get('state')).toMatchObject({
@@ -578,7 +578,7 @@ describe('the Google Calendar link', () => {
 			});
 			yield* first.link.close ?? Effect.void;
 			const restored = yield* fixture([], Object.fromEntries(first.h.values));
-			yield* restored.link.renew!();
+			yield* required(restored.link.renew)();
 			expect(restored.fetch.calls).toEqual([]);
 			expect(invalidations(restored.h)).toHaveLength(1);
 			expect(restored.h.values.get('state')).toMatchObject({ watches: [{ reconcile: false }] });
@@ -593,7 +593,7 @@ describe('the Google Calendar link', () => {
 					return undefined;
 				}
 			]);
-			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
+			expect(yield* required(f.link.renew)()).toBe(new Date(NOW + 300000).toISOString());
 			expect(JSON.stringify(f.h.values.get('state'))).toContain('pending');
 			expect(invalidations(f.h)).toEqual([
 				{
@@ -613,10 +613,10 @@ describe('the Google Calendar link', () => {
 						? json({ error: { message: 'Unauthorized WebHook callback channel' } }, 401)
 						: undefined
 			]);
-			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
+			expect(yield* required(f.link.renew)()).toBe(new Date(NOW + 300000).toISOString());
 			expect(JSON.stringify(f.h.values.get('state'))).not.toContain('pending');
 			expect(invalidations(f.h)).toHaveLength(1);
-			expect(yield* f.link.renew!()).toBe(new Date(NOW + 300000).toISOString());
+			expect(yield* required(f.link.renew)()).toBe(new Date(NOW + 300000).toISOString());
 			expect(invalidations(f.h)).toHaveLength(2);
 			yield* f.link.close ?? Effect.void;
 		})
@@ -631,10 +631,10 @@ describe('the Google Calendar link', () => {
 				},
 				watchResponse
 			]);
-			yield* f.link.renew!();
+			yield* required(f.link.renew)();
 			lost = false;
 			yield* f.now(NOW + 601000);
-			yield* f.link.renew!();
+			yield* required(f.link.renew)();
 			expect(JSON.stringify(f.h.values.get('state'))).not.toContain('pending');
 			expect(JSON.stringify(f.h.values.get('state'))).toContain('active');
 			yield* f.link.close ?? Effect.void;
@@ -647,7 +647,7 @@ describe('the Google Calendar link', () => {
 				{ token: TOKEN },
 				'http://127.0.0.1:54337/hooks/integration/desk'
 			);
-			expect(yield* local.link.renew!()).toBe(new Date(NOW + 300_000).toISOString());
+			expect(yield* required(local.link.renew)()).toBe(new Date(NOW + 300_000).toISOString());
 			expect(invalidations(local.h)).toEqual([
 				{
 					kind: 'invalidate',
@@ -661,14 +661,14 @@ describe('the Google Calendar link', () => {
 				snapshot: 'end'
 			});
 			yield* local.link.close ?? Effect.void;
-			expect(yield* local.link.renew!()).toBeNull();
+			expect(yield* required(local.link.renew)()).toBeNull();
 			expect(invalidations(local.h)).toHaveLength(1);
 			const remote = yield* fixture(
 				[],
 				{ token: TOKEN },
 				'http://insecure.example/hooks/integration/desk'
 			);
-			expect(yield* Effect.flip(remote.link.renew!())).toMatchObject({
+			expect(yield* Effect.flip(required(remote.link.renew)())).toMatchObject({
 				message: expect.stringMatching('HTTPS')
 			});
 			yield* remote.link.close ?? Effect.void;
@@ -682,11 +682,11 @@ describe('the Google Calendar link', () => {
 				'http://localhost:54337/hooks/integration/desk'
 			);
 			local.queueFails(true);
-			expect(yield* Effect.flip(local.link.renew!())).toMatchObject({
+			expect(yield* Effect.flip(required(local.link.renew)())).toMatchObject({
 				message: expect.stringContaining('queue unavailable')
 			});
 			local.queueFails(false);
-			expect(yield* local.link.renew!()).toBe(new Date(NOW + 300_000).toISOString());
+			expect(yield* required(local.link.renew)()).toBe(new Date(NOW + 300_000).toISOString());
 			expect(invalidations(local.h)).toHaveLength(1);
 			expect(local.fetch.calls).toHaveLength(0);
 			yield* local.link.close ?? Effect.void;
@@ -699,7 +699,7 @@ describe('the Google Calendar link', () => {
 				{ token: TOKEN },
 				'http://norbital_hq.localhost:5173/hooks/integration/desk'
 			);
-			expect(yield* local.link.renew!()).toBe(new Date(NOW + 300_000).toISOString());
+			expect(yield* required(local.link.renew)()).toBe(new Date(NOW + 300_000).toISOString());
 			expect(invalidations(local.h)).toEqual([
 				{
 					kind: 'invalidate',
@@ -722,15 +722,15 @@ describe('the Google Calendar sign-in', () => {
 				: call.url.includes('/calendarList')
 					? json({ items: [{ id: 'ana@example.com', summary: 'Ana', primary: true }] })
 					: undefined;
-	const authorize = (h: Host) => new URL(h.pairing!.value!);
+	const authorize = (h: Host) => new URL(required(required(h.pairing).value));
 
 	it.effect(
 		"publishes the authorize URL of the definition's client: PKCE, offline access, the host's one redirect URI",
 		() =>
 			Effect.gen(function* () {
 				const f = yield* fixture([], {});
-				expect(yield* f.link.renew!()).toBeNull(); // not signed in: nothing to renew
-				yield* f.link.pair!({});
+				expect(yield* required(f.link.renew)()).toBeNull(); // not signed in: nothing to renew
+				yield* required(f.link.pair)({});
 				expect(f.h.status).toEqual({ state: 'pairing' });
 				const url = authorize(f.h);
 				expect(`${url.origin}${url.pathname}`).toBe('https://accounts.google.com/o/oauth2/v2/auth');
@@ -744,7 +744,7 @@ describe('the Google Calendar sign-in', () => {
 					code_challenge_method: 'S256'
 				});
 				// while it waits, the renew loop looks again shortly
-				expect(yield* f.link.renew!()).toBe(new Date(NOW + 15_000).toISOString());
+				expect(yield* required(f.link.renew)()).toBe(new Date(NOW + 15_000).toISOString());
 				expect(f.h.writes).toEqual([]);
 				yield* f.link.close ?? Effect.void;
 			})
@@ -763,15 +763,15 @@ describe('the Google Calendar sign-in', () => {
 					],
 					{}
 				);
-				yield* f.link.pair!({});
-				const state = authorize(f.h).searchParams.get('state')!;
+				yield* required(f.link.pair)({});
+				const state = required(authorize(f.h).searchParams.get('state'));
 				expect(
-					(yield* f.link.webhook!(new Request(`${REDIRECT}?state=forged&code=c1`))).status
+					(yield* required(f.link.webhook)(new Request(`${REDIRECT}?state=forged&code=c1`))).status
 				).toBe(400);
 				expect(exchanged).toBeNull();
-				const res = yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				const res = yield* required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				expect(res.status).toBe(200);
-				expect(Object.fromEntries(exchanged!)).toMatchObject({
+				expect(Object.fromEntries(required<URLSearchParams>(exchanged))).toMatchObject({
 					grant_type: 'authorization_code',
 					code: 'c1',
 					redirect_uri: REDIRECT,
@@ -791,7 +791,7 @@ describe('the Google Calendar sign-in', () => {
 				]);
 				// A consumed callback still reports its completion without exchanging its code again.
 				expect(
-					(yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`))).status
+					(yield* required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`))).status
 				).toBe(200);
 				expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
 				yield* f.link.close ?? Effect.void;
@@ -817,10 +817,10 @@ describe('the Google Calendar sign-in', () => {
 					],
 					{}
 				);
-				yield* f.link.pair!({});
-				const state = authorize(f.h).searchParams.get('state')!;
+				yield* required(f.link.pair)({});
+				const state = required(authorize(f.h).searchParams.get('state'));
 				const callback = (nonce = state) =>
-					f.link.webhook!(new Request(`${REDIRECT}?state=${nonce}&code=c1`));
+					required(f.link.webhook)(new Request(`${REDIRECT}?state=${nonce}&code=c1`));
 				const abandoned = yield* Effect.forkChild(callback());
 				yield* Effect.promise(() => entered.promise);
 				const running = yield* Effect.forkChild(
@@ -845,11 +845,11 @@ describe('the Google Calendar sign-in', () => {
 				yield* f.now(NOW + 11 * 60_000);
 				expect((yield* callback()).status).toBe(400);
 				const sealed = f.h.values.get('token');
-				yield* f.link.pair!({});
-				const next = authorize(f.h).searchParams.get('state')!;
+				yield* required(f.link.pair)({});
+				const next = required(authorize(f.h).searchParams.get('state'));
 				expect((yield* callback()).status).toBe(400);
 				expect(f.h.values.get('token')).toEqual(sealed);
-				yield* f.link.unpair!();
+				yield* required(f.link.unpair)();
 				expect((yield* callback(next)).status).toBe(400);
 				expect(f.fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
 				yield* f.link.close ?? Effect.void;
@@ -858,10 +858,10 @@ describe('the Google Calendar sign-in', () => {
 	it.effect('replays a refused callback without exchanging the consumed code again', () =>
 		Effect.gen(function* () {
 			const f = yield* fixture([google(() => json({ error: 'invalid_grant' }, 400))], {});
-			yield* f.link.pair!({});
-			const state = authorize(f.h).searchParams.get('state')!;
+			yield* required(f.link.pair)({});
+			const state = required(authorize(f.h).searchParams.get('state'));
 			const callback = () =>
-				f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=refused`));
+				required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=refused`));
 			const first = yield* callback();
 			const body = yield* Effect.promise(() => first.text());
 			const again = yield* callback();
@@ -894,17 +894,17 @@ describe('the Google Calendar sign-in', () => {
 					],
 					{}
 				);
-				yield* f.link.pair!({});
-				const state = authorize(f.h).searchParams.get('state')!;
-				const callback = () => f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				yield* required(f.link.pair)({});
+				const state = required(authorize(f.h).searchParams.get('state'));
+				const callback = () => required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				const signingIn = yield* Effect.forkChild(Effect.exit(callback()));
 				yield* Effect.promise(() => entered.promise);
-				const disconnecting = yield* Effect.forkChild(f.link.unpair!());
+				const disconnecting = yield* Effect.forkChild(required(f.link.unpair)());
 				yield* Fiber.join(disconnecting);
 				expect(Exit.isFailure(yield* Fiber.join(signingIn))).toBe(true);
 				expect(f.h.values.has('token')).toBe(false);
 				expect((yield* callback()).status).toBe(400);
-				expect(yield* Effect.flip(f.link.discover!())).toMatchObject({ _tag: 'OAuthRefused' });
+				expect(yield* Effect.flip(required(f.link.discover)())).toMatchObject({ _tag: 'OAuthRefused' });
 				allow.resolve();
 				yield* Effect.promise(() => answered.promise);
 				expect(f.h.values.has('token')).toBe(false);
@@ -929,15 +929,15 @@ describe('the Google Calendar sign-in', () => {
 						await allow.promise;
 					}
 				);
-				yield* f.link.pair!({});
-				const state = authorize(f.h).searchParams.get('state')!;
-				const callback = () => f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				yield* required(f.link.pair)({});
+				const state = required(authorize(f.h).searchParams.get('state'));
+				const callback = () => required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				const signingIn = yield* Effect.forkChild(callback());
 				yield* Effect.promise(() => entered.promise);
 				let disconnected = false;
 				const wiped: string[] = [];
 				const disconnecting = yield* Effect.forkChild(
-					f.link.unpair!().pipe(
+					required(f.link.unpair)().pipe(
 						Effect.tap(() =>
 							Effect.sync(() => {
 								// The host wipes the keys known after the provider's unpair completes.
@@ -962,7 +962,7 @@ describe('the Google Calendar sign-in', () => {
 				expect((yield* callback()).status).toBe(400);
 				expect(f.h.statuses).toHaveLength(statuses);
 				expect(f.h.events).toHaveLength(events);
-				expect(yield* Effect.flip(f.link.discover!())).toMatchObject({ _tag: 'OAuthRefused' });
+				expect(yield* Effect.flip(required(f.link.discover)())).toMatchObject({ _tag: 'OAuthRefused' });
 				yield* f.link.close ?? Effect.void;
 			})
 	);
@@ -982,12 +982,12 @@ describe('the Google Calendar sign-in', () => {
 					[google(() => json({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 }))],
 					{}
 				);
-				yield* f.link.pair!({ returnTo });
-				const state = authorize(f.h).searchParams.get('state')!;
-				const response = yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				yield* required(f.link.pair)({ returnTo });
+				const state = required(authorize(f.h).searchParams.get('state'));
+				const response = yield* required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				expect(response.status).toBe(status);
 				expect(response.headers.get('location')).toBe(location);
-				const again = yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				const again = yield* required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				expect(again.status).toBe(status);
 				expect(again.headers.get('location')).toBe(location);
 				expect(f.h.status?.state).toBe('connected');
@@ -1009,12 +1009,12 @@ describe('the Google Calendar sign-in', () => {
 					],
 					{ token: { ...TOKEN, exp: NOW - 1 } }
 				);
-				yield* f.link.discover!();
+				yield* required(f.link.discover)();
 				expect(f.h.values.get('token')).toMatchObject({ access: 'at-2', refresh: 'rt-2' });
-				expect(f.fetch.calls.at(-1)!.headers['authorization']).toBe('Bearer at-2');
+				expect(required(f.fetch.calls.at(-1)).headers['authorization']).toBe('Bearer at-2');
 				yield* f.now(NOW + 7_200_000);
 				revoked = true;
-				expect(yield* Effect.flip(f.link.discover!())).toMatchObject({
+				expect(yield* Effect.flip(required(f.link.discover)())).toMatchObject({
 					_tag: 'OAuthRefused',
 					revoked: true
 				});
@@ -1074,22 +1074,22 @@ describe('the Google Calendar call', () => {
 			Effect.gen(function* () {
 				const google = store();
 				const f = yield* fixture([google.route]);
-				const insert = yield* f.link.request!({
+				const insert = yield* required(f.link.request)({
 					method: 'POST',
 					path: EVENTS,
 					query: { sendUpdates: 'none' },
 					body: { id: 'hq1', summary: 'Kick-off' }
 				});
 				expect(insert).toMatchObject({ status: 200, body: { id: 'hq1', etag: '"v1"' } });
-				expect(new URL(f.fetch.calls[0]!.url).searchParams.get('sendUpdates')).toBe('none');
+				expect(new URL(required(f.fetch.calls[0]).url).searchParams.get('sendUpdates')).toBe('none');
 				expect(
-					yield* f.link.request!({
+					yield* required(f.link.request)({
 						method: 'POST',
 						path: EVENTS,
 						body: { id: 'hq1', summary: 'Kick-off' }
 					})
 				).toMatchObject({ status: 409 });
-				const patched = yield* f.link.request!({
+				const patched = yield* required(f.link.request)({
 					method: 'PATCH',
 					path: `${EVENTS}/hq1`,
 					headers: { 'if-match': '"v1"' },
@@ -1101,7 +1101,7 @@ describe('the Google Calendar call', () => {
 				});
 				expect(f.fetch.calls.at(-1)?.headers['if-match']).toBe('"v1"');
 				expect(
-					yield* f.link.request!({
+					yield* required(f.link.request)({
 						method: 'PATCH',
 						path: `${EVENTS}/hq1`,
 						headers: { 'if-match': '"v1"' },
@@ -1109,7 +1109,7 @@ describe('the Google Calendar call', () => {
 					})
 				).toMatchObject({ status: 412, body: { error: { code: 412 } } });
 				expect(
-					yield* f.link.request!({
+					yield* required(f.link.request)({
 						method: 'DELETE',
 						path: `${EVENTS}/hq1`,
 						headers: { 'if-match': '"v2"' }
@@ -1130,7 +1130,7 @@ describe('the Google Calendar call', () => {
 	])('refuses a call outside one calendar’s events: $method $path', (op) =>
 		Effect.gen(function* () {
 			const f = yield* fixture([]);
-			expect(yield* f.link.request!(op)).toMatchObject({ status: 400 });
+			expect(yield* required(f.link.request)(op)).toMatchObject({ status: 400 });
 			expect(f.fetch.calls).toEqual([]);
 			yield* f.link.close ?? Effect.void;
 		})
@@ -1161,7 +1161,7 @@ describe('the Google Calendar call', () => {
 				expect(refreshes.map((body) => body.get('scope'))).toEqual([READ]);
 				expect(f.h.values.get('token')).toMatchObject({ access: 'at-2', scope: READ });
 				expect(
-					yield* f.link.request!({ method: 'POST', path: EVENTS, body: { summary: 'x' } })
+					yield* required(f.link.request)({ method: 'POST', path: EVENTS, body: { summary: 'x' } })
 				).toMatchObject({ status: 403, body: expect.stringContaining('Reconnect') });
 				expect(
 					f.fetch.calls.some((call) => call.method === 'POST' && call.url.includes('/events'))
@@ -1187,9 +1187,9 @@ describe('the Google Calendar call', () => {
 				],
 				{}
 			);
-			yield* f.link.pair!({});
-			const state = new URL(f.h.pairing!.value!).searchParams.get('state')!;
-			yield* f.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+			yield* required(f.link.pair)({});
+			const state = required(new URL(required(required(f.h.pairing).value)).searchParams.get('state'));
+			yield* required(f.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 			expect(f.h.status).toEqual({ state: 'connected', account: 'ana@example.com' });
 			expect(f.h.values.get('token')).toMatchObject({ scope: `${READ} ${WRITE}` });
 			yield* f.link.close ?? Effect.void;

@@ -2,6 +2,8 @@
 // are signed with OAuth 1.0a by X's own SDK: an OAuth 2 token lasts two hours, and its rotating refresh token has nowhere to
 // persist here. A mention is its own thread, because a reply must name the post it answers and an adapter keeps no map from
 // a conversation to its latest post. Direct messages can be read back; X has no such read for posts.
+import { Option, Schema } from 'effect';
+import { parse as parseJson, json } from '../http.ts';
 import type { ChatConnection, ChatField, ChatHost, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
@@ -55,14 +57,26 @@ export const xApi = async (
 	};
 	return {
 		raw,
-		json: async <A>(method: string, path: string, body?: object): Promise<A> =>
-			(await raw(method, path, body)).json()
+		json: async <A>(
+			schema: Schema.Decoder<A>,
+			method: string,
+			path: string,
+			body?: object
+		): Promise<A> => json(schema, await raw(method, path, body))
 	};
 };
 export type XApi = Awaited<ReturnType<typeof xApi>>;
 /** The account behind a token, which proves the keys. */
 export const xAccount = async (api: XApi) => {
-	const { data } = await api.json<{ data?: { id: string; username?: string } }>(
+	const { data } = await api.json(
+		Schema.Struct({
+			data: Schema.optionalKey(
+				Schema.Struct({
+					id: Schema.String,
+					username: Schema.optionalKey(Schema.String)
+				})
+			)
+		}),
 		'GET',
 		'/2/users/me?user.fields=username'
 	);
@@ -87,48 +101,80 @@ export const xChallenge = (request: Request, body: string, secret: string) => {
 	return Response.json({ response_token: `sha256=${hmac(secret, token, 'base64')}` });
 };
 
-type User = { readonly id: string; readonly name?: string; readonly username?: string };
-type Post = {
-	readonly id: string;
-	readonly text: string;
-	readonly author_id?: string;
-	readonly created_at?: string;
-};
-type Payload = Readonly<Record<string, unknown>> & {
-	readonly direct_message_events?: readonly {
-		readonly id: string;
-		readonly created_timestamp?: string;
-		readonly message_create?: {
-			readonly sender_id?: string;
-			readonly message_data?: { readonly text?: string };
-		};
-	}[];
-	readonly users?: Readonly<Record<string, { readonly data?: User }>>;
-};
-type Activity = {
-	readonly event_type?: string;
-	readonly payload?: Payload;
-	readonly includes?: { readonly users?: readonly User[] };
-};
-type DmEvent = {
-	readonly id: string;
-	readonly text?: string;
-	readonly sender_id?: string;
-	readonly created_at?: string;
-};
-type DmPage = { readonly data?: readonly DmEvent[]; readonly meta?: { readonly next_token?: string } };
+const User = Schema.Struct({
+	id: Schema.String,
+	name: Schema.optionalKey(Schema.String),
+	username: Schema.optionalKey(Schema.String)
+});
+type User = typeof User.Type;
+const Post = Schema.Struct({
+	id: Schema.String,
+	text: Schema.String,
+	author_id: Schema.optionalKey(Schema.String),
+	created_at: Schema.optionalKey(Schema.String)
+});
+const Payload = Schema.StructWithRest(
+	Schema.Struct({
+		direct_message_events: Schema.optionalKey(
+			Schema.Array(
+				Schema.Struct({
+					id: Schema.String,
+					created_timestamp: Schema.optionalKey(Schema.String),
+					message_create: Schema.optionalKey(
+						Schema.Struct({
+							sender_id: Schema.optionalKey(Schema.String),
+							message_data: Schema.optionalKey(
+								Schema.Struct({
+									text: Schema.optionalKey(Schema.String)
+								})
+							)
+						})
+					)
+				})
+			)
+		),
+		users: Schema.optionalKey(
+			Schema.Record(
+				Schema.String,
+				Schema.Struct({
+					data: Schema.optionalKey(User)
+				})
+			)
+		)
+	}),
+	[Schema.Record(Schema.String, Schema.Json)]
+);
+const Activity = Schema.Struct({
+	event_type: Schema.optionalKey(Schema.String),
+	payload: Schema.optionalKey(Payload),
+	includes: Schema.optionalKey(
+		Schema.Struct({
+			users: Schema.optionalKey(Schema.Array(User))
+		})
+	)
+});
+type Activity = typeof Activity.Type;
+const DmEvent = Schema.Struct({
+	id: Schema.String,
+	text: Schema.optionalKey(Schema.String),
+	sender_id: Schema.optionalKey(Schema.String),
+	created_at: Schema.optionalKey(Schema.String)
+});
+type DmEvent = typeof DmEvent.Type;
+const DmPage = Schema.Struct({
+	data: Schema.optionalKey(Schema.Array(DmEvent)),
+	meta: Schema.optionalKey(
+		Schema.Struct({
+			next_token: Schema.optionalKey(Schema.String)
+		})
+	)
+});
 
-const isPost = (value: unknown): value is Post =>
-	typeof value === 'object' &&
-	value !== null &&
-	'id' in value &&
-	typeof value.id === 'string' &&
-	'text' in value &&
-	typeof value.text === 'string';
-const direct = (id: string, sender: string, text: string, sentAt: string, name: string | null) => ({
+const postOf = Schema.decodeUnknownOption(Post);
+const direct = (id: string, sender: string, text: string, sent_at: string, name: string | null) => ({
 	id,
 	thread: `dm:${sender}`,
-	sentAt,
+	sent_at,
 	from: { handle: sender, name },
 	text
 });
@@ -136,14 +182,16 @@ const parse = (event: Activity, me: string): readonly Incoming[] => {
 	const payload = event.payload,
 		users = event.includes?.users;
 	if (event.event_type === 'post.mention.create') {
-		const post = [payload, payload?.['post'], payload?.['tweet'], payload?.['data']].find(isPost);
+		const post = [payload, payload?.['post'], payload?.['tweet'], payload?.['data']].flatMap(
+			(value) => Option.toArray(postOf(value))
+		)[0];
 		if (post === undefined || post.author_id === me) return [];
 		const author = users?.find((user) => user.id === post.author_id);
 		return [
 			{
 				id: post.id,
 				thread: `post:${post.id}`,
-				sentAt: post.created_at ?? new Date().toISOString(),
+				sent_at: post.created_at ?? new Date().toISOString(),
 				from: {
 					handle: post.author_id ?? 'unknown',
 					name: author?.name ?? author?.username ?? null
@@ -193,18 +241,37 @@ export const x: ChatPlatform = {
 			async deliver(request, body) {
 				const challenge = xChallenge(request, body, settings['apiSecret'] ?? '');
 				if (challenge !== null) return nothing(challenge);
-				const { data } = JSON.parse(body) as { data?: Activity | Activity[] };
+				const { data } = await parseJson(
+					Schema.Struct({
+						data: Schema.optionalKey(Schema.Union([Activity, Schema.Array(Activity)]))
+					}),
+					body
+				);
 				return { messages: [data ?? []].flat().flatMap((event) => parse(event, me)) };
 			},
 			async send(thread, text) {
 				if (thread.startsWith('post:')) {
-					const sent = await api.json<{ data: { id: string } }>('POST', '/2/tweets', {
-						text,
-						reply: { in_reply_to_tweet_id: thread.slice('post:'.length) }
-					});
+					const sent = await api.json(
+						Schema.Struct({
+							data: Schema.Struct({
+								id: Schema.String
+							})
+						}),
+						'POST',
+						'/2/tweets',
+						{
+							text,
+							reply: { in_reply_to_tweet_id: thread.slice('post:'.length) }
+						}
+					);
 					return { id: sent.data.id };
 				}
-				const sent = await api.json<{ data: { dm_event_id: string } }>(
+				const sent = await api.json(
+					Schema.Struct({
+						data: Schema.Struct({
+							dm_event_id: Schema.String
+						})
+					}),
 					'POST',
 					`/2/dm_conversations/with/${encodeURIComponent(thread.replace(/^dm:/, ''))}/messages`,
 					{ text }
@@ -217,9 +284,10 @@ export const x: ChatPlatform = {
 				const user = thread.replace(/^dm:/, ''),
 					from = Date.parse(since),
 					messages: Incoming[] = [];
-				for (let token: string | undefined; ; ) {
+				for (let token: string | undefined; ;) {
 					const after = token === undefined ? '' : `&pagination_token=${encodeURIComponent(token)}`;
-					const page = await api.json<DmPage>(
+					const page = await api.json(
+						DmPage,
 						'GET',
 						`/2/dm_conversations/with/${encodeURIComponent(user)}/dm_events?dm_event.fields=id,text,sender_id,created_at&event_types=MessageCreate&max_results=100${after}`
 					);
@@ -228,13 +296,7 @@ export const x: ChatPlatform = {
 					for (const event of events)
 						if (event.sender_id !== me && at(event) >= from)
 							messages.push(
-								direct(
-									event.id,
-									user,
-									event.text ?? '',
-									new Date(at(event)).toISOString(),
-									null
-								)
+								direct(event.id, user, event.text ?? '', new Date(at(event)).toISOString(), null)
 							);
 					token = page.meta?.next_token;
 					if (token === undefined || events.some((event) => at(event) < from))

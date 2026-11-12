@@ -1,7 +1,7 @@
 import './resolve.ts';
 import assert from 'node:assert/strict';
 import { describe, it } from '@effect/vitest';
-import { jsonSchemaFromRows, jsonSchemaRows } from '../src/kinds/json-schema-rows.ts';
+import { json_schema_from_rows, json_schema_rows } from '../src/kinds/json-schema-rows.ts';
 
 describe('json schema rows', () => {
 	it('a schema reads as rows and writes back unchanged', () => {
@@ -35,7 +35,7 @@ describe('json schema rows', () => {
 			additionalProperties: false
 		};
 		assert.deepStrictEqual(
-			jsonSchemaRows(held).map((row) => row.path),
+			json_schema_rows(held).map((row) => row.path),
 			[
 				'zone',
 				'facts',
@@ -48,7 +48,7 @@ describe('json schema rows', () => {
 				'terms[].ok'
 			]
 		);
-		assert.deepStrictEqual(jsonSchemaFromRows(jsonSchemaRows(held), held), held);
+		assert.deepStrictEqual(json_schema_from_rows(json_schema_rows(held), held), held);
 	});
 
 	it('a renamed row keeps its keywords and children, added rows nest by path, blanks are named', () => {
@@ -66,12 +66,12 @@ describe('json schema rows', () => {
 				}
 			}
 		};
-		const rows = jsonSchemaRows(held);
+		const rows = json_schema_rows(held);
 		assert.deepStrictEqual(
 			rows.map((row) => row.path),
 			['pay', 'pay[].code']
 		);
-		const renamed = jsonSchemaFromRows(
+		const renamed = json_schema_from_rows(
 			rows.map((row) =>
 				row.path === 'pay[].code' ? { ...row, path: 'pay[].ref', required: true } : row
 			),
@@ -88,7 +88,7 @@ describe('json schema rows', () => {
 				}
 			}
 		});
-		const added = jsonSchemaFromRows(
+		const added = json_schema_from_rows(
 			[...rows, { path: 'meta.started', type: 'date', label: 'Started' }, {}],
 			held
 		);

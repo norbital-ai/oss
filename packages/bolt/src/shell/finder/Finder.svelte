@@ -27,24 +27,24 @@
 		catalog,
 		read,
 		t,
-		onNavigate,
-		onOpenRecord,
-		onAsk,
+		on_navigate,
+		on_open_record,
+		on_ask,
 		entries = [],
-		initialScope = null,
-		onClose
+		initial_scope = null,
+		on_close
 	}: {
 		open?: boolean;
 		nav: readonly NavNode[];
 		catalog: { readonly [model: string]: ModelExposure };
 		read: FinderRead;
 		t: (key: string) => string;
-		onNavigate: (href: string) => void;
-		onOpenRecord: (model: string, id: string) => void;
-		onAsk: ((prompt: string) => void) | null;
+		on_navigate: (href: string) => void;
+		on_open_record: (model: string, id: string) => void;
+		on_ask: ((prompt: string) => void) | null;
 		entries?: readonly ManifestItem[];
-		initialScope?: string | null;
-		onClose?: () => void;
+		initial_scope?: string | null;
+		on_close?: () => void;
 	} = $props();
 	let query = $state('');
 	let found = $state<FinderHit[]>([]);
@@ -75,7 +75,7 @@
 				? scopedPages(selected, term)
 				: [
 						...manifestMatches(nav, scopes, parsed.query, t),
-						...(onAsk !== null && !parsed.explicit && query.trim() !== ''
+						...(on_ask !== null && !parsed.explicit && query.trim() !== ''
 							? [{ kind: 'ask' as const, key: 'ask' as const, label: query.trim() }]
 							: [])
 					]
@@ -97,7 +97,7 @@
 		}
 	);
 	watch(
-		() => [initialScope, open] as const,
+		() => [initial_scope, open] as const,
 		([name, visible]) => {
 			if (visible && name !== null) {
 				picked = scopes.find((scope) => scope.command === name);
@@ -174,13 +174,13 @@
 			return drill(row.scope);
 		}
 		open = false;
-		if (row.kind === 'ask') onAsk?.(row.label);
-		else if (row.kind === 'page') onNavigate(row.href);
-		else if (row.kind === 'record') onOpenRecord(row.model, row.id);
-		else if (row.scope.kind !== 'model') onNavigate(row.scope.href);
+		if (row.kind === 'ask') on_ask?.(row.label);
+		else if (row.kind === 'page') on_navigate(row.href);
+		else if (row.kind === 'record') on_open_record(row.model, row.id);
+		else if (row.scope.kind !== 'model') on_navigate(row.scope.href);
 		query = '';
 		picked = undefined;
-		onClose?.();
+		on_close?.();
 	}
 	function keydown(event: KeyboardEvent): void {
 		if (event.isComposing) return;
@@ -203,7 +203,8 @@
 			event.preventDefault();
 			for (let step = 0; step < rows.length; step++) {
 				active = (active + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
-				if (!disabled(rows[active]!)) break;
+				const next = rows[active];
+				if (next !== undefined && !disabled(next)) break;
 			}
 			document
 				.getElementById(`shell-finder-result-${active}`)
@@ -292,14 +293,14 @@
 <span hidden {@attach search(open, model, term)}></span>
 <Dialog.Root
 	bind:open
-	onOpenChange={(visible) => {
-		if (!visible) onClose?.();
+	on_open_change={(visible) => {
+		if (!visible) on_close?.();
 	}}
 >
 	<Dialog.Content
 		class="top-[15%] max-w-2xl translate-y-0 [&>button]:top-5 [&>button]:grid [&>button]:size-8 [&>button]:place-items-center max-md:[&>button]:top-3.5 max-md:[&>button]:size-11"
 		data-finder
-		onEscapeKeydown={(event) => {
+		on_escape_keydown={(event) => {
 			if (selected) {
 				event.preventDefault();
 				void back();

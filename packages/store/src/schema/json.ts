@@ -1,4 +1,5 @@
 // The persisted JSON structure follows std's kind codecs; file bytes and reference visibility belong to the host.
+import { UUID_PATTERN } from '@norbital-ai/std/id';
 export const JSON_VALID = `create or replace function store_json_valid(value jsonb, spec jsonb) returns boolean
 language plpgsql immutable parallel safe set timezone = 'UTC' set datestyle = 'ISO,YMD' as $store_json$
 declare
@@ -20,10 +21,13 @@ declare
 begin
 	if value is null then return false; end if;
 	if value = 'null'::jsonb and coalesce((spec->>'optional')::boolean, false) then return true; end if;
-	if coalesce((spec->>'many')::boolean, false) or coalesce((spec->>'multiple')::boolean, false) then
+	if coalesce((spec->>'many')::boolean, false) then
 		if shape <> 'array' then return false; end if;
+		length_value := jsonb_array_length(value);
+		if (spec ? 'min_items' and length_value < (spec->>'min_items')::numeric) or
+			(spec ? 'max_items' and length_value > (spec->>'max_items')::numeric) then return false; end if;
 		for item in select v from jsonb_array_elements(value) items(v) loop
-			if not store_json_valid(item, spec - array['many','multiple','optional']) then return false; end if;
+			if not store_json_valid(item, spec - array['many','optional','min_items','max_items','key']) then return false; end if;
 		end loop;
 		return true;
 	end if;
@@ -31,14 +35,13 @@ begin
 	when 'json' then
 		return case when spec ? 'shape' then store_json_valid(value, spec->'shape') else true end;
 	when 'custom' then return true;
-	when 'list', 'vector' then
+	when 'vector' then
 		if shape <> 'array' then return false; end if;
 		length_value := jsonb_array_length(value);
 		if kind = 'vector' and length_value <> (spec->>'dim')::numeric then return false; end if;
-		if kind = 'list' and ((spec ? 'min' and length_value < (spec->>'min')::numeric) or
-			(spec ? 'max' and length_value > (spec->>'max')::numeric)) then return false; end if;
+
 		for item in select v from jsonb_array_elements(value) items(v) loop
-			if not store_json_valid(item, case when kind = 'vector' then '{"kind":"number"}'::jsonb else spec->'of' end) then return false; end if;
+			if not store_json_valid(item, '{"kind":"number"}'::jsonb) then return false; end if;
 		end loop;
 		return true;
 	when 'object' then
@@ -90,8 +93,8 @@ begin
 			and store_json_valid(value->'lng','{"kind":"number"}'::jsonb);
 	when 'ref' then
 		if jsonb_typeof(spec->'to') = 'string' then return shape = 'string'; end if;
-		return coalesce(shape = 'object' and jsonb_typeof(value->'collection') = 'string'
-			and spec->'to' ? (value->>'collection') and jsonb_typeof(value->'id') = 'string',false);
+		return coalesce(shape = 'object' and jsonb_typeof(value->'model') = 'string'
+			and spec->'to' ? (value->>'model') and jsonb_typeof(value->'id') = 'string',false);
 	when 'period' then
 		if shape <> 'object' then return false; end if;
 		field_name := case when spec->>'of' = 'date' then 'from' else 'start' end;
@@ -104,7 +107,7 @@ begin
 		return case when spec->>'of' = 'date' then from_value <= to_value
 			else from_value::timestamptz < to_value::timestamptz end;
 	when 'bool' then return shape = 'boolean';
-	when 'int', 'number', 'count', 'duration' then
+	when 'int', 'number', 'count' then
 		if shape <> 'number' then return false; end if;
 		text_value := value #>> '{}';
 		float_value := text_value::double precision;
@@ -137,7 +140,7 @@ begin
 			end if;
 			return spec->>'format' is distinct from 'email' or text_value ~ '^[^@\\s]+@[^@\\s]+$';
 		when 'currency' then return true;
-		when 'id' then return text_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+		when 'id' then return text_value ~* '${UUID_PATTERN.source}';
 		when 'enum' then return spec->'values' ? text_value;
 		when 'state' then return spec->'states' ? text_value;
 		when 'time' then return text_value ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\.[0-9]+)?)?$';

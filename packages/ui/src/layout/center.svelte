@@ -7,10 +7,10 @@ Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), 
 	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
 	/** The maximum width a `Center` holds its content to. */
-	export type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
+	type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
 	type CenterLayout = 'block' | 'stack' | 'inline' | 'cluster' | 'grid';
 	/** The props of `Center`. */
-	export interface CenterProps extends LayoutAttributes {
+	interface CenterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		measure?: CenterMeasure;
 		/** Arrange direct children while keeping centring and composition on the same element. */
@@ -24,7 +24,7 @@ Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), 
 
 <script lang="ts">
 	import { cn } from '../primitives/utils.js';
-	import { GAP_CLASSES } from './layout.shared.js';
+	import { ALIGN_CLASSES, JUSTIFY_CLASSES, GAP_CLASSES } from './layout.shared.js';
 
 	let {
 		as = 'div',
@@ -52,19 +52,6 @@ Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), 
 		cluster: 'flex flex-row flex-wrap',
 		grid: 'grid'
 	};
-	const alignClasses = {
-		start: 'items-start',
-		center: 'items-center',
-		end: 'items-end',
-		baseline: 'items-baseline',
-		stretch: 'items-stretch'
-	} as const;
-	const justifyClasses = {
-		start: 'justify-start',
-		center: 'justify-center',
-		end: 'justify-end',
-		between: 'justify-between'
-	} as const;
 	const resolvedAlign = $derived(
 		align ?? (layout === 'stack' || layout === 'grid' ? 'stretch' : 'center')
 	);
@@ -78,8 +65,8 @@ Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), 
 		measureClasses[measure],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
-		layout !== 'block' && alignClasses[resolvedAlign],
-		layout !== 'block' && justifyClasses[justify],
+		layout !== 'block' && ALIGN_CLASSES[resolvedAlign],
+		layout !== 'block' && JUSTIFY_CLASSES[justify],
 		// Consumer classes last so marketing shells can tighten the measure
 		// (e.g. `measure="full" class="max-w-6xl"`) without twMerge dropping them.
 		className

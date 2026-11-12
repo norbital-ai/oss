@@ -1,449 +1,60 @@
 import {
-	Crypto,
 	Cause,
 	Clock,
-	Config,
-	ConfigProvider,
-	Context,
 	Deferred,
 	Effect,
-	Exit,
-	FiberHandle,
 	FiberSet,
 	Layer,
 	Option,
-	Predicate,
 	PubSub,
-	Random,
-	Result,
-	Redacted,
 	Schema,
-	Semaphore,
-	Stream
+	Semaphore
 } from 'effect';
-import * as EffectArray from 'effect/Array';
-import type { Json } from '../../decl/values.ts';
-import { RunAttempt, RunError } from './attempt.ts';
-import { EngineActorSchema, RunTriggerSchema } from '../../protocol/schema.ts';
-import { exposed, viewOutput, type Holder } from '../access/authority.ts';
-import { issueAutomationDelegation, delegatedVerbAuthority } from '../access/delegation.ts';
-import { Port, type PortFailure } from '../port.ts';
+import type { Row } from './rows.ts';
 import { makeParking } from '../parking.ts';
-import { TURN_RUN } from '../agent/turns.ts';
-import { AgentHost } from '../agent/index.ts';
-import { inferArgsOf, inferFacility, type InferTool } from '../agent/ai.ts';
-import { EmbedInputs, ImageOptions, Reference } from '../facilities.ts';
-import { readInferTool } from '../agent/tools.ts';
-import { SaidContent, StepContent } from '../agent/schema.ts';
-import {
-	LIMITS,
-	type AiMessage,
-	type Authority,
-	type RowData,
-	type CrossAnswer,
-	type GuestOutcome,
-	type RunTrigger,
-	type RunTriggerView
-} from '../contracts.ts';
-import { isTransient, type EngineError } from '../errors.ts';
+import type { EngineError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { SqlReadCapture, TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
-import { ReadDeps } from '../query/engine.ts';
-import { Ai, Browser, Drivers, Logs, RunUnits } from '../ports.ts';
-import { automationBrowserProfile } from '../agent/browser.ts';
+import { TenantDb } from '../db/tenant-db.ts';
+import { Drivers } from '../ports.ts';
 import {
-	Activation,
-	Approvals,
-	Callables,
 	Deadlines,
-	Facilities,
-	Guest,
-	Identity,
 	Live,
 	Manifest,
-	Reads,
 	RunEnds,
 	RunHandlers,
 	Runs,
 	Wake,
-	Writes,
-	type CrossCall,
-	type ActsRequest,
-	type FacilityCall,
 	type RetrySpec,
 	type RunHandler,
 	type RunRest
 } from '../services.ts';
-import { actorRef } from '../write/commit.ts';
-import {
-	answer,
-	Chain,
-	GATED,
-	makeReadGuards,
-	noticeCaptures,
-	noticeInsert
-} from '../write/sql.ts';
-import { canonical, sha256Hex } from '@norbital-ai/store';
-import { pruneHistory } from '../query/history.ts';
-import { layered, relations, type EngineManifest } from '../manifest.ts';
-import { bindingsAt } from '../query/reader.ts';
-import { encodeWire } from '@norbital-ai/std/wire';
-import { decodeInput, decodeOutput } from '../callables/decode.ts';
-import { isBatchCallable } from '../callables/index.ts';
-import { DecisionTrace, readableFile } from '../decisions/index.ts';
-import { prepareSend, sendPiece } from '../conversations/outbound.ts';
-import { preview, stableId } from '../conversations/store.ts';
-import { instanceRequest } from '../integrations/instances.ts';
-import { verifiedWebhook, type WebhookRequest } from './webhook.ts';
-import { effectOf, enqueue, nextDue, triggersOf } from './queue.ts';
-import { evaluate, type EvalEnv } from '../query/eval.ts';
-import { catalogOf } from '../access/pred.ts';
-import type { AutomationSpec } from '../../decl/runtime/automation.ts';
-import { backoffMs, dueAt, iso, materialize } from './time.ts';
-import { NOTICE_PUSH, noticePush } from './push.ts';
-import { makeTransactions, transactionFailure } from '../transactions.ts';
-import { Audit } from '../audit.ts';
-import { audited } from '../audit-operation.ts';
-import { NOTIFY, noticeRows, runNotify } from '../notifications/notify.ts';
+
+import { canonical, sha256_hex } from '@norbital-ai/store';
+import { makePruner, PRUNE } from './prune.ts';
+import { makeRunExecutor } from './executor.ts';
+import { makeRunStore } from './store.ts';
+import { cronLedger } from './ledger.ts';
+import { triggers_of } from './queue.ts';
+import { iso } from './time.ts';
+import { notice_push } from './push.ts';
+import { NOTICE_PUSH } from '../notifications/queue.ts';
 import { fileSyncHandlers } from '../sync/file.ts';
 import { syncTriggers } from '../sync/index.ts';
 import { EMBED, embedRun } from '../integrations/embed.ts';
 import { INDEX, indexRun } from '../write/index-run.ts';
-const HolderSchema = Schema.Struct({
-	actor: EngineActorSchema,
-	policies: Schema.Array(Schema.String),
-	admin: Schema.Boolean,
-	platform: Schema.optionalKey(Schema.Boolean),
-	teamTree: Schema.optionalKey(Schema.Array(Schema.String)),
-	scopes: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String)))
-});
-const RowSchema = Schema.Struct({
-	id: Schema.String,
-	automation: Schema.String,
-	input: Schema.Json,
-	due_at: Schema.String,
-	run_key: Schema.NullOr(Schema.String),
-	cause: Schema.String,
-	depth: Schema.Number,
-	attempts: Schema.Number,
-	leases: Schema.Number,
-	actor: Schema.NullOr(Schema.String),
-	starter: Schema.NullOr(HolderSchema),
-	trigger: Schema.NullOr(RunTriggerSchema)
-});
-type Row = typeof RowSchema.Type;
-const Image = Schema.Record(Schema.String, Schema.Json);
-/** An effect run's input (`queueEffects`): the committed rows, or an update's before and after images. */
-const EffectInput = Schema.Union([
-	Schema.Struct({ ids: Schema.Array(Schema.String), rows: Schema.Array(Image) }),
-	Schema.Struct({
-		ids: Schema.Array(Schema.String),
-		changes: Schema.Array(Schema.Struct({ before: Image, after: Image }))
-	})
-]);
-const effectImages = Schema.decodeUnknownOption(EffectInput);
-/** A model effect's run: the writer's authority (`sys_run.starter`), retried 3 times; it holds no policy of its own. */
-const EFFECT: Pick<AutomationSpec, 'description' | 'retry' | 'input' | 'output'> = {
-	description: 'A model effect.',
-	retry: { attempts: 3 }
-};
-type Starter = typeof HolderSchema.Type;
-/**
- * The holder an automation run is: the reserved system identity holding exactly its declared policies. Who started it
- * (`sys_run.trigger`) never enters its authority.
- */
-const policyHolder = (head: Row, policies: readonly string[]): Holder => ({
-	actor: { kind: 'system', run: head.id, by: { automation: head.automation } },
-	policies,
-	admin: false
-});
-/**
- * Who a run's schedule records as its starter, the person who may read its result: an effect's writer (the holder it
- * runs as), else this run's own starter.
- */
-const starterOf = (run: Row, holder: Holder): Starter | null =>
-	holder.actor.kind === 'system' ? run.starter : holder;
-/** What a run's schedule records as the scheduled run's trigger: the effect and its rows, or the scheduling run. */
-function scheduledBy(m: EngineManifest, run: Row): RunTrigger {
-	const effect = effectOf(m, run.automation);
-	const images = effect === undefined ? Option.none() : effectImages(run.input);
-	return effect !== undefined && Option.isSome(images)
-		? {
-				kind: 'system',
-				cause: 'effect',
-				model: effect.model,
-				verb: effect.verb,
-				records: images.value.ids
-			}
-		: { kind: 'system', cause: 'schedule', by: { automation: run.automation, run: run.id } };
-}
-/**
- * An effect's images as its writer reads them: the root fields of the writer's output of the model (`default` when it
- * holds it, else the first named output it holds, in declaration order); nothing when it holds none. The rows
- * themselves are the writer's own write, admitted by its grant.
- */
-function writerImages(
-	m: EngineManifest,
-	a: Authority,
-	model: string,
-	input: typeof EffectInput.Type
-): Json {
-	if (a.admin) return 'rows' in input ? input.rows : input.changes;
-	const output = viewOutput(m, a, model);
-	if (output === undefined) return [];
-	const keep = new Set(['id', 'revision', ...exposed(m, model, model, model, output)]);
-	const shown = (image: RowData): RowData =>
-		Object.fromEntries(Object.entries(image).filter(([field]) => keep.has(field)));
-	return 'rows' in input
-		? input.rows.map(shown)
-		: input.changes.map((change) => ({ before: shown(change.before), after: shown(change.after) }));
-}
-export const RunViewRow = Schema.Struct({
-	id: Schema.String,
-	automation: Schema.String,
-	cause: Schema.String,
-	state: Schema.String,
-	due_at: Schema.String,
-	started: Schema.NullOr(Schema.String),
-	progress: Schema.Json,
-	output: Schema.Json,
-	error: Schema.NullOr(RunError),
-	attempts: Schema.Number,
-	results: Schema.Array(RunAttempt),
-	input: Schema.Json,
-	actor: Schema.NullOr(Schema.String),
-	starter: Schema.NullOr(HolderSchema),
-	trigger: Schema.NullOr(RunTriggerSchema),
-	trigger_name: Schema.NullOr(Schema.String)
-});
-export type RunViewRow = typeof RunViewRow.Type;
-/** Actual output and authorization columns for a stored automation-file candidate. */
-export const RunOutputRow = Schema.Struct({
-	id: Schema.String,
-	automation: Schema.String,
-	output: Schema.Json,
-	starter: Schema.NullOr(HolderSchema)
-});
-export function readsRunResult(
-	authority: Authority,
-	row: Pick<typeof RunOutputRow.Type, 'automation' | 'starter'>
-): boolean {
-	const starter = row.starter?.actor;
-	return (
-		authority.admin ||
-		authority.automations.includes(row.automation) ||
-		(starter !== undefined && canonical(starter) === canonical(authority.actor))
-	);
-}
-export type RunView = {
-	id: string;
-	automation: string;
-	cause: string;
-	trigger: RunTriggerView | null;
-	status: string;
-	due_at: string;
-	started: string | null;
-	progress: Json;
-	error: RunViewRow['error'];
-	attempt_count: number;
-	result?: Json;
-	input?: Json;
-	attempts?: readonly RunAttempt[];
-};
-export const RUN_VIEW_COLUMNS = `id, automation, cause, state, due_at::text AS due_at, started_at::text AS started, progress, output, error, attempts, results, input, actor, starter, trigger,
-	(SELECT coalesce(u.name, u.email) FROM sys_user u WHERE u.id::text = coalesce(trigger->'actor'->>'id', trigger->'actor'->>'member')) AS trigger_name`;
-const triggerView = (row: RunViewRow): RunTriggerView | null =>
-	row.trigger?.kind === 'person'
-		? {
-				kind: 'person',
-				ref: actorRef(row.trigger.actor),
-				name: row.trigger_name,
-				...(row.trigger.agent === undefined ? {} : { agent: true as const })
-			}
-		: row.trigger;
-export function runView(authority: Authority, row: RunViewRow): RunView | null {
-	const base = {
-		id: row.id,
-		automation: row.automation,
-		cause: row.cause,
-		trigger: triggerView(row),
-		status: row.state,
-		due_at: row.due_at,
-		started: row.started,
-		progress: row.progress,
-		attempt_count: row.attempts
-	};
-	// a run the person started by hand answers them with its declared result, whatever policies it ran under; an
-	// effect's input holds the write's whole images, so its writer sees what any causing actor does
-	if (
-		(readsRunResult(authority, row) && (row.cause !== 'effect' || authority.admin)) ||
-		(row.cause === 'start' && row.actor === actorRef(authority.actor))
-	)
-		return {
-			...base,
-			error: row.error,
-			...(row.output === null ? {} : { result: row.output }),
-			input: row.input,
-			attempts: row.results
-		};
-	return row.actor === actorRef(authority.actor)
-		? { ...base, error: row.error === null ? null : { code: row.error.code } }
-		: null;
-}
-/**
- * The runs list (the `runs` read: the command center's Automations, `bolt.runs`): an administrator sees every run; a
- * member (staff or external) the runs of automations they hold and the runs they caused, each as rule 56 lets them read
- * it (status, progress and the error code only for a run they merely caused). `automation` narrows the list to one
- * automation; `id` to one run.
- */
-export const runList = Effect.fn('Runs.list')(function* (
-	db: TenantDbShape,
-	auth: Authority,
-	limit: number = 100,
-	automation?: string,
-	id?: string
-) {
-	const a = auth.actor;
-	if (a.kind !== 'member') return [];
-	const rows = yield* db.rows(RunViewRow, {
-		text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run
-		WHERE ($1 OR actor = $2 OR automation IN (SELECT jsonb_array_elements_text($3::jsonb))) AND ($4::text IS NULL OR automation = $4) AND ($5::text IS NULL OR id = $5)
-		ORDER BY due_at DESC LIMIT ${Math.min(Math.max(1, limit), 500)}`,
-		params: [
-			auth.admin,
-			actorRef(a),
-			JSON.stringify(auth.automations),
-			automation ?? null,
-			id ?? null
-		]
-	});
-	return rows.flatMap((row) => runView(auth, row) ?? []);
-});
-const EFFECTS = new Set([
-	'act',
-	'acts',
-	'schedule',
-	'notify',
-	'send',
-	'request',
-	'progress',
-	'withdraw',
-	'transactionBegin'
-]);
-/**
- * What a facility call is to a run's gates, decoded once from its arguments with the shapes the dispatcher takes: the
- * stored files it reads (each must be the run's to read), whether it stores a new one (then the run's own),
- * and the host tools an inference names. Arguments of another shape gate nothing; the dispatcher refuses them.
- */
-type CallFacts = {
-	readonly reads: readonly string[];
-	readonly stores: boolean;
-	readonly tools: readonly string[] | undefined;
-};
-function factsOf(call: FacilityCall): CallFacts {
-	// built per call: `facilities.ts` reaches this module through `decisions`, so its schemas are not there at load
-	const [first, options] = call.args,
-		referenceOf = Schema.decodeUnknownOption(Reference);
-	const ids = (refs: readonly (string | { readonly id: string })[]) =>
-		refs.flatMap((ref) => (typeof ref === 'string' ? [] : [ref.id]));
-	switch (call._tag) {
-		case 'files.put':
-		case 'browser.download':
-		case 'ai.speak':
-			return { reads: [], stores: true, tools: undefined };
-		case 'files.image':
-			return {
-				reads: ids(Option.toArray(referenceOf(first))),
-				stores: Option.exists(
-					Schema.decodeUnknownOption(ImageOptions)(options ?? {}),
-					(o) => o.jpeg !== undefined
-				),
-				tools: undefined
-			};
-		case 'files.meta':
-		case 'files.get':
-		case 'files.url':
-		case 'files.text':
-		case 'files.table':
-		case 'files.sheet':
-			return { reads: ids(Option.toArray(referenceOf(first))), stores: false, tools: undefined };
-		case 'convert.ingest':
-			return {
-				reads: ids(Option.toArray(referenceOf(first))),
-				stores: Option.exists(
-					Schema.decodeUnknownOption(Schema.Struct({ for: Schema.optionalKey(Schema.String) }))(
-						options ?? {}
-					),
-					(o) => o.for !== undefined
-				),
-				tools: undefined
-			};
-		case 'convert.document':
-			return {
-				reads: ids(
-					Option.toArray(
-						Schema.decodeUnknownOption(Schema.Struct({ reference: Schema.optionalKey(Reference) }))(
-							options
-						)
-					).flatMap((o) => (o.reference === undefined ? [] : [o.reference]))
-				),
-				stores: true,
-				tools: undefined
-			};
-		case 'ai.embed':
-			return {
-				reads: ids(Option.getOrElse(Schema.decodeUnknownOption(EmbedInputs)(first), () => [])),
-				stores: false,
-				tools: undefined
-			};
-		case 'ai.sys_2.infer': {
-			const a = Option.getOrUndefined(inferArgsOf(first ?? {}));
-			return { reads: ids(a?.files ?? []), stores: false, tools: a?.tools };
-		}
-		default:
-			return { reads: [], stores: false, tools: undefined };
-	}
-}
-/** An inference's messages as its transcript rows hold them: a tool step, or a prompt's or reply's words. */
-const stepOf = Schema.decodeUnknownOption(StepContent),
-	saidOf = Schema.decodeUnknownOption(SaidContent);
-const MAX_IDS = 10000,
-	/** A model effect's runs: no authored retry, so a transient failure is retried this often, with backoff: over an hour. */
-	EFFECT_RETRY: RetrySpec = { attempts: 10, backoff: '10s' },
-	DAY = 86400000,
-	/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
-	LANES = 12,
+/** Workspace automations that may run side by side; one automation's own runs stay one at a time. */
+const LANES = 12,
 	/** How soon a parked generation's wake asks again. */
 	PARKED_WAKE_MS = 5_000;
-const PRUNE = 'bolt.prune';
-/**
- * Where a run's row stands. A queued run has its row; a fired cron's run writes it only with its first effect:
- * `record` writes it once and answers false when the slot already ran.
- */
-type Ledger = {
-	readonly record: Effect.Effect<boolean, EngineError>;
-	readonly written: () => boolean;
-};
-const QUEUED: Ledger = { record: Effect.succeed(true), written: () => true };
-export class Nudges extends Context.Service<Nudges, PubSub.PubSub<number>>()('bolt/Nudges') {}
 export const WakeLive = Layer.effect(
 	Wake,
 	Effect.gen(function* () {
-		const deadlines = yield* Deadlines,
-			nudges = yield* Nudges;
-		return {
-			at: (at: string) =>
-				deadlines
-					.announce(at)
-					.pipe(Effect.andThen(PubSub.publish(nudges, Date.parse(at))), Effect.asVoid)
-		};
+		const deadlines = yield* Deadlines;
+		return { at: deadlines.announce };
 	})
 ).pipe(
 	Layer.provideMerge(
-		Layer.merge(
-			Layer.effect(Nudges, PubSub.unbounded<number>()),
-			Layer.effect(RunEnds, PubSub.unbounded<readonly string[]>())
-		)
+		Layer.effect(RunEnds, PubSub.unbounded<readonly string[]>())
 	)
 );
 export const RunHandlersLive = Layer.sync(RunHandlers, () => {
@@ -472,53 +83,16 @@ export const RunHandlersLive = Layer.sync(RunHandlers, () => {
 		retry: (name: string) => Effect.sync(() => Option.fromNullishOr(retries.get(name)))
 	};
 });
-const fail = (code: string, message: string): CrossAnswer => ({
-	ok: false,
-	error: { kind: 'bolt', code, message }
-});
-const failure = (error: EngineError): CrossAnswer =>
-	fail(error._tag === 'BoltError' ? error.code : 'internal', error.message);
-const CreatedFile = Schema.Struct({
-	id: Schema.String.check(Schema.isUUID()),
-	name: Schema.String,
-	mime: Schema.String,
-	bytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-	sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))
-});
 export const RunsLive = Layer.effect(
 	Runs,
 	Effect.gen(function* () {
 		const m = yield* Manifest,
-			audit = yield* Audit,
 			db = yield* TenantDb,
-			activation = yield* Activation,
-			guest = yield* Guest,
-			reads = yield* Reads,
-			writes = yield* Writes,
-			approvals = yield* Approvals,
-			calls = yield* Callables,
-			identity = yield* Identity,
 			live = yield* Live,
-			facilities = yield* Facilities,
-			browser = yield* Browser,
 			registry = yield* RunHandlers,
 			deadlines = yield* Deadlines,
-			nudges = yield* Nudges,
-			ends = yield* RunEnds,
 			drivers = yield* Drivers;
-		const ai = yield* Ai,
-			logs = yield* Logs,
-			agentHost = yield* AgentHost;
-		const crypto = yield* Crypto.Crypto;
-		const uuid = crypto
-			.randomUUIDv4()
-			.pipe(
-				Effect.mapError((error) =>
-					BoltError.make('unavailable', 'facility', 'Secure random UUID generation failed.', error)
-				)
-			);
-		const crons = [...triggersOf(m).crons, ...(drivers.available ? syncTriggers(m) : [])];
-		const tenant = yield* ConfigProvider.ConfigProvider;
+		const crons = [...triggers_of(m).crons, ...(drivers.available ? syncTriggers(m) : [])];
 		const stopping = new Set<string>();
 		/** A running run's stop signal: `stop` completes it, which ends the crossing in flight (an inference has no time limit). */
 		const halts = new Map<string, Deferred.Deferred<void>>();
@@ -526,6 +100,7 @@ export const RunsLive = Layer.effect(
 		const lanes = yield* Semaphore.make(LANES),
 			claims = yield* Semaphore.make(1),
 			tickPermit = yield* Semaphore.make(1),
+			pulseGate = yield* Semaphore.make(1),
 			/** The running automations: a planned close waits for them, and no run starts after it. */
 			parking = makeParking();
 		const capacities: Record<string, number> = {};
@@ -541,1211 +116,43 @@ export const RunsLive = Layer.effect(
 				locks.set(automation, (held = Semaphore.makeUnsafe(capacities[automation] ?? 1)));
 			return held;
 		};
-		let prunedDay = -1;
+		let activeTick: (() => Effect.Effect<void>) | undefined;
+		const pulse = pulseGate.withPermit(Effect.suspend(() =>
+			activeTick === undefined || parking.parked
+				? Effect.succeed(false)
+				: activeTick().pipe(Effect.as(true))));
 		yield* registry.register({
-			[NOTICE_PUSH]: yield* noticePush,
-			[NOTIFY]: yield* runNotify,
+			[NOTICE_PUSH]: yield* notice_push,
 			[EMBED]: yield* embedRun,
 			[INDEX]: yield* indexRun,
 			...(yield* fileSyncHandlers)
-		});
-		// a nudge follows every commit that queued a run: live `runs` reads see it before it is claimed
-		yield* Stream.fromPubSub(nudges).pipe(
-			Stream.runForEach(() => Effect.sync(() => live.syncChanged('sys_run'))),
-			Effect.forkScoped
-		);
-		const announce = (at: string) =>
-			deadlines
-				.announce(at)
-				.pipe(Effect.andThen(PubSub.publish(nudges, Date.parse(at))), Effect.asVoid);
-		const boot = (overran?: string) =>
-			Effect.gen(function* () {
-				const now = yield* Clock.currentTimeMillis,
-					c = new Chain(),
-					at = c.p(iso(now)),
-					over = c.p(overran ?? null),
-					// a handed-off request's work lived in its generation's memory: it is not run again (the person asks again);
-					// a run its generation stopped past the CPU budget would only overrun again. A close that interrupted a run is
-					// no lost lease (only a crash writes no `interrupted`): restarts cannot use up a run's three
-					closed = `error->>'code' = 'interrupted'`,
-					fails = `((${over}::text IS NOT NULL AND automation <> '${TURN_RUN}') OR cause = 'handoff' OR (leases >= 3 AND ${closed} IS NOT TRUE))`;
-				c.cte(
-					'lost',
-					`UPDATE sys_run SET leases = leases + CASE WHEN ${closed} THEN 0 ELSE 1 END, due_at = ${at}::timestamptz, state = CASE WHEN ${fails} THEN 'failed' ELSE 'queued' END, finished_at = CASE WHEN ${fails} THEN ${at}::timestamptz END, error = CASE WHEN ${over}::text IS NOT NULL THEN jsonb_build_object('code', 'cpuBudget', 'message', ${over}::text) WHEN cause = 'handoff' THEN '{"code":"lostLease","message":"The host was lost before the request answered."}'::jsonb WHEN ${closed} THEN NULL WHEN leases < 3 THEN error ELSE '{"code":"lostLease","message":"The run lost its lease 3 times."}'::jsonb END WHERE state = 'running' RETURNING id, state, due_at`
-				);
-				// a turn no run answers any more, or that lost its run some other way: its conversation takes input again, and
-				// never reads as running forever
-				c.cte(
-					'released',
-					`UPDATE sys_conversation c SET status = 'idle', lease_until = NULL WHERE c.status = 'running' AND (c.id::text IN (SELECT r.input->>'conversation' FROM sys_run r JOIN lost l ON l.id = r.id WHERE l.state = 'failed' AND r.automation = '${TURN_RUN}') OR (c.lease_until < ${at}::timestamptz AND NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.automation = '${TURN_RUN}' AND r.state IN ('queued', 'running') AND r.input->>'conversation' = c.id::text))) RETURNING c.id`
-				);
-				const rows = yield* db.returning(
-					Schema.Struct({
-						next: Schema.NullOr(Schema.String),
-						failed: Schema.Array(Schema.String),
-						released: Schema.Array(Schema.String)
-					}),
-					c.sql(
-						`least((SELECT min(due_at) FROM sys_run WHERE state = 'queued'), (SELECT min(due_at) FROM lost WHERE state = 'queued'), ${nextDue(c)})::text AS next,
-						(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM lost WHERE state = 'failed') AS failed,
-						(SELECT coalesce(jsonb_agg(id), '[]'::jsonb) FROM released) AS released`
-					)
-				);
-				if ((rows[0]?.failed.length ?? 0) > 0) yield* PubSub.publish(ends, rows[0]!.failed);
-				yield* deadlines.settle(rows[0]?.next ?? null);
-				return rows[0]?.released ?? [];
-			});
-		const claim = (now: number, pruned = false, custom = false) =>
-			Effect.gen(function* () {
-				if (parking.parked) return { runs: [], next: null };
-				const c = new Chain(),
-					automations = c.p(Object.keys(m.automations)),
-					capacity = c.p(capacities),
-					due = c.p(iso(now)),
-					eligible = `r.state = 'queued' AND r.due_at <= ${due}::timestamptz AND (NOT ${c.p(pruned)} OR r.automation <> ${c.p(PRUNE)}) AND (SELECT count(*) FROM sys_run x WHERE x.automation = r.automation AND x.state = 'running') < coalesce((${capacity}::jsonb ->> r.automation)::int, 1)`;
-				// an authored automation's lane claims one run; every other (platform and effect runs) is claimed in bulk
-				// its own CTE, run once: a locking LIMIT inside the UPDATE's IN may be evaluated again and claim more
-				c.cte(
-					'head',
-					`SELECT r.id FROM sys_run r WHERE ${eligible} AND r.automation ${custom ? '' : 'NOT '}IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) ORDER BY r.due_at, r.id LIMIT ${custom ? 1 : 1000} FOR UPDATE SKIP LOCKED`
-				);
-				c.cte(
-					'claimed',
-					`UPDATE sys_run s SET state = 'running', attempts = s.attempts + 1, started_at = ${due}::timestamptz, run_key = coalesce(s.key, s.run_key), key = CASE WHEN s.automation IN (SELECT jsonb_array_elements_text(${automations}::jsonb)) THEN NULL ELSE s.key END WHERE s.state = 'queued' AND s.id IN (SELECT id FROM head) RETURNING s.*`
-				);
-				const rows = yield* db.returning(
-					Schema.Struct({ runs: Schema.Array(RowSchema), next: Schema.NullOr(Schema.String) }),
-					c.sql(
-						`(SELECT coalesce(jsonb_agg(to_jsonb(x) || jsonb_build_object('due_at', x.due_at::text) ORDER BY x.due_at, x.id), '[]'::jsonb) FROM claimed x) AS runs, (SELECT min(due_at)::text FROM sys_run WHERE state = 'queued' AND id NOT IN (SELECT id FROM claimed)) AS next`
-					),
-					// Taken before the statement snapshot: separate runtimes must see the previous claim.
-					{ advisory: ['bolt:runs:claim'] }
-				);
-				const claimed = rows[0];
-				if (claimed !== undefined && claimed.runs.length > 0)
-					live.syncChanged(
-						'sys_run',
-						claimed.runs.map((run) => run.id)
-					);
-				return {
-					runs: claimed?.runs ?? [],
-					next: claimed?.next ?? null
-				};
-			});
-		const prune = Effect.fn('Runs.prune')(function* (
-			now: number
-		): Effect.fn.Return<{ deleted: number; continued?: number }, EngineError> {
-			const aged = {
-				sys_run: `state IN ('succeeded', 'failed', 'stopped', 'skipped') AND finished_at < $1::timestamptz - interval '90 days'`,
-				// a webhook delivery's key goes with its run
-				bolt_idem: `((run IS NOT NULL AND (run IN (SELECT id FROM sel_sys_run) OR NOT EXISTS (SELECT 1 FROM sys_run r WHERE r.id = bolt_idem.run)))
-				OR (run IS NULL AND issued_at < $1::timestamptz - interval '24 hours'))
-				AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL)`,
-				bolt_rate: `window_start < $1::timestamptz - interval '1 day'`,
-				// a consumed delivery only dedupes a redelivery, and providers stop retrying within days
-				sys_inbox: `consumed_at < $1::timestamptz - interval '30 days'`,
-				sys_notification: `(read_at < $1::timestamptz - interval '90 days') OR at < $1::timestamptz - interval '365 days'`, // L-BOLT-354
-				bolt_host_nonce: `at < $1::timestamptz - CASE WHEN key LIKE 'nonce:%' THEN interval '10 minutes' ELSE interval '30 days' END`,
-				// an anonymous user whose session lapsed (30 days unused) or was retired by a sign-in, unless a record references it
-				sys_user: `kind = 'anonymous' AND NOT EXISTS (SELECT 1 FROM sys_session s WHERE s."user" = sys_user.id AND s.expires_at > $1::timestamptz)${relations(
-					layered(m)
-				)
-					.all.filter(
-						(r) => r.from !== 'sys_session' && r.targets.length === 1 && r.targets[0] === 'sys_user'
-					)
-					.map(
-						(r) => ` AND NOT EXISTS (SELECT 1 FROM "${r.from}" r WHERE r."${r.fk}" = sys_user.id)`
-					)
-					.join('')}`
-			};
-			const tables = Object.keys(aged);
-			const ctes = Object.entries(aged).map(
-				([
-					t,
-					where
-				]) => `sel_${t} AS (SELECT ctid${t === 'sys_run' ? ', id' : ''} FROM ${t} WHERE ${where} LIMIT ${MAX_IDS}),
-			del_${t} AS (DELETE FROM ${t} WHERE ctid IN (SELECT ctid FROM sel_${t}) RETURNING 1)`
-			);
-			const counts = tables.map(
-				(t) =>
-					`(SELECT count(*) FROM sel_${t})::int AS "sel_${t}", (SELECT count(*) FROM del_${t})::int AS "del_${t}"`
-			);
-			const [r] = (yield* db.write({
-				text: `WITH ${ctes.join(',\n')} SELECT ${counts.join(', ')}`,
-				params: [iso(now)]
-			})).rows;
-			const selected = tables.reduce((n, t) => n + Number(r?.[`sel_${t}`] ?? 0), 0),
-				deleted = tables.reduce((n, t) => n + Number(r?.[`del_${t}`] ?? 0), 0);
-			// the history horizon (rule 17, L-BOLT-182): 256 revisions per row, never an open restore point or an erased revision
-			// ponytail: uncapped by rule 25a's 10,000; cap it with a ctid select if a backlog ever makes this pass long
-			const pruned = yield* pruneHistory(db);
-			if (selected > 0 && deleted === 0)
-				return yield* Effect.fail(
-					BoltError.make(
-						'noProgress',
-						'commit',
-						`bolt.prune: a pass selected ${selected} rows and deleted 0; it stops (rule 25a)`
-					)
-				);
-			if (!tables.some((t) => Number(r?.[`sel_${t}`] ?? 0) >= MAX_IDS))
-				return { deleted: deleted + pruned };
-			const c = new Chain();
-			enqueue(c, [{ automation: PRUNE, input: {}, dueAt: iso(now), cause: 'continue', depth: 0 }], {
-				when: `NOT EXISTS (SELECT 1 FROM sys_run WHERE automation = ${c.p(PRUNE)} AND state = 'queued')`
-			});
-			yield* db.write(c.sql('NULL AS outcome'));
-			return { deleted: deleted + pruned, continued: now };
-		});
-		/** A crossing that writes, sends, schedules or reports: a fired cron's run writes its row before the first. */
-		const effecting = (call: Exclude<CrossCall, { _tag: 'read' }>) =>
-			EFFECTS.has(call._tag) ||
-			call._tag.startsWith('ai.') ||
-			call._tag === 'convert.document' ||
-			call._tag === 'files.put' ||
-			call._tag === 'browser.download' ||
-			(call._tag === 'files.image' &&
-				Option.exists(
-					Schema.decodeUnknownOption(ImageOptions)(call.args[1] ?? {}),
-					(o) => o.jpeg !== undefined
-				));
-		/** The first wake or written fire of a day prunes (rule 56); `undefined` once it ran today, or when it made no progress. */
-		const daily = (now: number) =>
-			Effect.suspend(
-				(): Effect.Effect<{ deleted: number; continued?: number } | undefined, EngineError> => {
-					if (Math.floor(now / DAY) === prunedDay) return Effect.succeed(undefined);
-					prunedDay = Math.floor(now / DAY);
-					return prune(now).pipe(
-						Effect.catchTag('BoltError', (error): Effect.Effect<undefined, EngineError> =>
-							error.code !== 'noProgress'
-								? Effect.fail(error)
-								: logs
-										.write({
-											at: iso(now),
-											severity: 'warn',
-											event: 'prune.noProgress',
-											invocation: PRUNE,
-											run: null,
-											conversation: null,
-											turn: null,
-											attributes: { code: error.code, message: error.message }
-										})
-										.pipe(Effect.as(undefined))
-						)
-					);
-				}
-			);
-		const invoke = (
-			run: Row,
-			ids: readonly string[],
-			holder: Holder,
-			input: Json,
-			dues: number[],
-			warnings: string[],
-			record: Ledger['record']
-		) =>
-			Effect.gen(function* () {
-				// A run's browser tab is its own: closed by this scope on success, failure or interruption.
-				const browseProfile = automationBrowserProfile(run.automation, run.id);
-				yield* browser.scoped(browseProfile).pipe(Effect.catch(() => Effect.void));
-				const cause = yield* Schema.decodeUnknownEffect(
-					Schema.Literals(['cron', 'webhook', 'effect', 'schedule', 'start', 'retry'])
-				)(run.cause).pipe(
-					Effect.mapError(() =>
-						BoltError.make('invalidInput', 'admission', 'The automation run has an unknown cause.')
-					)
-				);
-				const now = yield* Clock.currentTimeMillis,
-					b = bindingsAt(now, m.workspace.tz),
-					// the run's writes queue model effects one deeper, as this holder (`writerOf`)
-					authority = { ...(yield* identity.authority(holder)), run: { depth: run.depth, holder } };
-				const delegation = issueAutomationDelegation(m, authority, run.id, run.automation);
-				// One optimistic read boundary per confirmed commit, retained across failures within this attempt.
-				const priorReads = makeReadGuards(activation.release);
-				// Only native write admission is sequenced; inference and other facilities remain parallel.
-				const writeLane = yield* Semaphore.make(1);
-				const transactions = yield* makeTransactions({
-					audit,
-					db,
-					manifest: m,
-					reads,
-					writes,
-					authority,
-					authorityForVerb: (name) => delegatedVerbAuthority(m, authority, delegation, name),
-					bindings: b,
-					sourceEpoch: activation.release,
-					invocationId: run.id,
-					input
-				});
-				let transactionOpen = false;
-				let transactionReadGeneration: number | undefined;
-				let transactionInvocationId = run.id;
-				const nativeTables = new Set([
-					...Object.keys(m.models),
-					'bolt_schema',
-					'bolt_history',
-					'bolt_seq',
-					'bolt_idem',
-					'bolt_idem_outcome',
-					'bolt_rate',
-					'bolt_push_subscriptions',
-					'bolt_host_nonce',
-					'bolt_credential',
-					'bolt_approvals',
-					'bolt_run_admitted'
-				]);
-				const createdFiles = new Set<string>();
-				const halt = yield* Deferred.make<void>();
-				halts.set(run.id, halt);
-				// keys are per attempt: a rerun starts from the beginning and writes again (no replay)
-				const seen = new Map<string, number>();
-				const keyOf = (kind: string, target: string, args: Json) => {
-					const digest = sha256Hex(canonical([kind, target, args])),
-						ordinal = seen.get(digest) ?? 0;
-					seen.set(digest, ordinal + 1);
-					return `${run.id}:${run.attempts}:${digest}:${ordinal}`;
-				};
-				/** One statement of a run's own effect (schedule, notify, send), ungated. */
-				const effect = (pieces: (c: Chain) => void, outcome: (c: Chain) => string) =>
-					Effect.gen(function* () {
-						const c = new Chain();
-						c.cte('idem', 'SELECT 1 AS active');
-						pieces(c);
-						const rows = yield* db.returning(
-							Schema.Struct({
-								outcome: Schema.Json,
-								notices: Schema.Array(
-									Schema.Struct({
-										model: Schema.String,
-										id: Schema.String,
-										op: Schema.Literals(['create', 'update', 'delete']),
-										revision: Schema.Number,
-										old: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
-										new: Schema.NullOr(Schema.Record(Schema.String, Schema.Json)),
-										cause: Schema.Literals(['direct', 'derived', 'cascade', 'erased'])
-									})
-								),
-								next_due: Schema.NullOr(Schema.String)
-							}),
-							c.sql(
-								`${outcome(c)} AS outcome, ${noticeCaptures(c)} AS notices, (${nextDue(c)})::text AS next_due`
-							)
-						);
-						const result = rows[0];
-						if (result === undefined)
-							return yield* Effect.fail(
-								BoltError.make('internal', 'commit', 'an effect statement returned no answer')
-							);
-						live.publish(result.notices);
-						if (result.next_due !== null) yield* announce(result.next_due);
-						return result.outcome;
-					});
-				const rememberFile = (facts: CallFacts, answer: CrossAnswer) =>
-					Effect.gen(function* () {
-						if (!answer.ok || !facts.stores) return;
-						// a FileRef, or an ingest's stored images
-						const created = yield* Schema.decodeUnknownEffect(
-							Schema.Union([CreatedFile, Schema.Struct({ images: Schema.Array(CreatedFile) })])
-						)(answer.value).pipe(
-							Effect.mapError(() =>
-								BoltError.make('corrupt', 'guest', 'a file creation answered an invalid FileRef')
-							)
-						);
-						for (const file of 'images' in created ? created.images : [created])
-							createdFiles.add(file.id);
-					});
-				const checkFiles = (facts: CallFacts) =>
-					Effect.gen(function* () {
-						for (const id of facts.reads) {
-							const found = yield* db.one(Schema.Struct({ field: Schema.String }), {
-								text: `SELECT coalesce(field, '') AS field FROM sys_file WHERE id = $1`,
-								params: [id]
-							});
-							if (Option.isNone(found)) return false;
-							if (createdFiles.has(id)) continue;
-							const field = found.value.field;
-							const allowed = field.includes('.')
-								? yield* readableFile(
-										{ manifest: m, db, read: reads.run, authority, bindings: b },
-										id,
-										field
-									)
-								: authority.admin ||
-									field === run.automation ||
-									authority.automations.includes(field);
-							if (!allowed) return false;
-						}
-						return true;
-					});
-				/** A facility call, gated by its `facts`; `key` names an infer's session. */
-				const facility = (call: FacilityCall, facts: CallFacts, key: string) =>
-					Effect.gen(function* (): Effect.fn.Return<CrossAnswer, PortFailure> {
-						const withProfile = call._tag.startsWith('browser.')
-							? { ...call, args: [browseProfile, ...call.args] }
-							: call;
-						if (call._tag === 'ai.sys_1.decide')
-							return yield* facilities.dispatch(call).pipe(
-								Effect.provideService(DecisionTrace, {
-									invocation: `${run.id}:${run.attempts}`,
-									run: run.id,
-									automation: run.automation
-								})
-							);
-						if (call._tag !== 'ai.sys_2.infer') return yield* facilities.dispatch(withProfile);
-						const names = [...new Set(facts.tools ?? [])];
-						const hostTools = agentHost.hostTools;
-						const hosted =
-							typeof hostTools === 'function'
-								? yield* Port.attempt('hostTools', () => hostTools(authority, run.id))
-								: (hostTools ?? []);
-						// `read`: workspace records as the run's policies, through the agent's own read tool (rule 58)
-						const reader =
-							names.includes('read') && m.automations[run.automation] !== undefined
-								? readInferTool({
-										engine: { manifest: m, read: reads.run },
-										authority,
-										bindings: b
-									})
-								: undefined;
-						const records: InferTool[] = reader === undefined ? [] : [reader];
-						const missing = names.find((name) =>
-							name === 'read'
-								? reader === undefined
-								: !(authority.admin || authority.capabilities.tools.includes(name)) ||
-									![...records, ...hosted].some((tool) => tool.name === name)
-						);
-						if (missing !== undefined)
-							return {
-								ok: false,
-								error: {
-									kind: 'unavailable',
-									facility: `tool ${missing}`,
-									reason:
-										missing === 'read'
-											? "'read' needs an automation's policies that grant a read"
-											: `'${missing}' is not a host tool this run's policies name`
-								}
-							} satisfies CrossAnswer;
-						// one browsing session per inference: inferences side by side in one run never share a page
-						const session = stableId('infer', key);
-						const tools: InferTool[] = hosted
-							.filter((tool) => names.includes(tool.name))
-							.map((tool) => ({
-								name: tool.name,
-								description: tool.description,
-								input: tool.input,
-								call: (input) =>
-									Effect.gen(function* () {
-										const callId = yield* crypto
-											.randomUUIDv4()
-											.pipe(Effect.mapError(Port.failure(`tool ${tool.name}`)));
-										return yield* Port.attempt(`tool ${tool.name}`, (signal) =>
-											tool.call(
-												input,
-												{
-													actor: authority.actor,
-													conversation: `${run.id}:${session}`,
-													turn: run.id,
-													callId,
-													attach: () => {}
-												},
-												signal
-											)
-										);
-									})
-							}));
-						// each tool step is one `infer.tool` event on the run (what it read, searched, opened or edited), as
-						// `decision.made` traces a sys_1 call: the run's own record of the research it did
-						const recorded = (name: string, input: Json, error?: string) =>
-							Effect.gen(function* () {
-								yield* logs.write({
-									at: new Date(yield* Clock.currentTimeMillis).toISOString(),
-									severity: error === undefined ? 'info' : 'warn',
-									event: 'infer.tool',
-									invocation: `${run.id}:${run.attempts}`,
-									run: run.id,
-									conversation: null,
-									turn: null,
-									attributes: {
-										automation: run.automation,
-										tool: name,
-										input: JSON.stringify(input).slice(0, 500),
-										...(error === undefined ? {} : { error })
-									}
-								});
-							}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-						const traced = (tool: InferTool): InferTool => ({
-							...tool,
-							call: (input) =>
-								tool
-									.call(input)
-									.pipe(
-										Effect.onExit((exit) =>
-											recorded(
-												tool.name,
-												input,
-												Exit.isFailure(exit)
-													? Option.getOrUndefined(Cause.findErrorOption(exit.cause))?.message
-													: undefined
-											)
-										)
-									)
-						});
-						// the inference's whole transcript is a conversation of its own, as an agent's is: labelled, read-only, for
-						// administrators (the run's own `session` names it)
-						const named = Schema.decodeUnknownOption(
-							Schema.Struct({
-								label: Schema.optionalKey(Schema.String),
-								model: Schema.optionalKey(Schema.String)
-							})
-						)(call.args[0]);
-						const label = Option.isSome(named) ? named.value.label : undefined;
-						yield* db
-							.write({
-								text: "INSERT INTO sys_conversation (id, title, run, status, model) VALUES ($1, $2, $3, 'running', $4) ON CONFLICT (id) DO UPDATE SET status = 'running', updated_at = now()",
-								params: [
-									session,
-									label === undefined ? run.automation : `${run.automation} · ${label}`,
-									run.id,
-									(Option.isSome(named) ? named.value.model : undefined) ?? 'default'
-								]
-							})
-							.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-						// a tool row carries the call's input as the panel shows a step (its query, address or path), as an
-						// agent's does; the model's own messages keep it once, in its call
-						const asked = new Map<string, string>();
-						const transcribe = (message: AiMessage, index: number) => {
-							// the message's content decoded as a transcript row's, by its role
-							const step =
-									message.role === 'tool'
-										? Option.getOrUndefined(stepOf(message.content))
-										: undefined,
-								words =
-									message.role === 'tool'
-										? undefined
-										: Option.getOrUndefined(saidOf(message.content));
-							if (typeof words === 'object' && words !== null)
-								for (const c of words.toolCalls ?? []) asked.set(c.id, JSON.stringify(c.input));
-							const args = step === undefined ? undefined : asked.get(step.id);
-							const content: Json =
-								step !== undefined && args !== undefined ? { ...step, args } : message.content;
-							const text =
-								typeof words === 'string'
-									? words
-									: typeof words === 'object' && words?.text !== undefined
-										? words.text
-										: JSON.stringify(content);
-							return db
-								.write({
-									text: "INSERT INTO sys_message (id, conversation, role, content, text, preview, mode, author) VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'agent', $7) ON CONFLICT (id) DO NOTHING",
-									// the automation asked: its prompt is written by it, as a member writes theirs
-									params: [
-										stableId(session, String(index)),
-										session,
-										message.role,
-										// a prompt is a bare string: encoded, it is JSON like every other content
-										JSON.stringify(content),
-										text,
-										preview(text),
-										message.role === 'user' ? run.automation : null
-									]
-								})
-								.pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
-						};
-						return yield* inferFacility(ai, {
-							load: facilities.fileLoader,
-							onDraft: recorded,
-							onMessage: transcribe
-						})(call, [...records, ...tools].map(traced)).pipe(
-							Effect.ensuring(
-								db
-									.write({
-										text: "UPDATE sys_conversation SET status = 'idle', updated_at = now() WHERE id = $1",
-										params: [session]
-									})
-									.pipe(Effect.ignore)
-							)
-						);
-					}).pipe(
-						Effect.catch((error) =>
-							Effect.succeed({
-								ok: false,
-								error:
-									error._tag === 'Unavailable'
-										? { kind: 'unavailable', facility: error.facility, reason: error.reason }
-										: { kind: error.kind, message: error.message }
-							} satisfies CrossAnswer)
-						)
-					);
-				const crossing = (
-					call: Exclude<
-						CrossCall,
-						{
-							_tag: 'read';
-						}
-					>
-				): Effect.Effect<CrossAnswer, EngineError> => {
-					const work = Effect.gen(function* (): Effect.fn.Return<CrossAnswer, EngineError> {
-						if (stopping.has(run.id)) return fail('stopped', 'The run was stopped.');
-						if (transactionOpen && !call._tag.startsWith('transaction')) {
-							yield* transactions.abort();
-							transactionOpen = false;
-							return fail('invalidInput', 'Only tx.query and tx.act may run inside a transaction.');
-						}
-						if (effecting(call) && !(yield* record))
-							return fail('stopped', 'This cron slot already ran.');
-						switch (call._tag) {
-							case 'transactionBegin': {
-								const key = keyOf('transaction', 'transaction', null);
-								transactionInvocationId = key;
-								const snapshot = priorReads.snapshot();
-								const begun = yield* transactions.begin({
-									key,
-									issuedAt: b.now,
-									readGuards: snapshot.guards
-								});
-								transactionOpen = !begun.cached;
-								transactionReadGeneration = begun.cached ? undefined : snapshot.generation;
-								return {
-									ok: true,
-									value: begun.cached
-										? { cached: true, outcome: encodeWire(begun.outcome) }
-										: { cached: false }
-								};
-							}
-							case 'transactionRead':
-								return {
-									ok: true,
-									value: { value: yield* transactions.read(call.reads, call.keys) }
-								};
-							case 'transactionAct':
-								return { ok: true, value: yield* transactions.act(call) };
-							case 'transactionFinish': {
-								const result = yield* transactions.finish(call);
-								transactionOpen = false;
-								if (result.readGuardsConsumed === true && transactionReadGeneration !== undefined)
-									priorReads.consume(transactionReadGeneration);
-								transactionReadGeneration = undefined;
-								return { ok: true, value: encodeWire(result.outcome) };
-							}
-							case 'transactionAbort':
-								yield* transactions.abort();
-								transactionOpen = false;
-								transactionReadGeneration = undefined;
-								return { ok: true, value: null };
-							case 'progress': {
-								const decoded = yield* Schema.decodeUnknownEffect(
-									Schema.Struct({
-										ratio: Schema.optionalKey(
-											Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))
-										),
-										text: Schema.optionalKey(Schema.String)
-									})
-								)(call.progress).pipe(
-									Effect.mapError(() =>
-										BoltError.make(
-											'invalidInput',
-											'guest',
-											'progress takes { ratio?: 0..1, text?: string }'
-										)
-									)
-								);
-								const result = yield* db.returning(Schema.Struct({ state: Schema.String }), {
-									text: `UPDATE sys_run SET progress = CASE WHEN state = 'running' THEN $2::jsonb ELSE progress END WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)) RETURNING state`,
-									params: [
-										JSON.stringify(ids),
-										JSON.stringify({
-											ratio: decoded.ratio ?? null,
-											text: decoded.text?.slice(0, 500) ?? null
-										})
-									]
-								});
-								live.syncChanged('sys_run', ids);
-								if (result[0]?.state === 'stopped') {
-									stopping.add(run.id);
-									return fail('stopped', 'The run was stopped.');
-								}
-								return { ok: true, value: null };
-							}
-							case 'act': {
-								const name =
-									call.callable._tag === 'Verb'
-										? `${call.callable.model}.${call.callable.verb}`
-										: '';
-								const key = keyOf(
-									'act',
-									name,
-									call.options?.observed === undefined
-										? call.input
-										: { input: call.input, observed: call.options.observed }
-								);
-								const k = call.options?.once === undefined ? key : `once:${call.options.once}`;
-								if (call.callable._tag !== 'Verb')
-									return fail('invalidInput', 'ctx.act takes a generated model verb');
-								const observedRead = priorReads.snapshot();
-								const guards = observedRead.guards;
-								const result = yield* writes.act({
-									model: call.callable.model,
-									verb: call.callable.verb,
-									input: call.input,
-									mode: { _tag: 'Direct' },
-									...(guards.fingerprints.length === 0 && guards.inconsistent !== true
-										? {}
-										: { readGuards: guards }),
-									key: k,
-									issuedAt: b.now,
-									retry: false,
-									authority: delegatedVerbAuthority(m, authority, delegation, name),
-									bindings: b,
-									invocationId: k,
-									...(call.options?.observed === undefined
-										? {}
-										: { observed: call.options.observed }),
-									...(call.options?.onConflict === undefined
-										? {}
-										: { onConflict: call.options.onConflict })
-								});
-								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
-								return { ok: true, value: result.outcome };
-							}
-							case 'withdraw': {
-								const decision = yield* approvals.decide({
-									requestId: call.requestId,
-									decision: 'withdraw',
-									...(call.reason === undefined ? {} : { reason: call.reason }),
-									authority,
-									now: b.now
-								});
-								return {
-									ok: true,
-									value:
-										decision.kind === 'decided'
-											? { requestId: decision.requestId, status: decision.status }
-											: encodeWire(decision)
-								};
-							}
-							case 'acts': {
-								const acts: ActsRequest['acts'][number][] = [];
-								for (const act of call.acts) {
-									if (!isBatchCallable(act.callable))
-										return fail(
-											'invalidInput',
-											'An act batch takes create, update, upsert or delete.'
-										);
-									acts.push({
-										model: act.callable.model,
-										verb: act.callable.verb,
-										input: act.input,
-										...(act.observed === undefined ? {} : { observed: act.observed }),
-										...(act.onConflict === undefined ? {} : { onConflict: act.onConflict })
-									});
-								}
-								const key = keyOf('acts', 'acts', encodeWire(acts));
-								const observedRead = priorReads.snapshot();
-								const guards = observedRead.guards;
-								const result = yield* calls.acts({
-									name: 'act.many',
-									acts,
-									...(guards.fingerprints.length === 0 && guards.inconsistent !== true
-										? {}
-										: { readGuards: guards }),
-									key,
-									issuedAt: b.now,
-									authority,
-									bindings: b,
-									invocationId: key,
-									from: 'Server'
-								});
-								if (result.readGuardsConsumed === true) priorReads.consume(observedRead.generation);
-								return { ok: true, value: result.outcome };
-							}
-							case 'schedule': {
-								const target = m.automations[call.automation];
-								if (target === undefined)
-									return fail('invalidInput', `no automation '${call.automation}'`);
-								const self = call.automation === run.automation;
-								// code schedules without a start grant: `automations` admits manual starts only
-								if (self && call.at === undefined && canonical(call.input) === canonical(run.input))
-									return fail(
-										'hotLoop',
-										'A run cannot schedule itself at once with the same input.'
-									);
-								const depth = self ? run.depth : run.depth + 1;
-								if (depth > LIMITS.writeDepth)
-									return fail('depth', `Runs chain at most ${LIMITS.writeDepth} deep.`);
-								// `{ var }`: a time expression over `now` and `today` (`now + minutes(1)`), read where the run starts it
-								const when = call.at;
-								const at =
-									when === undefined
-										? now
-										: typeof when === 'string'
-											? Date.parse(when)
-											: Result.match(
-													Result.try(() => materialize(when, bindingsAt(now, m.workspace.tz))),
-													{
-														onSuccess: (v) => (typeof v === 'string' ? Date.parse(v) : Number.NaN),
-														onFailure: () => Number.NaN
-													}
-												);
-								if (!Number.isFinite(at))
-									return fail('invalidInput', 'schedule: at is not an instant');
-								const due = iso(dueAt(now, at)),
-									runKey = call.key;
-								const value = yield* effect(
-									(c) => {
-										const queued = enqueue(
-											c,
-											[
-												{
-													automation: call.automation,
-													input: call.input,
-													dueAt: due,
-													...(runKey === undefined ? {} : { key: runKey }),
-													cause: 'schedule',
-													depth,
-													actor: actorRef(holder.actor),
-													starter: starterOf(run, holder),
-													trigger: scheduledBy(m, run)
-												}
-											],
-											{ when: GATED, conflict: 'replace' }
-										);
-										c.cte('scheduled', `SELECT id FROM ${queued}`);
-									},
-									(c) =>
-										`jsonb_build_object('id', (SELECT id FROM scheduled), 'automation', ${c.p(call.automation)}::text)`
-								);
-								dues.push(Date.parse(due));
-								return { ok: true, value };
-							}
-							case 'notify': {
-								const key = keyOf('notify', '', call.notices);
-								const report = (value: Json) => {
-									if (Predicate.isObject(value) && EffectArray.isArray(value['unaddressed']))
-										for (const title of value['unaddressed'])
-											warnings.push(`notify: '${String(title)}' reached no member`);
-								};
-								const rows = yield* noticeRows(call.notices, { manifest: m, id: key });
-								report(
-									yield* effect(
-										(c) =>
-											noticeInsert(
-												c,
-												'n',
-												rows,
-												b.now,
-												undefined,
-												m.teams,
-												m.workspace.signup?.policies
-											),
-										() =>
-											`jsonb_build_object('unaddressed', (SELECT coalesce(jsonb_agg(title), '[]'::jsonb) FROM n_to WHERE member IS NULL AND coalesce("to"->>'channel', 'inbox') = 'inbox'))`
-									)
-								);
-								return { ok: true, value: null };
-							}
-							case 'send': {
-								if (call.to === null)
-									return fail('invalidInput', 'ctx.send names its connection or instance');
-								const prepared = yield* prepareSend(m, db, call.to, call.message, crypto);
-								if ('error' in prepared) return fail('invalidInput', prepared.error);
-								const id = yield* uuid;
-								const value = yield* effect(
-									(c) => {
-										const sent = sendPiece(c, { ...prepared, id }, b.now, true);
-										c.cte('sent', `SELECT id FROM ${sent}`);
-									},
-									() => 'to_jsonb((SELECT id FROM sent))'
-								);
-								return { ok: true, value };
-							}
-							case 'request': {
-								if (call.to === null)
-									return fail('invalidInput', 'ctx.request names its connection or instance');
-								return yield* instanceRequest(
-									{ manifest: m, db, links: drivers },
-									call.to,
-									call.operation
-								);
-							}
-							default: {
-								const facts = factsOf(call);
-								if (!(yield* checkFiles(facts)))
-									return {
-										ok: false,
-										error: { kind: 'invalid', message: 'this run cannot read file' }
-									};
-								const got = yield* facility(call, facts, keyOf(call._tag, '', call.args));
-								yield* rememberFile(facts, got);
-								return got;
-							}
-						}
-					});
-					return call._tag === 'act' ||
-						call._tag === 'acts' ||
-						call._tag === 'withdraw' ||
-						call._tag.startsWith('transaction')
-						? writeLane.withPermit(work)
-						: work;
-				};
-				return yield* guest
-					.invoke(
-						{
-							id: `${run.id}:${run.attempts}`,
-							run: run.id,
-							kind: effectOf(m, run.automation) === undefined ? 'automation' : 'effect',
-							target: run.automation,
-							input,
-							ctx: {
-								actor: holder.actor,
-								now: b.now,
-								today: b.today,
-								tz: b.tz,
-								seed: run.id,
-								cause,
-								...(effectOf(m, run.automation) === undefined &&
-								m.automations[run.automation] !== undefined
-									? {
-											run: {
-												id: run.id,
-												// ponytail: a run queued before triggers were recorded reads as an unattributed schedule
-												trigger: run.trigger ?? {
-													kind: 'system' as const,
-													cause: 'schedule' as const
-												}
-											}
-										}
-									: {})
-							},
-							budget: {
-								crossings: LIMITS.crossings.automation,
-								readBytes: LIMITS.readBytes
-							}
-						},
-						{
-							cross: (batch) =>
-								Effect.gen(function* () {
-									if (
-										(batch.length !== 1 &&
-											batch.some((call) => call._tag.startsWith('transaction'))) ||
-										(transactionOpen && batch.some((call) => !call._tag.startsWith('transaction')))
-									) {
-										const aborted = yield* Effect.result(transactions.abort());
-										transactionOpen = false;
-										transactionReadGeneration = undefined;
-										return batch.map(() =>
-											Result.isFailure(aborted)
-												? failure(aborted.failure)
-												: fail(
-														'invalidInput',
-														'A transaction admits one native operation at a time.'
-													)
-										);
-									}
-									const requests = batch.flatMap((call) =>
-										call._tag === 'read' ? [call.read] : []
-									);
-									const tables = new Set<string>();
-									const observation = priorReads.begin(tables);
-									const capture = {
-										read: (
-											statements: Parameters<typeof observation.capture.read>[0],
-											execute: Parameters<typeof observation.capture.read>[1]
-										) => {
-											// Native SQL may also read approval, history, sync or agent metadata outside the business IR.
-											// Restrict conservative identifier matches to existing native tables; no authored SQL is admitted.
-											for (const statement of statements)
-												for (const match of statement.text.matchAll(
-													/\b(?:FROM|JOIN)\s+(?:"((?:[^"]|"")*)"|([a-z_][a-z0-9_]*))/gi
-												)) {
-													const table =
-														match[1] === undefined
-															? match[2]?.toLowerCase()
-															: match[1].replaceAll('""', '"');
-													if (table !== undefined && nativeTables.has(table)) tables.add(table);
-												}
-											return observation.capture.read(statements, execute);
-										}
-									};
-									const answers =
-										requests.length === 0
-											? []
-											: yield* reads.run(requests, { as: 'caller', authority }, b, 'Server').pipe(
-													Effect.provideService(SqlReadCapture, capture),
-													Effect.provideService(ReadDeps, tables),
-													Effect.tap(() =>
-														Effect.try({
-															try: observation.finish,
-															catch: (error) =>
-																error instanceof BoltError
-																	? error
-																	: BoltError.make('internal', 'admission', String(error), error)
-														})
-													),
-													Effect.map((values) =>
-														values.map((value): CrossAnswer => ({ ok: true, value }))
-													),
-													Effect.catch((error): Effect.Effect<readonly CrossAnswer[]> =>
-														Effect.succeed(requests.map(() => failure(error)))
-													)
-												);
-									let index = 0;
-									return yield* Effect.forEach(batch, (call): Effect.Effect<CrossAnswer> =>
-										call._tag === 'read'
-											? Effect.succeed(
-													answers[index++] ?? fail('internal', 'the read returned no answer')
-												)
-											: crossing(call).pipe(
-													Effect.catch((error): Effect.Effect<CrossAnswer> =>
-														call._tag.startsWith('transaction')
-															? transactions.abort().pipe(
-																	Effect.catch(() => Effect.void),
-																	Effect.andThen(
-																		Effect.sync((): CrossAnswer => {
-																			transactionOpen = false;
-																			transactionReadGeneration = undefined;
-																			return {
-																				ok: true,
-																				value: encodeWire(
-																					transactionFailure(error, transactionInvocationId)
-																				)
-																			} satisfies CrossAnswer;
-																		})
-																	)
-																)
-															: Effect.succeed(failure(error))
-													),
-													Effect.raceFirst(
-														Deferred.await(halt).pipe(
-															Effect.as(fail('stopped', 'The run was stopped.'))
-														)
-													)
-												)
-									);
-								})
-						}
-					)
-					.pipe(Effect.ensuring(Effect.sync(() => halts.delete(run.id))));
-			}).pipe(Effect.scoped);
-		const interrupted = (rows: readonly Row[], message: string) =>
-			db
-				.write({
-					text: `UPDATE sys_run r SET error = $2::jsonb WHERE r.state = 'running' AND EXISTS (SELECT 1 FROM jsonb_to_recordset($1::jsonb) AS x(id text, attempts int) WHERE x.id = r.id AND x.attempts = r.attempts)`,
-					params: [
-						JSON.stringify(rows.map((row) => ({ id: row.id, attempts: row.attempts }))),
-						JSON.stringify({ code: 'interrupted', message })
-					]
-				})
-				.pipe(Effect.asVoid);
-		const execute = (rows: readonly Row[], ledger = QUEUED) =>
-			Effect.gen(function* () {
-				const head = rows[0];
-				if (head === undefined) return [];
-				yield* (yield* RunUnits).next();
-				const now = yield* Clock.currentTimeMillis,
-					effect = effectOf(m, head.automation),
-					spec = m.automations[head.automation] ?? (effect === undefined ? undefined : EFFECT),
-					dues: number[] = [],
-					warnings: string[] = [];
-				if (spec !== undefined) parking.enter(head.id);
-				let input: Json = head.input;
-				const decoded = spec?.input === undefined ? undefined : decodeInput(spec.input, input);
-				let outcome: GuestOutcome;
-				const handler =
-					head.automation === PRUNE
-						? Option.some<RunHandler>(() =>
-								prune(now).pipe(Effect.map((result): Json => ({ ...result })))
-							)
-						: yield* registry.handler(head.automation);
-				if (spec === undefined && Option.isSome(handler)) {
-					// Platform handlers own their I/O and page statements, so claim a fired slot before handing them control.
-					// A queued attempt already has its lease; a repeated cron slot must never enter the handler again.
-					if (!ledger.written() && !(yield* ledger.record)) return dues;
-					outcome = yield* handler.value(input, head).pipe(
-						Effect.map((output): GuestOutcome => ({ kind: 'ok', output })),
-						Effect.catch((error) =>
-							Effect.succeed({
-								kind: 'failed',
-								error:
-									error._tag === 'BoltError'
-										? error
-										: BoltError.make('internal', 'guest', error.message, error)
-							} satisfies GuestOutcome)
-						)
-					);
-				} else if (spec === undefined)
-					outcome = {
-						kind: 'failed',
-						error: BoltError.make(
-							'unknownAutomation',
-							'admission',
-							`no automation '${head.automation}'`
-						)
-					};
-				else if (decoded !== undefined && decoded.problems.length > 0)
-					outcome = {
-						kind: 'failed',
-						error: BoltError.make('invalidInput', 'decode', 'The run input did not decode.')
-					};
-				else {
-					if (decoded?.value !== undefined) input = encodeWire(decoded.value);
-					// an effect runs as its writer; an automation as the system identity with its policies
-					const automation = m.automations[head.automation];
-					const holder: Holder | undefined =
-						automation === undefined
-							? (head.starter ?? undefined)
-							: policyHolder(head, automation.policies);
-					const images = effect === undefined ? undefined : effectImages(input);
-					if (holder === undefined)
-						outcome = {
-							kind: 'failed',
-							error: BoltError.make('noTrigger', 'admission', 'the run has no starter')
-						};
-					else if (images !== undefined && Option.isNone(images))
-						outcome = {
-							kind: 'failed',
-							error: BoltError.make(
-								'invalidInput',
-								'decode',
-								'The effect run input did not decode.'
-							)
-						};
-					else {
-						// an effect's images as its writer reads them, handed over as the body's first argument
-						if (effect !== undefined && images !== undefined && Option.isSome(images))
-							input = writerImages(
-								m,
-								yield* identity.authority(holder),
-								effect.model,
-								images.value
-							);
-						outcome = yield* invoke(
-							head,
-							rows.map((row) => row.id),
-							holder,
-							input,
-							dues,
-							warnings,
-							ledger.record
-						);
-					}
-				}
-				if (outcome.kind === 'ok' && spec?.output !== undefined) {
-					const decoded = yield* Effect.result(decodeOutput(m, spec.output, outcome.output));
-					outcome =
-						decoded._tag === 'Success'
-							? { ...outcome, output: decoded.success }
-							: { kind: 'failed', error: decoded.failure };
-				}
-				if (outcome.kind === 'failed' && outcome.error.code === 'interrupted') {
-					yield* interrupted(rows, outcome.error.message);
-					return dues;
-				}
-				if (!ledger.written()) {
-					// An authored cron that only read writes nothing; platform handlers claimed their slot before I/O.
-					const idle =
-						outcome.kind === 'ok' &&
-						(spec !== undefined ||
-							(Predicate.isObject(outcome.output) && outcome.output['pages'] === 0));
-					if (idle || !(yield* ledger.record)) return dues;
-				}
-				for (const row of rows) stopping.delete(row.id);
-				const platformRetry = yield* registry.retry(head.automation),
-					policy = spec?.retry ?? Option.getOrUndefined(platformRetry);
-				const retry =
-					outcome.kind === 'failed' &&
-					isTransient(outcome.error) &&
-					head.attempts < (policy?.attempts ?? 1);
-				const at = yield* Clock.currentTimeMillis,
-					jitter = 0.5 + (yield* Random.next);
-				const wait = backoffMs(policy?.backoff ?? '10s', head.attempts) * jitter,
-					due = retry ? dueAt(at, at + wait) : null;
-				if (due !== null) dues.push(due);
-				const state = retry ? 'queued' : outcome.kind === 'ok' ? 'succeeded' : 'failed';
-				const error =
-					outcome.kind === 'ok'
-						? null
-						: outcome.kind === 'refused'
-							? {
-									code: outcome.code ?? 'refused',
-									message: outcome.message,
-									...(outcome.field === undefined ? {} : { field: outcome.field }),
-									...(outcome.row === undefined ? {} : { row: outcome.row }),
-									...(outcome.rows === undefined ? {} : { rows: outcome.rows }),
-									...(outcome.rule === undefined ? {} : { rule: outcome.rule }),
-									...(outcome.data === undefined ? {} : { data: outcome.data }),
-									...(outcome.records === undefined ? {} : { records: outcome.records }),
-									...(outcome.invocation === undefined ? {} : { invocation: outcome.invocation })
-								}
-							: { code: outcome.error.code, message: outcome.error.message };
-				const result: RunAttempt = {
-					attempt: head.attempts,
-					at: iso(at),
-					state,
-					...(outcome.kind === 'ok' ? { output: outcome.output } : error === null ? {} : { error }),
-					...(warnings.length === 0 ? {} : { warnings }),
-					...(head.cause === 'cron' && now - Date.parse(head.due_at) > 60_000
-						? { missed: true }
-						: {})
-				};
-				const c = new Chain();
-				c.cte(
-					'done',
-					`UPDATE sys_run s SET state = ${c.p(state)}, output = ${c.p(outcome.kind === 'ok' ? JSON.stringify(outcome.output) : null)}::jsonb, error = ${c.p(error)}::jsonb, finished_at = ${state === 'queued' ? 'NULL' : `${c.p(iso(at))}::timestamptz`}, due_at = coalesce(${c.p(due === null ? null : iso(due))}::timestamptz, s.due_at), results = s.results || jsonb_build_array(${c.p(result)}::jsonb) WHERE s.id IN (SELECT jsonb_array_elements_text(${c.p(rows.map((row) => row.id))}::jsonb)) AND s.state <> 'stopped' RETURNING s.id`
-				);
-				yield* audited(
-					db,
-					{
-						category: 'automation',
-						action: `${head.automation}.finish`,
-						actor: { kind: 'system', id: head.id, label: null },
-						run: head.id,
-						payload: encodeWire({
-							automation: head.automation,
-							runIds: rows.map((row) => row.id),
-							result
-						})
-					},
-					db.write(c.sql(`(SELECT count(*) FROM done)::int AS n`))
-				).pipe(Effect.provideService(Audit, audit));
-				live.syncChanged(
-					'sys_run',
-					rows.map((row) => row.id)
-				);
-				if (state !== 'queued')
-					yield* PubSub.publish(
-						ends,
-						rows.map((row) => row.id)
-					);
-				return dues;
-			}).pipe(
-				Effect.onInterrupt(() =>
-					interrupted(rows, 'The run was interrupted while its generation was draining (rule 71a).')
-				),
-				Effect.ensuring(Effect.sync(() => parking.leave(rows[0]?.id ?? '')))
-			);
+		}, { [NOTICE_PUSH]: { attempts: 3, backoff: '10s' } });
+		const announce = (yield* Wake).at;
+		const { boot, claim, view, stop } = yield* makeRunStore(parking, capacities, halts, stopping);
+		const { prune, daily } = yield* makePruner();
+
+		const { execute, interrupted } = yield* makeRunExecutor(parking, halts, stopping, prune);
 		const tick = tickPermit.withPermit(
 			Effect.scoped(
 				Effect.gen(function* () {
 					const now = yield* Clock.currentTimeMillis;
 					// parked, this generation is closing: the wake comes back soon and lands on the next one
 					if (parking.parked) return yield* deadlines.settle(iso(now + PARKED_WAKE_MS));
-					const inflight = yield* FiberSet.make<void, never>(),
-						timer = yield* FiberHandle.make<void, never>(),
-						subscription = yield* PubSub.subscribe(nudges);
+					const inflight = yield* FiberSet.make<void, never>();
+					const fork = yield* FiberSet.runtime(inflight)();
 					let errors: Cause.Cause<EngineError> = Cause.empty,
 						pruned = false;
 					const dues: number[] = [];
 					const track = (work: Effect.Effect<void, EngineError>) =>
-						FiberSet.run(
-							inflight,
-							work.pipe(
+						Effect.sync(() => {
+							fork(work.pipe(
 								Effect.catchCause((cause) =>
 									Effect.sync(() => {
 										errors = Cause.combine(errors, cause);
 									})
 								)
-							)
-						).pipe(Effect.asVoid);
+							));
+						});
 					const run = (group: readonly Row[]) =>
 						lock(group[0]?.automation ?? '')
 							.withPermit(execute(group))
@@ -1798,137 +205,68 @@ export const RunsLive = Layer.effect(
 					const pass = yield* daily(now);
 					pruned = pass !== undefined;
 					if (pass?.continued !== undefined) dues.push(pass.continued);
-					let armed = Infinity;
-					yield* Effect.forkScoped(
-						Effect.forever(
-							Effect.gen(function* () {
-								const at = yield* PubSub.take(subscription);
-								if (at >= armed) return;
-								armed = at;
-								const current = yield* Clock.currentTimeMillis;
-								yield* FiberHandle.run(
-									timer,
-									Effect.sleep(Math.max(0, at - current)).pipe(
-										Effect.andThen(
-											Effect.sync(() => {
-												armed = Infinity;
-											})
-										),
-										Effect.andThen(
-											track(
-												Effect.gen(function* () {
-													const claimed = yield* claim(yield* Clock.currentTimeMillis, pruned);
-													yield* start(claimed.runs);
-												})
-											)
-										)
-									)
-								);
-							})
-						)
-					);
-					const first = yield* claim(now, pruned);
-					yield* start(first.runs);
-					yield* FiberSet.awaitEmpty(inflight);
-					if (errors.reasons.length > 0) return yield* Effect.failCause(errors);
+					let requested = false, claiming: object | undefined;
+					const scan = (token: object) => Effect.gen(function* () {
+						for (;;) {
+							yield* pulseGate.withPermit(Effect.sync(() => { requested = false; }));
+							const claimed = yield* claim(yield* Clock.currentTimeMillis, pruned);
+							yield* start(claimed.runs);
+							const again = yield* pulseGate.withPermit(Effect.sync(() => {
+								if (requested) return true;
+								claiming = undefined;
+								return false;
+							}));
+							if (!again) return;
+						}
+					}).pipe(Effect.ensuring(pulseGate.withPermit(Effect.sync(() => {
+						if (claiming === token) claiming = undefined;
+					}))));
+					yield* pulseGate.withPermit(Effect.sync(() => {
+						activeTick = () => Effect.suspend(() => {
+							requested = true;
+							if (claiming !== undefined) return Effect.void;
+							const token = {};
+							claiming = token;
+							return track(scan(token));
+						});
+					}));
+					yield* pulse;
+					for (;;) {
+						yield* FiberSet.awaitEmpty(inflight);
+						const closed = yield* pulseGate.withPermit(Effect.gen(function* () {
+							if ((yield* FiberSet.size(inflight)) > 0) return false;
+							activeTick = undefined;
+							return true;
+						}));
+						if (closed) break;
+					}
 					const next = yield* db.value(Schema.NullOr(Schema.String), {
 						text: `SELECT min(due_at)::text AS next FROM sys_run WHERE state = 'queued'`,
 						params: []
 					});
 					const earliest = Math.min(...dues, next === null ? Infinity : Date.parse(next));
 					yield* deadlines.settle(Number.isFinite(earliest) ? iso(earliest) : null);
-				})
+					if (errors.reasons.length > 0) return yield* Effect.failCause(errors);
+				}).pipe(Effect.ensuring(pulseGate.withPermit(Effect.sync(() => { activeTick = undefined; }))))
 			)
 		);
-		const view = (authority: Authority, id: string) =>
-			db
-				.one(RunViewRow, {
-					text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = $1`,
-					params: [id]
-				})
-				.pipe(
-					Effect.map((row) =>
-						Option.flatMap(row, (value) => Option.fromNullishOr(runView(authority, value)))
-					)
-				);
-		const stop = (authority: Authority, id: string) =>
-			Effect.gen(function* () {
-				const found = yield* db.one(RunViewRow, {
-					text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = $1`,
-					params: [id]
-				});
-				if (Option.isNone(found) || runView(authority, found.value)?.input === undefined)
-					return Option.none();
-				const rows = yield* db.returning(RunViewRow, {
-					text: `UPDATE sys_run SET state = 'stopped', key = NULL, finished_at = $2::timestamptz, error = jsonb_build_object('code', 'stopped', 'message', 'The run was stopped.') WHERE id = $1 AND state IN ('queued', 'running') RETURNING ${RUN_VIEW_COLUMNS}`,
-					params: [id, iso(yield* Clock.currentTimeMillis)]
-				});
-				if (rows.length > 0) {
-					live.syncChanged('sys_run', [id]);
-					yield* PubSub.publish(ends, [id]);
-				}
-				if (rows.length > 0 && found.value.state === 'running') stopping.add(id);
-				const halt = halts.get(id);
-				if (rows.length > 0 && halt !== undefined) yield* Deferred.succeed(halt, undefined);
-				return Option.fromNullishOr(runView(authority, rows[0] ?? found.value));
-			});
-		const webhook = (path: string, request: WebhookRequest) =>
-			Effect.gen(function* () {
-				const trigger = triggersOf(m).webhooks.find((candidate) => candidate.path === path);
-				if (trigger === undefined) return { status: 404 };
-				const configured = yield* Config.option(Config.Redacted(trigger.secret))
-					.parse(tenant)
-					.pipe(
-						Effect.mapError((error) =>
-							BoltError.make('unavailable', 'facility', 'the webhook secret is unavailable', error)
-						)
-					);
-				if (Option.isNone(configured)) return { status: 401 };
-				const secret = Redacted.value(configured.value);
-				if (secret === '') return { status: 401 };
-				const now = yield* Clock.currentTimeMillis,
-					verified = verifiedWebhook(trigger.scheme, secret, request, now);
-				if ('answer' in verified) return verified.answer;
-				const spec = m.automations[trigger.automation],
-					decoded =
-						verified.body === undefined || spec?.input === undefined
-							? undefined
-							: decodeInput(spec.input, verified.body),
-					refused =
-						verified.body === undefined || (decoded !== undefined && decoded.problems.length > 0);
-				const key = `webhook:${trigger.automation}:${verified.delivery}`,
-					due = iso(now),
-					c = new Chain(),
-					id = yield* uuid;
-				c.cte(
-					'idem',
-					`INSERT INTO bolt_idem (key, digest, issued_at, run) VALUES (${c.p(key)}, '', ${c.p(due)}::timestamptz, ${c.p(id)}) ON CONFLICT (key) DO NOTHING RETURNING key`
-				);
-				enqueue(c, {
-					select: `SELECT ${c.p(id)}::text AS id, ${c.p(trigger.automation)}::text AS automation, ${c.p(verified.body ?? {})}::jsonb AS input, ${c.p(due)}::timestamptz AS due_at, 'webhook'::text AS cause, '{"kind":"system","cause":"webhook"}'::jsonb AS trigger, 0 AS depth, ${refused ? `'failed'::text AS state, '{"code":"invalidInput","message":"The body did not decode."}'::jsonb AS error, ${c.p(due)}::timestamptz AS finished_at` : `'queued'::text AS state, NULL::jsonb AS error, NULL::timestamptz AS finished_at`} WHERE ${GATED}`
-				});
-				yield* db.write(c.sql(answer(c, key, '', `'null'::jsonb`)));
-				if (refused) return { status: 400 };
-				yield* announce(due);
-				return { status: 200 };
-			});
 		/** Cron `id` at `slot`: the run id is their digest, so a repeat meets the row its first effect wrote. */
 		const fire = Effect.fn('Runs.fire')(function* (id: string, slot: string) {
 			const at = Date.parse(slot);
 			if (!crons.some((entry) => entry.id === id) || !Number.isFinite(at))
 				return yield* Effect.fail(
-					BoltError.make('invalidInput', 'admission', `no cron '${id}' fires at '${slot}'`)
+					BoltError.make('invalid_input', 'admission', `no cron '${id}' fires at '${slot}'`)
 				);
 			const now = yield* Clock.currentTimeMillis;
 			const until = yield* registry.resting(id, now);
 			if (until !== undefined) return { ran: false, until: iso(until) };
 			// a cron that rests depends on the data alone: while nothing touched the database, its last read still stands
-			const rest = triggersOf(m).rests.get(id),
+			const rest = triggers_of(m).rests.get(id),
 				rested = restEnds.get(id);
 			if (rested !== undefined && rested > now && !(yield* db.awake))
 				return { ran: false, until: iso(rested) };
 			const run: Row = {
-				id: sha256Hex(canonical(['cron', id, iso(at)])).slice(0, 32),
+				id: sha256_hex(canonical(['cron', id, iso(at)])).slice(0, 32),
 				automation: id,
 				input: {},
 				due_at: iso(at),
@@ -1941,32 +279,16 @@ export const RunsLive = Layer.effect(
 				starter: null,
 				trigger: { kind: 'system', cause: 'cron' }
 			};
-			let written = false;
-			const record = yield* Effect.cached(
-				Effect.gen(function* () {
-					const c = new Chain();
-					const inserted = enqueue(
-						c,
-						{
-							select: `SELECT ${c.p(run.id)}::text AS id, ${c.p(run.automation)}::text AS automation, ${c.p(run.due_at)}::timestamptz AS due_at, 'cron'::text AS cause, ${c.p(run.trigger)}::jsonb AS trigger, 0 AS depth, 'running'::text AS state, 1 AS attempts, ${c.p(iso(now))}::timestamptz AS started_at`
-						},
-						{ conflict: 'keep' }
-					);
-					const rows = yield* db.returning(
-						Schema.Struct({ n: Schema.Number }),
-						c.sql(`(SELECT count(*) FROM ${inserted})::int AS n`)
-					);
-					written = (rows[0]?.n ?? 0) > 0;
-					return written;
-				})
+			const ledger = yield* cronLedger(run, now).pipe(
+				Effect.provideService(TenantDb, db), Effect.provideService(Live, live)
 			);
 			const running = lock(run.automation).withPermit(
-				execute([run], { record, written: () => written })
+				execute([run], ledger)
 			);
 			const dues = yield* rest === undefined ? running : db.quietly(running);
 			if (dues.length > 0) yield* announce(iso(Math.min(...dues)));
 			// only a slot that used the database prunes it: a pass is no reason to wake it
-			if (written) {
+			if (ledger.written()) {
 				restEnds.delete(id);
 				const pass = yield* daily(now);
 				if (pass?.continued !== undefined) yield* announce(iso(pass.continued));
@@ -1981,11 +303,10 @@ export const RunsLive = Layer.effect(
 		return {
 			boot,
 			tick,
+			pulse,
 			park: parking.park,
-			nudge: (at: string) => PubSub.publish(nudges, Date.parse(at)).pipe(Effect.asVoid),
 			view,
 			stop,
-			webhook,
 			crons: Effect.succeed(crons),
 			fire
 		};

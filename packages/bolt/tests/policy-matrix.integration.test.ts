@@ -1,20 +1,21 @@
 // The production read-policy matrix (L-BOLT-229, ported from `access-structured-policy-matrix.integration.test.ts`) as
-// a table on the new engine: each row's grant `Where` compiles through the query area (`toPred` → `whereSql`, the SQL
+// a table on the new engine: each row's grant `Where` compiles through the query area (`toPred` → `where_sql`, the SQL
 // every caller read conjoins, rule 13) and runs against allow/deny rows on PGlite. The rows over agent tables
 // (conversation, plan, message, turn, usage, notification) are not here: those system models are the agents
 // area's. `jsonPath` has no counterpart (rule 16: no `Where` reads json); the correction flag is a stored enum.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
-import { catalogOf, toPred } from '../src/engine/access/pred.ts';
+import { catalog_of, toPred } from '../src/engine/access/pred.ts';
 import type { Authority, Bindings, ModelAuthority, EngineActor } from '../src/engine/contracts.ts';
 import { TestDb } from '../../bolt-cli/src/test/database.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
-import { whereSql, type Pred } from '@norbital-ai/store';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
+import { where_sql, type Pred } from '@norbital-ai/store';
+import type { Where } from '@norbital-ai/std/kind';
 import { readOptions } from '../src/engine/query/reader.ts';
-import { fromStore } from '../src/protocol/errors.ts';
+import { from_store } from '../src/protocol/errors.ts';
 
-const d = { description: 'x', label: 'name' };
+const d = { description: 'x', record_label: 'record.name' };
 const name = { name: { kind: 'text', optional: true } };
 const models = {
 	sites: { ...d, fields: name },
@@ -44,7 +45,7 @@ const models = {
 	}
 };
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models,
 		relationships: {
@@ -61,31 +62,29 @@ const manifest = Result.getOrThrow(
 			'component_entries.employment': { to: 'employments', inverse: 'entries' }
 		},
 		exposures: Object.fromEntries(
-			Object.keys(models).map((c) => [c, { read: { [c]: { fields: 'all' } } }])
+			Object.keys(models).map((c) => [c, { outputs: { default: { [c]: { fields: 'all' } } } }])
 		),
 		integrations: {},
 		policies: {},
 		teams: {},
 		automations: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
 
 // ── the grant predicates, in the new `Where` ──
 const OWN = { assignee: { eq: { var: 'requestor.id' } } };
-const UNCHECKED = { suspicion_checked_at: { isNull: true } };
+const UNCHECKED = { suspicion_checked_at: { is_null: true } };
 const OWN_VARIATION = { assignment: { is: OWN } };
 const OWN_EMPLOYMENT = { employee: { is: { email: { eq: { var: 'requestor.email' } } } } };
 const NOT_A_CORRECTION = { kind: { ne: 'MANUAL_ADJUSTMENT' } };
 type Row = {
 	id: string;
 	root: string;
-	where: unknown;
+	where: Where;
 	sql: readonly string[];
 	allow: readonly string[];
 	deny: readonly string[];
@@ -241,7 +240,6 @@ const u = (n: string) => {
 const b: Bindings = { now: '2026-09-25T10:00:00.000Z', today: '2026-09-25', tz: 'UTC' };
 const all = (model: string): ModelAuthority => ({
 	read: { default: { [model]: [{ policy: 'p', where: { t: 'const', value: true } }] } },
-	history: [],
 	create: [],
 	update: [],
 	delete: [],
@@ -261,14 +259,14 @@ const who = (
 		phone: null,
 		external: false,
 		teams: ['Ops'],
-		teamPath: ['Ops'],
+		team_path: ['Ops'],
 		admin,
 		party: null,
 		...over
 	},
 	models: Object.fromEntries(Object.keys(models).map((c) => [c, all(c)])),
 	automations: [],
-	capabilities: { apps: [], tools: [], mcp: [] },
+	capabilities: { apps: [], syncs: [], tools: [], mcp: [] },
 	limits: [],
 	teamTree: [],
 	scopes: {}
@@ -287,12 +285,12 @@ const fixture = Effect.gen(function* () {
 				[root]: { ...all(root), read: { default: { [root]: [{ policy: 'p', where: pred }] } } }
 			}
 		};
-		const s = yield* whereSql(
-			catalogOf(manifest),
+		const s = yield* where_sql(
+			catalog_of(manifest),
 			root,
 			{ t: 'const', value: true },
 			readOptions({ as: 'caller', authority }, b)
-		).pipe(Effect.mapError(fromStore));
+		).pipe(Effect.mapError(from_store));
 		return { sql: s.text, ids: (yield* db.rows(IdRow, s)).map((r) => names.get(r.id) ?? r.id) };
 	});
 	const ins = Effect.fnUntraced(function* (
@@ -388,7 +386,7 @@ describe('the production read-policy matrix on the new engine (L-BOLT-229)', () 
 				for (const row of matrix) {
 					const { sql, ids: seen } = yield* visible(
 						row.root,
-						toPred(manifest, row.root, row.where)
+						yield* toPred(manifest, row.root, row.where)
 					);
 					for (const fragment of row.sql) expect(sql, row.id).toContain(fragment);
 					for (const id of row.allow) expect(seen, `${row.id} allows ${id}`).toContain(id);
@@ -402,7 +400,7 @@ describe('the production read-policy matrix on the new engine (L-BOLT-229)', () 
 			const { db, visible } = yield* PolicyFixture;
 			const first = matrix[0];
 			if (first === undefined) throw new Error('The policy matrix is empty');
-			const pred = toPred(manifest, 'sites', first.where);
+			const pred = yield* toPred(manifest, 'sites', first.where);
 			const sites = () => visible('sites', pred).pipe(Effect.map((answer) => answer.ids.sort()));
 			try {
 				yield* db.write({

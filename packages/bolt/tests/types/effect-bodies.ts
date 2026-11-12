@@ -1,36 +1,43 @@
 // Type corpus for Effect-native bodies (D8): generator bodies over the ctx Effects and their tagged failures. Each
 // `@ts-expect-error` line is a planted mistake; a clean tsc proves every valid line compiles.
-import { Effect } from 'effect';
-import { Refusal } from '../../src/decl/errors.ts';
-import { automation, model } from '../../src/index.ts';
-import type { Actor, AutomationCtx, EffectCtx, WriteCtx } from '../../src/index.ts';
+import { Context, Effect } from 'effect';
+import { Refusal } from '../../src/decl/errors/refusal.ts';
+import { attached, attached_verdict, type GeneratorBody } from '../../src/decl/body.ts';
+import { Verdict, type VerdictData } from '../../src/decl/access/policy.ts';
+import { automation, browser_start } from '../../src/index.ts';
+import { bind_model } from '../../src/declarations.ts';
+import type { Actor, AutomationCtx, EffectCtx, Id, WriteCtx } from '../../src/index.ts';
 import type {
 	ActConflict,
 	ActRefused,
-	ActUnknown,
 	FacilityFailure,
+	ReadFailed,
 	Unavailable
 } from '../../src/decl/errors.ts';
+import type { ActUnknown } from '../../src/decl/errors/act.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
+import type { BrowserSnapshot } from '../../src/decl/runtime/facilities.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 
 // ── a generator body yields its reads and returns its output ──
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
-		const open = yield* ctx.query({ orders: {
-			where: { status: { ne: 'ordered' } },
-			fields: ['total']
-		} });
+		const open = yield* ctx.query({
+			orders: {
+				where: { status: { ne: 'ordered' } },
+				fields: ['total']
+			}
+		});
 		return open.orders.rows.length;
 	}
 });
 // two reads in one crossing: a concurrent `Effect.all`, or one read request of two roots
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
 		const customers = yield* ctx.query({ customers: { fields: ['id'] } });
@@ -38,7 +45,9 @@ automation('orders_renote', {
 		const [orders, customer] = yield* Effect.all(
 			[
 				ctx.query({ orders: {} }),
-				first === undefined ? Effect.succeed(null) : ctx.query({ customers: { where: { id: { eq: first.id } }, limit: 1 } })
+				first === undefined
+					? Effect.succeed(null)
+					: ctx.query({ customers: { where: { id: { eq: first.id } }, limit: 1 } })
 			],
 			{ concurrency: 'unbounded' }
 		);
@@ -47,14 +56,14 @@ automation('orders_renote', {
 		return orders.orders.rows.length + both.orders.rows.length + both.customers.rows.length;
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	// @ts-expect-error E1 an unyielded effect returned as the output
 	run: function* (_, ctx) {
-		return ctx.query({ orders: { } });
+		return ctx.query({ orders: {} });
 	}
 });
-automation('orders_renote', {
+automation({
 	...rt.orders_renote.spec,
 	// @ts-expect-error E2 a body failing with an untagged value (every failure is tagged)
 	run: function* () {
@@ -63,40 +72,43 @@ automation('orders_renote', {
 });
 
 // ── refuse is an Effect failing with Refusal: `return yield*` it ──
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
 		transform: function* (rows, ctx) {
-			if (rows.length === 0) return yield* ctx.refuse('no rows', { field: 'note' });
-			return rows;
+			if (rows.length === 0) return yield* ctx.refuse('errors.refused', { field: 'note' });
+			return rows.map(({ set }) => set);
 		}
 	}
 });
 is<Eq<Effect.Error<ReturnType<WriteCtx<'orders'>['refuse']>>, Refusal>>();
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	create: {
 		...m.orders.spec.create,
 		transform: function* (rows, ctx) {
 			// @ts-expect-error E3 refuse used as `never`
-			const none: readonly never[] = ctx.refuse('no rows');
-			return none.length === 0 ? rows : rows;
+			const none: readonly never[] = ctx.refuse('errors.refused');
+			return rows.map(({ set }) => none.length === 0 ? set : set);
 		}
 	}
 });
 
 // ── act fails with its tags, and catchTag narrows them away ──
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
-		const submit = ctx.act('orders.update', [{
-			target: target.id,
-			set: { status: 'submitted' }
-		}]);
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('errors.refused');
+		const submit = ctx.act({ 'orders.update': [
+			{
+				target,
+				set: { status: 'submitted' }
+			}
+		] });
 		is<Eq<Effect.Error<typeof submit>, ActRefused | ActConflict | ActUnknown>>();
 		const kept = submit.pipe(
 			Effect.catchTag('ActRefused', (refused) => Effect.succeed(refused.code))
@@ -105,13 +117,14 @@ automation('orders_submit', {
 		yield* kept;
 	}
 });
-automation('orders_submit', {
+automation({
 	...rt.orders_submit.spec,
 	run: function* ({ target: targetId }, ctx) {
-		const target = (yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders.rows[0] ?? null;
-		if (target === null)
-			return yield* Effect.fail(new Refusal({ message: 'Choose an existing orders record.' }));
-		yield* ctx.act('orders.update', [{ target: target.id, set: {} }]).pipe(
+		const target =
+			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
+				.rows[0] ?? null;
+		if (target === null) return yield* ctx.refuse('errors.refused');
+		yield* ctx.act({ 'orders.update': [{ target, set: {} }] }).pipe(
 			// @ts-expect-error E4 a tag act never fails with
 			Effect.catchTag('Refusal', () => Effect.void)
 		);
@@ -120,7 +133,7 @@ automation('orders_submit', {
 
 // ── facilities fail with FacilityFailure or Unavailable ──
 
-automation('sweep', {
+automation({
 	description: 'x',
 	policies: ['sales_rep'],
 	run: function* (_, ctx) {
@@ -134,15 +147,15 @@ automation('sweep', {
 	}
 });
 
-model('orders', {
+bind_model('orders')({
 	...m.orders.spec,
 	// @ts-expect-error E5 ctx-bearing bodies must be generators
 	create: { ...m.orders.spec.create, transform: async () => [] }
 });
 declare const automationCtx: AutomationCtx;
 // @ts-expect-error E6 ctx members have no Promise facet
-const promiseRead: Promise<unknown> = automationCtx.query({ orders: { } });
-automation('sweep', {
+const promiseRead: Promise<unknown> = automationCtx.query({ orders: {} });
+automation({
 	description: 'x',
 	policies: ['sales_rep'],
 	run: function* (_, ctx) {
@@ -160,3 +173,120 @@ is<Eq<typeof effectCtx.actor, Actor>>();
 void effectCtx.ai.sys_2.infer({ prompt: 'x', tools: ['browser'] });
 // @ts-expect-error E9 nor record reads
 void effectCtx.ai.sys_2.infer({ prompt: 'x', tools: ['read'] });
+
+// ── literal reads keep their output inference and their real ReadFailed channel ──
+const literalRead = automationCtx.query({ orders: { fields: ['number'], limit: 1 } });
+is<Eq<Effect.Success<typeof literalRead>['orders']['rows'][number]['number'], string>>();
+is<Eq<Effect.Error<typeof literalRead>, ReadFailed>>();
+const recoveredRead = literalRead.pipe(
+	Effect.catchTag('ReadFailed', (failure) => {
+		is<Eq<typeof failure, ReadFailed>>();
+		return Effect.succeed(failure.message);
+	})
+);
+is<Eq<Effect.Error<typeof recoveredRead>, never>>();
+literalRead.pipe(
+	// @ts-expect-error E10 a literal read does not fail with ActRefused
+	Effect.catchTag('ActRefused', () => Effect.void)
+);
+
+// ── calling a named automation preserves its handle and permits refusal recovery ──
+const childRun = automationCtx.run('orders_renote', { ids: [], note: 'Follow up' });
+is<Eq<Effect.Success<typeof childRun>['automation'], 'orders_renote'>>();
+is<Eq<Effect.Error<typeof childRun>, ActRefused>>();
+const recoveredRun = childRun.pipe(
+	Effect.catchTag('ActRefused', (failure) => {
+		is<Eq<typeof failure, ActRefused>>();
+		return Effect.succeed(failure.code);
+	})
+);
+is<Eq<Effect.Error<typeof recoveredRun>, never>>();
+childRun.pipe(
+	// @ts-expect-error E11 a run does not fail with ReadFailed
+	Effect.catchTag('ReadFailed', () => Effect.void)
+);
+
+// ── geo may fail at the facility boundary or have no provider ──
+const geocoded = automationCtx.geo.search('Kismis');
+const reversed = automationCtx.geo.reverse({ lat: 1.33, lng: 103.77 });
+is<Eq<Effect.Error<typeof geocoded>, FacilityFailure | Unavailable>>();
+is<Eq<Effect.Error<typeof reversed>, FacilityFailure | Unavailable>>();
+const availableGeo = geocoded.pipe(
+	Effect.catchTag('Unavailable', (failure) => {
+		is<Eq<typeof failure, Unavailable>>();
+		return Effect.succeed(failure.reason);
+	})
+);
+is<Eq<Effect.Error<typeof availableGeo>, FacilityFailure>>();
+const recoveredGeo = availableGeo.pipe(
+	Effect.catchTag('FacilityFailure', (failure) => {
+		is<Eq<typeof failure, FacilityFailure>>();
+		return Effect.succeed(failure.message);
+	})
+);
+is<Eq<Effect.Error<typeof recoveredGeo>, never>>();
+geocoded.pipe(
+	// @ts-expect-error E12 geo does not fail with ActRefused
+	Effect.catchTag('ActRefused', () => Effect.void)
+);
+
+// ── browser_start preserves a callback's failures and its unprovided service ──
+class BrowserDestination extends Context.Service<BrowserDestination, { readonly url: string }>()(
+	'types/BrowserDestination'
+) {}
+const browse = browser_start(automationCtx, (browser) =>
+	Effect.gen(function* () {
+		const destination = yield* BrowserDestination;
+		yield* browser.navigate(destination.url);
+		return yield* browser.snapshot();
+	})
+);
+is<Eq<Effect.Success<typeof browse>, BrowserSnapshot>>();
+is<Eq<Effect.Error<typeof browse>, FacilityFailure | Unavailable>>();
+is<Eq<Effect.Services<typeof browse>, BrowserDestination>>();
+// @ts-expect-error E13 the callback's destination must be provided before running
+Effect.runPromise(browse);
+const providedBrowser = browse.pipe(
+	Effect.provideService(BrowserDestination, { url: 'https://a.test' })
+);
+is<Eq<Effect.Services<typeof providedBrowser>, never>>();
+is<Eq<Effect.Error<typeof providedBrowser>, FacilityFailure | Unavailable>>();
+
+// Attachment keeps the original argument tuple and successful result through the native generator boundary.
+const typedProducer = function* (input: { count: number }, context: { suffix: string }) {
+	if (input.count < 0) return yield* Effect.fail(new Refusal({ message: 'A count is positive.' }));
+	return { count: yield* Effect.succeed(input.count + 1), suffix: context.suffix };
+};
+const attachedProducer = attached(typedProducer, 1);
+is<Eq<Parameters<typeof attachedProducer>, [input: { count: number }, context: { suffix: string }]>>();
+is<Eq<ReturnType<typeof attachedProducer>, Promise<{ count: number; suffix: string }>>>();
+is<Eq<typeof typedProducer extends GeneratorBody<Parameters<typeof typedProducer>, { count: number; suffix: string }> ? true : false, true>>();
+is<Eq<ReturnType<typeof attachedProducer> extends Promise<string> ? true : false, false>>();
+
+const policyProducer = function* (input: { id: Id<'orders'> }) {
+	void input;
+	return Verdict.allow();
+};
+const attachedPolicy = attached_verdict(policyProducer, 1);
+is<Eq<Parameters<typeof attachedPolicy>, [input: { id: Id<'orders'> }]>>();
+is<Eq<ReturnType<typeof attachedPolicy>, Promise<VerdictData>>>();
+
+// Runtime inspection does not manufacture a service-free or tagged-failure generator contract.
+const unprovidedProducer = function* () { return (yield* BrowserDestination).url; };
+const scalarProducer = function* () { yield 1; return 2; };
+const untaggedProducer = function* () { return yield* Effect.fail('no'); };
+is<Eq<typeof unprovidedProducer extends GeneratorBody<[], string> ? true : false, false>>();
+is<Eq<typeof scalarProducer extends GeneratorBody<[], number> ? true : false, false>>();
+is<Eq<typeof untaggedProducer extends GeneratorBody<[], never> ? true : false, false>>();
+const availableBrowser = providedBrowser.pipe(
+	Effect.catchTag('Unavailable', (failure) => Effect.succeed(failure.reason))
+);
+is<Eq<Effect.Error<typeof availableBrowser>, FacilityFailure>>();
+const recoveredBrowser = availableBrowser.pipe(
+	Effect.catchTag('FacilityFailure', (failure) => Effect.succeed(failure.message))
+);
+is<Eq<Effect.Error<typeof recoveredBrowser>, never>>();
+browse.pipe(
+	// @ts-expect-error E14 a browser callback without reads does not fail with ReadFailed
+	Effect.catchTag('ReadFailed', () => Effect.void)
+);

@@ -1,24 +1,15 @@
 import { describe, expect, it } from '@effect/vitest';
-import {
-	selectField,
-	selectOperator,
-	selectQuantifier,
-	operatorsFor,
-	resolve,
-	taggedArg,
-	aggregateValue,
-	fromWhere,
-	toWhere,
-	type Node,
-	type Offer,
-	type Op,
-	type RawArg
-} from '../src/filter/filter.ts';
+import { selectField, selectOperator, selectQuantifier, aggregateValue } from '../src/filter/edit.ts';
+import { operatorsFor } from '../src/filter/operators.ts';
+import { resolve, type Offer } from '../src/filter/catalog.ts';
+import { taggedArg, type Node, type Op, type RawArg } from '../src/filter/node.ts';
+import { fromWhere, toWhere } from '../src/filter/where.ts';
 import type { Json, Kind, Value } from '../src/kinds/kind.ts';
 import type { ModelExposure } from '../src/kinds/context.ts';
 
 const catalog: Record<string, ModelExposure> = {
 	people: {
+		record_label: 'record.name',
 		label: ['name'],
 		fields: {
 			name: { kind: 'text' },
@@ -47,13 +38,15 @@ const catalog: Record<string, ModelExposure> = {
 		},
 		many: ['contracts', 'notes']
 	},
-	companies: { label: ['name'], fields: { name: { kind: 'text' } } },
+	companies: { record_label: 'record.name', label: ['name'], fields: { name: { kind: 'text' } } },
 	contracts: {
+		record_label: 'record.title',
 		label: ['title'],
 		fields: { title: { kind: 'text' }, amount: { kind: 'number' }, ends: { kind: 'date' } },
 		relations: { person: { targets: ['people'], inverse: 'contracts' } }
 	},
 	notes: {
+		record_label: 'record.body',
 		label: ['body'],
 		fields: { body: { kind: 'text' } },
 		relations: { person: { targets: ['people'], inverse: 'notes' } }
@@ -100,9 +93,9 @@ function valueFor(r: NonNullable<ReturnType<typeof resolve>>, op: Op): Value {
 	return 12;
 }
 function argFor(r: NonNullable<ReturnType<typeof resolve>>, op: Op): RawArg | null {
-	if (['isNull', 'notNull', 'isEmpty', 'notEmpty'].includes(op)) return null;
+	if (['is_null', 'not_null', 'is_empty', 'not_empty'].includes(op)) return null;
 	const value = valueFor(r, op);
-	return op === 'in' || op === 'nin' || op === 'hasAny' || op === 'hasAll'
+	return op === 'in' || op === 'not_in' || op === 'has_any' || op === 'has_all'
 		? { list: [value] }
 		: { lit: value };
 }
@@ -144,8 +137,8 @@ describe('filter state transitions', () => {
 		expect(change(condition('name'), 'in')).toEqual(condition('name', 'in', { list: ['hello'] }));
 		expect(change(condition('name', 'in', { list: ['hello'] }), 'eq')).toEqual(condition('name'));
 		expect(change(condition('name', 'in', { list: ['a', 'b'] }), 'eq').arg).toBeNull();
-		expect(change(condition('name', 'in', { list: ['a', 'b'] }), 'nin')).toEqual(
-			condition('name', 'nin', { list: ['a', 'b'] })
+		expect(change(condition('name', 'in', { list: ['a', 'b'] }), 'not_in')).toEqual(
+			condition('name', 'not_in', { list: ['a', 'b'] })
 		);
 	});
 	it('clears incompatible field values and selects only an operator of the destination type', () => {
@@ -177,18 +170,18 @@ describe('filter state transitions', () => {
 			}
 		];
 		expect(ops('hired', stale)).not.toContain('like');
-		expect(ops('window')).toEqual(['contains', 'overlaps', 'within', 'startsWithin', 'endsWithin']);
+		expect(ops('window')).toEqual(['contains', 'overlaps', 'contained_by', 'starts_within', 'ends_within']);
 		expect(ops('enabled')).toEqual(['eq']);
-		expect(ops('employer')).toEqual(['eq', 'ne', 'in', 'nin']);
+		expect(ops('employer')).toEqual(['eq', 'ne', 'in', 'not_in']);
 		expect(ops('amount')).toContain('in');
-		expect(ops('sequence')).toEqual(['eq', 'ne', 'in', 'nin']);
+		expect(ops('sequence')).toEqual(['eq', 'ne', 'in', 'not_in']);
 		expect(ops('code')).not.toContain('like');
 		expect(change(condition('amount', 'eq', { lit: 12 }), 'in').arg).toEqual(
 			taggedArg({ list: [12] })
 		);
 		const n = condition('hired', 'eq', { lit: '2026-10-01' });
 		expect(change(n, 'like')).toBe(n);
-		expect(change(n, 'isNull')).toMatchObject({ op: 'isNull', arg: null });
+		expect(change(n, 'is_null')).toMatchObject({ op: 'is_null', arg: null });
 	});
 	it('retains only valid variable, field, and range operands', () => {
 		expect(pick(condition('hired', 'gte', { var: 'today' }), 'due')).toMatchObject({
@@ -239,7 +232,7 @@ describe('filter state transitions', () => {
 	it('refuses an operator its field kind cannot take', () => {
 		// fromWhere is the untrusted boundary: a parsed where is JSON, not a Node
 		const badJson: readonly Json[] = [
-			{ name: { isNull: true } },
+			{ name: { is_null: true } },
 			{ hired: { like: '%2026-10-01%' } },
 			{ status: { gt: 'open' } },
 			{ employer: { like: '%company-1%' } },
@@ -257,15 +250,15 @@ describe('filter state transitions', () => {
 			expect(fromWhere(catalog, 'people', bad), JSON.stringify(bad)).toBeNull();
 		// toWhere takes a Node the UI built: these are well-typed nodes the catalogue still refuses
 		const badNodes: readonly Node[] = [
-			condition('name', 'isNull'),
+			condition('name', 'is_null'),
 			condition('hired', 'like', { lit: '2026-10-01' }),
 			condition('status', 'gt', { lit: 'open' }),
 			condition('employer', 'like', { lit: 'company-1' }),
-			condition('employer', 'isEmpty'),
+			condition('employer', 'is_empty'),
 			condition('employer', 'eq', { list: ['company-1'] }),
 			condition('sequence', 'gt', { lit: 1 }),
 			condition('spot', 'near', { lit: { lat: 1, lng: 1 } }),
-			condition('spot', 'within', { lit: { lat: 1, lng: 1 } }),
+			condition('spot', 'contained_by', { lit: { lat: 1, lng: 1 } }),
 			{
 				t: 'many',
 				rel: 'contracts',

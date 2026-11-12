@@ -1,38 +1,40 @@
-// `automation('<name>', …)` (§3.3.8, rules 48–56): triggers are one literal union (P26); the `run` body sits in the
-// literal, typed from the generated names (its input from the triggers or the declared input, its output, its ctx).
+// An automation's source path supplies its name. The run body infers its input and output from its literal.
+import { Schema } from 'effect';
+import { duration_seconds } from '@norbital-ai/std/date';
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
-import type { Act, BodyReturn, CallerQuery, Clock, Eff } from '../ctx.ts';
-import type { ActConflict, ActRefused, ActUnknown } from '../errors.ts';
-import type { Transaction } from '../transaction.ts';
+import type { Act, BodyReturn, CallerQuery, Clock, Eff, MessageKey, RefuseAt } from '../ctx.ts';
+import type { ActConflict, ActRefused, FacilityFailure, Refusal, Unavailable } from '../errors.ts';
+import type { ActUnknown } from '../errors/act.ts';
 import type {
 	Checked,
 	Exact,
-	InputFields,
-	InputOf,
 	Simplify,
 	ValidOutput,
 	OutputKind,
-	ValidInputs,
 	ValueOf
 } from '../fields.ts';
-import type { AutomationName, ModelName, PolicyName } from '../names.ts';
-import type { Duration, IanaZone, Id, NonEmpty, Rate, RequestId } from '../values.ts';
+import type { ModelName, PolicyName, Row } from '../names.ts';
+import type { Duration, FileRef, IanaZone, Id, NonEmpty, RequestId } from '../values.ts';
+import type { ApprovalEffectEvent } from '../../protocol/effect-events.ts';
 import type {
 	Ai,
 	Browser,
 	Convert,
 	Files,
 	Geo,
+	ImageFacts,
+	IngestOptions,
 	Notify,
 	Request,
+	Run,
 	RunCause,
 	RunTrigger,
 	Schedule,
 	Send,
 	Web
 } from './facilities.ts';
-import type { AutomationSpecOf, SecretName } from './names.ts';
+import type { AutomationInputFields, AutomationInputOf, ValidAutomationInputs } from './automation-input.ts';
 
 type Macro = '@yearly' | '@annually' | '@monthly' | '@weekly' | '@daily' | '@hourly';
 type Fields<S, N extends unknown[] = [0]> = S extends `${string} ${infer R}`
@@ -44,48 +46,45 @@ export type Cron<S> = S extends Macro
 	: Fields<S> extends 5
 		? S
 		: 'error: a cron is 5 fields or a macro';
-/**
- * How a webhook is signed: `standard` is Standard Webhooks (HMAC-SHA256 over `id.timestamp.body`, `webhook-*` headers;
- * Svix sends the same scheme under `svix-*` headers and is accepted as it), `hmac-sha256` a hex digest of the body,
- * `stripe`, `slack` and `meta` those providers' own signatures, `bearer` a shared token in `Authorization`.
- */
-export type WebhookScheme = 'standard' | 'hmac-sha256' | 'stripe' | 'slack' | 'meta' | 'bearer';
-/** When an automation runs (its `on`): a `cron` schedule or a `webhook` path. Row writes run a model's `effect`. */
-export type Trigger =
-	| {
-			cron: string;
-			tz?: IanaZone;
-			/**
-			 * For a safety-net cron whose work depends only on workspace data, never on the time: when a run writes nothing,
-			 * no slot fires until the workspace is used again or this long has passed, so its database can sleep.
-			 */
-			rest?: Duration;
-	  }
-	| { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: string } };
+export const DeclaredDuration = Schema.TemplateLiteral([
+	Schema.BigInt,
+	Schema.Literals(['s', 'min', 'h', 'd'])
+]);
+export const CallCacheDuration = DeclaredDuration.check(Schema.makeFilter((value) => {
+	const seconds = duration_seconds(value);
+	return seconds !== undefined && Number.isFinite(seconds) && seconds > 0 ? undefined : 'cache must be a positive duration';
+}));
+/** A cron schedule. Row writes run the model's effect; integrations own incoming webhooks. */
+export const TriggerSpec = Schema.Struct({
+	cron: Schema.String,
+	tz: Schema.optionalKey(Schema.String),
+	rest: Schema.optionalKey(DeclaredDuration)
+});
+export type Trigger = typeof TriggerSpec.Type;
 type ValidTrigger<T> = T extends { cron: infer S }
 	? { cron: Cron<S>; tz?: IanaZone; rest?: Duration }
-	: T extends { webhook: unknown }
-		? { webhook: `/${string}`; verify: { scheme: WebhookScheme; secret: SecretName } }
-		: Trigger;
+	: Trigger;
 
 type Attempts = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 type Max = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 /** An automation literal's data: what the manifest holds (the `run` body is not data). */
-export type AutomationSpec = {
+/** Cached calls have no starter metadata and cannot write, including through nested runs. */
+type AutomationMode =
+	| { mode?: 'job'; cache?: never }
+	| { mode: 'call'; cache?: Duration; on?: never; retry?: never; concurrency?: never };
+export type AutomationSpec = AutomationMode & {
 	description: string;
 	/** The typed input a start or schedule passes. */
-	input?: InputFields;
-	/** The typed result recorded on the run. */
+	input?: AutomationInputFields;
+	/** The typed result returned by a call or recorded on a job. */
 	output?: OutputKind;
-	/** What runs it: cron or webhook; absent means started only. */
-	on?: Trigger | readonly Trigger[];
+	/** Cron schedules; absent means started only. */
+	on?: readonly Trigger[];
 	/**
 	 * The policies every run holds, whoever or whatever starts it: a run executes as the reserved system identity, and
 	 * who triggered it (`ctx.run.trigger`) never changes its authority.
 	 */
 	policies: NonEmpty<string>;
-	/** Native generated verbs delegated to this authenticated run and its child action lineage only. */
-	delegations?: readonly { verb: `${string}.${'create' | 'update' | 'delete'}`; policy: string }[];
 	/**
 	 * Retries of a failed run, only for a transient failure: a refusal or a bug is final. `attempts` counts every run,
 	 * the first included, so `1` never retries. `backoff` (default `10s`) doubles each attempt, up to an hour, with jitter.
@@ -95,38 +94,25 @@ export type AutomationSpec = {
 	concurrency?: { max: Max };
 	/** How the agent may start it (`direct`, `confirm`, `never`). */
 	agent?: AgentUse;
-	/**
-	 * Manual starts per starter (`'10/min'`; default `'30/min'`): the `start` callable, Run now and the agent, each
-	 * admitted by a policy's `automations`. Cron, webhook and model effect runs, schedules from code, and the acts a run's
-	 * body performs, are never rate limited and need no start grant.
-	 */
-	limit?: Rate;
 };
-type AutomationFor<N, S> = {
+type AutomationFor<S, Body> = AutomationMode & {
 	description: string;
-	input?: S extends { input: infer I } ? ValidInputs<I> : InputFields;
+	input?: S extends { input: infer I } ? ValidAutomationInputs<I> : AutomationInputFields;
 	output?: S extends { output: infer O } ? ValidOutput<O> : OutputKind;
-	on?: S extends { on: infer O }
-		? O extends readonly unknown[]
-			? { [I in keyof O]: ValidTrigger<O[I]> }
-			: ValidTrigger<O>
+	on?: S extends { on: infer O extends readonly Trigger[] }
+		? { [I in keyof O]: ValidTrigger<O[I]> }
 		: never;
 	policies: NonEmpty<PolicyName>;
-	delegations?: readonly {
-		verb: `${ModelName}.${'create' | 'update' | 'delete'}`;
-		policy: PolicyName;
-	}[];
 	retry?: { attempts: Attempts; backoff?: Duration };
 	concurrency?: { max: Max };
 	agent?: AgentUse;
-	limit?: Rate;
-	run: RunBody<SpecOf<N>>;
+	run: Body;
 };
 
 // ── the run's input and ctx ──
-/** What `run` receives: the declared input (a cron or webhook run without one receives `{}`). */
-export type RunInput<S> = Simplify<S extends { input: infer I } ? InputOf<I> : {}>;
-/** What `run` returns: the declared output, recorded on the run. */
+/** What `run` receives: the declared input (a cron run without one receives `{}`). */
+export type RunInput<S> = Simplify<S extends { input: infer I } ? AutomationInputOf<I> : {}>;
+/** What `run` returns: the declared output. */
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
 /**
@@ -136,14 +122,19 @@ export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
  * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it
  * explicitly (`trigger.kind === 'person'`, then their id, party or teams against the rows it touches).
  */
-export type AutomationCtx<_S = AutomationSpec> = RunCtx<
-	Extract<Actor, { kind: 'system' }>,
-	true
-> & {
-	readonly run: { readonly id: Id<'sys_run'>; readonly trigger: RunTrigger };
+type SystemRunCtx = RunCtx<Extract<Actor, { kind: 'system' }>, true>;
+type CachedCtx = Omit<SystemRunCtx, 'act' | 'schedule' | 'notify' | 'send' | 'files' | 'convert' | 'browser'> & {
+	files: Pick<Files, 'meta' | 'get' | 'url'> & { image(ref: FileRef): Eff<ImageFacts, FacilityFailure | Unavailable> };
+	convert: { ingest(file: FileRef, options?: Omit<IngestOptions, 'for'> & { for?: never }): ReturnType<Convert['ingest']> };
+	browser: Pick<Browser, 'navigate' | 'snapshot' | 'close'>;
+};
+export type AutomationCtx<S = AutomationSpec> = (S extends { cache: Duration } ? CachedCtx : SystemRunCtx) & {
+	readonly run: Run & (S extends { mode: 'call' }
+		? S extends { cache: Duration } ? {} : { readonly trigger: RunTrigger }
+		: { readonly id: Id<'sys_run'>; readonly trigger: RunTrigger });
 };
 type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
-	CallerQuery & { invocationId: string } & {
+	CallerQuery & { invocation_id: string } & {
 		actor: A;
 		/** 1 on the first attempt. */
 		attempt: number;
@@ -156,15 +147,19 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		 */
 		approvals: {
 			withdraw(
-				requestId: RequestId,
+				request_id: RequestId,
 				reason?: string
 			): Eff<
-				{ readonly requestId: RequestId; readonly status: 'Withdrawn' },
+				{ readonly request_id: RequestId; readonly status: 'Withdrawn' },
 				ActRefused | ActConflict | ActUnknown
 			>;
 		};
-		/** Caller-scoped model reads and guarded CRUD in one fixed five-second native transaction. */
-		transaction: Transaction;
+		run: Run;
+		/**
+		 * Stops the current body with an authored refusal: a catalogue key, the input list `row` and `field` it names,
+		 * and the message's placeholder `values`.
+		 */
+		refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, { field?: string; row?: number }>): Eff<never, Refusal>;
 		schedule: Schedule;
 		notify: Notify;
 		send: Send;
@@ -182,34 +177,50 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
  * A model `effect`'s ctx: an automation run's facilities, as the writer whose committed write ran it (its actor, its
  * authority); an effect holds no policy of its own.
  */
-export type EffectCtx = RunCtx<Actor, false>;
-type RunBody<S> = (input: RunInput<S>, ctx: AutomationCtx<S>) => BodyReturn<RunOutput<S>>;
-/** Automation `N`'s data from the generated names; the general shape until the first sync knows it. */
-type SpecOf<N> = [AutomationSpecOf<N>] extends [never] ? AutomationSpec : AutomationSpecOf<N>;
-/** The literal `automation(N, …)` takes: its data and the `run` body, typed from the generated names. */
-type AutomationLiteral<N> = AutomationSpec & { run: RunBody<SpecOf<N>> };
-/** What `automation()` returns: the name, the literal, and `run` as the guest calls it. */
-export type Automation<N extends string, S> = {
-	readonly name: N;
+export type EffectEvent<M = ModelName> =
+	| { readonly kind: 'write' }
+	| (Omit<ApprovalEffectEvent, 'request' | 'records' | 'requester'> & {
+		readonly request: RequestId;
+		readonly records: readonly { readonly id: Id<M & string>; readonly row: Readonly<Partial<Row<M>>> | null }[];
+		readonly requester: Id<'sys_user'> | null;
+	});
+export type EffectCtx<M = ModelName> = RunCtx<Actor, false> & {
+	/** Approval moves have no committed change list; their frozen data is carried here. */
+	readonly event: EffectEvent<M>;
+};
+type AutomationLiteral<I extends AutomationInputFields, O extends OutputKind | undefined, M extends 'job' | 'call', C extends Duration | undefined> = Omit<
+	AutomationSpec,
+	'input' | 'output' | 'mode' | 'cache'
+> & {
+	input?: I;
+	output?: O;
+	mode?: M;
+	cache?: C;
+	run: (
+		input: RunInput<{ input: I }>,
+		ctx: AutomationCtx<{ mode: M; cache: C }>
+	) => BodyReturn<O extends OutputKind ? ValueOf<O> : void>;
+};
+/** The literal and the body the guest calls. The file supplies its name. */
+export type Automation<S> = {
 	readonly spec: S;
 	readonly body: Body;
 };
 
 /**
- * `src/automation/+<a>.automation.ts`: a job that runs on a trigger (`on`: cron or webhook) or when started, executed by
+ * `src/automation/+<a>.automation.ts`: a job on a trigger or a call in the request, executed by
  * the reserved system identity with the declared `policies` (`ctx.run.trigger` records who started it), with typed `input` and `output`, retries and concurrency. `run` is a generator in the literal; `ctx` carries reads (`ctx.query`), `act`, files, AI and the other facilities.
  * A person's permission to start a job does not grant the job that person's authority. Check `ctx.run.trigger`
  * explicitly when business rules depend on the starter. External calls can repeat when a failed run retries.
  * Every declared automation the caller may start appears in the native Command Center Automations, with this typed
  * input rendered by `Form`; a page form is optional, not required. A start queues a run and is followed by the native
  * run status — the page does not poll or reimplement the queue.
- * @param name The automation name discovered from its source file.
  * @param spec Input/output contracts, execution policies, trigger and generator body.
  * @returns Declaration metadata with an attached run body; declaring it does not start a job.
  * @example
- * export default automation('sweep_quotes', {
+ * export default automation({
  * 	description: 'Daily sweep of lapsed quotes.',
- * 	on: { cron: '0 6 * * *' },
+ * 	on: [{ cron: '0 6 * * *' }],
  * 	policies: ['quote_watch'],
  * 	run: function* (_, ctx) {
  * 		const { quotes: lapsed } = yield* ctx.query({ quotes: { where: { valid_until: { lt: ctx.today } }, limit: 50 } });
@@ -217,9 +228,21 @@ export type Automation<N extends string, S> = {
  * 	}
  * });
  */
-export function automation<const N extends AutomationName, const S extends AutomationLiteral<N>>(
-	name: N,
-	spec: S & NoInfer<Checked<AutomationLiteral<N>, S, Exact<S, AutomationFor<N, S>>>>
-): Automation<N, S> {
-	return { name, spec, body: attached(spec.run, 1) };
+export function automation<
+	const I extends AutomationInputFields = {},
+	const O extends OutputKind | undefined = undefined,
+	const M extends 'job' | 'call' = 'job',
+	const C extends Duration | undefined = undefined,
+	const S extends AutomationLiteral<I, O, M, C> = AutomationLiteral<I, O, M, C>
+>(
+	spec: { input?: I; output?: O; mode?: M; cache?: C } & S &
+		NoInfer<
+			Checked<
+				AutomationLiteral<I, O, M, C>,
+				S,
+				Exact<S, AutomationFor<S, AutomationLiteral<I, O, M, C>['run']>>
+			>
+		>
+): Automation<S> {
+	return { spec, body: attached(spec.run, 1) };
 }

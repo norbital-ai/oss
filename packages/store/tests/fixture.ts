@@ -25,8 +25,9 @@ export const shop = schema({
 	}),
 	order: table({
 		audit: true,
+		unique: [{ fields: ['number'] }],
 		fields: {
-			number: { kind: 'text', unique: true },
+			number: { kind: 'text' },
 			customer: { kind: 'ref', to: 'customer', inverse: 'orders' },
 			status: { kind: 'enum', values: ['open', 'shipped'], default: 'open' },
 			placed_on: { kind: 'date' },
@@ -40,11 +41,12 @@ export const shop = schema({
 					floor: { kind: 'int', optional: true }
 				}
 			},
-			labels: { kind: 'list', of: { kind: 'text' }, default: [] },
+			labels: { kind: 'text', many: true, default: [] },
 			events: {
-				kind: 'list',
-				default: [],
-				of: { kind: 'object', fields: { at: { kind: 'instant' }, what: { kind: 'text' } } }
+				kind: 'object',
+				fields: { at: { kind: 'instant' }, what: { kind: 'text' } },
+				many: true,
+				default: []
 			}
 		},
 		through: { tags: { table: 'order_tag', from: 'order', to: 'tag' } },
@@ -63,7 +65,7 @@ export const shop = schema({
 			qty: { kind: 'int' }
 		}
 	}),
-	tag: table({ audit: true, fields: { label: { kind: 'text', unique: true } } }),
+	tag: table({ audit: true, unique: [{ fields: ['label'] }], fields: { label: { kind: 'text' } } }),
 	order_tag: table({
 		audit: true,
 		fields: {

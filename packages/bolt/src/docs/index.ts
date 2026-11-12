@@ -5,18 +5,23 @@
 // the agent's `docs` tool searches it (through its host's `Docs` port). Read lazily from `build/docs/`, next to this
 // module in the published package.
 import { readFileSync } from 'node:fs';
+import { Effect } from 'effect';
+import { FacilityFailure } from '../decl/errors.ts';
 import { corpus } from '../engine/docs-corpus.ts';
-export * from '../engine/docs-corpus.ts';
-
-// `src/docs` and `build/docs` are both two levels under the package root, so this resolves from either
-export const DOCS_DIR = new URL('../../build/docs/', import.meta.url);
-const cache = new Map<string, unknown>();
+import { DOCS_DIR } from '../node/docs.ts';
 /**
- * The docs corpus: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)`, `guide(slug)` and `skill(name)`.
+ * The docs corpus, read on first run and kept: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)`,
+ * `guide(slug)` and `skill(name)`.
  * @example
- * docs.symbol('bolt', 'model')?.signature
+ * (yield* docs).symbol('bolt', 'ModelDeclaration')?.signature
  */
-export const docs = corpus(<T>(file: string): T => {
-	if (!cache.has(file)) cache.set(file, JSON.parse(readFileSync(new URL(file, DOCS_DIR), 'utf8')));
-	return cache.get(file) as T;
-});
+export const docs = Effect.runSync(
+	Effect.cached(
+		corpus((file) =>
+			Effect.try({
+				try: (): unknown => JSON.parse(readFileSync(new URL(file, DOCS_DIR), 'utf8')),
+				catch: (error) => new FacilityFailure({ kind: 'invalid', message: `docs ${file}: ${String(error)}` })
+			})
+		)
+	)
+);

@@ -16,7 +16,7 @@ describe('an integration import start', () => {
 			} as const;
 			expect(yield* resolveImportStart(native, NOW)).toEqual({
 				...native,
-				selectedAt: '2026-10-21T01:40:12.345Z'
+				selected_at: '2026-10-21T01:40:12.345Z'
 			});
 		})
 	);
@@ -149,7 +149,7 @@ describe('an integration import start', () => {
 				expect(
 					yield* resolveImportStart({ kind: 'since', date, zone: 'UTC' }, NOW).pipe(Effect.flip),
 					date
-				).toMatchObject({ code: 'invalidInput' });
+				).toMatchObject({ code: 'invalid_input' });
 		})
 	);
 
@@ -160,7 +160,7 @@ describe('an integration import start', () => {
 					{ kind: 'since', date: '2011-12-30', zone: 'Pacific/Apia' },
 					NOW
 				).pipe(Effect.flip)
-			).toMatchObject({ code: 'invalidInput' });
+			).toMatchObject({ code: 'invalid_input' });
 		})
 	);
 
@@ -169,12 +169,12 @@ describe('an integration import start', () => {
 			for (const zone of ['', 'Not/A_Real_Zone']) {
 				expect(
 					yield* resolveImportStart({ kind: 'now', zone }, NOW).pipe(Effect.flip)
-				).toMatchObject({ code: 'invalidInput' });
+				).toMatchObject({ code: 'invalid_input' });
 				expect(
 					yield* resolveImportStart({ kind: 'since', date: '2026-10-21', zone }, NOW).pipe(
 						Effect.flip
 					)
-				).toMatchObject({ code: 'invalidInput' });
+				).toMatchObject({ code: 'invalid_input' });
 			}
 		})
 	);
@@ -205,7 +205,7 @@ describe('admission at an import start', () => {
 			kind: 'native',
 			provider: 'archive',
 			values: { checkpoint: 'opaque' },
-			selectedAt: '2026-10-21T01:40:12.345Z'
+			selected_at: '2026-10-21T01:40:12.345Z'
 		};
 		for (const choice of [undefined, null, { kind: 'all' }, native] as const) {
 			expect(permitsImport(choice, '1999-01-01T00:00:00.000Z')).toBe(true);

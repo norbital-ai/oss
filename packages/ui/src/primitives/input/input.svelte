@@ -1,12 +1,12 @@
 <!--
 @component
-A text input (every `<input>` type), bindable `value`. `type="file"` binds `files` (or `onFiles`) instead: a file
+A text input (every `<input>` type), bindable `value`. `type="file"` binds `files` (or `on_files`) instead: a file
 input's value is not writable. `readonly` (or an enclosing readonly form) shows the value as
 copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps the box, muted.
 -->
 <script lang="ts">
 	import { CONTROL_SIZE } from '../../kinds/classes.js';
-	import { cn, useControls, uiText, type WithElementRef } from '../utils.js';
+	import { cn, use_controls, ui_text, type WithElementRef } from '../utils.js';
 	import type { HTMLInputAttributes, HTMLInputTypeAttribute } from 'svelte/elements';
 
 	type InputType = Exclude<HTMLInputTypeAttribute, 'file'>;
@@ -14,8 +14,8 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 	type Props = WithElementRef<
 		Omit<HTMLInputAttributes, 'type'> &
 			(
-				| { type: 'file'; files?: FileList; onFiles?: (files: FileList | null) => void }
-				| { type?: InputType; files?: undefined; onFiles?: undefined }
+				| { type: 'file'; files?: FileList; on_files?: (files: FileList | null) => void }
+				| { type?: InputType; files?: undefined; on_files?: undefined }
 			)
 	>;
 
@@ -24,15 +24,15 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		value = $bindable(),
 		type,
 		files = $bindable(),
-		onFiles,
+		on_files,
 		class: className,
 		'data-slot': dataSlot = 'input',
 		readonly,
 		disabled,
 		...restProps
 	}: Props = $props();
-	const controls = useControls();
-	const t = uiText();
+	const controls = use_controls();
+	const t = ui_text();
 	// a secret or a non-text control never turns into visible text
 	const asText = $derived(
 		(readonly ?? controls.readonly) &&
@@ -92,7 +92,7 @@ copyable text, no field chrome; `disabled` (or an enclosing disabled form) keeps
 		{readonly}
 		disabled={off}
 		{...restProps}
-		onchange={(e) => (onFiles?.(e.currentTarget.files), restProps.onchange?.(e))}
+		onchange={(e) => (on_files?.(e.currentTarget.files), restProps.onchange?.(e))}
 	/>
 {:else}
 	<input

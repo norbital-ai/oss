@@ -28,7 +28,7 @@ type Fake = {
 };
 /** A fake port service: what it was asked to connect, and how many sessions it closed. */
 const fakeMcp = (fake: Fake = {}) => {
-	const seen = { connects: [] as McpServer[], closes: 0 };
+	const seen = { connects: new Array<McpServer>(), closes: 0 };
 	const service: Mcp['Service'] = {
 		connect: (server) =>
 			Effect.acquireRelease(
@@ -95,7 +95,7 @@ it.effect('resolves the URL and credentials from secrets into the server the por
 					client: {
 						description: '',
 						url: 'URL',
-						auth: { oauth: { clientId: 'CLIENT', clientSecret: 'SECRET', scopes: ['a', 'b'] } }
+						auth: { oauth: { client_id: 'CLIENT', client_secret: 'SECRET', scopes: ['a', 'b'] } }
 					}
 				}
 			},
@@ -183,7 +183,7 @@ const discoveryAuthority: Authority = {
 		admin: true,
 		party: null,
 		external: false,
-		teamPath: []
+		team_path: []
 	},
 	admin: true,
 	policies: [],
@@ -192,12 +192,12 @@ const discoveryAuthority: Authority = {
 	limits: [],
 	teamTree: [],
 	scopes: {},
-	capabilities: { apps: [], tools: [], mcp: [] }
+	capabilities: { apps: [], tools: [], mcp: [], syncs: [] }
 };
 const info = (name: string): McpToolInfo => ({
 	name,
 	description: name,
-	inputSchema: { type: 'object' }
+	input_schema: { type: 'object' }
 });
 it.effect('keeps declaration order and allowlists when server lists finish out of order', () =>
 	Effect.gen(function* () {
@@ -347,31 +347,33 @@ it.effect('ends a call past its wall as a timeout and interrupts the port call',
 	})
 );
 
-it.effect("over a host's Promise port, an interrupted connect aborts the port's signal and leaves nothing to close", () =>
-	Effect.gen(function* () {
-		const started = Promise.withResolvers<void>();
-		let signal: AbortSignal | undefined;
-		const close = vi.fn(async (_session: string) => {});
-		const port: McpPort = {
-			connect: (_server, s) => {
-				signal = s;
-				started.resolve();
-				return new Promise<string>(() => {});
-			},
-			tools: async () => [],
-			call: async () => ({ content: [] }),
-			close
-		};
-		const scope = yield* Scope.make();
-		const sessions = yield* mcpSessions(manifest, host()).pipe(
-			Scope.provide(scope),
-			Effect.provide(Mcp.fromAbi(port))
-		);
-		const call = yield* Effect.forkChild(sessions.call('good', 'echo', {}));
-		yield* Port.attempt('fixture.connect', () => started.promise);
-		yield* Fiber.interrupt(call);
-		expect(signal?.aborted).toBe(true);
-		yield* Scope.close(scope, Exit.void);
-		expect(close).not.toHaveBeenCalled();
-	})
+it.effect(
+	"over a host's Promise port, an interrupted connect aborts the port's signal and leaves nothing to close",
+	() =>
+		Effect.gen(function* () {
+			const started = Promise.withResolvers<void>();
+			let signal: AbortSignal | undefined;
+			const close = vi.fn(async (_session: string) => {});
+			const port: McpPort = {
+				connect: (_server, s) => {
+					signal = s;
+					started.resolve();
+					return new Promise<string>(() => {});
+				},
+				tools: async () => [],
+				call: async () => ({ content: [] }),
+				close
+			};
+			const scope = yield* Scope.make();
+			const sessions = yield* mcpSessions(manifest, host()).pipe(
+				Scope.provide(scope),
+				Effect.provide(Mcp.fromAbi(port))
+			);
+			const call = yield* Effect.forkChild(sessions.call('good', 'echo', {}));
+			yield* Port.attempt('fixture.connect', () => started.promise);
+			yield* Fiber.interrupt(call);
+			expect(signal?.aborted).toBe(true);
+			yield* Scope.close(scope, Exit.void);
+			expect(close).not.toHaveBeenCalled();
+		})
 );

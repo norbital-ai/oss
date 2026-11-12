@@ -9,7 +9,7 @@ export function and(...parts: readonly (Json | undefined)[]): Json | undefined {
 	return list.length === 0 ? undefined : list.length === 1 ? list[0] : { and: list };
 }
 /** Drops `undefined` members, so an options literal is `Json`. */
-export const compact = (o: { readonly [k: string]: Json | undefined }): Json =>
+export const compact = (o: { readonly [k: string]: Json | undefined }): { readonly [k: string]: Json } =>
 	Object.fromEntries(Object.entries(o).filter((e): e is [string, Json] => e[1] !== undefined));
 type Layer = {
 	readonly where?: Json;

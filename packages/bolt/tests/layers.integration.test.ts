@@ -3,14 +3,20 @@
 // a root; a user `where` only narrows. Writes are batches: `columns` are admitted before any guest code, then ONE
 // `check` per verb judges the whole batch tree; `deny` refuses it, `approve` holds it.
 import { expect, layer } from '@effect/vitest';
-import { Effect, Layer, type Scope } from 'effect';
+import { Effect, Layer, Schema, type Scope } from 'effect';
+import { input_schema } from '@norbital-ai/std/kind';
 import type { Authority } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { Json } from '../src/decl/values.ts';
-import { dynamicRead } from '../src/protocol/read-request.ts';
-import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { dynamic_read } from '../src/protocol/read-request.ts';
+import {
+	NativeReadRow,
+	TestWorkspace,
+	type Kit,
+	type WorkspaceServices
+} from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const ACME = '0199a000-0000-4000-8000-0000000000a1';
 const N1 = '0199a000-0000-4000-8000-0000000000b1',
@@ -28,7 +34,7 @@ const manifest: EngineManifest = {
 		// no `read`: stored, and a layer of orders, never a root
 		parties: {
 			description: 'A party',
-			label: 'name',
+			record_label: 'record.name',
 			fields: {
 				name: { kind: 'text' },
 				code: { kind: 'text' },
@@ -37,7 +43,7 @@ const manifest: EngineManifest = {
 		},
 		orders: {
 			description: 'An order',
-			label: 'number',
+			record_label: 'record.number',
 			fields: {
 				number: { kind: 'text' },
 				region: { kind: 'enum', values: ['north', 'south'] },
@@ -46,7 +52,7 @@ const manifest: EngineManifest = {
 		},
 		order_lines: {
 			description: 'A line',
-			label: 'product',
+			record_label: 'record.product',
 			fields: {
 				product: { kind: 'text' },
 				quantity: { kind: 'int' },
@@ -60,13 +66,12 @@ const manifest: EngineManifest = {
 	},
 	exposures: {
 		orders: {
-			read: {
-				orders: { fields: 'all' },
-				'orders.party': { fields: ['name', 'code', 'credit_limit'] },
-				'orders.lines': { fields: 'all' }
-			},
-			// a narrower output: a party shows its name and code, never its credit limit
 			outputs: {
+				default: {
+					orders: { fields: 'all' },
+					'orders.party': { fields: ['name', 'code', 'credit_limit'] },
+					'orders.lines': { fields: 'all' }
+				},
 				brief: {
 					orders: { fields: ['number', 'region', 'party'] },
 					'orders.party': { fields: ['name', 'code'] }
@@ -82,7 +87,7 @@ const manifest: EngineManifest = {
 			delete: {}
 		},
 		// a root of its own that `rep` holds no grant on
-		order_lines: { read: { order_lines: { fields: 'all' } } }
+		order_lines: { outputs: { default: { order_lines: { fields: 'all' } } } }
 	},
 	integrations: {},
 	policies: {
@@ -90,53 +95,55 @@ const manifest: EngineManifest = {
 			description: 'Northern sales, through the order tree',
 			grants: {
 				orders: {
-					read: {
-						orders: { where: { region: { eq: 'north' } } },
-						'orders.lines': { where: { cost: { gt: 0 } } }
+					outputs: {
+						default: {
+							scopes: { orders: { region: { eq: 'north' } }, 'orders.lines': { cost: { gt: 0 } } }
+						}
 					},
 					create: {
 						columns: {
 							orders: ['number', 'region', 'status', 'party'],
 							'orders.lines': ['product', 'quantity']
 						},
-						check: true
+						verdict: true
 					},
-					update: { check: true },
-					delete: { check: true }
+					update: { verdict: true },
+					delete: { verdict: true }
 				}
 			}
 		},
-		reviewer: { description: 'Finance', grants: { orders: { read: true } } },
+		reviewer: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } },
 		partner: {
 			description: 'Northern orders, briefly',
-			grants: { orders: { outputs: { brief: { orders: { where: { region: { eq: 'north' } } } } } } }
+			grants: {
+				orders: { outputs: { brief: { scopes: { orders: { region: { eq: 'north' } } } } } }
+			}
 		}
 	},
-	teams: { finance: ['reviewer'], sales: ['rep'] },
+	teams: { finance: { policies: ['reviewer'] }, sales: { policies: ['rep'] } },
 	automations: {},
-	connections: {},
-	envoys: {},
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 /** `rep`'s checks: `COUNT` answers the batch it judged (rows, nested lines), a non-positive quantity is denied at its
- * path, a `BIG` order is approved by finance; an update needs a draft with lines; a delete is always denied. */
+ * row, a `BIG` order is approved by finance; an update needs a draft with lines; a delete is always denied. */
 const source = `export default { policy: { rep: { grants: { orders: {
-	create: { check: function* (rows, ctx) {
+	create: { verdict: function* (changes, ctx) {
+		const rows = changes.map((change) => change.after);
 		const lines = rows.flatMap((r) => r.lines ?? []);
-		if (rows.some((r) => r.number === 'COUNT')) return ctx.deny('rows:' + rows.length + ';lines:' + lines.length);
+		if (rows.some((r) => r.number === 'COUNT')) return yield* ctx.refuse('rows:' + rows.length + ';lines:' + lines.length);
 		const row = rows.findIndex((r) => (r.lines ?? []).some((l) => typeof l !== 'string' && l.quantity <= 0));
-		if (row >= 0) return ctx.deny('Quantities must be positive.', { row, path: 'orders.lines', field: 'quantity' });
-		if (rows.some((r) => r.number.startsWith('BIG'))) return ctx.approve((flow) => flow.step('Finance', { teams: ['finance'] }));
+		if (row >= 0) return yield* ctx.refuse('Quantities must be positive.', { row, field: 'region' });
+		if (rows.some((r) => r.number.startsWith('BIG'))) return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
 		return ctx.allow();
 	} },
-	update: { check: function* (changes, ctx) {
+	update: { verdict: function* (changes, ctx) {
 		const row = changes.findIndex((c) => c.before.status !== 'draft' || c.before.lines.length === 0);
-		return row >= 0 ? ctx.deny('Only a draft with lines changes.', { row }) : ctx.allow();
+		return row >= 0 ? yield* ctx.refuse('Only a draft with lines changes.', { row }) : ctx.allow();
 	} },
-	delete: { check: function* (rows, ctx) { return ctx.deny('Reps never delete.'); } }
+	delete: { verdict: function* (rows, ctx) { return yield* ctx.refuse('Reps never delete.'); } }
 } } } } };`;
 const seed = {
 	parties: [{ id: ACME, name: 'Acme', code: 'AC', credit_limit: '1000.00' }],
@@ -157,17 +164,75 @@ const workspace = Layer.unwrap(
 );
 const setup = Effect.gen(function* () {
 	const t = yield* TestWorkspace;
-	const route = yield* routeFixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
-	return { t, route, rep: t.as(t.member(['rep'], { teams: ['sales'] })) };
+	const route = yield* route_fixture(yield* Effect.context<TestWorkspace | WorkspaceServices>());
+	return { t, route, rep: yield* t.as(t.member(['rep'], { teams: ['sales'] })) };
 });
 const act = (route: FixtureRoute, t: Kit, who: Authority, callable: string, input: Json) =>
-	actReply(route, who, { callable, input, issuedAt: t.clock.now() }).pipe(
+	act_reply(route, who, { acts: { [callable]: input }, issued_at: t.clock.now() }).pipe(
 		Effect.map((reply) => reply.outcome)
 	);
 /** A raw `/q` read: what a page or another host could put on the wire, typed or not. */
 const raw = (route: FixtureRoute, who: Authority, request: Json) =>
-	qReply(route, who, { reads: [{ m: 'query', a: [request] }] });
+	q_reply(route, who, { reads: [{ m: 'query', a: [request] }] });
 const ids = (rows: readonly { readonly id: string }[]) => rows.map((row) => row.id);
+const orders_page = <A>(row: Schema.Decoder<A>) =>
+	Schema.Struct({ orders: Schema.Struct({ rows: Schema.Array(row) }) });
+const OrderIds = orders_page(NativeReadRow);
+const NativeDecimal = Schema.toType(input_schema({ kind: 'decimal', scale: 2 }));
+const Party = Schema.StructWithRest(
+	Schema.Struct({
+		id: Schema.String,
+		name: Schema.String,
+		code: Schema.String,
+		credit_limit: NativeDecimal
+	}),
+	NativeReadRow.records
+);
+const BriefParty = Schema.StructWithRest(
+	Schema.Struct({ id: Schema.String, name: Schema.String, code: Schema.String }),
+	NativeReadRow.records
+);
+const CreditParty = Schema.StructWithRest(
+	Schema.Struct({ id: Schema.String, name: Schema.String, credit_limit: NativeDecimal }),
+	NativeReadRow.records
+);
+const OrdersWithParty = orders_page(
+	Schema.StructWithRest(
+		Schema.Struct({ ...NativeReadRow.schema.fields, number: Schema.String, party: Schema.NullOr(Party) }),
+		NativeReadRow.records
+	)
+);
+const OrdersWithBriefParty = orders_page(
+	Schema.StructWithRest(
+		Schema.Struct({ ...NativeReadRow.schema.fields, party: Schema.NullOr(BriefParty) }),
+		NativeReadRow.records
+	)
+);
+const OrdersWithCreditParty = orders_page(
+	Schema.StructWithRest(
+		Schema.Struct({ ...NativeReadRow.schema.fields, party: Schema.NullOr(CreditParty) }),
+		NativeReadRow.records
+	)
+);
+const OrdersWithLines = orders_page(
+	Schema.StructWithRest(
+		Schema.Struct({
+			...NativeReadRow.schema.fields,
+			lines: Schema.Array(
+				Schema.StructWithRest(
+					Schema.Struct({
+						id: Schema.String,
+						product: Schema.String,
+						quantity: Schema.Int,
+						cost: Schema.NullOr(NativeDecimal)
+					}),
+					NativeReadRow.records
+				)
+			)
+		}),
+		NativeReadRow.records
+	)
+);
 // Reads never write, so one workspace serves every read; the writes share a second one.
 const run = <A, E, R>(body: Effect.Effect<A, E, R | Scope.Scope>) => Effect.scoped(body);
 
@@ -176,17 +241,20 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 		run(
 			Effect.gen(function* () {
 				const { rep } = yield* setup;
-				const all = dynamicRead({ orders: { orderBy: 'number' } });
-				expect(ids((yield* rep.query(all)).orders?.rows ?? [])).toEqual([N1, N2]);
-				const south = dynamicRead({ orders: { where: { region: { eq: 'south' } } } });
-				expect((yield* rep.query(south)).orders?.rows).toEqual([]);
-				const either = dynamicRead({
+				const all = dynamic_read({ orders: { order_by: 'number' } });
+				const allPage = yield* rep.query(all).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrderIds)));
+				expect(ids(allPage.orders.rows)).toEqual([N1, N2]);
+				const south = dynamic_read({ orders: { where: { region: { eq: 'south' } } } });
+				const southPage = yield* rep.query(south).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrderIds)));
+				expect(southPage.orders.rows).toEqual([]);
+				const either = dynamic_read({
 					orders: {
 						where: { or: [{ region: { eq: 'south' } }, { region: { eq: 'north' } }] },
-						orderBy: 'number'
+						order_by: 'number'
 					}
 				});
-				expect(ids((yield* rep.query(either)).orders?.rows ?? [])).toEqual([N1, N2]);
+				const eitherPage = yield* rep.query(either).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrderIds)));
+				expect(ids(eitherPage.orders.rows)).toEqual([N1, N2]);
 			})
 		)
 	);
@@ -197,13 +265,11 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 			run(
 				Effect.gen(function* () {
 					const { rep } = yield* setup;
-					const tree = dynamicRead({
-						orders: { where: { number: { eq: 'N1' } } },
-						'orders.lines': {}
-					});
-					const [order] = (yield* rep.query(tree)).orders?.rows ?? [];
+					const tree = dynamic_read({ orders: { where: { number: { eq: 'N1' } }, lines: {} } });
+					const treePage = yield* rep.query(tree).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithLines)));
+					const [order] = treePage.orders.rows;
 					expect(order).toMatchObject({ id: N1, lines: [{ id: L5, product: 'paid' }] });
-					const lines = dynamicRead({ order_lines: {} });
+					const lines = dynamic_read({ order_lines: {} });
 					expect(yield* Effect.flip(rep.query(lines))).toMatchObject({ code: 'forbidden' });
 				})
 			)
@@ -213,14 +279,12 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 		run(
 			Effect.gen(function* () {
 				const { rep } = yield* setup;
-				const layer = dynamicRead({
-					orders: { where: { number: { eq: 'N1' } }, fields: ['number', 'party'] },
-					'orders.party': {}
-				});
-				expect((yield* rep.query(layer)).orders?.rows).toMatchObject([
+				const layer = dynamic_read({ orders: { where: { number: { eq: 'N1' } }, fields: ['number', 'party'], party: {} } });
+				const layerPage = yield* rep.query(layer).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithParty)));
+				expect(layerPage.orders.rows).toMatchObject([
 					{ id: N1, number: 'N1', party: { id: ACME, name: 'Acme', code: 'AC' } }
 				]);
-				const root = dynamicRead({ parties: {} });
+				const root = dynamic_read({ parties: {} });
 				const refused = yield* Effect.flip(rep.query(root));
 				expect(refused.message).toContain('no read root');
 			})
@@ -234,35 +298,22 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 				Effect.gen(function* () {
 					const { rep } = yield* setup;
 					// the policy's `orders.lines` where (cost > 0) drops free lines, never the order that holds them
-					const lines = dynamicRead({ orders: { orderBy: 'number' }, 'orders.lines': {} });
-					expect(
-						((yield* rep.query(lines)).orders?.rows ?? []).map((o) => [
-							o['id'],
-							ids(rowsOf(o['lines']))
-						])
-					).toEqual([
+					const lines = dynamic_read({ orders: { order_by: 'number', lines: {} } });
+					const linesPage = yield* rep.query(lines).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithLines)));
+					expect(linesPage.orders.rows.map((o) => [o.id, ids(o.lines)])).toEqual([
 						[N1, [L5]],
 						[N2, []]
 					]);
 					// a user layer where narrows the policy's further, still per layer
-					const narrower = dynamicRead({
-						orders: { orderBy: 'number' },
-						'orders.lines': { where: { quantity: { gt: 2 } } }
-					});
-					expect(
-						((yield* rep.query(narrower)).orders?.rows ?? []).map((o) => [
-							o['id'],
-							ids(rowsOf(o['lines']))
-						])
-					).toEqual([
+					const narrower = dynamic_read({ orders: { order_by: 'number', lines: { where: { quantity: { gt: 2 } } } } });
+					const narrowerPage = yield* rep.query(narrower).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithLines)));
+					expect(narrowerPage.orders.rows.map((o) => [o.id, ids(o.lines)])).toEqual([
 						[N1, []],
 						[N2, []]
 					]);
-					const ref = dynamicRead({
-						orders: { orderBy: 'number', fields: ['number', 'party'] },
-						'orders.party': { where: { code: { eq: 'ZZ' } } }
-					});
-					expect((yield* rep.query(ref)).orders?.rows).toMatchObject([
+					const ref = dynamic_read({ orders: { order_by: 'number', fields: ['number', 'party'], party: { where: { code: { eq: 'ZZ' } } } } });
+					const refPage = yield* rep.query(ref).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithParty)));
+					expect(refPage.orders.rows).toMatchObject([
 						{ id: N1, party: null },
 						{ id: N2, party: null }
 					]);
@@ -276,35 +327,27 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 			run(
 				Effect.gen(function* () {
 					const { t } = yield* setup;
-					const partner = t.as(t.member(['partner']));
-					const brief = dynamicRead({
-						orders: { output: 'brief', where: { number: { eq: 'N1' } }, fields: ['party'] },
-						'orders.party': {}
-					});
-					const [row] = (yield* partner.query(brief)).orders?.rows ?? [];
-					expect(row?.['party']).toEqual(expect.objectContaining({ name: 'Acme', code: 'AC' }));
-					expect(row?.['party']).not.toHaveProperty('credit_limit');
-					const named = dynamicRead({
-						orders: { output: 'brief', fields: ['party'] },
-						'orders.party': { fields: ['name', 'credit_limit'] }
-					});
+					const partner = yield* t.as(t.member(['partner']));
+					const brief = dynamic_read({ orders: { output: 'brief', where: { number: { eq: 'N1' } }, fields: ['party'], party: {} } });
+					const briefPage = yield* partner.query(brief).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithBriefParty)));
+					const [row] = briefPage.orders.rows;
+					expect(row?.party).toEqual(expect.objectContaining({ name: 'Acme', code: 'AC' }));
+					expect(row?.party).not.toHaveProperty('credit_limit');
+					const named = dynamic_read({ orders: { output: 'brief', fields: ['party'], party: { fields: ['name', 'credit_limit'] } } });
 					expect(yield* Effect.flip(partner.query(named))).toMatchObject({ code: 'invalid' });
 					// the partner holds no `default` grant: reading it is forbidden
-					expect(yield* Effect.flip(partner.query(dynamicRead({ orders: {} })))).toMatchObject({
+					expect(yield* Effect.flip(partner.query(dynamic_read({ orders: {} })))).toMatchObject({
 						code: 'forbidden'
 					});
 					// the brief rows are the partner's grant's: the northern orders only
-					const all = dynamicRead({ orders: { output: 'brief', orderBy: 'number' } });
-					expect(ids((yield* partner.query(all)).orders?.rows ?? [])).toEqual([N1, N2]);
+					const all = dynamic_read({ orders: { output: 'brief', order_by: 'number' } });
+					const allPage = yield* partner.query(all).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrderIds)));
+					expect(ids(allPage.orders.rows)).toEqual([N1, N2]);
 					// a caller reading `default` reads the credit limit
-					expect(
-						(yield* t.as(t.member(['reviewer'])).query(
-							dynamicRead({
-								orders: { where: { number: { eq: 'N1' } }, fields: ['party'] },
-								'orders.party': { fields: ['name', 'credit_limit'] }
-							})
-						)).orders?.rows[0]?.['party']
-					).toHaveProperty('credit_limit');
+					const creditPage = yield* (yield* t.as(t.member(['reviewer']))).query(
+							dynamic_read({ orders: { where: { number: { eq: 'N1' } }, fields: ['party'], party: { fields: ['name', 'credit_limit'] } } })
+						).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrdersWithCreditParty)));
+					expect(creditPage.orders.rows[0]?.party).toHaveProperty('credit_limit');
 				})
 			)
 	);
@@ -317,9 +360,10 @@ layer(workspace)('read layers: one access point, the root policy alone', (it) =>
 					const { route, rep } = yield* setup;
 					for (const request of [
 						{ orders: { nope: 1 } },
-						{ orders: {}, 'orders.customer': {} },
-						{ 'orders.lines.order.lines.order.lines': {} },
-						{ orders: {}, 'orders.lines': { asOf: '2026-01-01T00:00:00Z' } }
+						{ orders: { customer: {} } },
+						{ orders: { lines: { order: { lines: { order: { lines: {} } } } } } },
+						{ orders: { lines: { as_of: '2026-01-01T00:00:00Z' } } },
+						{ 'orders.lines': {} }
 					])
 						expect(yield* Effect.flip(raw(route, rep.authority, request))).toMatchObject({
 							_tag: 'ReadFailed'
@@ -344,7 +388,7 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 		)
 	);
 
-	it.effect('`deny` refuses the whole batch at the row, path and field it names', () =>
+	it.effect('a refusal refuses the whole batch at the row and field it names', () =>
 		run(
 			Effect.gen(function* () {
 				const { t, route, rep } = yield* setup;
@@ -358,13 +402,13 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 					code: 'refused',
 					rule: 'rep.orders.create',
 					row: 1,
-					path: 'orders.lines',
-					field: 'quantity'
+					field: 'region'
 				});
-				const written = dynamicRead({ orders: { where: { number: { in: ['OK', 'BAD'] } } } });
-				expect((yield* t.storedQuery(written)).orders?.rows).toEqual([]);
+				const written = dynamic_read({ orders: { where: { number: { in: ['OK', 'BAD'] } } } });
+				const writtenPage = yield* t.stored_query(written).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrderIds)));
+				expect(writtenPage.orders.rows).toEqual([]);
 				expect(
-					yield* act(route, t, rep.authority, 'orders.delete', [{ target: N1 }])
+					yield* act(route, t, rep.authority, 'orders.delete', [{ target: { id: N1, revision: 1 } }])
 				).toMatchObject({ kind: 'refused', code: 'refused', rule: 'rep.orders.delete' });
 			})
 		)
@@ -378,7 +422,7 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 					yield* act(route, t, rep.authority, 'orders.create', [
 						{ number: 'BIG-1', region: 'north', lines: [{ product: 'a', quantity: 1 }] }
 					])
-				).toMatchObject({ kind: 'pendingApproval', requestId: expect.any(String) });
+				).toMatchObject({ kind: 'pending_approval', request_id: expect.any(String) });
 				const plain = yield* act(route, t, rep.authority, 'orders.create', [
 					{ number: 'SMALL', region: 'north', lines: [{ product: 'a', quantity: 1 }] }
 				]);
@@ -388,16 +432,3 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 	);
 });
 
-/** A many-layer's rows off a dynamic answer's row. */
-function rowsOf(value: Json | undefined): readonly { readonly id: string }[] {
-	return Array.isArray(value)
-		? value.flatMap((row) =>
-				typeof row === 'object' &&
-				row !== null &&
-				!Array.isArray(row) &&
-				typeof row['id'] === 'string'
-					? [{ id: row['id'] }]
-					: []
-			)
-		: [];
-}

@@ -6,8 +6,10 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Schema } from 'effect';
+import { parse } from '../chat/http.ts';
 
-export type SimulatedMessage = {
+type SimulatedMessage = {
 	readonly seq: number;
 	readonly channel: 'whatsapp' | 'telegram' | 'chat';
 	/** The connected account: a WhatsApp number, a bot's token id or a chat connection. */
@@ -19,17 +21,19 @@ export type SimulatedMessage = {
 	readonly text: string;
 	readonly at: string;
 };
-type Json = { readonly [key: string]: unknown };
+const Json = Schema.Record(Schema.String, Schema.Unknown);
+type Json = typeof Json.Type;
 type Bot = { readonly token: string; url?: string; secret?: string };
 /** A message as the `chat` channel's history holds it, and as its webhook carries it. */
-export type SimulatedChatMessage = {
-	readonly id: string;
-	readonly thread: string;
-	readonly from: string;
-	readonly name: string;
-	readonly text: string;
-	readonly sentAt: string;
-};
+export const SimulatedChatMessage = Schema.Struct({
+	id: Schema.String,
+	thread: Schema.String,
+	from: Schema.String,
+	name: Schema.String,
+	text: Schema.String,
+	sent_at: Schema.String
+});
+export type SimulatedChatMessage = typeof SimulatedChatMessage.Type;
 type Chat = { url: string; secret: string; readonly history: SimulatedChatMessage[] };
 
 const BODY_BYTES = 1_048_576;
@@ -42,14 +46,15 @@ const send = (res: ServerResponse, status: number, body: unknown) => {
 const bodyOf = async (req: IncomingMessage): Promise<Json> => {
 	const chunks: Buffer[] = [];
 	let size = 0;
-	for await (const chunk of req as AsyncIterable<Buffer>) {
-		size += chunk.byteLength;
+	for await (const chunk of req) {
+		const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+		size += bytes.byteLength;
 		if (size > BODY_BYTES) throw new Error('body too large');
-		chunks.push(chunk);
+		chunks.push(bytes);
 	}
 	const text = Buffer.concat(chunks).toString('utf8');
 	if (!(req.headers['content-type'] ?? '').includes('json') || text === '') return {};
-	return JSON.parse(text) as Json;
+	return parse(Json, text);
 };
 
 /** The whole-page phone: pick a connected account, write as the customer, read what came back. */
@@ -140,7 +145,7 @@ export async function startSimulator(port = 0) {
 			from: digits(from),
 			name: named(name, 'Simulated customer'),
 			text: named(text, ''),
-			sentAt: named(at, new Date().toISOString())
+			sent_at: named(at, new Date().toISOString())
 		};
 		chat.history.push(message);
 		if (drop !== true) {
@@ -213,7 +218,7 @@ export async function startSimulator(port = 0) {
 					thread = url.searchParams.get('thread');
 				return send(res, 200, {
 					messages: (chats.get(url.searchParams.get('account') ?? '')?.history ?? []).filter(
-						(one) => one.thread === thread && Date.parse(one.sentAt) >= since
+						(one) => one.thread === thread && Date.parse(one.sent_at) >= since
 					)
 				});
 			}
@@ -313,7 +318,8 @@ export async function startSimulator(port = 0) {
 		});
 	});
 	await new Promise<void>((listening) => server.listen(port, '127.0.0.1', listening));
-	const { port: bound } = server.address() as AddressInfo;
+	const address = server.address();
+	const bound = address !== null && typeof address === 'object' ? address.port : port;
 	return {
 		url: `http://127.0.0.1:${bound}`,
 		messages: () => log,

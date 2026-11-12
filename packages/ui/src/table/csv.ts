@@ -1,4 +1,4 @@
-import { formatValue as show, currencyOf, minorDigits, shownKind } from '../kinds/kind.js';
+import { format_value as show, currencyOf, minorDigits, shownKind } from '../kinds/kind.js';
 import type { Kind } from '../kinds/kind.js';
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { Values } from '../model/types.js';

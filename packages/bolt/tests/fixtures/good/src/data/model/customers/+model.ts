@@ -1,13 +1,13 @@
-import { model } from '../../../../../../../src/index.ts';
+import { model } from '../../../../.norbital/models/customers.ts';
 
-export default model('customers', {
+export default model({
 	description: 'Buyers',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		rating: { kind: 'custom', of: 'rating', optional: true },
 		order_count: { kind: 'count', of: 'orders' }
 	},
-	read: 'all',
-	create: { columns: { customers: ['name', 'rating'] } }
+	outputs: { default: { fields: 'all' } },
+	create: { columns: { fields: ['name', 'rating'] } }
 });

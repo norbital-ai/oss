@@ -5,8 +5,8 @@ import { TestClock } from 'effect/testing';
 import {
 	OP_HEADERS,
 	OP_WINDOW_MS,
-	signOp,
-	verifyOp,
+	sign_op,
+	verify_op,
 	type NonceStore,
 	type OpKey
 } from '../src/host-op.ts';
@@ -31,7 +31,7 @@ const request = (headers: { readonly [h: string]: string }) =>
 	new Request('https://acme.example/__bolt/ops', { method: 'POST', headers, body });
 /** The refusal reason, or the operation name. */
 const outcome = (headers: { readonly [h: string]: string }, nonces: NonceStore, signed = body) =>
-	verifyOp(key, request(headers), signed, nonces).pipe(
+	verify_op(key, request(headers), signed, nonces).pipe(
 		Effect.catchTag('OpRefused', (e) => Effect.succeed(`refused:${e.reason}`))
 	);
 
@@ -40,7 +40,7 @@ describe('std/host-op', () => {
 		Effect.gen(function* () {
 			yield* TestClock.setTime(NOW);
 			const nonces = store(),
-				headers = signOp(key, 'acme.example', 'session.mint', body, NOW);
+				headers = sign_op(key, 'acme.example', 'session.mint', body, NOW);
 			assert.equal(headers[OP_HEADERS.op], 'session.mint');
 			assert.equal(yield* outcome(headers, nonces), 'session.mint');
 			assert.equal(yield* outcome(headers, nonces), 'refused:replayed');
@@ -53,20 +53,20 @@ describe('std/host-op', () => {
 			const nonces = store();
 			assert.equal(
 				yield* outcome(
-					signOp(key, 'acme.example', 'host.ping', body, NOW - OP_WINDOW_MS - 1),
+					sign_op(key, 'acme.example', 'host.ping', body, NOW - OP_WINDOW_MS - 1),
 					nonces
 				),
 				'refused:stale'
 			);
 			assert.equal(
 				yield* outcome(
-					signOp(key, 'acme.example', 'host.ping', body, NOW + OP_WINDOW_MS + 1),
+					sign_op(key, 'acme.example', 'host.ping', body, NOW + OP_WINDOW_MS + 1),
 					nonces
 				),
 				'refused:stale'
 			);
 			assert.equal(
-				yield* outcome(signOp(key, 'acme.example', 'host.ping', body, NOW - OP_WINDOW_MS), nonces),
+				yield* outcome(sign_op(key, 'acme.example', 'host.ping', body, NOW - OP_WINDOW_MS), nonces),
 				'host.ping'
 			);
 			assert.equal(nonces.seen.size, 1);
@@ -78,16 +78,16 @@ describe('std/host-op', () => {
 			yield* TestClock.setTime(NOW);
 			const nonces = store();
 			const forged = [
-				signOp({ ...key, secret: 'other' }, 'acme.example', 'host.ping', body, NOW),
-				signOp({ ...key, scope: 'other' }, 'acme.example', 'host.ping', body, NOW),
-				signOp(key, 'other.example', 'host.ping', body, NOW),
-				{ ...signOp(key, 'acme.example', 'host.ping', body, NOW), [OP_HEADERS.op]: 'session.mint' }
+				sign_op({ ...key, secret: 'other' }, 'acme.example', 'host.ping', body, NOW),
+				sign_op({ ...key, scope: 'other' }, 'acme.example', 'host.ping', body, NOW),
+				sign_op(key, 'other.example', 'host.ping', body, NOW),
+				{ ...sign_op(key, 'acme.example', 'host.ping', body, NOW), [OP_HEADERS.op]: 'session.mint' }
 			];
 			for (const headers of forged)
-				assert.equal(yield* outcome(headers, nonces), 'refused:badSignature');
+				assert.equal(yield* outcome(headers, nonces), 'refused:bad_signature');
 			assert.equal(
-				yield* outcome(signOp(key, 'acme.example', 'host.ping', body, NOW), nonces, '{}'),
-				'refused:badSignature'
+				yield* outcome(sign_op(key, 'acme.example', 'host.ping', body, NOW), nonces, '{}'),
+				'refused:bad_signature'
 			);
 			assert.equal(nonces.seen.size, 0);
 		})
@@ -97,7 +97,7 @@ describe('std/host-op', () => {
 		Effect.gen(function* () {
 			yield* TestClock.setTime(NOW);
 			const nonces = store(),
-				signed = signOp(key, 'acme.example', 'host.ping', body, NOW);
+				signed = sign_op(key, 'acme.example', 'host.ping', body, NOW);
 			assert.equal(yield* outcome({}, nonces), 'refused:unsigned');
 			assert.equal(
 				yield* outcome({ ...signed, [OP_HEADERS.nonce]: 'short' }, nonces),

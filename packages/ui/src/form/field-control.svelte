@@ -10,7 +10,7 @@
 
 <script lang="ts">
 	import DescriptionHint from './description-hint.svelte';
-	import { cn, uiText } from '../primitives/utils.js';
+	import { cn, ui_text } from '../primitives/utils.js';
 
 	let {
 		id,
@@ -36,7 +36,7 @@
 		dense?: boolean;
 		children: Snippet;
 	} = $props();
-	const t = uiText();
+	const t = ui_text();
 	const description = $derived(error ?? help);
 	setContext(FIELD_PRESENTATION, {
 		get id() {

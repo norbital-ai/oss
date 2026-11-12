@@ -8,54 +8,68 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 	import * as Popover from '../popover/index.js';
 	import { cn, noHover } from '../utils.js';
 	import Content from './tooltip-content.svelte';
+	import type { SnakeProps } from '../bits.js';
 
 	type ContentProps = ComponentProps<typeof Content>;
 
 	let {
-		delayDuration = 100,
+		delay_duration = 100,
 		disabled = false,
-		ignoreNonKeyboardFocus = false,
+		ignore_non_keyboard_focus = false,
 		side = 'top',
-		sideOffset = 0,
+		side_offset = 0,
 		align,
-		avoidCollisions = true,
-		collisionPadding = 8,
+		avoid_collisions = true,
+		collision_padding = 8,
 		text,
-		contentClass,
-		arrowClasses,
+		content_class,
+		arrow_classes,
 		trigger,
 		content,
+		on_open_change,
+		on_open_change_complete,
+		disable_hoverable_content,
+		disable_close_on_trigger_click,
+		trigger_id,
 		...rootProps
 	}: {
 		/** Hover open delay in ms. */
-		delayDuration?: number;
+		delay_duration?: number;
 		/** When true, renders the trigger without a tooltip. */
 		disabled?: boolean;
 		/**
 		 * When true, focus from dialog autofocus / mouse click does not open the tooltip —
 		 * only keyboard focus does.
 		 */
-		ignoreNonKeyboardFocus?: boolean;
+		ignore_non_keyboard_focus?: boolean;
 		side?: ContentProps['side'] | undefined;
-		sideOffset?: ContentProps['sideOffset'];
+		side_offset?: ContentProps['side_offset'];
 		align?: ContentProps['align'] | undefined;
 		/**
 		 * Let Floating UI flip/shift the content to keep it on screen. Bits UI defaults this to
-		 * `true`, but leaves `collisionPadding` at `0`; we default to an 8px gutter instead.
+		 * `true`, but leaves `collision_padding` at `0`; we default to an 8px gutter instead.
 		 *
 		 * Collision handling only *moves* the content — it never shrinks it. Rich tooltip bodies
 		 * must still cap their own height, or they overflow the viewport no matter what.
 		 */
-		avoidCollisions?: ContentProps['avoidCollisions'];
-		collisionPadding?: ContentProps['collisionPadding'];
+		avoid_collisions?: ContentProps['avoid_collisions'];
+		collision_padding?: ContentProps['collision_padding'];
 		/** Simple string body. Prefer `content` for richer markup. */
 		text?: string | undefined;
-		contentClass?: string;
+		content_class?: string;
 		/** Text-color class for the SVG arrow; match this when overriding the content surface. */
-		arrowClasses?: string;
+		arrow_classes?: string;
 		trigger: Snippet<[{ props: Record<string, unknown> }]>;
 		content?: Snippet;
-	} & Omit<TooltipPrimitive.RootProps, 'children' | 'ignoreNonKeyboardFocus'> = $props();
+		on_open_change?: TooltipPrimitive.RootProps['onOpenChange'];
+		on_open_change_complete?: TooltipPrimitive.RootProps['onOpenChangeComplete'];
+	} & SnakeProps<Omit<TooltipPrimitive.RootProps, 'children' | 'onOpenChange' | 'onOpenChangeComplete'>, {
+		delay_duration: 'delayDuration';
+		ignore_non_keyboard_focus: 'ignoreNonKeyboardFocus';
+		disable_hoverable_content: 'disableHoverableContent';
+		disable_close_on_trigger_click: 'disableCloseOnTriggerClick';
+		trigger_id: 'triggerId';
+	}> = $props();
 
 	const hasBody = $derived(Boolean(text) || Boolean(content));
 	let tapped = $state(false);
@@ -75,7 +89,8 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 {:else if noHover.current}
 	<Popover.Root
 		bind:open={() => open, (next) => (tapped = next)}
-		onOpenChange={rootProps.onOpenChange}
+		{on_open_change}
+		{on_open_change_complete}
 	>
 		<Popover.Trigger>
 			{#snippet child({ props })}
@@ -95,16 +110,16 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		<!-- a hint: focus stays where it is, or a tap on a field's hint would blur the field -->
 		<Popover.Content
 			{side}
-			{sideOffset}
+			{side_offset}
 			{align}
-			{avoidCollisions}
-			{collisionPadding}
-			trapFocus={false}
-			onOpenAutoFocus={(e: Event) => e.preventDefault()}
+			{avoid_collisions}
+			{collision_padding}
+			trap_focus={false}
+			on_open_auto_focus={(e: Event) => e.preventDefault()}
 			class={cn(
 				'px-3 py-1.5 text-xs text-balance',
-				// repository-health:allow UI25 -- pass-through of the caller's `contentClass` prop; its tokens are literal at the call site
-				contentClass,
+				// repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site
+				content_class,
 				// after the caller's: a desktop cap such as `max-w-96` is wider than a phone
 				'max-w-[min(20rem,calc(100vw-1rem))]'
 			)}
@@ -113,8 +128,15 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 		</Popover.Content>
 	</Popover.Root>
 {:else}
-	<TooltipPrimitive.Provider {delayDuration} {ignoreNonKeyboardFocus}>
-		<TooltipPrimitive.Root {...rootProps} {ignoreNonKeyboardFocus}>
+	<TooltipPrimitive.Provider delayDuration={delay_duration} ignoreNonKeyboardFocus={ignore_non_keyboard_focus}>
+		<TooltipPrimitive.Root
+			{...rootProps}
+			ignoreNonKeyboardFocus={ignore_non_keyboard_focus}
+			disableHoverableContent={disable_hoverable_content}
+			disableCloseOnTriggerClick={disable_close_on_trigger_click}
+			triggerId={trigger_id}
+			onOpenChange={on_open_change}
+			onOpenChangeComplete={on_open_change_complete}>
 			<TooltipPrimitive.Trigger>
 				{#snippet child({ props })}
 					{@render trigger({ props })}
@@ -122,12 +144,12 @@ A tooltip on hover or focus of its trigger, with a text or snippet body; where n
 			</TooltipPrimitive.Trigger>
 			<Content
 				{side}
-				{sideOffset}
+				{side_offset}
 				{align}
-				{avoidCollisions}
-				{collisionPadding}
-				{arrowClasses}
-				class={/* repository-health:allow UI25 -- pass-through of the caller's `contentClass` prop; its tokens are literal at the call site */ contentClass}
+				{avoid_collisions}
+				{collision_padding}
+				{arrow_classes}
+				class={/* repository-health:allow UI25 -- pass-through of the caller's `content_class` prop; its tokens are literal at the call site */ content_class}
 			>
 				{@render body()}
 			</Content>

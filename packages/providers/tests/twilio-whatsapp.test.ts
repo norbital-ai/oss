@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 // inbound with media, status callbacks as delivery events, and the Messages API send shape.
 import { describe, expect, it } from '@effect/vitest';
 import { twilioSignature, twilioWhatsapp } from '../src/twilio/whatsapp.ts';
-import { fakeFetch, file, host, json, signal } from './kit.ts';
+import { required, fakeFetch, file, host, json, signal } from './kit.ts';
 
 const SID = `AC${'1'.repeat(32)}`,
 	TOKEN = 'f'.repeat(32),
@@ -37,31 +37,31 @@ describe('WhatsApp via Twilio', () => {
 							? json({ message: 'nope', code: 21211 }, status)
 							: undefined
 				]);
-			const refused = yield* host(twilioWhatsapp(), answer(400), STORED, { webhookUrl: URL_ });
+			const refused = yield* host(twilioWhatsapp(), answer(400), STORED, { webhook_url: URL_ });
 			expect(
-				yield* Effect.flip(refused.link.send!({ to: '+6591111111', text: 'hi' }, undefined))
+				yield* Effect.flip(required(refused.link.send)({ to: '+6591111111', text: 'hi' }, undefined))
 			).toMatchObject({ _tag: 'ProviderRefused', permanent: true, code: '400' });
-			const down = yield* host(twilioWhatsapp(), answer(503), STORED, { webhookUrl: URL_ });
+			const down = yield* host(twilioWhatsapp(), answer(503), STORED, { webhook_url: URL_ });
 			expect(
-				yield* Effect.flip(down.link.send!({ to: '+6591111111', text: 'hi' }, undefined))
+				yield* Effect.flip(required(down.link.send)({ to: '+6591111111', text: 'hi' }, undefined))
 			).toMatchObject({ _tag: 'ProviderUnavailable' });
 		})
 	);
 	it.effect('validates the SID, token and sender, then reads the account with them', () =>
 		Effect.gen(function* () {
 			const f = api(),
-				h = yield* host(twilioWhatsapp(), f, {}, { webhookUrl: URL_ });
+				h = yield* host(twilioWhatsapp(), f, {}, { webhook_url: URL_ });
 			expect(
 				(yield* Effect.flip(
-					h.link.pair!({ accountSid: 'nope', authToken: TOKEN, from: '+6580000000' })
+					required(h.link.pair)({ accountSid: 'nope', authToken: TOKEN, from: '+6580000000' })
 				)).message
 			).toMatch(/account SID/);
 			expect(
-				(yield* Effect.flip(h.link.pair!({ accountSid: SID, authToken: TOKEN }))).message
+				(yield* Effect.flip(required(h.link.pair)({ accountSid: SID, authToken: TOKEN }))).message
 			).toMatch(/sender number is required/);
 			expect(f.calls).toEqual([]);
-			yield* h.link.pair!({ accountSid: SID, authToken: TOKEN, from: '6580000000' });
-			expect(f.calls[0]!.headers['authorization']).toBe(
+			yield* required(h.link.pair)({ accountSid: SID, authToken: TOKEN, from: '6580000000' });
+			expect(required(f.calls[0]).headers['authorization']).toBe(
 				`Basic ${Buffer.from(`${SID}:${TOKEN}`).toString('base64')}`
 			);
 			expect(Object.fromEntries(h.values)).toEqual(STORED);
@@ -74,16 +74,16 @@ describe('WhatsApp via Twilio', () => {
 	);
 	it.effect('refuses a request signed with another token or for another URL', () =>
 		Effect.gen(function* () {
-			const h = yield* host(twilioWhatsapp(), api(), STORED, { webhookUrl: URL_ });
+			const h = yield* host(twilioWhatsapp(), api(), STORED, { webhook_url: URL_ });
 			const params = { MessageSid: 'SM9', From: 'whatsapp:+6591111111', Body: 'hi' };
-			expect((yield* h.link.webhook!(form(params, '0'.repeat(32)))).status).toBe(403);
+			expect((yield* required(h.link.webhook)(form(params, '0'.repeat(32)))).status).toBe(403);
 			const moved = form(params);
 			const other = new Request('http://10.0.0.1/hooks/integration/desk?x=1', {
 				method: 'POST',
 				headers: moved.headers,
 				body: new URLSearchParams(params)
 			});
-			expect((yield* h.link.webhook!(other)).status).toBe(403);
+			expect((yield* required(h.link.webhook)(other)).status).toBe(403);
 			expect(h.events).toEqual([]);
 		})
 	);
@@ -91,8 +91,8 @@ describe('WhatsApp via Twilio', () => {
 		'decodes an inbound message with its media, and a status callback as a delivery event',
 		() =>
 			Effect.gen(function* () {
-				const h = yield* host(twilioWhatsapp(), api(), STORED, { webhookUrl: URL_ });
-				const r = yield* h.link.webhook!(
+				const h = yield* host(twilioWhatsapp(), api(), STORED, { webhook_url: URL_ });
+				const r = yield* required(h.link.webhook)(
 					form({
 						MessageSid: 'SM9',
 						From: 'whatsapp:+6591111111',
@@ -117,14 +117,14 @@ describe('WhatsApp via Twilio', () => {
 					],
 					bins: [new Uint8Array([9, 9])]
 				});
-				yield* h.link.webhook!(
+				yield* required(h.link.webhook)(
 					form({ MessageSid: 'SM1', MessageStatus: 'undelivered', ErrorCode: '63016' })
 				);
-				yield* h.link.webhook!(form({ MessageSid: 'SM1', MessageStatus: 'read' }));
+				yield* required(h.link.webhook)(form({ MessageSid: 'SM1', MessageStatus: 'read' }));
 				expect(h.events.slice(1)).toMatchObject([
 					{
 						kind: 'delivery',
-						providerId: 'SM1',
+						provider_id: 'SM1',
 						report: {
 							kind: 'bounced',
 							provider: 'twilio',
@@ -133,7 +133,7 @@ describe('WhatsApp via Twilio', () => {
 							permanent: true
 						}
 					},
-					{ kind: 'delivery', providerId: 'SM1', report: { kind: 'read', provider: 'twilio' } }
+					{ kind: 'delivery', provider_id: 'SM1', report: { kind: 'read', provider: 'twilio' } }
 				]);
 			})
 	);
@@ -145,8 +145,8 @@ describe('WhatsApp via Twilio', () => {
 					(c) => (c.url.endsWith('/gone') ? new Response('nope', { status: 500 }) : undefined),
 					(c) => (c.url.endsWith('/ok') ? new Response(new Uint8Array([7])) : undefined)
 				]);
-				const h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
-				yield* h.link.webhook!(
+				const h = yield* host(twilioWhatsapp(), f, STORED, { webhook_url: URL_ });
+				yield* required(h.link.webhook)(
 					form({
 						MessageSid: 'SM9',
 						From: 'whatsapp:+6591111111',
@@ -171,12 +171,12 @@ describe('WhatsApp via Twilio', () => {
 						bins: [new Uint8Array([7])]
 					}
 				]);
-				expect(f.calls.find((c) => c.url.endsWith('/ok'))!.headers['authorization']).toBe(
+				expect(required(f.calls.find((c) => c.url.endsWith('/ok'))).headers['authorization']).toBe(
 					`Basic ${Buffer.from(`${SID}:${TOKEN}`).toString('base64')}`
 				);
 			})
 	);
-	it.effect("sentAt is the platform's date_sent, the arrival only when it cannot be read", () =>
+	it.effect("sent_at is the platform's date_sent, the arrival only when it cannot be read", () =>
 		Effect.gen(function* () {
 			const f = fakeFetch([
 				(c) =>
@@ -184,20 +184,20 @@ describe('WhatsApp via Twilio', () => {
 						? json({ date_sent: 'Fri, 24 May 2019 17:44:50 +0000' })
 						: undefined
 			]);
-			const h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
+			const h = yield* host(twilioWhatsapp(), f, STORED, { webhook_url: URL_ });
 			const hello = { From: 'whatsapp:+6591111111', Body: 'hi' };
-			yield* h.link.webhook!(form({ ...hello, MessageSid: 'SM9' }));
-			yield* h.link.webhook!(form({ ...hello, MessageSid: 'SM8' }));
+			yield* required(h.link.webhook)(form({ ...hello, MessageSid: 'SM9' }));
+			yield* required(h.link.webhook)(form({ ...hello, MessageSid: 'SM8' }));
 			expect(h.events).toMatchObject([
-				{ messages: [{ sentAt: '2019-05-24T17:44:50.000Z' }] },
-				{ messages: [{ sentAt: new Date(0).toISOString() }] }
+				{ messages: [{ sent_at: '2019-05-24T17:44:50.000Z' }] },
+				{ messages: [{ sent_at: new Date(0).toISOString() }] }
 			]);
 		})
 	);
 	it.effect('a shared location carries its place as the text', () =>
 		Effect.gen(function* () {
-			const h = yield* host(twilioWhatsapp(), api(), STORED, { webhookUrl: URL_ });
-			yield* h.link.webhook!(
+			const h = yield* host(twilioWhatsapp(), api(), STORED, { webhook_url: URL_ });
+			yield* required(h.link.webhook)(
 				form({
 					MessageSid: 'SM9',
 					From: 'whatsapp:+6591111111',
@@ -250,9 +250,9 @@ describe('WhatsApp via Twilio', () => {
 								})
 							: undefined
 				]);
-				const h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
-				const page = yield* h.link.reconcile!('whatsapp:+6591111111', '2026-11-01T12:00:00.000Z');
-				const first = new URL(f.calls[0]!.url);
+				const h = yield* host(twilioWhatsapp(), f, STORED, { webhook_url: URL_ });
+				const page = yield* required(h.link.reconcile)('whatsapp:+6591111111', '2026-11-01T12:00:00.000Z');
+				const first = new URL(required(f.calls[0]).url);
 				expect(Object.fromEntries(first.searchParams)).toEqual({
 					From: 'whatsapp:+6591111111',
 					To: 'whatsapp:+6580000000',
@@ -266,14 +266,14 @@ describe('WhatsApp via Twilio', () => {
 						{
 							id: 'SM3',
 							thread: 'whatsapp:+6591111111',
-							sentAt: '2026-11-02T10:00:00.000Z',
+							sent_at: '2026-11-02T10:00:00.000Z',
 							from: { handle: 'whatsapp:+6591111111', name: null },
 							text: 'SM3',
 							group: false,
 							attachments: [{ name: 'whatsapp-0.jpeg', mime: 'image/jpeg', bytes: 0 }]
 						},
-						{ id: 'SM4', sentAt: '2026-11-03T09:00:00.000Z', attachments: [] },
-						{ id: 'SM2', sentAt: '2026-11-02T09:00:00.000Z' }
+						{ id: 'SM4', sent_at: '2026-11-03T09:00:00.000Z', attachments: [] },
+						{ id: 'SM2', sent_at: '2026-11-02T09:00:00.000Z' }
 					]
 				});
 				expect(page.messages).toHaveLength(3);
@@ -283,11 +283,11 @@ describe('WhatsApp via Twilio', () => {
 	it.effect("sends from the account's own sender with this webhook as the status callback", () =>
 		Effect.gen(function* () {
 			const f = api(),
-				h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
+				h = yield* host(twilioWhatsapp(), f, STORED, { webhook_url: URL_ });
 			expect(
-				yield* h.link.send!({ to: '6591111111@s.whatsapp.net', text: 'hi' }, undefined)
-			).toEqual({ providerId: 'SM1' });
-			const call = f.calls.at(-1)!;
+				yield* required(h.link.send)({ to: '6591111111@s.whatsapp.net', text: 'hi' }, undefined)
+			).toEqual({ provider_id: 'SM1' });
+			const call = required(f.calls.at(-1));
 			expect(call.url).toBe(`https://api.twilio.com/2010-04-01/Accounts/${SID}/Messages.json`);
 			expect(Object.fromEntries(new URLSearchParams(call.body))).toEqual({
 				From: 'whatsapp:+6580000000',
@@ -302,8 +302,8 @@ describe('WhatsApp via Twilio', () => {
 		() =>
 			Effect.gen(function* () {
 				const f = api(),
-					h = yield* host(twilioWhatsapp(), f, STORED, { webhookUrl: URL_ });
-				yield* h.link.send!({ to: '+6591111111', text: 'hi' }, [
+					h = yield* host(twilioWhatsapp(), f, STORED, { webhook_url: URL_ });
+				yield* required(h.link.send)({ to: '+6591111111', text: 'hi' }, [
 					file('report.pdf', 'application/pdf', '%PDF r')
 				]);
 				expect(
@@ -325,7 +325,7 @@ describe('WhatsApp via Twilio', () => {
 				const before = f.calls.length;
 				expect(
 					yield* Effect.flip(
-						h.link.send!({ to: '+6591111111', text: 'hi' }, [
+						required(h.link.send)({ to: '+6591111111', text: 'hi' }, [
 							file('report.pdf', 'application/pdf', '%PDF r', null)
 						])
 					)

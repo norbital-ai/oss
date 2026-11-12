@@ -1,18 +1,23 @@
+<!--
+@component
+Stored files behind one compact trigger: up to three thumbnails and the name or count. Its popover lists the files a page
+at a time; picking one shows its preview with Download, and Remove when `on_remove` is given.
+-->
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { uiText } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
+	import { ui_text } from '../primitives/utils.js';
 	import FilePreview from './file-preview.svelte';
-	import { fileIcon, type FileRef } from './kind.js';
+	import { file_icon, type FileRef } from './kind.js';
 
-	let { refs, onRemove }: { refs: readonly FileRef[]; onRemove?: (ref: FileRef) => void } =
+	let { ctx, refs, on_remove }: { ctx: UiContext; refs: readonly FileRef[]; on_remove?: (ref: FileRef) => void } =
 		$props();
-	const host = useKinds();
-	const t = uiText();
+	const host = $derived(ctx.ui.kinds);
+	const t = ui_text();
 	const pageSize = 6;
 	let pageIndex = $state(0);
 	let selected = $state<string | null>(null);
@@ -43,7 +48,7 @@
 </script>
 
 {#snippet thumbnail(ref: FileRef)}
-	{@const url = host.fileUrl?.(ref, { preview: 64 })}
+	{@const url = host.file_url?.(ref, { preview: 64 })}
 	<span class="grid size-5 shrink-0 place-items-center overflow-hidden rounded-sm bg-muted">
 		{#if ref.mime.startsWith('image/') && url !== undefined}
 			<Image
@@ -52,17 +57,17 @@
 				width={20}
 				height={20}
 				class="size-full"
-				imageClass="size-full object-cover"
+				image_class="size-full object-cover"
 			/>
 		{:else}
-			<Icon icon={fileIcon(ref.mime)} class="size-3.5 text-muted-foreground" />
+			<Icon icon={file_icon(ref.mime)} class="size-3.5 text-muted-foreground" />
 		{/if}
 	</span>
 {/snippet}
 
 <Popover.Root
 	bind:open
-	onOpenChange={(open) => {
+	on_open_change={(open) => {
 		if (!open) {
 			pageIndex = 0;
 			selected = null;
@@ -94,12 +99,12 @@
 					{t('back')}
 				</Button>
 			{/if}
-			<FilePreview
+			<FilePreview {ctx}
 				file={active}
-				onRemove={onRemove
+				on_remove={on_remove
 					? () => {
 							open = false;
-							onRemove(active);
+							on_remove(active);
 						}
 					: undefined}
 			/>

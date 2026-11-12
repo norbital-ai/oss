@@ -167,6 +167,6 @@ export const fake = (log: string[] = [], options: BaileysOptions = {}) => {
 		opened,
 		socket,
 		control,
-		provider: baileys({ open, graceMs: 100, retryMs: 300, ...options })
+		provider: baileys({ open, grace_ms: 100, retry_ms: 300, ...options })
 	};
 };

@@ -85,7 +85,7 @@ describe('the membrane', () => {
 		expect(thrown).toMatchObject({ message: 'duplicate key', sqlstate: '23505' });
 		const failure = {
 			_tag: 'HostFailure',
-			code: 'notFound',
+			code: 'not_found',
 			phase: 'admission',
 			message: 'no artifact'
 		};

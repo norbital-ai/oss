@@ -1,12 +1,12 @@
 // A notice (L-BOLT-354/356): one row per inbox member it reaches, or one per notice on another channel. `once`
-// dedupes (an `on conflict` arbiter). The delivery and push triggers are the engine's (`engine/schema/engine.ts`).
-// A member's inbox; written by the `bolt.notify` run and `ctx.notify`.
-import { model } from '../../../../decl/model.ts';
+// dedupes (an `on conflict` arbiter). Its native writer queues delivery and push jobs in the same captured statement.
+// A member's inbox; effects and automations write notices through `ctx.notify`.
+import { bind_system_model } from '../../../../decl/model.ts';
 
-export default model('sys_notification', {
+export default bind_system_model('sys_notification')({
 	description:
 		'A notification: its recipient, title, body, attachments and link, and when its member read it.',
-	label: 'title',
+	record_label: 'record.title',
 	fields: {
 		recipient: { kind: 'json' },
 		title: { kind: 'text' },
@@ -14,14 +14,15 @@ export default model('sys_notification', {
 		link: { kind: 'json', optional: true },
 		/** Its files: `FileRef`s, and documents (`{ document, to, name }`) converted at delivery. */
 		attachments: { kind: 'json', default: [] },
-		once: { kind: 'text', optional: true, unique: true },
+		once: { kind: 'text', optional: true },
 		at: { kind: 'instant' },
 		member: { kind: 'text', optional: true },
 		read_at: { kind: 'instant', optional: true }
 	},
+	constraints: { once: { unique: ['once'] } },
 	table: {
-		primary: 'text',
-		indexes: [{ on: ['member', 'at'], where: { member: { isNull: false } } }]
+		primary: 'text'
 	},
-	read: 'all'
+	outputs: { default: { fields: 'all' } },
+	indexes: { by_member_at: { on: ['member', 'at'], where: { member: { is_null: false } } } }
 });

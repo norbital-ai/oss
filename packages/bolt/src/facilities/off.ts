@@ -2,4 +2,4 @@
 // by its tag, never by identity.
 export const off = { _tag: 'Off' } as const;
 export type Off = typeof off;
-export const isOff = (value: object): value is Off => '_tag' in value && value._tag === 'Off';
+export const is_off = (value: object): value is Off => '_tag' in value && value._tag === 'Off';

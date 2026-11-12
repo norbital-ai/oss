@@ -1,5 +1,7 @@
+import { with_accounts } from './support/accounts.ts';
+import { with_envoys } from './support/envoys.ts';
 // engine/envoys on PGlite with the agent area's real turn loop and a scripted model (§4.4, P22, P32, rules 57–61; G12 (4), (5)):
-// envoys are source roles deployed on `+workspace.ts` connections, every message admitted by the run its ingest queued.
+// Envoys and their account deployments are durable runtime rows; ingestion queues each admission.
 // A DM holds the envoy's policies joined by the linked sender's own authority (a contractor's DM does what the
 // contractor's team grants where the envoy's policies would refuse it), a group turn
 // holds the envoy's policies alone whoever sends, a private desk admits only senders whose handle is registered on a
@@ -11,39 +13,40 @@ import { Effect, Exit, Layer, Predicate, Schema, Scope, Stream } from 'effect';
 import { afterAll } from 'vitest';
 import { Ai } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
-import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse, AiRequest } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { NOTICES } from '../src/engine/envoys/index.ts';
 import { simulatedProviders, startSimulator } from '../../providers/src/simulator/index.ts';
 import { hookServer, host } from '../../providers/tests/kit.ts';
-import {
-	layer,
-	TestWorkspace,
-	type Kit,
-	type WorkspaceServices,
-	respondSystem1
-} from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { TestWorkspace, type Kit, type WorkspaceServices, respond_system_1 } from '../../bolt-cli/src/test/index.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts'; // hook:decisions
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
 	return value;
 };
 
+const runtime_accounts = [
+	{ id: 'field_wa', integration: 'whatsapp', status: { state: 'connected' } },
+	{ id: 'sales_tg', integration: 'telegram', status: { state: 'connected' } },
+	{ id: 'ops_mail', integration: 'email', status: { state: 'connected' } },
+] as const;
+
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
 	models: {
 		jobs: {
 			description: 'A job',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' }, status: { kind: 'text' } }
 		}
 	},
 	relationships: {},
 	exposures: {
 		jobs: {
-			read: { jobs: { fields: 'all' } },
+			outputs: { default: { jobs: { fields: 'all' } } },
 			create: { columns: { jobs: ['title', 'status'] } },
 			update: { columns: { jobs: ['status'] } }
 		}
@@ -52,10 +55,13 @@ const manifest = {
 	policies: {
 		desk: {
 			description: 'What the envoys may do',
-			grants: { jobs: { read: true, create: true } },
+			grants: { jobs: { outputs: { default: {} }, create: {} } },
 			limits: { 'envoys.receive': [{ rate: '2/min', per: 'sender' }] }
 		},
-		contractor: { description: 'Contractors', grants: { jobs: { read: true, update: true } } },
+		contractor: {
+			description: 'Contractors',
+			grants: { jobs: { outputs: { default: {} }, update: {} } }
+		},
 		desk_turns: {
 			description: 'The public desk turn budget',
 			grants: {},
@@ -64,45 +70,51 @@ const manifest = {
 	},
 	teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 	automations: {},
-	connections: {
-		field_wa: { integration: 'whatsapp', envoy: 'field_ops' },
-		sales_tg: { integration: 'telegram', envoy: 'sales_desk' },
-		ops_mail: { integration: 'email', envoy: 'ops_desk' }
-	},
-	envoys: {
-		field_ops: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			groupMessages: 'mention_or_reply',
-			delegation: 'disabled',
-			task: 'Keep jobs up to date.'
-		},
-		sales_desk: {
-			audience: 'public',
-			name: 'Norbius',
-			policies: ['desk', 'desk_turns'],
-			triage: false,
-			groupMessages: 'disabled',
-			delegation: 'enabled',
-			task: 'Answer about jobs.'
-		},
-		ops_desk: {
-			audience: 'private',
-			name: 'Norbius',
-			policies: ['desk'],
-			triage: false,
-			delegation: 'disabled',
-			task: 'Answer mail.'
-		}
-	},
+	
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
+const fieldOpsEnvoy = '0199a000-0000-7000-8000-0000000000e1';
+const salesDeskEnvoy = '0199a000-0000-7000-8000-0000000000e2';
+const opsDeskEnvoy = '0199a000-0000-7000-8000-0000000000e3';
+const runtimeEnvoys = [
+	{
+		id: fieldOpsEnvoy,
+		accounts: ['field_wa'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		group_messages: 'mention_or_reply',
+		delegation: 'disabled',
+		task: 'Keep jobs up to date.'
+	},
+	{
+		id: salesDeskEnvoy,
+		accounts: ['sales_tg'],
+		audience: 'public',
+		name: 'Norbius',
+		policies: ['desk', 'desk_turns'],
+		triage: false,
+		group_messages: 'disabled',
+		delegation: 'enabled',
+		task: 'Answer about jobs.'
+	},
+	{
+		id: opsDeskEnvoy,
+		accounts: ['ops_mail'],
+		audience: 'private',
+		name: 'Norbius',
+		policies: ['desk'],
+		triage: false,
+		delegation: 'disabled',
+		task: 'Answer mail.'
+	}
+] as const;
 
 /**
  * A scripted model: a message whose own line is "close <id>" says "On it." and asks for `act jobs.update`; after a tool
@@ -116,7 +128,7 @@ function scriptedAi(sent: (instance: string) => string[]) {
 	const text = (c: Json) =>
 		typeof c === 'string' ? c : String(Predicate.isObject(c) ? (c['text'] ?? '') : '');
 	const layer = Layer.succeed(Ai, {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Port.unavailable('ai.catalog'),
@@ -128,32 +140,33 @@ function scriptedAi(sent: (instance: string) => string[]) {
 					const usage = { input: 10, output: 5 };
 					const last = present(
 						request.messages.findLast(
-							(m) => !(typeof m.content === 'string' && m.content.startsWith('[conversation state'))
+							// the step's notes (available actions) and conversation state are context, not what was said
+							(m) => !(typeof m.content === 'string' && /^\[(?:note\]|conversation state)/.test(m.content))
 						)
 					); // the step's closing note is the engine's, not a message
 					if (last.role === 'tool') {
 						sentBeforeEnd.push(sent('field_wa').at(-1) ?? '');
-						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
+						return { content: 'Done.', tool_calls: [], finish: 'stop', usage };
 					}
 					// the command is its own line of the message, after the envelope's header (never a word inside the header)
 					const close = /^(?:\[[^\]\n]*\] )?close (\S+)$/m.exec(text(last.content));
 					if (close !== null)
 						return {
 							content: 'On it.',
-							toolCalls: [
+							tool_calls: [
 								{
 									id: `c${++n}`,
 									name: 'act',
 									input: {
 										callable: 'jobs.update',
-										input: [{ target: present(close[1]), set: { status: 'done' } }]
+input: [{ target: { id: present(close[1]), revision: 1 }, set: { status: 'done' } }]
 									}
 								}
 							],
 							finish: 'tool',
 							usage
 						};
-					return { content: `echo: ${text(last.content)}`, toolCalls: [], finish: 'stop', usage };
+					return { content: `echo: ${text(last.content)}`, tool_calls: [], finish: 'stop', usage };
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});
@@ -191,23 +204,23 @@ const setup = Effect.gen(function* () {
 	kit = t;
 	t.clock.advance('1h');
 	// work an earlier case left due (a turn queued behind its lease) runs now, before this case counts model steps
-	yield* t.runDue();
+	yield* t.run_due();
 	yield* t.settled();
-	const r = (route ??= yield* routeFixture(
+	const r = (route ??= yield* route_fixture(
 		yield* Effect.context<TestWorkspace | WorkspaceServices>()
 	).pipe(Scope.provide(fileScope)));
+	const adminAuthority = (yield* t.as(t.admin)).authority;
 	const job = () =>
 		Effect.gen(function* () {
-			const o = (yield* actReply(r, t.as(t.admin).authority, {
-				callable: 'jobs.create',
-				input: [{ title: 'Kismis', status: 'open' }],
-				issuedAt: t.clock.now()
+			const o = (yield* act_reply(r, (yield* t.as(t.admin)).authority, {
+				acts: { 'jobs.create': [{ title: 'Kismis', status: 'open' }] },
+				issued_at: t.clock.now()
 			})).outcome;
 			if (o.kind !== 'committed') throw new Error(o.kind);
 			return present(o.records[0]).id;
 		});
 	const status = (id: string) =>
-		qReply(r, t.as(t.admin).authority, {
+		q_reply(r, adminAuthority, {
 			reads: [{ m: 'query', a: [{ jobs: { where: { id: { eq: id } }, fields: ['status'] } }] }]
 		}).pipe(
 			Effect.flatMap((reply) =>
@@ -223,7 +236,7 @@ const setup = Effect.gen(function* () {
 	const paused = () =>
 		Effect.gen(function* () {
 			t.clock.advance('2s');
-			yield* t.runDue();
+			yield* t.run_due();
 		});
 	const say = (
 		instance: 'field_wa' | 'sales_tg',
@@ -235,7 +248,7 @@ const setup = Effect.gen(function* () {
 			.receive(instance, {
 				id: `m${++seq}`,
 				thread: from,
-				sentAt: t.clock.now(),
+				sent_at: t.clock.now(),
 				from: { handle: from, name: null },
 				text,
 				attachments: [],
@@ -268,7 +281,14 @@ const To = Schema.Struct({ to: Schema.String });
 /** The suite's workspace runs on the real clock, as `it.live` would. */
 const LIVE = { excludeTestServices: true };
 layer(
-	TestWorkspace.layer({ manifest, ports: ai.layer, host: { envoys: { workspace: 'Acme Field' } } }),
+	with_envoys(
+		with_accounts(TestWorkspace.layer({
+			manifest,
+			ports: ai.layer,
+			host: { envoys: { workspace: 'Acme Field' } }
+		}), runtime_accounts),
+		runtimeEnvoys
+	),
 	LIVE
 )('envoys', (it) => {
 	it.effect(
@@ -287,7 +307,7 @@ layer(
 				expect(ai.sentBeforeEnd.at(-1)).toBe('On it.'); // streamed while the turn worked (parity 2.12)
 				expect(present((yield* rows(`close ${other}`))[0])['as']).toEqual({
 					envoy: {
-						name: 'field_ops',
+						name: fieldOpsEnvoy,
 						instance: 'field_wa',
 						sender: '6598765432@s.whatsapp.net',
 						member: CAL,
@@ -320,9 +340,9 @@ layer(
 					t.receive('ops_mail', {
 						id,
 						thread: null,
-						sentAt: t.clock.now(),
+						sent_at: t.clock.now(),
 						from: { address: from, name: 'Dana' },
-						replyTo: null,
+						reply_to: null,
 						to: [],
 						cc: [],
 						subject: 'Hi',
@@ -358,7 +378,13 @@ layer(
 				const { say, rows, steps } = yield* setup;
 				yield* say('sales_tg', '777', 'hello 0');
 				expect(present((yield* rows('hello 0'))[0])['as']).toEqual({
-					envoy: { name: 'sales_desk', instance: 'sales_tg', sender: '777', member: null, dm: true }
+					envoy: {
+						name: salesDeskEnvoy,
+						instance: 'sales_tg',
+						sender: '777',
+						member: null,
+						dm: true
+					}
 				});
 				const before = steps();
 				yield* say('sales_tg', '888', 'group chatter', {
@@ -372,7 +398,7 @@ layer(
 				yield* say('sales_tg', '91', 'hello 1');
 				yield* say('sales_tg', '92', 'hello 2');
 				expect(steps()).toBe(before + 1);
-				expect((yield* rows('hello 2'))[0]).toMatchObject({ refused: 'rateLimited', role: null });
+				expect((yield* rows('hello 2'))[0]).toMatchObject({ refused: 'rate_limited', role: null });
 			})
 	);
 
@@ -438,7 +464,7 @@ layer(
 					thread: '1203@g.us',
 					group: true,
 					invocation: 'reply',
-					sentAt: t.clock.now(),
+					sent_at: t.clock.now(),
 					from: { handle: '6598765432@s.whatsapp.net', name: null },
 					text: 'and mine?',
 					attachments: []
@@ -461,20 +487,20 @@ layer(
 		() =>
 			Effect.gen(function* () {
 				const { say, rows, texts, steps } = yield* setup;
-				const notices = () => texts('field_wa').filter((x) => x === NOTICES.rateLimited).length;
+				const notices = () => texts('field_wa').filter((x) => x === NOTICES.rate_limited).length;
 				const before = notices();
 				for (const n of [1, 2, 3])
 					yield* say('field_wa', '6598765432@s.whatsapp.net', `flood ${n}`);
 				expect(steps()).toBe(2);
-				expect((yield* rows('flood 3'))[0]).toMatchObject({ refused: 'rateLimited', role: null });
+				expect((yield* rows('flood 3'))[0]).toMatchObject({ refused: 'rate_limited', role: null });
 				expect(notices() - before).toBe(1);
 			})
 	);
 
-	it.effect('a tenant-created envoy links a channel and answers through it', () =>
+	it.effect('a tenant-created envoy queues its answer until its new channel is paired', () =>
 		Effect.gen(function* () {
 			const { t, rows, paused, steps } = yield* setup;
-			const created = yield* t.as(t.admin).act('sys_envoy.create', [
+			const created = yield* (yield* t.as(t.admin)).act({ 'sys_envoy.create': [
 				{
 					name: 'Runtime desk',
 					audience: 'private',
@@ -484,34 +510,41 @@ layer(
 					delegation: 'disabled',
 					dm: 'union'
 				}
-			]);
+			] });
 			if (created.kind !== 'committed') throw new Error(created.kind);
 			const envoy = present(created.records[0]).id;
-			const line = yield* t
-				.as(t.admin)
-				.act('sys_integration.create', [{ integration: 'whatsapp', name: 'Runtime line', envoy }]);
+			const line = yield* (yield* t.as(t.admin)).act({ 'sys_integration.create': [{ integration: 'whatsapp', name: 'Runtime line', envoy }] });
 			expect(line.kind).toBe('committed');
 			const instance = present(
 				(yield* t.db.read([
 					{ text: 'SELECT id FROM sys_integration WHERE name = $1', params: ['Runtime line'] }
 				]))[0]
 			).rows[0]?.['id'];
-			expect(typeof instance).toBe('string');
-			yield* t.receive(String(instance), {
+			if (typeof instance !== 'string') throw new Error('Missing runtime line');
+			yield* t.receive(instance, {
 				id: 'runtime-m1',
 				thread: '6591234567:14@s.whatsapp.net',
-				sentAt: t.clock.now(),
+				sent_at: t.clock.now(),
 				from: { handle: '6591234567:14@s.whatsapp.net', name: null },
 				text: 'hello runtime',
 				attachments: []
 			});
 			yield* paused();
+			yield* t.settled();
 			expect(steps()).toBe(1);
 			// the tenant row's task and name reach the turn, not only admission
 			expect(ai.requests.at(-1)?.system).toContain('Answer the runtime line.');
 			expect((yield* rows('hello runtime'))[0]).toMatchObject({
 				as: { envoy: { name: envoy, member: ADA, dm: true } }
 			});
+			expect(yield* t.db.rows(
+				Schema.Struct({ status: Schema.String, attempts: Schema.Number, sent_at: Schema.Null, claimed_at: Schema.Null }),
+				{
+					text: "SELECT status,attempts,sent_at,claimed_at FROM sys_message WHERE integration=$1 AND direction='outbound'",
+					params: [instance]
+				}
+			)).toEqual([{ status: 'queued', attempts: 0, sent_at: null, claimed_at: null }]);
+			expect(t.fakes.links.sent.filter((item) => item.instance === instance)).toEqual([]);
 		})
 	);
 	it.effect(
@@ -529,7 +562,7 @@ layer(
 					hook = yield* hookServer,
 					services = yield* Effect.context<WorkspaceServices | TestWorkspace>();
 				const h = yield* host(telegram, fetch, undefined, {
-					webhookUrl: hook.url,
+					webhook_url: hook.url,
 					emit: (event) =>
 						Effect.runPromiseWith(services)(
 							t.receive(
@@ -540,8 +573,8 @@ layer(
 							)
 						)
 				});
-				hook.route.to = (request) => Effect.runPromiseWith(services)(h.link.webhook!(request));
-				yield* h.link.pair!({ token: '424242:simulated' });
+				hook.route.to = (request) => Effect.runPromiseWith(services)(present(h.link.webhook)(request));
+				yield* present(h.link.pair)({ token: '424242:simulated' });
 				const before = sent('sales_tg').length,
 					answer = yield* Effect.promise(() =>
 						fetch(`${running.url}/inbound`, {
@@ -559,11 +592,17 @@ layer(
 				expect(answer.status).toBe(200);
 				yield* paused();
 				expect(present((yield* rows('through the pipeline'))[0])['as']).toEqual({
-					envoy: { name: 'sales_desk', instance: 'sales_tg', sender: '555', member: null, dm: true }
+					envoy: {
+						name: salesDeskEnvoy,
+						instance: 'sales_tg',
+						sender: '555',
+						member: null,
+						dm: true
+					}
 				});
 				// the kit's links stand where the host's do; what the envoy queued now takes the provider's real send
 				const reply = present(sent('sales_tg')[before]);
-				yield* h.link.send!(reply.message, []);
+				yield* present(h.link.send)(reply.message, []);
 				expect(running.messages().at(-1)).toMatchObject({
 					channel: 'telegram',
 					direction: 'out',

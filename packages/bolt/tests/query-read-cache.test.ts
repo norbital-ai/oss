@@ -3,7 +3,12 @@ import { Effect, Result } from 'effect';
 import type { Sql } from '../src/engine/contracts.ts';
 import { TenantDb } from '../src/engine/db/tenant-db.ts';
 import { DbError } from '../src/engine/errors.ts';
-import { coalescing, memoReads } from '../src/engine/query/engine.ts';
+import { coalescing, memo_reads } from '../src/engine/query/engine.ts';
+
+const present = <A>(value: A | null | undefined): A => {
+	if (value === null || value === undefined) throw new Error('Missing fixture value');
+	return value;
+};
 
 const a: Sql = { text: 'SELECT $1 AS n', params: [1] };
 const b: Sql = { text: 'SELECT $1 AS n', params: [2] };
@@ -19,14 +24,12 @@ describe('planning-scoped SQL answer cache', () => {
 					read: (statements) =>
 						Effect.sync(() => {
 							calls.push(statements);
-							return statements.map((s) => ({ rows: [{ n: s.params[0]! }], affected: 1 }));
+							return statements.map((s) => ({ rows: [{ n: present(s.params[0]) }], affected: 1 }));
 						}),
 					write: unused,
-					session: () =>
-						Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 					transaction: unused
 				});
-				const cached = yield* memoReads(yield* coalescing(db));
+				const cached = yield* memo_reads(yield* coalescing(db));
 				const [first, second] = yield* Effect.all(
 					[cached.read([a, { ...a }, b]), cached.read([a])],
 					{ concurrency: 'unbounded' }
@@ -46,7 +49,7 @@ describe('planning-scoped SQL answer cache', () => {
 			Effect.gen(function* () {
 				const failure = DbError.make('08006', 'refused');
 				let calls = 0;
-				const cached = yield* memoReads(
+				const cached = yield* memo_reads(
 					TenantDb.typed({
 						read: () =>
 							Effect.suspend(() => {
@@ -54,8 +57,6 @@ describe('planning-scoped SQL answer cache', () => {
 								return Effect.fail(failure);
 							}),
 						write: unused,
-						session: () =>
-							Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 						transaction: unused
 					})
 				);
@@ -82,12 +83,10 @@ describe('planning-scoped SQL answer cache', () => {
 						return statements.map(() => ({ rows: [], affected: 0 }));
 					}),
 				write: unused,
-				session: () =>
-					Effect.fail(DbError.make('0A000', 'this fixture does not support leased sessions')),
 				transaction: unused
 			});
-			const first = yield* memoReads(db),
-				second = yield* memoReads(db);
+			const first = yield* memo_reads(db),
+				second = yield* memo_reads(db);
 			expect(yield* first.read([])).toEqual([]);
 			expect(calls).toHaveLength(0);
 			yield* first.read([a]);

@@ -9,6 +9,7 @@ describe('host route contract', () => {
 		Effect.sync(() => {
 			expect(ORDER).toEqual(['hooks', 'shell', 'integrations', 'files', 'bolt']);
 			expect(Object.keys(BoltRoutes)).toEqual([
+				'POST /__bolt/sync',
 				'POST /__bolt/q',
 				'POST /__bolt/act',
 				'GET /__bolt/live',

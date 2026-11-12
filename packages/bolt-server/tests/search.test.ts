@@ -6,7 +6,7 @@ const context: HostToolContext = {
 	actor: { kind: 'system', run: 'r', by: { platform: 'test' } },
 	conversation: 'c',
 	turn: 't',
-	callId: 'k',
+	call_id: 'k',
 	attach: () => {}
 };
 const call = (input: Json) =>

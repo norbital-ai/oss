@@ -3,7 +3,7 @@ import { Clock, Effect, Option, Predicate, Schema } from 'effect';
 import { HttpClient, HttpClientRequest } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { answerFailure, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import { field, hostCall, same, str, storedCredential, withFetch, type Obj } from '../util.ts';
 
 const API = 'https://slack.com/api';
@@ -73,7 +73,7 @@ export function slack(): ProviderDef {
 						en: 'Event Subscriptions: turn them on and paste this Request URL; subscribe to the bot events message.channels, message.groups, message.im and message.mpim.',
 						zh: 'Event Subscriptions：开启后粘贴此 Request URL；订阅机器人事件 message.channels、message.groups、message.im 和 message.mpim。'
 					},
-					copy: 'webhookUrl'
+					copy: 'webhook_url'
 				},
 				{
 					text: {
@@ -210,9 +210,7 @@ export function slack(): ProviderDef {
 					files: readonly OutboundAttachment[] = []
 				) {
 					if (cred === null)
-						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the Slack app is not connected' })
-						);
+						return yield* Effect.fail(notConnected('the Slack app'));
 					const value = cred;
 					const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
 						Effect.mapError(() => answerFailure('a Slack message needs `to` and `text`', 400))
@@ -260,7 +258,7 @@ export function slack(): ProviderDef {
 								...(thread === undefined ? {} : { thread_ts: thread })
 							})
 						);
-					return { providerId: `${sent.channel}:${sent.ts}` };
+					return { provider_id: `${sent.channel}:${sent.ts}` };
 				}),
 				webhook: Effect.fn('Slack.webhook')(function* (request: Request) {
 					const body = yield* hostCall('read Slack body', () => request.text());
@@ -302,9 +300,7 @@ export function slack(): ProviderDef {
 				}),
 				reconcile: Effect.fn('Slack.reconcile')(function* (thread: string, since: string) {
 					if (cred === null)
-						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the Slack app is not connected' })
-						);
+						return yield* Effect.fail(notConnected('the Slack app'));
 					const { botToken, botUser } = cred,
 						[channel = '', parent] = thread.split(':'),
 						oldest = String(Date.parse(since) / 1000);
@@ -442,12 +438,12 @@ function slackMessage(e: Readonly<Record<string, unknown>>, botUser: string): Sl
 		message: {
 			id: `${channel}:${ts}`,
 			thread: thread === null || thread === ts ? channel : `${channel}:${thread}`,
-			sentAt: instant(ts),
+			sent_at: instant(ts),
 			from: { handle: user, name: null },
 			text,
 			group,
 			invocation,
-			replyTo: thread === null || thread === ts ? null : `${channel}:${thread}`,
+			reply_to: thread === null || thread === ts ? null : `${channel}:${thread}`,
 			...(edited === null ? {} : { version: instant(edited) }),
 			attachments: files.map(({ url: _url, ...file }) => file)
 		},

@@ -5,13 +5,13 @@ import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Redacted, Result, Schema } from 'effect';
 import { HttpServerRequest, HttpServerResponse } from 'effect/http';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { credentials } from '../src/engine/integrations/credentials.ts';
-import { integrationLinks } from '../src/engine/integrations/links.ts';
-import { loopbackTcpPort } from '../src/node/tcp.ts';
+import { integration_links } from '../src/engine/integrations/links.ts';
+import { loopback_tcp_port } from '../src/node/tcp.ts';
 import { Secrets } from '../src/engine/secrets.ts';
 import { bindings } from '../src/protocol/http.ts';
-import { IntegrationManager, integrationRoutes } from '../src/protocol/integrations.ts';
+import { IntegrationManager, integration_routes } from '../src/protocol/integrations.ts';
 import { KitInvalid, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 
@@ -19,12 +19,12 @@ const NOW = '2026-10-14T17:30:00.000Z'; // 01:30 on 15 October in Kuala Lumpur
 const TODAY = '2026-10-15';
 const ORIGIN = 'http://cell';
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'Asia/Kuala_Lumpur', locale: 'en' },
 		models: {
 			notes: {
 				description: 'A note',
-				label: 'title',
+				record_label: 'record.title',
 				fields: {
 					title: { kind: 'text' },
 					due: { kind: 'date', optional: true, default: { var: 'today' } },
@@ -35,7 +35,7 @@ const manifest = Result.getOrThrow(
 		relationships: {},
 		exposures: {
 			notes: {
-				read: { notes: { fields: 'all' } },
+				outputs: { default: { notes: { fields: 'all' } } },
 				create: { columns: { notes: ['title', 'due', 'photo'] }, transform: true }
 			}
 		},
@@ -44,21 +44,19 @@ const manifest = Result.getOrThrow(
 		policies: {
 			reader: {
 				description: 'Reads due notes',
-				grants: { notes: { read: { notes: { where: { due: { lte: TODAY } } } } } }
+				grants: { notes: { outputs: { default: { scopes: { notes: { due: { lte: TODAY } } } } } } }
 			}
 		},
 		teams: { Readers: { name: 'Readers', policies: ['reader'] } },
 		automations: {},
-		connections: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
 const guest = program(
-	`export default { model: { notes: { bodies: { create: function* (rows, ctx) { return rows.map((row) => row.title === 'stamp' ? { ...row, title: ctx.today } : row); } } } } };`
+	`export default { model: { notes: { bodies: { create: function* (changes, ctx) { return changes.map(({ set, after }) => after.title === 'stamp' ? { ...set, title: ctx.today } : set); } } } } };`
 );
 const json = (response: Response) =>
 	Effect.tryPromise({
@@ -76,7 +74,7 @@ it.live(
 						manifest,
 						guest: yield* guest,
 						now: NOW,
-						secretsKey: Redacted.make(randomBytes(32))
+						secrets_key: Redacted.make(randomBytes(32))
 					})
 				);
 				const t = Context.get(context, TestWorkspace);
@@ -111,9 +109,8 @@ it.live(
 				expect(
 					yield* json(
 						yield* post('/__bolt/act', {
-							callable: 'notes.create',
-							input: [{ title: 'stamp' }],
-							issuedAt: NOW
+							acts: { 'notes.create': [{ title: 'stamp' }] },
+							issued_at: NOW
 						})
 					)
 				).toMatchObject({ outcome: { kind: 'committed' } });
@@ -123,9 +120,8 @@ it.live(
 				expect(
 					yield* json(
 						yield* post('/__bolt/act', {
-							callable: 'notes.create',
-							input: [{ title: 'defaulted' }],
-							issuedAt: NOW
+							acts: { 'notes.create': [{ title: 'defaulted' }] },
+							issued_at: NOW
 						})
 					)
 				).toMatchObject({ outcome: { kind: 'committed' } });
@@ -156,15 +152,14 @@ it.live(
 				expect(
 					yield* json(
 						yield* post('/__bolt/act', {
-							callable: 'notes.create',
-							input: [
+							acts: { 'notes.create': [
 								{
 									title: 'held',
 									due: TODAY,
 									photo: { id: photo.id, name: photo.name, mime: photo.mime }
 								}
-							],
-							issuedAt: NOW
+							] },
+							issued_at: NOW
 						})
 					)
 				).toMatchObject({ outcome: { kind: 'committed' } });
@@ -172,13 +167,13 @@ it.live(
 
 				// the integrations handler: the verbs authorize on the native activation's workspace day
 				const seen: string[] = [];
-				const links = yield* integrationLinks({
+				const links = yield* integration_links({
 					providers: [],
 					credentials: yield* credentials(t.db, Context.get(context, Secrets)).pipe(
 						Effect.provide(NodeCrypto.layer)
 					),
-					publicUrl: ORIGIN,
-					tcp: loopbackTcpPort,
+					public_url: ORIGIN,
+					tcp: loopback_tcp_port,
 					log: () => {},
 					enter: (work) =>
 						Effect.gen(function* () {
@@ -188,7 +183,7 @@ it.live(
 						}).pipe(Effect.provide(context)),
 					admit: (work) => work.pipe(Effect.provide(context))
 				}).pipe(Effect.provide(NodeCrypto.layer));
-				const response = yield* integrationRoutes(
+				const response = yield* integration_routes(
 					HttpServerRequest.fromWeb(
 						new Request(`${ORIGIN}/__bolt/integrations/none`, {
 							headers: { cookie: cookies.admin }

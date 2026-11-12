@@ -4,12 +4,15 @@ An exact money amount in `currency`: the currency as the box's leading affix, th
 the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Value } from './kind.js';
 
 	/** An exact amount in `currency`, typed to at most its minor digits (or `scale`). */
 	export type MoneyInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: Value;
-		onChange(next: Value): void;
+		on_change(next: Value): void;
 		currency?: string;
 		scale?: number;
 		id?: string;
@@ -20,17 +23,18 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 </script>
 
 <script lang="ts">
+	import { watch } from 'runed';
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
-	import { cn, useControls } from '../primitives/utils.js';
+	import { cn, use_controls } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
-	import { useKinds } from './context.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import { Decimal } from '@norbital-ai/std/decimal';
 	import { format, minorDigits, moneyProblem } from './kind.js';
 
 	let {
+		ctx,
 		value,
-		onChange,
+		on_change,
 		currency,
 		scale,
 		id,
@@ -38,8 +42,8 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 		disabled,
 		invalid = false
 	}: MoneyInputProps = $props();
-	const controls = useControls();
-	const host = useKinds();
+	const controls = use_controls();
+	const host = $derived(ctx.ui.kinds);
 	const off = $derived(disabled ?? controls.disabled);
 	const minor = $derived(currency === undefined ? undefined : minorDigits(currency));
 	const digits = $derived(scale ?? minor);
@@ -55,7 +59,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 	let text = $state(''),
 		focused = $state(false);
 	let last: Value | undefined;
-	$effect.pre(() => {
+	watch.pre(() => value, (value) => {
 		// an outside change (reset, refusal, a transform's echo) replaces the text; our own echo does not
 		if (value !== last) {
 			text =
@@ -91,7 +95,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 		const next = /^-?\d+(\.\d+)?$/.test(text) ? Decimal.of(text) : text === '' ? null : undefined;
 		if (next !== undefined) {
 			last = next;
-			onChange(next);
+			on_change(next);
 		}
 	}
 </script>

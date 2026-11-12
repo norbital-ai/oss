@@ -26,7 +26,7 @@ One value owned by the UI package. Never write it; put `inset` on a `Bound` or `
 
 - `inset` on a nested box is harmless: it pads only if nothing above does.
 - A panel holding a `Table` is padded by the panel; holding `Scroll inset`, by the `Scroll`.
-- Nested `Tabs` add no second gutter. There is no `contentPadding` prop or region padding class.
+- Nested `Tabs` add no second gutter. There is no `content_padding` prop or region padding class.
 
 ## App surfaces
 

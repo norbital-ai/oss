@@ -36,7 +36,7 @@ export const backgroundLocation = {
 	status: native(() => NorbitalShell.locationStatus()).pipe(
 		Effect.flatMap(Schema.decodeUnknownEffect(Status))
 	),
-	openSettings: native(() => NorbitalShell.openSettings())
+	openSettings: native(() => NorbitalShell.openSettings()).pipe(Effect.asVoid)
 };
 const tracker = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
 function positionOf(point: Location, now: number): GeolocationPosition {

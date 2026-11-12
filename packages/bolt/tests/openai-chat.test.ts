@@ -6,7 +6,7 @@ import { TestClock } from 'effect/testing';
 import type { AiRequest } from '../src/engine/contracts.ts';
 import { Port } from '../src/engine/port.ts';
 import { filePart } from '../src/engine/agent/ingest.ts';
-import { openAiChat, type OpenAiChat } from '../src/engine/agent/openai-chat.ts';
+import { open_ai_chat, type OpenAiChat } from '../src/engine/agent/openai-chat.ts';
 
 const Sent = Schema.Struct({
 	model: Schema.String,
@@ -66,7 +66,7 @@ const collect = (infer: OpenAiChat, input: AiRequest = request) =>
 		};
 	});
 
-describe('openAiChat', () => {
+describe('open_ai_chat', () => {
 	it.effect(
 		'decodes temporary budget and rate refusals with their retry hints, preserving permanent 402s',
 		() =>
@@ -85,11 +85,11 @@ describe('openAiChat', () => {
 					)
 				);
 				expect(
-					yield* collect(openAiChat(config, { fetch: temporary.f })).pipe(Effect.flip)
+					yield* collect(open_ai_chat(config, { fetch: temporary.f })).pipe(Effect.flip)
 				).toMatchObject({
-					kind: 'rateLimited',
+					kind: 'rate_limited',
 					status: 402,
-					retryAfterMs: 120_000
+					retry_after_ms: 120_000
 				});
 				yield* TestClock.setTime(Date.UTC(2026, 9, 26));
 				const rate = capture(
@@ -102,17 +102,17 @@ describe('openAiChat', () => {
 						})
 				);
 				expect(
-					yield* collect(openAiChat(config, { fetch: rate.f })).pipe(Effect.flip)
+					yield* collect(open_ai_chat(config, { fetch: rate.f })).pipe(Effect.flip)
 				).toMatchObject({
-					kind: 'rateLimited',
+					kind: 'rate_limited',
 					status: 429,
-					retryAfterMs: 30_000
+					retry_after_ms: 30_000
 				});
 				const unpaid = capture(() =>
 					Response.json({ error: { message: 'Insufficient credits' } }, { status: 402 })
 				);
 				expect(
-					yield* collect(openAiChat(config, { fetch: unpaid.f })).pipe(Effect.flip)
+					yield* collect(open_ai_chat(config, { fetch: unpaid.f })).pipe(Effect.flip)
 				).toMatchObject({
 					kind: 'upstream',
 					status: 402
@@ -134,7 +134,7 @@ describe('openAiChat', () => {
 					...(signal === undefined ? {} : { signal })
 				});
 			};
-			const pending = yield* collect(openAiChat(config, { fetch: f })).pipe(
+			const pending = yield* collect(open_ai_chat(config, { fetch: f })).pipe(
 				Effect.flip,
 				Effect.forkChild
 			);
@@ -170,7 +170,7 @@ describe('openAiChat', () => {
 					return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 				};
 				const events: string[] = [];
-				const pending = yield* openAiChat(config, { fetch: f })(request).pipe(
+				const pending = yield* open_ai_chat(config, { fetch: f })(request).pipe(
 					Stream.tap((event) =>
 						Effect.sync(() => {
 							events.push(event._tag);
@@ -216,7 +216,7 @@ describe('openAiChat', () => {
 						usage: { prompt_tokens: 11, completion_tokens: 2 }
 					})
 				);
-				const infer = openAiChat(
+				const infer = open_ai_chat(
 					{
 						endpoint: 'https://llm.test/v1/',
 						credential: 'k',
@@ -247,7 +247,7 @@ describe('openAiChat', () => {
 				expect(sent.messages[3]).toMatchObject({ tool_call_id: 't0', content: '{"ok":true}' });
 				expect(response).toEqual({
 					content: '',
-					toolCalls: [{ id: 't1', name: 'read_messages', input: { limit: 3 } }],
+					tool_calls: [{ id: 't1', name: 'read_messages', input: { limit: 3 } }],
 					finish: 'tool',
 					usage: { input: 11, output: 2 }
 				});
@@ -272,8 +272,8 @@ describe('openAiChat', () => {
 						usage: {}
 					})
 				);
-				const { response } = yield* collect(openAiChat(config, { fetch: f }));
-				expect(response.toolCalls).toEqual([
+				const { response } = yield* collect(open_ai_chat(config, { fetch: f }));
+				expect(response.tool_calls).toEqual([
 					{ id: 't1', name: 'read_model', input: {}, invalid: expect.stringMatching(/JSON/) }
 				]);
 			})
@@ -287,7 +287,7 @@ describe('openAiChat', () => {
 				''
 			].join('\n\n');
 			const { f } = capture(() => stream([sse]));
-			const { response, deltas } = yield* collect(openAiChat(config, { fetch: f }));
+			const { response, deltas } = yield* collect(open_ai_chat(config, { fetch: f }));
 			expect(deltas).toEqual(['Half']);
 			expect(response.finish).toBe('cut');
 		})
@@ -306,7 +306,7 @@ describe('openAiChat', () => {
 						].join('\n\n')
 					])
 				);
-				const { response } = yield* collect(openAiChat(config, { fetch: f }), {
+				const { response } = yield* collect(open_ai_chat(config, { fetch: f }), {
 					model: 'default',
 					messages: [
 						{ role: 'user', content: 'hi' },
@@ -317,7 +317,7 @@ describe('openAiChat', () => {
 						{ role: 'tool', content: { id: '', name: 'x', result: { ok: true } } }
 					]
 				});
-				expect(first(response.toolCalls).id).toMatch(/^call_/);
+				expect(first(response.tool_calls).id).toMatch(/^call_/);
 				expect(first(seen).sent.messages.at(-1)).toMatchObject({
 					role: 'tool',
 					tool_call_id: 't9',
@@ -354,7 +354,7 @@ describe('openAiChat', () => {
 						)
 				);
 				const metered: [number, string][] = [];
-				const infer = openAiChat(
+				const infer = open_ai_chat(
 					{
 						...config,
 						body: { usage: { include: true } },
@@ -372,7 +372,7 @@ describe('openAiChat', () => {
 				expect(deltas).toEqual(['Mar', 'ch']);
 				expect(response).toEqual({
 					content: 'March',
-					toolCalls: [{ id: 't1', name: 'read_model', input: { aggregate: {} } }],
+					tool_calls: [{ id: 't1', name: 'read_model', input: { aggregate: {} } }],
 					finish: 'tool',
 					usage: { input: 9, output: 4, cost: 0.001, call: 'gen-1' }
 				});
@@ -398,7 +398,7 @@ describe('openAiChat', () => {
 				const deltas: string[] = [];
 				const done = yield* Effect.forkChild(
 					Stream.runCollect(
-						openAiChat(config, { fetch: f })(request).pipe(
+						open_ai_chat(config, { fetch: f })(request).pipe(
 							Stream.tap((event) =>
 								event._tag === 'Delta'
 									? Effect.sync(() => {
@@ -434,7 +434,7 @@ describe('openAiChat', () => {
 								'data: {"choices":[{"delta":{"content":"true}"}}]}\n\ndata: [DONE]\n\n'
 							])
 				);
-				const infer = openAiChat({ ...config, strict: true }, { fetch: f });
+				const infer = open_ai_chat({ ...config, strict: true }, { fetch: f });
 				const { response } = yield* collect(infer, {
 					model: 'default',
 					output: { type: 'object' },
@@ -478,7 +478,7 @@ describe('openAiChat', () => {
 				const { f, seen } = capture(() =>
 					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
 				);
-				const infer = openAiChat(config, { fetch: f });
+				const infer = open_ai_chat(config, { fetch: f });
 				const step = (id: string) => ({
 					role: 'tool' as const,
 					content: { id, name: 'read_file', result: { attached: 'shown' } }
@@ -505,11 +505,10 @@ describe('openAiChat', () => {
 					files: [
 						{ mime: 'image/jpeg', bytes: new Uint8Array([2]), call: 'c1' },
 						{ mime: 'image/png', bytes: new Uint8Array([1]), call: 'gone' }
-					],
-					effort: 'low'
+					]
 				});
 				const { sent } = first(seen);
-				expect(sent).toMatchObject({ reasoning_effort: 'low' });
+				expect(sent).not.toHaveProperty('reasoning_effort');
 				expect(sent.messages.map((m) => m.role)).toEqual([
 					'user',
 					'assistant',
@@ -535,7 +534,7 @@ describe('openAiChat', () => {
 				const { f, seen } = capture(() =>
 					Response.json({ choices: [{ message: { content: 'ok' } }], usage: {} })
 				);
-				const infer = openAiChat(config, { fetch: f }),
+				const infer = open_ai_chat(config, { fetch: f }),
 					book = new Uint8Array(
 						readFileSync(new URL('./fixtures/files/items.xlsx', import.meta.url))
 					);
@@ -614,7 +613,7 @@ describe('openAiChat', () => {
 					const { f, seen } = capture(() =>
 						stream(['data: {"id":"gen-9","choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'])
 					);
-					yield* collect(openAiChat(config, { fetch: f }), { ...request, messages, files });
+					yield* collect(open_ai_chat(config, { fetch: f }), { ...request, messages, files });
 					return first(seen).sent.messages.map((m) => JSON.stringify(m));
 				});
 			const kept = { ...image, call: 'c1' },
@@ -638,7 +637,7 @@ describe('openAiChat', () => {
 						'data: {"id":"gen-2","choices":[{"delta":{"content":"Balanced."}}]}\n\ndata: [DONE]\n\n'
 					])
 				);
-				const { response, thought } = yield* collect(openAiChat(config, { fetch: f }), {
+				const { response, thought } = yield* collect(open_ai_chat(config, { fetch: f }), {
 					...request,
 					messages: [
 						{ role: 'user', content: 'q' },
@@ -660,7 +659,7 @@ describe('openAiChat', () => {
 					])
 				);
 				const call = (id: string) => ({ id, name: 'read', input: {} });
-				yield* collect(openAiChat(config, { fetch: steps.f }), {
+				yield* collect(open_ai_chat(config, { fetch: steps.f }), {
 					...request,
 					messages: [
 						{ role: 'user', content: 'q' },
@@ -690,7 +689,7 @@ describe('openAiChat', () => {
 					])
 				);
 				expect(
-					yield* collect(openAiChat(config, { fetch: mixed.f }), {
+					yield* collect(open_ai_chat(config, { fetch: mixed.f }), {
 						...request,
 						messages: [{ role: 'user', content: 'q' }]
 					}).pipe(Effect.flip)
@@ -705,7 +704,7 @@ describe('openAiChat', () => {
 					'data: {"id":"c","choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"set","arguments":"{}"}}]}}]}\n\n',
 					'data: [DONE]\n\n'
 				]);
-			const events = yield* Stream.runCollect(openAiChat(config, { fetch: f })(request));
+			const events = yield* Stream.runCollect(open_ai_chat(config, { fetch: f })(request));
 			expect(events.map((event) => event._tag)).toEqual(['Progress', 'Progress', 'Response']);
 		})
 	);
@@ -722,7 +721,7 @@ describe('openAiChat', () => {
 				fetched.resolve();
 				return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 			};
-			const done = yield* Effect.forkChild(collect(openAiChat(config, { fetch: f })));
+			const done = yield* Effect.forkChild(collect(open_ai_chat(config, { fetch: f })));
 			yield* Port.attempt('fixture.fetch', () => fetched.promise);
 			if (controller === undefined) return yield* Effect.die(new Error('stream did not start'));
 			controller.enqueue(new TextEncoder().encode(': keep-alive\n\n'));

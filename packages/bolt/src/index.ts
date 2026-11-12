@@ -1,346 +1,64 @@
-// @norbital-ai/bolt: the declaration functions and their types. Nothing else is a runtime value (P29).
-export { customField } from './decl/custom-field.ts';
-export type { CustomField } from './decl/custom-field.ts';
-export { model } from './decl/model.ts';
+// @norbital-ai/bolt: author declarations, small composition helpers and their types. Native services use separate entries.
+export { custom_field } from './decl/custom-field.ts';
 export { policy } from './decl/access/policy.ts';
 export { team } from './decl/access/team.ts';
-export type { SourceTeam, TeamData, TeamEntries, TeamEntry, TeamSpec } from './decl/access/team.ts';
-export { envoy, mcp, tool } from './decl/runtime/agent.ts';
-export type { ToolFiles, ToolRun, ToolSpec } from './decl/runtime/agent.ts';
-export type { EnvoySpec, McpBase, McpSpec } from './decl/runtime/agent.ts';
+export { mcp } from './decl/runtime/agent.ts';
 export { app, group, messages, secrets, workspace } from './decl/runtime/app.ts';
-export type { AppSpec, DeviceRequirement, EmbedOrigin, GroupSpec } from './decl/runtime/app.ts';
-export { kiosk } from './decl/runtime/kiosk.ts';
-export type { KioskSpec } from './decl/runtime/kiosk.ts';
 export { automation } from './decl/runtime/automation.ts';
-export { browserStart } from './decl/runtime/facilities.ts';
-export { seeder, type Seeder } from './decl/seeder.ts';
-export { idOf } from './decl/id.ts';
-export { integration, instanceId, isInstance } from './decl/runtime/integration.ts';
-export { pageServer } from './decl/runtime/page.ts';
-export type { PageData, PageLoad, PageLoadRequest, PageServer } from './decl/runtime/page.ts';
-/** Pure: what changed between two JSON values, keyed list items matched by key (a reviewed draft's changes). */
-export { jsonDiff } from './engine/agent/draft.ts';
-export type { JsonChange } from './engine/agent/draft.ts';
+export { browser_start } from './decl/runtime/facilities.ts';
+export { seeder } from './decl/seeder.ts';
+export { id_of } from './decl/id.ts';
+export { instance_id, is_instance } from './decl/runtime/integration.ts';
 
-export type { Actor, Handle, PlatformAutomation } from './decl/access/actor.ts';
+export type { Actor } from './decl/access/actor.ts';
+export type { ApprovalFlow, Verdict } from './decl/access/policy.ts';
 export type {
-	ApprovalSnapshot,
-	ApprovalStep,
-	DeleteGrant,
-	Edge,
-	State,
-	EnvoyLimit,
-	Flow,
-	Grant,
-	IdentityGrant,
-	Limit,
-	LimitKey,
-	ReadGrant,
-	StartableName,
-	StateField,
-	Verdict,
-	VerdictData,
-	WriteField,
-	WriteGrant
-} from './decl/access/policy.ts';
-export type { AgentUse, OutputOf } from './decl/body.ts';
-export type {
-	ExposureSpec,
-	ComputedKind,
-	Expr,
-	LayerColumns,
-	Model,
-	ModelBodies,
-	ModelLiteral,
-	ModelParts,
-	ModelSpec,
-	ReadLayers,
-	RefField,
-	SearchIndexSpec,
-	SyncEntry,
-	TableSpec
-} from './decl/model.ts';
-export type {
-	Act,
-	ActBatch,
-	ActManyInput,
-	ActManyOutput,
 	ActInput,
 	ActOutput,
-	AggRow,
 	BodyError,
-	BodyReturn,
-	Bucket,
-	BucketField,
 	Callable,
-	CallerQuery,
-	Carried,
 	CreatedRow,
 	CarriedWrites,
 	Clock,
-	Committed,
-	CreateCheck,
-	CreateRow,
-	CreateTree,
-	DeleteCheck,
-	DenyAt,
+	CreateInput,
 	Eff,
-	HistoryOptions,
 	IndexSearch,
-	LayerAggregate,
-	LayerOrderBy,
-	LayerRequest,
-	LayerRow,
 	MessageKey,
-	Measures,
-	NotifyCtx,
-	NotifyEvent,
-	Conflict,
 	Cursor,
-	Insert,
-	KeyValues,
 	ListRow,
 	Outcome,
 	Page,
-	PageReadContext,
-	Paged,
-	Patch,
-	PendingApproval,
-	PlatformRefusal,
 	PolicyCtx,
-	PolicyReads,
 	ReadAnswer,
-	DynamicAnswer,
 	ReadRequest,
 	ReadRequestBase,
-	RequestSpec,
-	Revision,
-	Refused,
-	RootRequest,
-	Running,
 	StoredTree,
-	Unknown,
-	UpdateCheck,
-	TransformAnswer,
-	UpdateSet,
-	UpdateTree,
+	UpdateInput,
 	WorkspaceQuery,
 	WriteCtx
 } from './decl/ctx.ts';
+export type { InputFields, InputOf, ValueOf } from './decl/fields.ts';
 export type {
-	Transaction,
-	TxAct,
-	TxApplied,
-	TxCtx,
-	TxInstruction,
-	TxStep,
-	TxValue
-} from './decl/transaction.ts';
-export type {
-	FieldCommon,
-	FieldKind,
-	StoredArm,
-	InputFields,
-	InputKind,
-	OutputKind,
-	InputOf,
-	Value,
-	ValueOf
-} from './decl/fields.ts';
-export type {
-	AppName,
-	AutomationName,
-	BtreeField,
-	ModelName,
-	CustomFieldName,
-	FileField,
-	FileSyncName,
-	IndexName,
-	LayerColumn,
-	LayerField,
-	PathModel,
-	PeriodField,
-	RelName,
-	RelPath,
-	RequiredBtreeField,
-	SearchableField,
-	TextField,
-	VectorField,
-	EnvoyName,
-	FieldName,
-	HostToolName,
-	InstanceId,
-	IntegrationName,
-	KioskName,
-	McpName,
-	AuthoredModelName,
 	Names,
-	RowApproval,
-	RowState,
-	OutputName,
-	PolicyName,
-	ReadField,
-	ReadPath,
-	ReadableName,
-	RelationshipSpec,
+	ModelName,
+	InstanceId,
 	Row,
-	StoredRow,
-	SyncCallable,
-	SyncName,
-	SyncState,
-	TargetName,
-	TeamName,
-	WritePath
+	StoredRow
 } from './decl/names.ts';
 export type { Check, Verify } from './decl/verify.ts';
 export type {
-	AssetPath,
 	CurrencyCode,
-	DatePeriod,
-	Decimal,
-	Duration,
 	FileRef,
-	IanaZone,
-	IconName,
 	Id,
 	Instant,
-	InstantPeriod,
-	LocaleTag,
-	MimePattern,
-	Msg,
-	Offset,
 	PlainDate,
 	PlainTime,
-	RequestId,
-	Point,
-	RecordRef,
-	Seconds,
-	Size,
-	Rate,
-	Vector
+	Point
 } from './decl/values.ts';
-export type { LayerWhere, Operand, OrderBy, Shape, StaticWhere, Where } from './decl/where.ts'; // hook:query (OrderBy)
-export type {
-	Automation,
-	AutomationCtx,
-	AutomationSpec,
-	Cron,
-	EffectCtx,
-	RunInput,
-	RunOutput,
-	Trigger,
-	WebhookScheme
-} from './decl/runtime/automation.ts';
-export type {
-	Ai,
-	Browser,
-	Convert,
-	ConvertOptions,
-	ConvertRequest,
-	ConvertSource,
-	ConvertTarget,
-	ConvertTargets,
-	DecisionAnswers,
-	DecisionEntry,
-	DecisionQuestion,
-	DecisionState,
-	FileMeta,
-	Files,
-	Geo,
-	GeoHit,
-	ImageFacts,
-	InstanceTarget,
-	Notice,
-	NoticeAttachment,
-	Notify,
-	Recipient,
-	Request,
-	RunCause,
-	RunHandle,
-	RunRow,
-	RunTrigger,
-	RunTriggerView,
-	RunStatus,
-	Schedule,
-	Send,
-	SpeakOptions,
-	SpeechFormat,
-	StartInput,
-	FileSyncStartInput,
-	StartOutput,
-	IngestOptions,
-	Ingest,
-	IngestIndex,
-	Transcript,
-	TranscriptSegment,
-	Web,
-	WebPage
-} from './decl/runtime/facilities.ts';
-export type {
-	Attachment,
-	CalendarEvent,
-	CalendarTime,
-	ConfigurationOf,
-	ConversationOf,
-	DatabaseRequester,
-	DeliveryEvent,
-	DeliveryKind,
-	DeliveryOf,
-	DriverItemOf,
-	DriverName,
-	DriverOf,
-	HandleKind,
-	HttpOp,
-	HttpRequester,
-	Inbound,
-	InboundChat,
-	InboundMail,
-	Integration,
-	IntegrationSpec,
-	MessageDelivery,
-	MessageItem,
-	Outgoing,
-	RequestOf,
-	RequestResult,
-	RequesterOf,
-	SendInput,
-	TestCtx,
-	WebhookDelivery
-} from './decl/runtime/integration.ts';
-export type {
-	BuiltinParser,
-	CustomParser,
-	FileReadInput,
-	FileReadResult,
-	FileRecord,
-	FileSync,
-	FileWriteInput,
-	FileWriteResult,
-	Finding,
-	Health,
-	RemoteReadInput,
-	RemoteReadResult,
-	RemoteSync,
-	RemoteWriteResult,
-	SyncChange,
-	SyncCtx,
-	FileSyncCtx,
-	SyncRow,
-	SyncSpec
-} from './decl/runtime/sync.ts';
-export type { MediaType } from './decl/media-types.ts';
-export type {
-	AiModelClass,
-	ChildName,
-	ConnectionName,
-	DeclaredConvertTarget,
-	EmbeddingModelName,
-	IntegrationOf,
-	KioskPageName,
-	PageName,
-	SecretName
-} from './decl/runtime/names.ts';
+export type { LayerWhere, Where } from './decl/where.ts'; // hook:query (OrderBy)
+export type { AutomationCtx, EffectCtx } from './decl/runtime/automation.ts';
+export type { ImageFacts, StartInput } from './decl/runtime/facilities.ts';
+export type { Attachment, CalendarEvent } from './decl/runtime/integration.ts';
+export type { Finding, Health, RemoteSync, SyncCtx, FileSyncCtx, SyncRow } from './decl/runtime/sync.ts';
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props
 
-export type { Unavailable } from './decl/errors.ts';

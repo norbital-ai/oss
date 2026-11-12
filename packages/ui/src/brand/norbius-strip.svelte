@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { attachDotField, markRadius } from './dot-field.js';
+	import { attach_dot_field, markRadius } from './dot-field.js';
 	import {
 		NORBIUS_STRIP_STATES,
 		norbiusStripGeometry,
@@ -20,9 +20,7 @@
 	/** The live attribute Svelte keeps in sync: the attach closure must not snapshot `state`. */
 	const liveState = (root: Element): NorbiusStripState => {
 		const v = root.getAttribute('data-state');
-		return (NORBIUS_STRIP_STATES as readonly string[]).includes(v ?? '')
-			? (v as NorbiusStripState)
-			: 'ready';
+		return NORBIUS_STRIP_STATES.find((known) => known === v) ?? 'ready';
 	};
 </script>
 
@@ -38,7 +36,7 @@
 		const canvas = root.querySelector('canvas');
 		const swatch = root.querySelector('[data-swatch]');
 		if (!(canvas instanceof HTMLCanvasElement) || !(swatch instanceof HTMLElement)) return;
-		return attachDotField(root, canvas, swatch, {
+		return attach_dot_field(root, canvas, swatch, {
 			geometry: norbiusStripGeometry,
 			size,
 			radius: markRadius(size),

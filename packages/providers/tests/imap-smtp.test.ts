@@ -3,15 +3,15 @@
 // the engine stored), the open pixel, and the instance's own OAuth (authorize URL, state refusals, code exchange with
 // PKCE and sealing, refresh on use, a revoked refresh flipping the instance to error).
 import { describe, expect, it } from '@effect/vitest';
-import { Clock, Effect, Exit, Fiber, Option, Schema } from 'effect';
+import { Clock, Deferred, Effect, Exit, Fiber, Option, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
 import { ProviderUnavailable } from '../src/errors.ts';
 import type { LinkDef } from '../src/abi.ts';
+import type { DriverEvent } from '@norbital-ai/bolt/engine';
 import { Cursor } from '../src/imap-smtp/model.ts';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { readMail } from '../src/imap-smtp/reports.ts';
-import {
-	fakeFetch,
+import { required, fakeFetch,
 	HOOK,
 	host,
 	json,
@@ -172,7 +172,7 @@ describe('reading the watched folder', () => {
 						subject: 'Automatic reply: hello',
 						text: 'I am away\n',
 						from: { address: 'carol@else.example', name: 'Carol' },
-						sentAt: '2026-09-30T10:00:00.000Z',
+						sent_at: '2026-09-30T10:00:00.000Z',
 						headers: { 'auto-submitted': 'auto-replied', 'in-reply-to': '<m-1@acme.example>' }
 					}
 				});
@@ -183,7 +183,7 @@ describe('reading the watched folder', () => {
 describe('the mailbox link (password)', () => {
 	const setup = Effect.fn('MailboxTest.password')(function* (
 		tracking = 'off',
-		emit?: () => Promise<void>
+		emit?: (event: DriverEvent) => Promise<void>
 	) {
 		const imap = yield* Effect.acquireRelease(
 			fixture(() => fakeImap({ accept: (u, s) => u === 'desk@acme.example' && s.pass === 'pw' })),
@@ -194,7 +194,7 @@ describe('the mailbox link (password)', () => {
 			(server) => Effect.promise(() => server.close())
 		);
 		imap.deliver(mail('From: old@else.example\nSubject: before\nMessage-ID: <old@else.example>')); // history: never replayed
-		const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+		const provider = required(mailbox({ plain: true }).find((p) => p.id === 'imap'));
 		const h = yield* host(provider, fakeFetch([]), {}, emit === undefined ? {} : { emit });
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
 		const input = {
@@ -215,14 +215,14 @@ describe('the mailbox link (password)', () => {
 		() =>
 			Effect.gen(function* () {
 				const { h, input, imap } = yield* setup();
-				expect(yield* Effect.flip(h.link.pair!({ ...input, password: 'nope' }))).toMatchObject({
+				expect(yield* Effect.flip(required(h.link.pair)({ ...input, password: 'nope' }))).toMatchObject({
 					message: expect.stringMatching(/IMAP 127.0.0.1/)
 				});
 				expect(h.writes).toEqual([]);
-				expect(yield* Effect.flip(h.link.pair!({ ...input, imapPort: 'x' }))).toMatchObject({
+				expect(yield* Effect.flip(required(h.link.pair)({ ...input, imapPort: 'x' }))).toMatchObject({
 					message: expect.stringMatching(/IMAP port is not a port number/)
 				});
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				yield* until(() => h.status?.state === 'connected');
 				expect(h.status).toMatchObject({
 					account: 'desk@acme.example',
@@ -258,7 +258,7 @@ describe('the mailbox link (password)', () => {
 				});
 				expect(h.events[1]).toMatchObject({
 					kind: 'delivery',
-					providerId: '<m-1@acme.example>',
+					provider_id: '<m-1@acme.example>',
 					report: { kind: 'bounced', code: '550 5.1.1', provider: 'imap', permanent: true }
 				});
 				yield* until(() => cursorOf(h)?.uid === 4);
@@ -273,7 +273,7 @@ describe('the mailbox link (password)', () => {
 				const { h, input, imap } = yield* setup('off', async () => {
 					if (refuse) throw new Error('database unavailable');
 				});
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				yield* TestClock.withLive(until(() => h.status?.state === 'connected'));
 				imap.deliver(
 					mail('From: carol@else.example\nSubject: one\nMessage-ID: <one@else.example>')
@@ -302,19 +302,19 @@ describe('the mailbox link (password)', () => {
 			yield* Effect.promise(() => smtp.close());
 			for (let i = 0; i < 60; i++)
 				imap.deliver(mail(`From: customer@else.example\nMessage-ID: <history-${i}@else.example>`));
-			const provider = mailbox({ plain: true }).find((p) => p.id === 'imap')!;
+			const provider = required(mailbox({ plain: true }).find((p) => p.id === 'imap'));
 			const personal = yield* host(provider, fakeFetch([]), {}, { personal: true });
 			yield* Effect.addFinalizer(() => personal.link.close ?? Effect.void);
 			const { smtpHost: _host, smtpPort: _port, ...readOnly } = input;
-			yield* personal.link.pair!(readOnly);
+			yield* required(personal.link.pair)(readOnly);
 			expect(
-				yield* Effect.flip(personal.link.send!({ id: 'never-send', text: 'hi' }, undefined))
+				yield* Effect.flip(required(personal.link.send)({ id: 'never-send', text: 'hi' }, undefined))
 			).toMatchObject({ message: expect.stringMatching(/only synchronizes/) });
-			expect(yield* Effect.flip(personal.link.test!({}))).toMatchObject({
+			expect(yield* Effect.flip(required(personal.link.test)({}))).toMatchObject({
 				message: expect.stringMatching(/only synchronizes/)
 			});
 			expect(
-				provider.describe!({
+				required(provider.describe)({
 					personal: true,
 					definition: { description: 'Mail', driver: 'email' }
 				}).setup.fields?.map((f) => f.name)
@@ -341,26 +341,71 @@ describe('the mailbox link (password)', () => {
 		})
 	);
 
+	it.live('stores the outbound reference before SMTP can accept the message', () =>
+		Effect.gen(function* () {
+			const registration = yield* Deferred.make<Extract<DriverEvent, { kind: 'outbound_ref' }>>(),
+				release = yield* Deferred.make<void>(),
+				runtime = yield* Effect.context<never>();
+			yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.asVoid));
+			const { h, input, smtp } = yield* setup('off', (event) =>
+				event.kind !== 'outbound_ref' ? Promise.resolve() :
+					Effect.runPromiseWith(runtime)(Deferred.succeed(registration, event).pipe(
+						Effect.andThen(Deferred.await(release))
+					))
+			);
+			yield* required(h.link.pair)(input);
+			const sending = yield* required(h.link.send)({
+				id: 'reference-first', to: ['carol@else.example'], subject: 'Quote', text: 'Hello'
+			}, []).pipe(Effect.forkChild);
+			expect(yield* Deferred.await(registration)).toEqual({
+				kind: 'outbound_ref', message: 'reference-first', provider_id: '<reference-first@acme.example>'
+			});
+			expect(smtp.sent).toEqual([]);
+			yield* Deferred.succeed(release, undefined);
+			expect(yield* Fiber.join(sending)).toEqual({
+				provider_id: '<reference-first@acme.example>', presume_after_ms: 24 * 3_600_000
+			});
+			expect(smtp.sent).toHaveLength(1);
+			expect(h.events.filter((event) => event.kind === 'outbound_ref')).toHaveLength(1);
+		})
+	);
+
+	it.live('a refused outbound reference prevents SMTP submission', () =>
+		Effect.gen(function* () {
+			const { h, input, smtp } = yield* setup('off', async (event) => {
+				if (event.kind === 'outbound_ref') throw new Error('registration refused');
+			});
+			yield* required(h.link.pair)(input);
+			expect(yield* required(h.link.send)({
+				id: 'reference-refused', to: ['carol@else.example'], subject: 'Quote', text: 'Hello'
+			}, []).pipe(Effect.flip)).toMatchObject({
+				_tag: 'ProviderUnavailable', message: 'store outbound mail reference: registration refused'
+			});
+			expect(smtp.sent).toEqual([]);
+			expect(h.events.filter((event) => event.kind === 'outbound_ref')).toEqual([]);
+		})
+	);
+
 	it.live(
 		'sends as the mailbox with a DSN request; 4xx is a retryable refusal, 5xx a permanent one, both with their codes',
 		() =>
 			Effect.gen(function* () {
 				const { h, input, smtp } = yield* setup();
-				yield* h.link.pair!(input);
-				const sent = yield* h.link.send!(
+				yield* required(h.link.pair)(input);
+				const sent = yield* required(h.link.send)(
 					{
 						id: 'm-5',
 						to: ['carol@else.example'],
 						subject: 'Quote',
 						text: 'Attached',
 						html: '<p>Attached</p>',
-						inReplyTo: '<c2@else.example>',
+						reply_to: '<c2@else.example>',
 						references: ['<c2@else.example>']
 					},
 					undefined
 				);
-				expect(sent).toEqual({ providerId: '<m-5@acme.example>', presumeAfterMs: 24 * 3_600_000 });
-				const got = smtp.sent.at(-1)!;
+				expect(sent).toEqual({ provider_id: '<m-5@acme.example>', presume_after_ms: 24 * 3_600_000 });
+				const got = required(smtp.sent.at(-1));
 				expect(got.mailFrom).toMatch(/^MAIL FROM:<desk@acme\.example>.*RET=HDRS ENVID=m-5/);
 				expect(got.rcpts[0]).toMatch(/RCPT TO:<carol@else\.example> NOTIFY=SUCCESS,FAILURE,DELAY/);
 				expect(got.data).toMatch(/Message-ID: <m-5@acme\.example>/i);
@@ -368,7 +413,7 @@ describe('the mailbox link (password)', () => {
 				expect(got.data).toMatch(/From: Acme Desk <desk@acme\.example>/);
 				expect(got.data).not.toContain('/open/');
 				const refusal = (to: string) =>
-					Effect.flip(h.link.send!({ id: 'm-6', to: [to], subject: 's', text: 't' }, undefined));
+					Effect.flip(required(h.link.send)({ id: 'm-6', to: [to], subject: 's', text: 't' }, undefined));
 				expect(yield* refusal('full@else.example')).toMatchObject({
 					_tag: 'ProviderRefused',
 					permanent: false,
@@ -387,7 +432,7 @@ describe('the mailbox link (password)', () => {
 		() =>
 			Effect.gen(function* () {
 				const { h, input, smtp } = yield* setup();
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				const file = (id: string, name: string, text: string) => ({
 					id,
 					name,
@@ -395,7 +440,7 @@ describe('the mailbox link (password)', () => {
 					bytes: new TextEncoder().encode(text),
 					url: async () => 'unused'
 				});
-				yield* h.link.send!(
+				yield* required(h.link.send)(
 					{
 						id: 'm-8',
 						to: ['carol@else.example'],
@@ -405,7 +450,7 @@ describe('the mailbox link (password)', () => {
 					},
 					[file('f1', 'PCN report.pdf', '%PDF report'), file('f2', 'datasheet.pdf', '%PDF sheet')]
 				);
-				const data = smtp.sent.at(-1)!.data;
+				const data = required(smtp.sent.at(-1)).data;
 				expect(data).toMatch(/Content-Type: multipart\/mixed/i);
 				for (const [name, text] of [
 					['PCN report.pdf', '%PDF report'],
@@ -425,27 +470,28 @@ describe('the mailbox link (password)', () => {
 		() =>
 			Effect.gen(function* () {
 				const { h, input, smtp } = yield* setup('on');
-				yield* h.link.pair!(input);
-				yield* h.link.send!(
+				yield* required(h.link.pair)(input);
+				yield* required(h.link.send)(
 					{ id: 'm-7', to: ['carol@else.example'], subject: 's', html: '<p>hi</p>' },
 					undefined
 				);
 				const pixel = /src=3D"([^"]+)"|src="([^"]+)"/.exec(
-					smtp.sent.at(-1)!.data.replace(/=\r\n/g, '')
+					required(smtp.sent.at(-1)).data.replace(/=\r\n/g, '')
 				);
-				const url = (pixel?.[1] ?? pixel?.[2])!.replace(/=3D/g, '=');
+				const url = required((pixel?.[1] ?? pixel?.[2])).replace(/=3D/g, '=');
 				expect(url).toMatch(new RegExp(`^${HOOK}/open/m-7\\.[\\w-]{22}\\.gif$`));
-				const forged = yield* h.link.webhook!(
+				const forged = yield* required(h.link.webhook)(
 					new Request(url.replace(/\.[\w-]{22}\.gif$/, '.AAAAAAAAAAAAAAAAAAAAAA.gif'))
 				);
 				expect(forged.headers.get('content-type')).toBe('image/gif');
-				expect(h.events).toEqual([]);
-				const hit = yield* h.link.webhook!(new Request(url));
+				expect(h.events).toEqual([{ kind: 'outbound_ref', message: 'm-7', provider_id: '<m-7@acme.example>' }]);
+				const hit = yield* required(h.link.webhook)(new Request(url));
 				expect(hit.status).toBe(200);
 				expect(h.events).toEqual([
+					{ kind: 'outbound_ref', message: 'm-7', provider_id: '<m-7@acme.example>' },
 					{
 						kind: 'delivery',
-						providerId: '<m-7@acme.example>',
+						provider_id: '<m-7@acme.example>',
 						report: expect.objectContaining({ kind: 'opened', approximate: true, provider: 'imap' })
 					}
 				]);
@@ -457,10 +503,10 @@ describe('the mailbox link (password)', () => {
 		() =>
 			Effect.gen(function* () {
 				const { h, input, smtp, imap } = yield* setup();
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				yield* until(() => h.status?.state === 'connected');
 				smtp.relayTo(imap); // the server delivers it back
-				yield* h.link.test!({});
+				yield* required(h.link.test)({});
 			})
 	);
 });
@@ -491,9 +537,9 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 			imap: { host: '127.0.0.1', port: imap.port },
 			smtp: { host: '127.0.0.1', port: smtp.port }
 		};
-		const provider = mailbox({ plain: true, servers: { microsoft: servers } }).find(
+		const provider = required(mailbox({ plain: true, servers: { microsoft: servers } }).find(
 			(p) => p.id === 'microsoft'
-		)!;
+		));
 		const h = yield* host(provider, f, {}, { personal });
 		yield* Effect.addFinalizer(() => h.link.close ?? Effect.void);
 		return {
@@ -510,15 +556,15 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 		clientId: 'app-1',
 		clientSecret: 'shh'
 	};
-	const callback = (link: LinkDef, q: string) => link.webhook!(new Request(`${REDIRECT}?${q}`));
-	const authorize = (h: Host) => new URL(h.pairing!.value!);
+	const callback = (link: LinkDef, q: string) => required(link.webhook)(new Request(`${REDIRECT}?${q}`));
+	const authorize = (h: Host) => new URL(required(required(h.pairing).value));
 
 	it.effect(
 		"publishes an authorize URL for the popup: the tenant's app, PKCE, the host's one redirect URI, the mailbox scopes",
 		() =>
 			Effect.gen(function* () {
 				const { h } = yield* setup(() => json({}));
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				expect(h.status).toEqual({ state: 'pairing' });
 				expect(h.pairing).toMatchObject({ kind: 'oauth', label: 'Sign in with Microsoft' });
 				const url = authorize(h);
@@ -545,7 +591,7 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 		() =>
 			Effect.gen(function* () {
 				const { h } = yield* setup(() => json({}), true);
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				expect(authorize(h).searchParams.get('scope')).toBe(
 					'https://outlook.office.com/IMAP.AccessAsUser.All offline_access'
 				);
@@ -561,13 +607,13 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 					exchanged = b;
 					return json({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 });
 				});
-				yield* h.link.pair!(input);
-				const state = authorize(h).searchParams.get('state')!;
+				yield* required(h.link.pair)(input);
+				const state = required(authorize(h).searchParams.get('state'));
 				expect((yield* callback(h.link, 'state=forged&code=c1')).status).toBe(400);
 				expect(exchanged).toBeNull();
 				const res = yield* callback(h.link, `state=${state}&code=c1`);
 				expect(yield* fixture(() => res.text())).toContain('Connected as desk@acme.example');
-				expect(Object.fromEntries(exchanged!)).toMatchObject({
+				expect(Object.fromEntries(required<URLSearchParams>(exchanged))).toMatchObject({
 					grant_type: 'authorization_code',
 					code: 'c1',
 					redirect_uri: REDIRECT,
@@ -586,8 +632,8 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 				expect(again.status).toBe(200);
 				expect(yield* fixture(() => again.text())).toContain('Connected as desk@acme.example');
 				// an attempt left for longer than ten minutes is refused
-				yield* h.link.pair!(input);
-				const late = authorize(h).searchParams.get('state')!;
+				yield* required(h.link.pair)(input);
+				const late = required(authorize(h).searchParams.get('state'));
 				yield* advance(11 * 60_000);
 				expect((yield* callback(h.link, `state=${late}&code=c2`)).status).toBe(400);
 			})
@@ -600,7 +646,7 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 				let mode: 'first' | 'refresh' | 'revoked' = 'first';
 				const grants: string[] = [];
 				const { h, advance } = yield* setup((b) => {
-					grants.push(b.get('grant_type')!);
+					grants.push(required(b.get('grant_type')));
 					if (mode === 'revoked')
 						return json(
 							{ error: 'invalid_grant', error_description: 'AADSTS50173: the grant was revoked' },
@@ -610,11 +656,11 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 						? json({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
 						: json({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 });
 				});
-				yield* h.link.pair!(input);
+				yield* required(h.link.pair)(input);
 				yield* callback(h.link, `state=${authorize(h).searchParams.get('state')}&code=c1`);
 				mode = 'refresh';
 				yield* advance(2 * 3_600_000);
-				yield* h.link.send!(
+				yield* required(h.link.send)(
 					{ id: 'm-1', to: ['carol@else.example'], subject: 's', text: 't' },
 					undefined
 				);
@@ -623,7 +669,7 @@ describe("the mailbox link (the instance's own OAuth)", () => {
 				mode = 'revoked';
 				yield* advance(2 * 3_600_000);
 				const e = yield* Effect.flip(
-					h.link.send!(
+					required(h.link.send)(
 						{ id: 'm-2', to: ['carol@else.example'], subject: 's', text: 't' },
 						undefined
 					)
@@ -667,9 +713,9 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			imap: { host: '127.0.0.1', port: imap.port },
 			smtp: { host: '127.0.0.1', port: 1 }
 		};
-		const provider = mailbox({ plain: true, servers: { google: servers } }).find(
+		const provider = required(mailbox({ plain: true, servers: { google: servers } }).find(
 			(p) => p.id === 'google'
-		)!;
+		));
 		const h = yield* host(
 			provider,
 			f,
@@ -690,9 +736,9 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 			Effect.gen(function* () {
 				const { h, provider } = yield* setup();
 				expect(provider).toMatchObject({ oauth: 'google', setup: { kind: 'oauth', steps: [] } });
-				yield* h.link.pair!({});
+				yield* required(h.link.pair)({});
 				expect(h.pairing).toMatchObject({ kind: 'oauth', label: 'Sign in with Google' });
-				const url = new URL(h.pairing!.value!);
+				const url = new URL(required(required(h.pairing).value));
 				expect(`${url.origin}${url.pathname}`).toBe('https://accounts.google.com/o/oauth2/v2/auth');
 				expect(url.searchParams.get('client_id')).toBe('host-client');
 				expect(url.searchParams.get('scope')).toBe('https://mail.google.com/ openid email');
@@ -710,10 +756,10 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 					entered.resolve();
 					return allow.promise.then(() => json({ access_token: 'at-1', refresh_token: 'rt-1' }));
 				});
-				yield* h.link.pair!({});
-				const state = new URL(h.pairing!.value!).searchParams.get('state')!;
+				yield* required(h.link.pair)({});
+				const state = required(new URL(required(required(h.pairing).value)).searchParams.get('state'));
 				const callback = (nonce = state) =>
-					h.link.webhook!(new Request(`${REDIRECT}?state=${nonce}&code=c1`));
+					required(h.link.webhook)(new Request(`${REDIRECT}?state=${nonce}&code=c1`));
 				const running = yield* Effect.forkChild(
 					Effect.all([callback(), callback()], { concurrency: 2 })
 				);
@@ -731,11 +777,11 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 				yield* TestClock.withLive(until(() => h.status?.state === 'connected'));
 				expect((yield* callback('forged')).status).toBe(400);
 				const sealed = h.values.get('token');
-				yield* h.link.pair!({});
-				const next = new URL(h.pairing!.value!).searchParams.get('state')!;
+				yield* required(h.link.pair)({});
+				const next = required(new URL(required(required(h.pairing).value)).searchParams.get('state'));
 				expect((yield* callback()).status).toBe(400);
 				expect(h.values.get('token')).toEqual(sealed);
-				yield* h.link.unpair!();
+				yield* required(h.link.unpair)();
 				expect((yield* callback(next)).status).toBe(400);
 				expect(fetch.calls.filter((call) => call.url.endsWith('/token'))).toHaveLength(1);
 			})
@@ -744,11 +790,11 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 	it.effect('learns the mailbox from the sign-in and keeps no client of its own', () =>
 		Effect.gen(function* () {
 			const { h, exchanged } = yield* setup();
-			yield* h.link.pair!({});
-			const state = new URL(h.pairing!.value!).searchParams.get('state')!;
-			const res = yield* h.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+			yield* required(h.link.pair)({});
+			const state = required(new URL(required(required(h.pairing).value)).searchParams.get('state'));
+			const res = yield* required(h.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 			expect(yield* fixture(() => res.text())).toContain('Connected as desk@acme.example');
-			expect(Object.fromEntries(exchanged()!)).toMatchObject({
+			expect(Object.fromEntries(required(exchanged()))).toMatchObject({
 				client_id: 'host-client',
 				client_secret: 'host-secret'
 			});
@@ -761,15 +807,15 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 	it.effect('unpair revokes the Google grant before the tokens are dropped', () =>
 		Effect.gen(function* () {
 			const { h, fetch } = yield* setup();
-			yield* h.link.pair!({});
-			const state = new URL(h.pairing!.value!).searchParams.get('state')!;
-			yield* h.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
-			yield* h.link.unpair!();
+			yield* required(h.link.pair)({});
+			const state = required(new URL(required(required(h.pairing).value)).searchParams.get('state'));
+			yield* required(h.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
+			yield* required(h.link.unpair)();
 			const revoked = fetch.calls.filter(
 				(call) => call.url === 'https://oauth2.googleapis.com/revoke'
 			);
 			expect(revoked).toHaveLength(1);
-			expect(new URLSearchParams(revoked[0]!.body).get('token')).toBe('rt-1');
+			expect(new URLSearchParams(required(revoked[0]).body).get('token')).toBe('rt-1');
 		})
 	);
 
@@ -785,15 +831,15 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 					entered.resolve();
 					await allow.promise;
 				});
-				yield* h.link.pair!({});
-				const state = new URL(h.pairing!.value!).searchParams.get('state')!;
-				const callback = () => h.link.webhook!(new Request(`${REDIRECT}?state=${state}&code=c1`));
+				yield* required(h.link.pair)({});
+				const state = required(new URL(required(required(h.pairing).value)).searchParams.get('state'));
+				const callback = () => required(h.link.webhook)(new Request(`${REDIRECT}?state=${state}&code=c1`));
 				const signingIn = yield* Effect.forkChild(callback());
 				yield* Effect.promise(() => entered.promise);
 				let disconnected = false;
 				const wiped: string[] = [];
 				const disconnecting = yield* Effect.forkChild(
-					h.link.unpair!().pipe(
+					required(h.link.unpair)().pipe(
 						Effect.tap(() =>
 							Effect.sync(() => {
 								// The host wipes the keys known after the provider's unpair completes.
@@ -822,7 +868,7 @@ describe('Gmail: one click, signed in with the host’s Google client', () => {
 	it.effect('refuses to pair where the host has no Google client', () =>
 		Effect.gen(function* () {
 			const { h } = yield* setup(false);
-			expect(yield* Effect.flip(h.link.pair!({}))).toBeInstanceOf(ProviderUnavailable);
+			expect(yield* Effect.flip(required(h.link.pair)({}))).toBeInstanceOf(ProviderUnavailable);
 		})
 	);
 });

@@ -9,12 +9,11 @@ import { load, type Manifest } from '../../bolt-cli/src/compiler/load.ts';
 import { ManifestInvalid } from '../src/engine/errors.ts';
 import {
 	challengedApps,
-	declaredSecrets,
-	decodeManifest,
-	decodeProjectedManifest,
+	declared_secrets,
+	decode_manifest,
+	decode_projected_manifest,
 	layered,
-	projectManifest,
-	publicEnvoys,
+	project_manifest,
 	relations,
 	stateField,
 	teams,
@@ -35,30 +34,46 @@ const base: EngineManifest = {
 	policies: {},
 	teams: {},
 	automations: {},
-	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} }
 };
 const refusal = (u: unknown) =>
-	Result.match(decodeManifest(u), { onFailure: (e) => e, onSuccess: () => undefined });
+	Result.match(decode_manifest(u), { onFailure: (e) => e, onSuccess: () => undefined });
+const loaded = (over: Partial<Manifest>): Manifest => ({
+	workspace: { '': { tz: 'UTC', locale: 'en' } },
+	secrets: {}, model: {}, representation: {}, custom_field: {}, renderer: {},
+	integration_definition: {}, integration_setup: {}, policy: {}, team: {},
+	agent: {}, agent_external: {}, skill: {}, mcp: {}, automation: {}, app: {},
+	session: {}, page: {}, messages: {}, locale: {}, group: {},
+	...over
+});
 
-describe('decodeManifest', () => {
+describe('decode_manifest', () => {
 	it('ManifestInvalid: an unknown part, a part that is no object, a workspace without its zone', () => {
-		expect(Result.isSuccess(decodeManifest(base))).toBe(true);
+		expect(Result.isSuccess(decode_manifest(base))).toBe(true);
 		for (const bad of [
 			{ ...base, extra: {} },
 			{ ...base, models: { orders: 'orders' } },
 			{
 				...base,
-				models: { orders: { description: 'Orders', label: 'number', fields: {}, was: 123 } }
+				models: {
+					orders: { description: 'Orders', record_label: 'record.number', fields: {}, was: 123 }
+				}
 			},
 			{ ...base, workspace: { locale: 'en' } },
 			{ ...base, teams: { sales: 'p' } },
+			{ ...base, teams: { sales: ['rep'] } },
+			{ ...base, connections: {} },
+			{ ...base, messages: { 'models.orders.fields.number': 123 } },
 			{ ...base, policies: { p: { description: '', grants: { orders: { read: 'all' } } } } },
-			{ ...base, policies: { p: { description: '', grants: { orders: { moves: ['a->b'] } } } } },
+			{ ...base, policies: { p: { description: '', grants: { orders: { moves: 'all' } } } } },
+			{
+				...base,
+				policies: { p: { description: '', grants: { orders: { update: { moves: ['a->b'] } } } } }
+			},
 			{ ...base, policies: { p: { description: '', grants: { orders: { reed: true } } } } },
 			{
 				...base,
@@ -90,19 +105,55 @@ describe('decodeManifest', () => {
 		}
 	});
 
+	it('resolves the authored catalogue with the client exact-locale then language precedence', () => {
+		const messages = { '': {
+			'models.entries.fields.title': 'Title',
+			'models.entries.help.title': 'The entry title',
+			'models.entries.syncs.sheet.schema.fields.title': 'Sheet title'
+		} };
+		const locale = {
+			fr: { 'models.entries.fields.title': 'Titre', 'models.entries.help.title': 'Le titre' },
+			'FR-CA': { 'models.entries.fields.title': 'Titre canadien' }
+		};
+		const resolve = (tag: string) => Result.getOrThrow(decode_projected_manifest(project_manifest(loaded({
+			workspace: { '': { tz: 'UTC', locale: tag } }, messages, locale
+		})))).messages;
+		expect(resolve('fr-CA')).toEqual({
+			...messages[''], 'models.entries.fields.title': 'Titre canadien'
+		});
+		expect(resolve('FR-FR')).toEqual({
+			...messages[''], ...locale.fr
+		});
+		expect(resolve('de-DE')).toEqual(messages['']);
+		expect(Result.getOrThrow(decode_projected_manifest(project_manifest(loaded({}))))).not.toHaveProperty('messages');
+	});
+
+	it('refuses malformed base and locale catalogues, including an unselected locale', () => {
+		for (const over of [
+			{ messages: { '': { title: 123 } } },
+			{ messages: { '': undefined } },
+			{ locale: { en: null } },
+			{ locale: { fr: { title: false } } }
+		]) expect(() => project_manifest(loaded(over))).toThrow(ManifestInvalid);
+	});
+
 	it('keeps a standalone automation outside model exposure', () => {
 		const m = Result.getOrThrow(
-			decodeManifest({
+			decode_manifest({
 				...base,
 				models: {
-					orders: { description: 'Orders', label: 'number', fields: { number: { kind: 'text' } } }
+					orders: {
+						description: 'Orders',
+						record_label: 'record.number',
+						fields: { number: { kind: 'text' } }
+					}
 				},
-				exposures: { orders: { read: { orders: { fields: 'all' } } } },
+				exposures: { orders: { outputs: { default: { orders: { fields: 'all' } } } } },
 				automations: {
 					orders_submit: {
 						description: 'Submit an order through its native update.',
 						policies: ['clerk'],
-						input: { target: { kind: 'id', of: 'orders' } }
+						input: { target: { kind: 'ref', to: 'orders' } }
 					}
 				}
 			})
@@ -110,98 +161,127 @@ describe('decodeManifest', () => {
 		expect(m.automations.orders_submit).toEqual({
 			description: 'Submit an order through its native update.',
 			policies: ['clerk'],
-			input: { target: { kind: 'id', of: 'orders' } }
+			input: { target: { kind: 'ref', to: 'orders' } }
 		});
-		expect(m.exposures.orders).toEqual({ read: { orders: { fields: 'all' } } });
+		expect(m.exposures.orders).toEqual({ outputs: { default: { orders: { fields: 'all' } } } });
 	});
 
 	it('decodes each grant once: read layers, the columns and check marker of a write arm and moves arrive typed', () => {
 		const m = Result.getOrThrow(
-			decodeManifest({
+			decode_manifest({
 				...base,
 				policies: {
 					rep: {
 						description: '',
 						grants: {
 							orders: {
-								read: {
-									orders: { where: { region: { eq: 'north' } }, fields: ['region'] },
-									'orders.lines': { where: { qty: { gt: 0 } } }
+								outputs: {
+									default: {
+										scopes: {
+											orders: { region: { eq: 'north' } },
+											'orders.lines': { qty: { gt: 0 } }
+										}
+									}
 								},
 								create: { columns: { orders: ['region'], 'orders.lines': ['qty'] } },
-								update: { check: true },
-								delete: { check: true },
-								moves: { status: ['draft->sent'] }
+								update: { verdict: true, moves: { status: ['draft->sent'] } },
+								delete: { verdict: true }
 							},
-							lines: { read: true }
+							lines: { outputs: { default: {} } }
 						}
 					}
 				}
 			})
 		);
 		const grant = m.policies.rep?.grants.orders;
-		expect(grant?.read).toEqual({
-			orders: { where: { region: { eq: 'north' } }, fields: ['region'] },
-			'orders.lines': { where: { qty: { gt: 0 } } }
+		expect(grant?.outputs?.default).toEqual({
+			scopes: {
+				orders: { region: { eq: 'north' } },
+				'orders.lines': { qty: { gt: 0 } }
+			}
 		});
 		expect(grant?.create).toEqual({ columns: { orders: ['region'], 'orders.lines': ['qty'] } });
-		expect(grant?.update).toEqual({ check: true });
-		expect(grant?.delete).toEqual({ check: true });
-		expect(m.policies.rep?.grants.lines?.read).toBe(true);
+		expect(grant?.update).toEqual({ verdict: true, moves: { status: ['draft->sent'] } });
+		expect(grant?.delete).toEqual({ verdict: true });
+		expect(m.policies.rep?.grants.lines?.outputs?.default).toEqual({});
 	});
 
 	it.live(
-		'decodes the loaded fixture as projected: wrappers give their literal, connections are their own part',
+		'decodes the loaded fixture as projected: wrappers give their literal, and accounts stay outside source',
 		() =>
 			Effect.gen(function* () {
 				const root = fileURLToPath(new URL('./fixtures/good', import.meta.url));
 				const { files } = yield* discover(root);
 				const { manifest } = yield* load(root, files);
-				const m = Result.getOrThrow(decodeProjectedManifest(projectManifest(manifest)));
+				const m = Result.getOrThrow(decode_projected_manifest(project_manifest(manifest)));
 				expect(m.workspace).not.toHaveProperty('connections');
-				expect(m.connections.support).toEqual({ integration: 'mail', envoy: 'desk' });
-				expect(m.teams).toEqual({ Sales: ['sales_rep'] });
+				expect(m).not.toHaveProperty('connections');
+				expect(m.integrations.mail).toMatchObject({ driver: 'email' });
+				expect(m.teams).toEqual({ sales: { name: 'Sales', policies: ['sales_rep'] } });
 				expect(m.apps.sales?.title).toBe('Sales');
-				expect(m.kiosks?.clock?.policies).toEqual(['kiosk_reader']);
+				expect(m.apps.clock?.policies).toEqual(['kiosk_reader']);
 			}).pipe(Effect.provide(NodeServices.layer))
 	);
 });
 
-describe('projectManifest', () => {
-	const loaded = (over: Partial<Manifest>): Manifest => ({
-		workspace: { '': { tz: 'UTC', locale: 'en' } },
-		secrets: {},
-		model: {},
-		representation: {},
-		custom_field: {},
-		renderer: {},
-		integration_definition: {},
-		integration_setup: {},
-		policy: {},
-		team: {},
-		agent: {},
-		agent_external: {},
-		envoy: {},
-		skill: {},
-		tool: {},
-		mcp: {},
-		automation: {},
-		app: {},
-		kiosk: {},
-		kiosk_page: {},
-		kiosk_page_server: {},
-		session: {},
-		page: {},
-		page_server: {},
-		messages: {},
-		locale: {},
-		group: {},
-		...over
-	});
-	it('splits each model into its storage, its refs and, with `read`, its exposure; a model without `read` is not exposed', () => {
+describe('project_manifest', () => {
+	it('lowers field computations and named indexes through the normal model projection', () => {
 		const m = Result.getOrThrow(
-			decodeProjectedManifest(
-				projectManifest(
+			decode_projected_manifest(
+				project_manifest(
+					loaded({
+						model: {
+							entries: {
+								description: 'Entries',
+								record_label: 'record.title',
+								fields: {
+									title: { kind: 'text' },
+									amount: { kind: 'int' },
+									doubled: { kind: 'int', computed: { times: [{ field: 'amount' }, 2] } }
+								},
+								indexes: { by_title: { on: ['title'] }, find: { text: ['title'] } },
+								outputs: { default: { fields: 'all' } }
+							}
+						}
+					})
+				)
+			)
+		);
+		expect(m.models.entries).toEqual({
+			description: 'Entries',
+			record_label: 'record.title',
+			fields: { title: { kind: 'text' }, amount: { kind: 'int' } },
+			computed: { doubled: { kind: 'int', expr: { times: [{ field: 'amount' }, 2] } } },
+			indexes: [{ on: ['title'] }],
+			search: { text: ['title'] }
+		});
+	});
+	it('refuses removed label, computed and index authoring forms', () => {
+		for (const removed of [
+			{ label: 'title' },
+			{ computed: {} },
+			{ index: ['title'] },
+			{ search: { text: ['title'] } },
+			{ table: { primary: 'text', indexes: [] } }
+		])
+			expect(() =>
+				project_manifest(
+					loaded({
+						model: {
+							entries: {
+								description: 'Entries',
+								fields: { title: { kind: 'text' } },
+								...removed
+							}
+						}
+					})
+				)
+			).toThrow();
+	});
+	it('splits each model into its storage, its refs and the exposure declared by its outputs', () => {
+		const m = Result.getOrThrow(
+			decode_projected_manifest(
+				project_manifest(
 					loaded({
 						model: {
 							// as the check serializer hands it over (a body is `true`), or as loaded (a function)
@@ -210,21 +290,26 @@ describe('projectManifest', () => {
 								spec: {
 									description: 'Orders',
 									was: 'prior_orders',
-									label: 'number',
+									record_label: 'record.number',
 									fields: {
 										number: { kind: 'text' },
 										customer: { kind: 'ref', to: 'customers', inverse: 'orders' }
 									},
-									read: 'all',
-									create: { columns: { orders: ['number', 'customer'] }, transform: true },
-									update: { columns: { orders: ['number'] }, transform: () => [] },
+									constraints: {
+										one_number: { unique: ['number'] },
+										numbered: { check: { number: { ne: '' } } },
+										unassigned: { locked: { customer: { is_null: true } }, except: ['customer'] }
+									},
+									outputs: { default: { fields: 'all' } },
+									create: { columns: { fields: ['number', 'customer'] }, transform: true },
+									update: { columns: { fields: ['number'] }, transform: () => [] },
 									delete: {}
 								},
 								bodies: {}
 							},
 							customers: {
 								description: 'Customers',
-								label: 'name',
+								record_label: 'record.name',
 								fields: { name: { kind: 'text' } }
 							}
 						}
@@ -234,9 +319,14 @@ describe('projectManifest', () => {
 		);
 		expect(m.models.orders?.fields).toEqual({ number: { kind: 'text' } });
 		expect(m.models.orders?.was).toBe('prior_orders');
+		expect(m.models.orders).toMatchObject({
+			unique: [{ fields: ['number'], name: 'one_number' }],
+			check: { numbered: { number: { ne: '' } } },
+			locks: { unassigned: { where: { customer: { is_null: true } }, except: ['customer'] } }
+		});
 		expect(m.relationships).toEqual({ 'orders.customer': { to: 'customers', inverse: 'orders' } });
 		expect(m.exposures.orders).toEqual({
-			read: { orders: { fields: 'all' } },
+			outputs: { default: { orders: { fields: 'all' } } },
 			create: { columns: { orders: ['number', 'customer'] }, transform: true },
 			update: { columns: { orders: ['number'] }, transform: true },
 			delete: {}
@@ -245,19 +335,19 @@ describe('projectManifest', () => {
 		expect(m.models).toHaveProperty('customers');
 	});
 
-	it("marks bodies the engine must know of and keeps no function: a write arm's check, a custom field's validate, an integration's test", () => {
+	it("marks a write arm's verdict, a custom field's validate and an integration's test", () => {
 		const m = Result.getOrThrow(
-			decodeProjectedManifest(
-				projectManifest(
+			decode_projected_manifest(
+				project_manifest(
 					loaded({
 						policy: {
 							rep: {
 								description: '',
 								grants: {
 									orders: {
-										update: { columns: { orders: ['number'] }, check: function* () {} },
-										delete: { check: function* () {} },
-										read: true
+										update: { columns: { fields: ['number'] }, verdict: function* () {} },
+										delete: { verdict: function* () {} },
+										outputs: { default: {} }
 									}
 								}
 							}
@@ -286,10 +376,10 @@ describe('projectManifest', () => {
 		);
 		expect(m.policies.rep?.grants.orders?.update).toEqual({
 			columns: { orders: ['number'] },
-			check: true
+			verdict: true
 		});
-		expect(m.policies.rep?.grants.orders?.delete).toEqual({ check: true });
-		expect(m.customFields.sku).toEqual({
+		expect(m.policies.rep?.grants.orders?.delete).toEqual({ verdict: true });
+		expect(m.custom_fields.sku).toEqual({
 			description: 'A SKU.',
 			shape: { kind: 'text' },
 			check: true
@@ -312,32 +402,16 @@ describe('manifest accessors', () => {
 		models: {
 			orders: {
 				description: 'Orders',
-				label: 'number',
+				record_label: 'record.number',
 				fields: {
 					number: { kind: 'text' },
 					status: { kind: 'state', initial: 'draft', states: { draft: { to: ['done'] }, done: {} } }
 				}
 			},
-			lines: { description: 'Lines', label: 'sku', fields: { sku: { kind: 'text' } } }
+			lines: { description: 'Lines', record_label: 'record.sku', fields: { sku: { kind: 'text' } } }
 		},
 		relationships: { 'lines.order': { to: 'orders', inverse: 'lines' } },
-		teams: { sales: ['rep'], leads: { name: 'Leads', parent: 'sales', policies: ['lead'] } },
-		envoys: {
-			desk: {
-				name: 'Desk',
-				audience: 'public',
-				policies: ['rep'],
-				delegation: 'disabled',
-				task: 'Answer.'
-			},
-			staff: {
-				name: 'Staff',
-				audience: 'private',
-				policies: ['rep'],
-				delegation: 'disabled',
-				task: 'Answer.'
-			}
-		},
+		teams: { sales: { policies: ['rep'] }, leads: { name: 'Leads', parent: 'sales', policies: ['lead'] } },
 		apps: {
 			shop: {
 				title: 'Shop',
@@ -356,15 +430,13 @@ describe('manifest accessors', () => {
 		}
 	};
 
-	it('derive the public envoys, the secrets, the challenged apps and the normalised teams', () => {
-		expect(publicEnvoys(m)).toEqual(['desk']);
-		expect(declaredSecrets(m)).toEqual(['API_URL', 'API_KEY']);
+	it('derive the secrets, challenged apps and normalised teams', () => {
+		expect(declared_secrets(m)).toEqual(['API_URL', 'API_KEY']);
 		expect(challengedApps(m)).toEqual(['shop']);
 		expect(teams(m)).toEqual({
 			sales: { name: 'sales', parent: null, policies: ['rep'] },
 			leads: { name: 'Leads', parent: 'sales', policies: ['lead'] }
 		});
-		expect(publicEnvoys(m)).toBe(publicEnvoys(m));
 	});
 
 	it('stateField, the relation index and the built-in layer', () => {

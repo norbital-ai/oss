@@ -1,13 +1,14 @@
 // The value codec without a database: wire tags become std's values in the guest (§3.3.10, §5.8).
 import { describe, expect, it } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import { type Invocation, LIMITS } from '../src/engine/contracts.ts';
 import { Guest, type Bridge } from '../src/engine/services.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { guestLayer } from './support/guest-fixture.ts';
-import { createBolt } from '../src/page/bolt.ts';
+import { guest_layer } from './support/guest-fixture.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
+import { input_schema } from '@norbital-ai/std/kind';
 
 const invocation = (input: Json): Invocation => ({
 	id: 'inv-1',
@@ -56,8 +57,8 @@ export default { automation: { a: { body: function* (input, ctx) {
 				const o = yield* Guest.pipe(
 					Effect.flatMap((service) => service.invoke(invocation({ due: '2026-03-01' }), bridge)),
 					Effect.provide(
-						guestLayer(guest, {
-							lowerRead: () => ({
+						guest_layer(guest, {
+							lower_read: () => Effect.succeed({
 								kind: 'request',
 								roots: [
 									{
@@ -108,26 +109,30 @@ describe('codec: $bolt reads hand pages real values', () => {
 			};
 			const fetch: typeof globalThis.fetch = async () =>
 				Response.json({ answers: [{ t: answer }] });
-			const bolt = yield* createBolt({
+			const bolt = yield* create_bolt({
+				operation_outputs: { automations: {} },
 				base: 'https://workspace.test',
 				actor: null,
 				locale: 'en',
 				fetch,
-				openStream: () => ({ onmessage: null, onerror: null, close() {} })
+				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
 			});
-			const { t: page } = yield* bolt.query<{
-				t: {
-					rows: {
-						amount: Decimal;
-						day: string;
-						span: { start: string };
-						lines: { price: Decimal }[];
-					}[];
-				};
-			}>({ t: { limit: 1 } });
+			const decimal = input_schema({ kind: 'decimal', scale: 2 });
+			const { t: page } = yield* bolt.native_query({ m: 'query', a: [{ t: { limit: 1 } }] }, Schema.Struct({
+				t: Schema.Struct({
+					rows: Schema.Array(Schema.Struct({
+						id: Schema.String,
+						amount: decimal,
+						day: Schema.String,
+						span: Schema.Struct({ start: Schema.String, end: Schema.NullOr(Schema.String) }),
+						lines: Schema.Array(Schema.Struct({ price: decimal }))
+					})),
+					next: Schema.NullOr(Schema.String)
+				})
+			}));
 			const row = page.rows[0];
 			if (row === undefined) throw new Error('The fixture page returned no row');
-			expect(row.amount).toBeInstanceOf(Decimal);
+			if (!(row.amount instanceof Decimal)) throw new Error('The amount is not a Decimal');
 			expect(row.amount.plus('1').toString()).toBe('2.50');
 			expect(row.lines[0]?.price).toBeInstanceOf(Decimal);
 			expect([row.day, row.span.start]).toEqual(['2026-01-02', '2026-01-02T03:04:05.000Z']);

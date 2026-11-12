@@ -8,7 +8,7 @@ import { browser, required } from './view-fixture.ts';
 import { confirmDialog, element } from './elements.ts';
 import type { ComponentProps } from 'svelte';
 import { escapes, navigates, openSheets, popSheet, pushSheet } from '../src/primitives/sheet/dismiss.ts';
-import { filterLogs, logPreview, wantsOlder, type LogLine } from '../src/logs/logs.ts';
+import { filter_logs, logPreview, wantsOlder, type LogLine } from '../src/logs/logs.ts';
 import { offsets, windowOf } from '../src/primitives/virtual/virtual.ts';
 
 // after the DOM hook: static imports link before it registers
@@ -215,15 +215,15 @@ it.live('logs: level + text filter; a virtual window; older pages near the top',
 			{ id: '3', at: 2, level: 'debug', message: 'tick' }
 		];
 		assert.deepEqual(
-			filterLogs(rows, { debug: true }, '').map((r) => r.id),
+			filter_logs(rows, { debug: true }, '').map((r) => r.id),
 			['1', '2']
 		);
 		assert.deepEqual(
-			filterLogs(rows, {}, 'sync').map((r) => r.id),
+			filter_logs(rows, {}, 'sync').map((r) => r.id),
 			['2']
 		);
 		assert.deepEqual(
-			filterLogs(rows, {}, 'db').map((r) => r.id),
+			filter_logs(rows, {}, 'db').map((r) => r.id),
 			['2']
 		);
 		const offs = offsets([20, 60, 20, 20, 20]); // row 1 wrapped to three lines
@@ -289,29 +289,29 @@ it.live('logs: 10k rows render a window and load an older page on scroll to top'
 	})
 );
 
-it.live("openRecord writes the shell's one record link, ?record=<model>/<id|new>", () =>
+it.live("open_record writes the shell's one record link, ?record=<model>/<id|new>", () =>
 	browser(async () => {
-		const { openRecord } = await import('../src/record/navigation.ts');
+		const { open_record } = await import('../src/record/navigation.ts');
 		history.replaceState(null, '', '/app/sales/list?q=a');
-		openRecord('customers', 'new');
-		openRecord('customers', 'c1'); // the created record replaces its create sheet
+		open_record('customers', 'new');
+		open_record('customers', 'c1'); // the created record replaces its create sheet
 		assert.equal(location.search, '?q=a&record=customers%2Fc1');
-		openRecord('orders', 'o1'); // opened from the sheet: stacks
+		open_record('orders', 'o1'); // opened from the sheet: stacks
 		assert.equal(location.search, '?q=a&record=customers%2Fc1&record=orders%2Fo1');
-		openRecord('customers', 'c1'); // one already open becomes the top
+		open_record('customers', 'c1'); // one already open becomes the top
 		assert.equal(location.search, '?q=a&record=customers%2Fc1');
 	})
 );
 
-it.live("openRecord carries the opener's contexts to the shell's sheet for that record only", () =>
+it.live("open_record carries the opener's contexts to the shell's sheet for that record only", () =>
 	browser(async () => {
-		const { carriedContexts, openRecord } = await import('../src/record/navigation.ts');
+		const { carried_contexts, open_record } = await import('../src/record/navigation.ts');
 		const scope = new Map([[Symbol('page.create_scope'), { employmentId: () => 'e1' }]]);
-		openRecord('leave_entries', 'new', scope);
-		assert.equal(carriedContexts('leave_entries', 'new'), scope);
-		assert.equal(carriedContexts('leave_entries', 'x1'), undefined);
-		openRecord('leave_entries', 'x1');
-		assert.equal(carriedContexts('leave_entries', 'new'), undefined);
+		open_record('leave_entries', 'new', scope);
+		assert.equal(carried_contexts('leave_entries', 'new'), scope);
+		assert.equal(carried_contexts('leave_entries', 'x1'), undefined);
+		open_record('leave_entries', 'x1');
+		assert.equal(carried_contexts('leave_entries', 'new'), undefined);
 	})
 );
 

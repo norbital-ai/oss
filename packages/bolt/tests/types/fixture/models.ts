@@ -2,12 +2,16 @@ import { install } from '../../../src/decl/runtime/guest.ts';
 install();
 // A hand-written workspace for the type corpus: the `src/data/model/<name>/+model.ts` literals a template writes, every
 // body inline. `../registry.ts` is what `bolt sync` prints for them: each body is typed from it by the model's name.
-import { customField, model } from '../../../src/index.ts';
-import type { Finding, Notice, SyncRow } from '../../../src/index.ts';
+import { custom_field } from '../../../src/index.ts';
+import { bind_model } from '../../../src/declarations.ts';
+import type { Finding, InstanceId, SyncRow } from '../../../src/index.ts';
 
-export const customers = model('customers', {
+// a runtime conversation instance (never evaluated here)
+declare const whatsapp_account: InstanceId<'whatsapp'>;
+
+export const customers = bind_model('customers')({
 	description: 'Buyers',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
 		email: { kind: 'text', format: 'email', optional: true },
@@ -19,26 +23,24 @@ export const customers = model('customers', {
 			to: 'sys_integration',
 			optional: true,
 			where: { integration: { eq: 'whatsapp' } }
-		}
+		},
+		name_upper: { kind: 'text', computed: { upper: { field: 'name' } } },
+		email_lower: { kind: 'text', computed: { lower: { field: 'email' } } },
+		email_label: { kind: 'text', computed: { concat: [{ field: 'email' }, ' contact'] } },
+		email_default: { kind: 'text', computed: { coalesce: [{ field: 'email' }, 'unknown'] } },
+		email_chain: { kind: 'text', computed: { upper: { field: 'email_lower' } } }
 	},
-	computed: {
-		name_upper: { kind: 'text', expr: { upper: { field: 'name' } } },
-		email_lower: { kind: 'text', expr: { lower: { field: 'email' } } },
-		email_label: { kind: 'text', expr: { concat: [{ field: 'email' }, ' contact'] } },
-		email_default: { kind: 'text', expr: { coalesce: [{ field: 'email' }, 'unknown'] } },
-		email_chain: { kind: 'text', expr: { upper: { field: 'email_lower' } } }
-	},
-	search: { text: ['name'] },
-	read: 'all',
-	outputs: { directory: { customers: { fields: ['name', 'tier'] } } },
+
+	outputs: { default: { fields: 'all' }, directory: { fields: ['name', 'tier'] } },
 	create: {
-		columns: { customers: ['name', 'email', 'tier'] },
-		filled: { customers: ['name'] },
+		columns: { fields: ['name', 'email', 'tier'] },
+		filled: { fields: ['name'] },
 		transform: function* (rows) {
-			return rows.map((r) => (r.name === undefined ? { ...r, name: r.email ?? 'unknown' } : r));
+			return rows.map(({ set }) => (set.name === undefined ? { ...set, name: set.email ?? 'unknown' } : set));
 		}
 	},
-	update: { columns: { customers: ['name', 'email', 'tier', 'tags'] } },
+	update: { columns: { fields: ['name', 'email', 'tier', 'tags'] } },
+	delete: {},
 	syncs: {
 		// two ways with the ERP: `read` pulls changed customers, `write` sends each committed change
 		crm: {
@@ -50,11 +52,9 @@ export const customers = model('customers', {
 					path: 'customers',
 					query: { since: String(cursor ?? '') },
 					output: {
-						kind: 'list',
-						of: {
-							kind: 'object',
-							fields: { id: { kind: 'text' }, name: { kind: 'text' }, updated: { kind: 'text' } }
-						}
+						kind: 'object',
+						fields: { id: { kind: 'text' }, name: { kind: 'text' }, updated: { kind: 'text' } },
+						many: true
 					}
 				});
 				return {
@@ -74,12 +74,14 @@ export const customers = model('customers', {
 				return { $id: sent.id, $version: sent.updated };
 			}
 		}
-	}
+	},
+	indexes: { find: { text: ['name'] } }
 });
 
-export const orders = model('orders', {
+export const orders = bind_model('orders')({
 	description: 'Sales orders',
-	label: ['number', 'customer'],
+	record_label:
+		"[record.number != null ? string(record.number) : '', record.customer != null ? string(record.customer) : ''].filter(part, part != '').join(' · ')",
 	fields: {
 		number: { kind: 'seq', pattern: 'SO-{0000}' },
 		customer: { kind: 'ref', to: 'customers', inverse: 'orders' },
@@ -95,8 +97,8 @@ export const orders = model('orders', {
 			initial: 'draft',
 			states: {
 				draft: { to: ['submitted'] },
-				submitted: { to: ['ordered', 'draft'], edit: ['status', 'note', 'lines'] },
-				ordered: { edit: 'none' }
+				submitted: { to: ['ordered', 'draft'] },
+				ordered: {}
 			}
 		},
 		note: { kind: 'text', optional: true },
@@ -104,103 +106,70 @@ export const orders = model('orders', {
 		placed_at: { kind: 'instant', optional: true },
 		total: { kind: 'sum', of: 'lines.amount', where: { qty: { gt: 0 } } },
 		line_count: { kind: 'count', of: 'lines' },
-		colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true }
+		colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true },
+		due_soon: { kind: 'date', computed: { plus_days: [{ field: 'due' }, -7] } }
 	},
-	index: ['customer', 'due'],
-	computed: { due_soon: { kind: 'date', expr: { plusDays: [{ field: 'due' }, -7] } } },
-	check: { has_customer: { customer: { isNull: false } } },
-	search: {
-		text: ['note'],
-		indexes: {
-			by_colour: {
-				description: 'Orders of a similar colour',
-				dim: 3,
-				metric: 'l2',
-				vector: 'colour',
-				input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
-				candidates: 4,
-				probe: (q) => ({ vector: q.lab, where: { status: { eq: 'ordered' } } }),
-				rerank: (q, row) =>
-					Array.isArray(row.colour) ? row.colour.length - q.lab.length : undefined
-			}
-		}
+
+	constraints: {
+		has_customer: { check: { customer: { is_null: false } } },
+		submitted: { locked: { status: { eq: 'submitted' } }, except: ['status', 'note', 'lines'] },
+		ordered: { locked: { status: { eq: 'ordered' } } }
 	},
-	read: {
-		orders: { fields: 'all' },
-		'orders.customer': { fields: ['name', 'tier'] },
-		'orders.lines': { fields: 'all' }
-	},
+
 	outputs: {
-		logistics: { orders: { fields: ['number', 'status', 'customer'] }, 'orders.lines': { fields: ['item', 'qty'] } }
+		default: { fields: 'all', customer: { fields: ['name', 'tier'] }, lines: { fields: 'all' } },
+		logistics: { fields: ['number', 'status', 'customer'], lines: { fields: ['item', 'qty'] } }
 	},
 	create: {
-		columns: { orders: ['customer', 'note', 'due'], 'orders.lines': ['item', 'qty', 'price'] },
+		columns: { fields: ['customer', 'note', 'due'], lines: { fields: ['item', 'qty', 'price'] } },
 		transform: function* (rows, ctx) {
-			const known = yield* ctx.db.query({
+			const known = yield* ctx.query({
 				customers: {
-					where: { id: { in: rows.map((r) => r.customer) } },
+					where: { id: { in: rows.map((r) => r.after.customer) } },
 					fields: ['tier']
 				}
 			});
-			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.customer));
-			if (at >= 0) return yield* ctx.refuse('Unknown customer.', { field: 'customer', row: at });
-			return rows.map((r) => ({ ...r, placed_at: ctx.now }));
+			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.after.customer));
+			if (at >= 0) return yield* ctx.refuse('errors.refused', { field: 'customer', row: at });
+			return rows.map(({ set }) => ({ ...set, placed_at: ctx.now }));
+		},
+		effect: function* (changes, ctx) {
+			if (ctx.event.kind !== 'write') return;
+			const buyers = yield* ctx.query({ customers: {
+				where: { id: { in: changes.map(({ after }) => after.customer) } }, fields: ['name']
+			} });
+			for (const { after } of changes) yield* ctx.notify({
+				title: `New order ${after.number}`,
+				description: buyers.customers.rows.find((c) => c.id === after.customer)?.name ?? '',
+				to: [{ team: 'finance' }, 'requester'], via: [whatsapp_account],
+				attachments: [{ document: { html: `<h1>${after.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
+				link: { model: 'orders', id: after.id }
+			});
+			if (changes[0]?.after.number !== undefined && ctx.actor.kind === 'member')
+				yield* ctx.schedule('nightly', {});
 		}
 	},
 	update: {
-		columns: {
-			orders: ['status', 'note', 'due', 'placed_at'],
-			'orders.lines': ['item', 'qty', 'price']
-		},
+		columns: { fields: ['status', 'note', 'due', 'placed_at'], lines: { fields: ['item', 'qty', 'price'] } },
 		transform: function* (changes, ctx) {
 			return changes.map(({ before, set }) =>
 				set.status === 'submitted' && before.status !== 'submitted'
 					? { ...set, placed_at: ctx.now }
 					: set
 			);
+		},
+		effect: function* (changes, ctx) {
+			const moved = changes.filter(({ before, after }) => before.status !== after.status);
+			if (moved.length > 0) yield* ctx.act({
+				'orders.update': moved.map(({ after }) => ({ target: after, set: { note: 'moved' } }))
+			});
 		}
 	},
 	delete: {
-		check: function* (rows, ctx) {
-			const at = rows.findIndex((r) => r.status === 'ordered');
-			if (at >= 0) return yield* ctx.refuse('An ordered order stays.', { row: at });
-		}
-	},
-	notify: function* (event, ctx) {
-		if (event.kind !== 'write' || event.action !== 'create') return [];
-		const buyers = yield* ctx.db.query({
-			customers: {
-				where: { id: { in: event.records.map((o) => o.customer) } },
-				fields: ['name']
-			}
-		});
-		return event.records.map((o): Notice => ({
-			title: `New order ${o.number}`,
-			description: buyers.customers.rows.find((c) => c.id === o.customer)?.name ?? '',
-			to: [{ team: 'finance' }, 'requester'],
-			via: ['whatsapp'],
-			attachments: [{ document: { html: `<h1>${o.number}</h1>` }, to: 'pdf', name: 'order.pdf' }],
-			link: { model: 'orders', id: o.id }
-		}));
-	},
-	effect: {
-		created: function* (rows, ctx) {
-			const first: string | undefined = rows[0]?.number;
-			const actor: 'member' | 'envoy' | 'visitor' | 'apiKey' | 'system' = ctx.actor.kind;
-			if (first !== undefined && actor === 'member') yield* ctx.schedule('nightly', {});
-		},
-		updated: function* (changes, ctx) {
-			const moved = changes.filter(({ before, after }) => before.status !== after.status);
-			if (moved.length > 0)
-				yield* ctx.act(
-					'orders.update',
-					moved.map(({ after }) => ({ target: after.id, set: { note: 'moved' } }))
-				);
-		},
-		deleted: function* (rows, ctx) {
-			yield* ctx.notify(
-				rows.map((o) => ({ title: `Order ${o.number} removed`, to: [{ team: 'finance' }] }))
-			);
+		effect: function* (changes, ctx) {
+			yield* ctx.notify(changes.map(({ before }) => ({
+				title: `Order ${before.number} removed`, to: [{ team: 'finance' }]
+			})));
 		}
 	},
 	syncs: {
@@ -227,41 +196,43 @@ export const orders = model('orders', {
 					type: 'application/vnd.ms-excel',
 					extensions: ['.xls'],
 					parse: function* (file, ctx) {
-						const text = yield* ctx.files.text(file);
+						const text = new TextDecoder('utf-8', { fatal: true }).decode(
+							yield* ctx.files.get(file)
+						);
 						return text.split('\n').map((line, i) => ({ customer: line, note: null, $at: i + 1 }));
 					}
 				}
 			],
 			schema: {
-				customer: { kind: 'text', label: 'Customer' },
+				customer: { kind: 'text' },
 				note: { kind: 'text', optional: true }
 			},
 			context: { since: { kind: 'date' } },
 			read: function* ({ records, context }, ctx) {
-				const known = yield* ctx.db.query({
+				const known = yield* ctx.query({
 					customers: {
 						where: { name: { in: records.map((r) => r.customer) } },
 						fields: ['name']
 					}
 				});
-				const idOf = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
+				const id_of = (name: string) => known.customers.rows.find((c) => c.name === name)?.id;
 				return {
 					rows: records.flatMap((r) => {
-						const customer = idOf(r.customer);
+						const customer = id_of(r.customer);
 						return customer === undefined
 							? []
 							: [{ customer, note: r.note ?? null, due: context.since }];
 					}),
 					scope: { by: ['customer'], range: 'due' },
 					findings: records.flatMap((r): Finding[] =>
-						idOf(r.customer) === undefined
+						id_of(r.customer) === undefined
 							? [{ at: r.$at, field: 'customer', message: 'Unknown customer', severity: 'refuse' }]
 							: []
 					)
 				};
 			},
 			write: function* ({ context }, ctx) {
-				const open = yield* ctx.db.query({
+				const open = yield* ctx.query({
 					orders: {
 						where: { due: { gte: context.since } },
 						fields: ['customer', 'note']
@@ -270,42 +241,53 @@ export const orders = model('orders', {
 				return open.orders.rows.map((o) => ({ customer: String(o.customer), note: o.note }));
 			}
 		}
+	},
+	indexes: {
+		by_customer: { on: ['customer'] },
+		by_due: { on: ['due'] },
+		find: { text: ['note'] },
+		by_colour: {
+			description: 'Orders of a similar colour',
+			dim: 3,
+			metric: 'l2',
+			vector: 'colour',
+			input: { lab: { kind: 'vector', dim: 3, metric: 'l2' } },
+			candidates: 4,
+			probe: (q) => ({ vector: q.lab, where: { status: { eq: 'ordered' } } }),
+			rerank: (q, row) => (Array.isArray(row.colour) ? row.colour.length - q.lab.length : undefined)
+		}
 	}
 });
 
-export const order_lines = model('order_lines', {
+export const order_lines = bind_model('order_lines')({
 	description: 'Lines of an order',
-	label: 'item',
+	record_label: 'record.item',
 	fields: {
 		order: { kind: 'ref', to: 'orders', inverse: 'lines', owned: true },
 		item: { kind: 'text' },
 		qty: { kind: 'decimal', scale: 3 },
-		price: { kind: 'money' }
-	},
-	computed: {
+		price: { kind: 'money' },
 		amount: {
 			kind: 'money',
-			expr: { round: [{ times: [{ field: 'price' }, { field: 'qty' }] }, 2] }
+			computed: { round: [{ times: [{ field: 'price' }, { field: 'qty' }] }, 2] }
 		}
 	},
-	read: 'all'
+
+	outputs: { default: { fields: 'all' } }
 });
 
-export const notices = model('notices', {
+export const notices = bind_model('notices')({
 	description: 'Supplier notices mirrored from the inbox',
-	label: 'subject',
-	key: ['inbox', 'message_id'],
+	record_label: 'record.subject',
+	constraints: { one_message: { unique: ['inbox', 'message_id'], import_key: true } },
 	fields: {
 		inbox: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'support_mail' } } },
 		message_id: { kind: 'text' },
 		subject: { kind: 'text' },
 		received_at: { kind: 'instant' }
 	},
-	search: {
-		text: ['subject'],
-		semantic: { fields: ['subject'], model: 'text_small', dim: 1536 }
-	},
-	read: 'all',
+
+	outputs: { default: { fields: 'all' } },
 	syncs: {
 		// one way in: the mailbox's messages are its deliveries
 		mail: {
@@ -323,40 +305,44 @@ export const notices = model('notices', {
 											$version: d.message.version,
 											message_id: d.message.id,
 											subject: d.message.subject || '(no subject)',
-											received_at: d.message.sentAt
+											received_at: d.message.sent_at
 										}
 									]
 					)
 				};
 			}
 		}
+	},
+	indexes: {
+		find: { text: ['subject'] },
+		semantic: { semantic: { fields: ['subject'], model: 'text_small', dim: 1536 } }
 	}
 });
 
-export const notice_notes = model('notice_notes', {
+export const notice_notes = bind_model('notice_notes')({
 	description: 'What we add about a notice',
-	label: 'notice',
+	record_label: 'record.notice',
 	fields: {
 		notice: { kind: 'ref', to: 'notices', inverse: 'notes', owned: true },
 		integration: { kind: 'ref', to: 'sys_integration', optional: true },
 		note: { kind: 'text' }
 	},
-	unique: [{ fields: ['notice'] }],
-	read: 'all',
-	create: { columns: { notice_notes: ['notice', 'note'] } },
-	update: { columns: { notice_notes: ['note'] } }
+	constraints: { one_notice: { unique: ['notice'], import_key: true } },
+	outputs: { default: { fields: 'all' } },
+	create: { columns: { fields: ['notice', 'note'] } },
+	update: { columns: { fields: ['note'] } }
 });
 
-export const sites = model('sites', {
+export const sites = bind_model('sites')({
 	description: 'Customer sites',
-	label: 'name',
+	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text', max: 120 },
 		customer: {
 			kind: 'ref',
 			to: 'customers',
 			optional: true,
-			onDelete: 'setNull',
+			on_delete: 'set_null',
 			inverse: 'sites',
 			where: { tier: { eq: 'gold' } }
 		},
@@ -365,30 +351,34 @@ export const sites = model('sites', {
 		location: { kind: 'point', optional: true },
 		open: { kind: 'period', of: 'date' },
 		opens_at: { kind: 'time', optional: true },
-		slot: { kind: 'duration', default: '30min' },
-		photos: { kind: 'file', accept: ['image/*'], max: '5MiB', multiple: true, optional: true },
+		slot: { kind: 'int', default: 1800 },
+		photos: { kind: 'file', accept: ['image/*'], max: '5MiB', many: true, optional: true },
 		checklist: {
 			kind: 'json',
 			shape: {
-				kind: 'list',
-				of: { kind: 'object', fields: { item: { kind: 'text' }, done: { kind: 'bool' } } }
+				kind: 'object',
+				fields: { item: { kind: 'text' }, done: { kind: 'bool' } },
+				many: true
 			}
 		},
 		rating: { kind: 'custom', of: 'rating', optional: true },
 		budget: { kind: 'money', currency: 'EUR', optional: true }
 	},
-	noOverlap: [{ key: ['name'], period: 'open' }],
-	// a lock is a predicate over the model's own fields
-	locked: { zone: { isNull: false } },
-	read: { sites: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] } },
-	outputs: { summary: { sites: { fields: ['name', 'open'] } } },
-	update: { columns: { sites: ['name', 'location'] } }
+	constraints: {
+		no_overlapping_sites: { no_overlap: 'open', per: ['name'] },
+		zoned: { locked: { zone: { is_null: false } } }
+	},
+	outputs: {
+		default: { fields: ['name', 'location', 'customer', 'open', 'rating', 'checklist'] },
+		summary: { fields: ['name', 'open'] }
+	},
+	update: { columns: { fields: ['name', 'location'] } }
 });
 
-export const products = model('products', {
+export const products = bind_model('products')({
 	description: 'Products from the ledger',
-	label: 'name',
-	key: ['source', 'external_code'],
+	record_label: 'record.name',
+	constraints: { one_external: { unique: ['source', 'external_code'], import_key: true } },
 	fields: {
 		source: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'kingdee' } } },
 		external_code: { kind: 'text' },
@@ -397,8 +387,8 @@ export const products = model('products', {
 		price: { kind: 'decimal', scale: 2, optional: true },
 		commission_factor: { kind: 'decimal', scale: 4, optional: true }
 	},
-	read: 'all',
-	update: { columns: { products: ['commission_factor'] } },
+	outputs: { default: { fields: 'all' } },
+	update: { columns: { fields: ['commission_factor'] } },
 	syncs: {
 		// one way in from the ledger database, every 15 minutes by default
 		ledger: {
@@ -423,10 +413,10 @@ export const products = model('products', {
 	}
 });
 
-export const entries = model('entries', {
+export const entries = bind_model('entries')({
 	description: "Calendar entries mirrored from members' calendars",
-	label: 'subject',
-	key: ['account', 'calendar_id', 'external_id'],
+	record_label: 'record.subject',
+	constraints: { one_event: { unique: ['account', 'calendar_id', 'external_id'], import_key: true } },
 	fields: {
 		account: { kind: 'ref', to: 'sys_integration', where: { integration: { eq: 'calendar' } } },
 		calendar_id: { kind: 'text' },
@@ -435,8 +425,8 @@ export const entries = model('entries', {
 		event_status: { kind: 'enum', values: ['confirmed', 'tentative', 'cancelled'] },
 		filed: { kind: 'bool', default: false }
 	},
-	read: 'all',
-	update: { columns: { entries: ['filed'] } },
+	outputs: { default: { fields: 'all' } },
+	update: { columns: { fields: ['filed'] } },
 	syncs: {
 		// the calendar driver pushes events; one cursor per chosen calendar
 		calendar: {
@@ -457,7 +447,7 @@ export const entries = model('entries', {
 	}
 });
 
-export const rating = customField('rating', {
+export const rating = custom_field({
 	description: 'A score with an optional note',
 	shape: {
 		kind: 'object',
@@ -472,7 +462,7 @@ export const rating = customField('rating', {
  */
 export const base = {
 	description: 'x',
-	label: 'note',
+	record_label: 'record.note',
 	fields: { note: { kind: 'text', optional: true } },
-	read: 'all'
+	outputs: { default: { fields: 'all' } }
 } as const;

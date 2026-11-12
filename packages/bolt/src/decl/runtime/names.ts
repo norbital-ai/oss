@@ -2,17 +2,8 @@
 import type { AutomationName, InstanceId, NamesPart } from '../names.ts';
 import type { ConvertTarget } from './facilities.ts';
 
-type Connections = NamesPart<'workspace'> extends { connections: infer C } ? C : {};
-/** The named instances `+workspace.ts` declares under `connections`. */
-export type ConnectionName = keyof Connections & string;
-/** The definition a connection, or an instance id pinned to a definition, is an instance of. */
-export type IntegrationOf<N> = N extends ConnectionName
-	? Connections[N] extends { integration: infer D }
-		? D
-		: never
-	: N extends InstanceId<infer D>
-		? D
-		: never;
+/** The integration definition carried by a runtime instance id. */
+export type IntegrationOf<N> = N extends InstanceId<infer D> ? D : never;
 /** A name declared in `src/+secrets.ts`. */
 export type SecretName = keyof NamesPart<'secrets'> & string;
 type Ai = NamesPart<'workspace'> extends { ai: infer A } ? A : {};
@@ -27,10 +18,6 @@ export type DeclaredConvertTarget = ConvertDecl & ConvertTarget;
 /** A `sys_2` model class an agent or `ctx.ai.sys_2.infer` asks for; the host maps each to a model. */
 export type AiModelClass = 'default' | 'fast' | 'strong'; // every sys_2 model takes images (P39): no 'vision' class
 export type GroupName = keyof NamesPart<'groups'> & string;
-/** The `+<page>.page.svelte` files in kiosk `K`'s folder. */
-export type KioskPageName<K> = K extends keyof NamesPart<'kioskPages'>
-	? NamesPart<'kioskPages'>[K] & string
-	: never;
 /** The `+<page>.page.svelte` files in app `A`'s folder. */
 export type PageName<A> = A extends keyof NamesPart<'pages'>
 	? NamesPart<'pages'>[A] & string

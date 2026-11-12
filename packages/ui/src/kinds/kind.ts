@@ -1,3 +1,4 @@
+import { item_kind } from '@norbital-ai/std/kind';
 import { Array as Arr } from 'effect';
 // Field kinds as the ui sees them (§3.3.2): the literal a model or an input declares, structurally, so ui needs no bolt
 // dependency. Pure functions only: display text, text parsing, advisory checks and empty values. The host decides; these
@@ -6,14 +7,14 @@ import { Predicate } from 'effect';
 
 import { Decimal } from '@norbital-ai/std/decimal';
 import type { Fields, FileRef, Json, Kind, KindOf, Point, Value } from '@norbital-ai/std/kind';
-import { inputSchema } from '@norbital-ai/std/kind';
+import { input_schema } from '@norbital-ai/std/kind';
 import { Schema, Result } from 'effect';
 import { KINDS, sortable } from './registry.js';
 import { label as title } from '@norbital-ai/std/label';
 export type { Fields, FileRef, Json, Kind, KindOf, Point, Value };
 
 /** The custom renderer registered for a built-in or tenant field. */
-export function fieldName(kind: Kind): string | undefined {
+export function field_name(kind: Kind): string | undefined {
 	if (kind.kind === 'custom') return kind.of;
 	if (kind.kind === 'money' || kind.kind === 'file' || kind.kind === 'point') return kind.kind;
 	if (kind.kind === 'sum' && 'money' in kind && kind.money !== undefined) return 'money';
@@ -22,7 +23,7 @@ export function fieldName(kind: Kind): string | undefined {
 		: undefined;
 }
 /** A file's icon by its MIME type. */
-export const fileIcon = (mime: string) =>
+export const file_icon = (mime: string) =>
 	mime.startsWith('image/')
 		? 'lucide:image'
 		: mime === 'application/pdf'
@@ -87,22 +88,6 @@ export function formatDuration(seconds: number): string {
 		}
 	return (seconds < 0 ? '-' : '') + parts.join(' ');
 }
-function parseDuration(text: string): number | null {
-	const t = text.trim().toLowerCase();
-	if (/^-?\d+$/.test(t)) return Number(t) * 60;
-	const re = /(\d+(?:\.\d+)?)\s*(d|h|min|m|s)/g;
-	let total = 0,
-		seen = '',
-		m: RegExpExecArray | null;
-	while ((m = re.exec(t)) !== null) {
-		const symbol = m[2] === 'min' ? 'm' : m[2];
-		const unit = UNITS.find(([name]) => name === symbol);
-		if (unit === undefined) return null;
-		total += Number(m[1]) * unit[1];
-		seen += m[0];
-	}
-	return seen.replace(/\s/g, '') === t.replace(/\s/g, '') && seen !== '' ? Math.round(total) : null;
-}
 
 // ── points: "lat, lng" typed, or picked; never needs a provider (P19) ──
 export function parsePoint(text: string): Point | null {
@@ -146,7 +131,7 @@ export type EnumScope = { t?: (key: string) => string; model?: string; field?: s
  * `Pending review`). An upper-case word without a vowel or with a digit stays an acronym (`SG_CPF` → `SG CPF`), as does
  * an upper-case word inside a lower-case value (`sent_to_HR`).
  */
-export function enumText(value: string, o: EnumScope = {}): string {
+export function enum_text(value: string, o: EnumScope = {}): string {
 	if (o.t !== undefined && o.model && o.field) {
 		const key = `models.${o.model}.fields.${o.field}.${value}`,
 			s = o.t(key);
@@ -179,7 +164,7 @@ export const shownKind = (kind: Kind): Kind =>
 			}
 		: kind;
 /** A `Value` that is a plain object (not a list, not a `Decimal`): the one narrowing of the union's object arm. */
-export const valueObject = (v: unknown): v is { readonly [k: string]: Value } =>
+export const value_object = (v: unknown): v is { readonly [k: string]: Value } =>
 	typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Decimal);
 /**
  * The kind an undeclared JSON value shows as: scalars by their type, objects field by field, and a list of objects as
@@ -190,14 +175,14 @@ export function inferKind(v: Value): Kind {
 	if (typeof v === 'number') return { kind: 'number' };
 	if (typeof v === 'boolean') return { kind: 'bool' };
 	if (Arr.isArray<Value>(v)) {
-		if (v.length === 0 || !v.every(valueObject)) return { kind: 'list', of: { kind: 'json' } };
+		if (v.length === 0 || !v.every(value_object)) return { kind: 'json', many: true };
 		const fields: { [k: string]: Kind } = {};
 		for (const item of v)
 			for (const [k, held] of Object.entries(item))
 				if (fields[k] === undefined || held !== null) fields[k] = inferKind(held);
-		return { kind: 'list', of: { kind: 'object', fields } };
+		return { kind: 'object', fields, many: true };
 	}
-	if (valueObject(v))
+	if (value_object(v))
 		return {
 			kind: 'object',
 			fields: Object.fromEntries(Object.entries(v).map(([k, held]) => [k, inferKind(held)]))
@@ -206,12 +191,11 @@ export function inferKind(v: Value): Kind {
 }
 /** Whether a value of this kind needs a whole row: structures, maps, code and long-form text. */
 export const wideKind = (kind: Kind): boolean =>
-	(kind.kind === 'list' && wideKind(kind.of)) ||
 	['object', 'record', 'union', 'json', 'custom', 'point'].includes(kind.kind) ||
 	(kind.kind === 'text' && (kind.format === 'cel' || kind.format === 'markdown'));
 
 /** Named fields of a row as one line by kind (a record's title, a subtitle): `Q-1 · Jan 2, 2026 · On hold`; empties left out. */
-export function fieldsText(
+export function fields_text(
 	fields: Fields,
 	row: { readonly [f: string]: Value | undefined },
 	names: readonly string[],
@@ -231,26 +215,26 @@ export function fieldsText(
 		.join(' · ');
 }
 
-/** The model's shared record label, evaluated against the row; legacy field lists retain per-kind formatting. */
+/** The model's shared record-label expression, evaluated against its visible fields. */
 export function recordText(
-	exposure: { fields: Fields; label: readonly string[]; record_label?: string } | undefined,
-	row: { readonly [field: string]: Value },
-	o: ShowOptions = {}
+	exposure: { record_label?: string } | undefined,
+	row: { readonly [field: string]: Value }
 ): string {
 	if (exposure === undefined) return typeof row['id'] === 'string' ? row['id'] : '';
 	// Native live references (approval targets) carry the authorized target identifier, never a stored copy.
 	if (typeof row['$label'] === 'string' && row['$label'].trim() !== '') return row['$label'];
-	return (
-		title(row, exposure.record_label ?? exposure.label, (field, value) =>
-			format(exposure.fields[field] ?? { kind: 'text' }, value, o)
-		) ?? ''
-	);
+	return title(row, exposure.record_label ?? []) ?? '';
 }
 /** One value as text in the viewer's locale; '' for none. Structured values render through `Show`, this is their summary. */
 export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}): string {
 	const v = value ?? null;
 	const locale = o.locale ?? 'en';
 	if (v === null) return '';
+	if (kind.many === true)
+		return Arr.isArray<Value>(v)
+			? v.map((item) => format(item_kind(kind), item, o)).join(', ')
+			: '';
+	if (kind.kind === 'json' && kind.shape !== undefined) return format(kind.shape, v, o);
 	switch (kind.kind) {
 		case 'int':
 		case 'number':
@@ -281,10 +265,8 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 			return instantText(String(v), locale, o.zone, kind.precision);
 		case 'time':
 			return String(v).slice(0, kind.precision === 'hour' ? 2 : 5);
-		case 'duration':
-			return typeof v === 'number' ? formatDuration(v) : String(v);
 		case 'period': {
-			if (!valueObject(v)) return '';
+			if (!value_object(v)) return '';
 			const temporal: Kind =
 				kind.of === 'date'
 					? { kind: 'date', ...(kind.precision === undefined ? {} : { precision: kind.precision }) }
@@ -313,7 +295,7 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 		}
 		case 'enum':
 		case 'state':
-			return (Arr.isArray(v) ? v : [v]).map((x) => enumText(String(x), o)).join(', ');
+			return (Arr.isArray(v) ? v : [v]).map((x) => enum_text(String(x), o)).join(', ');
 		case 'text':
 			return Arr.isArray(v) ? v.join(', ') : String(v);
 		case 'point':
@@ -325,20 +307,18 @@ export function format(kind: Kind, value: Value | undefined, o: ShowOptions = {}
 				.join(', ');
 		case 'vector':
 			return Arr.isArray(v) ? `[${v.length}]` : '';
-		case 'list':
-			return Arr.isArray<Value>(v) ? v.map((x) => format(kind.of, x, o)).join(', ') : '';
 		case 'json':
 		case 'custom':
 		case 'object':
 		case 'union':
 		case 'record':
-			return valueObject(v) && typeof v['label'] === 'string' ? v['label'] : JSON.stringify(v);
+			return value_object(v) && typeof v['label'] === 'string' ? v['label'] : JSON.stringify(v);
 		default:
 			return String(v);
 	}
 }
 /** One native value as text, shared by views and kind renderers. */
-export function formatValue(value: Value | undefined, locale = 'en'): string {
+export function format_value(value: Value | undefined, locale = 'en'): string {
 	if (value === null || value === undefined) return '';
 	if (value instanceof Decimal) return decimalText(String(value), locale);
 	if (typeof value === 'boolean') return value ? '✓' : '✗';
@@ -347,10 +327,10 @@ export function formatValue(value: Value | undefined, locale = 'en'): string {
 		return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value)
 			? new Date(value).toLocaleString(locale, AT)
 			: value;
-	if (Arr.isArray<Value>(value)) return value.map((item) => formatValue(item, locale)).join(', ');
-	if (!valueObject(value)) return String(value);
+	if (Arr.isArray<Value>(value)) return value.map((item) => format_value(item, locale)).join(', ');
+	if (!value_object(value)) return String(value);
 	if ('from' in value || 'start' in value)
-		return `${formatValue(value['from'] ?? value['start'], locale)} – ${formatValue(value['to'] ?? value['end'], locale) || '…'}`;
+		return `${format_value(value['from'] ?? value['start'], locale)} – ${format_value(value['to'] ?? value['end'], locale) || '…'}`;
 	if (isPoint(value)) return `${value.lat}, ${value.lng}`;
 	if (isFile(value)) return value.name;
 	if ('model' in value && typeof value['id'] === 'string') return value['id'];
@@ -412,10 +392,6 @@ export function parse(kind: Kind, text: string): Parsed {
 				return { error: `at most ${scale} decimal places` };
 			return { value: Decimal.of(s) };
 		}
-		case 'duration': {
-			const n = parseDuration(t);
-			return n === null ? { error: 'expected a duration like 1h 30m' } : { value: n };
-		}
 		case 'point': {
 			const p = parsePoint(t);
 			return p === null ? { error: 'expected latitude, longitude' } : { value: p };
@@ -448,10 +424,21 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 	const v = value ?? null;
 	if (
 		v === null ||
-		(Arr.isArray<Value>(v) && v.length === 0 && (kind.kind === 'file' || kind.kind === 'list'))
+		(Arr.isArray<Value>(v) && v.length === 0 && (kind.kind === 'file' || kind.many === true))
 	) {
 		if (!required(kind)) return null;
-		return kind.kind === 'list' && (kind.min ?? 0) === 0 && v !== null ? null : 'is required';
+		return kind.many === true && kind.kind !== 'file' && (kind.min_items ?? 0) === 0 && v !== null
+			? null
+			: 'is required';
+	}
+	if (kind.many === true) {
+		if (!Arr.isArray<Value>(v)) return 'expected a list';
+		if (
+			(kind.min_items !== undefined && v.length < kind.min_items) ||
+			(kind.max_items !== undefined && v.length > kind.max_items)
+		)
+			return 'has the wrong number of items';
+		return null;
 	}
 	const range = (n: number, k: { min?: number; max?: number }) =>
 		(k.min !== undefined && n < k.min) || (k.max !== undefined && n > k.max)
@@ -489,7 +476,7 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 				: `expected one of ${kind.values.join(', ')}`;
 		}
 		case 'period': {
-			if (!valueObject(v)) return 'expected a period';
+			if (!value_object(v)) return 'expected a period';
 			const [a, b] = kind.of === 'date' ? [v['from'], v['to']] : [v['start'], v['end']];
 			if (a === null || a === undefined) return 'needs a start';
 			// empty or inverted periods are refused (rule 68): a date period is inclusive, an instant one closed-open
@@ -509,12 +496,6 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 			return (Arr.isArray<Value>(v) ? v.length > MAX_FILES : false)
 				? `at most ${MAX_FILES} files`
 				: null;
-		case 'list':
-			if (!Arr.isArray<Value>(v)) return 'expected a list';
-			return (kind.min !== undefined && v.length < kind.min) ||
-				(kind.max !== undefined && v.length > kind.max)
-				? 'has the wrong number of items'
-				: null;
 		default:
 			return null;
 	}
@@ -530,13 +511,13 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 		}
 		const x = v ?? null;
 		if (x === null) return;
-		const object = valueObject(x) ? x : null;
+		const object = value_object(x) ? x : null;
 		const join = (key: string | number) => (path === '' ? String(key) : `${path}.${key}`);
-		if (k.kind === 'object' && object !== null)
+		if (k.many === true && Arr.isArray<Value>(x))
+			x.forEach((item, i) => walk(item_kind(k), item, join(i)));
+		else if (k.kind === 'object' && object !== null)
 			for (const [f, fk] of Object.entries(k.fields)) walk(fk, object[f], join(f));
 		else if (k.kind === 'json' && k.shape !== undefined) walk(k.shape, x, path);
-		else if (k.kind === 'list' && Arr.isArray<Value>(x))
-			x.forEach((item, i) => walk(k.of, item, join(i)));
 		else if (k.kind === 'record' && object !== null)
 			for (const [key, item] of Object.entries(object)) walk(k.of, item, join(key));
 		else if (k.kind === 'union' && 'arms' in k && object !== null) {
@@ -554,16 +535,15 @@ export function problems(kind: Kind, value: Value | undefined, at = ''): Map<str
 export function initial(kind: Kind): Value {
 	const d = kind.default;
 	if (d !== undefined) {
-		const schema = inputSchema(kind);
+		const schema = input_schema(kind);
 		if (Schema.is(schema)(d)) return d;
 		const result = Schema.decodeUnknownResult(schema)(d);
 		if (Result.isSuccess(result)) return result.success;
 	}
+	if (kind.many === true) return [];
 	switch (kind.kind) {
 		case 'state':
 			return kind.initial;
-		case 'list':
-			return [];
 		case 'text':
 			return kind.many ? [] : null;
 		case 'enum':
@@ -590,17 +570,12 @@ export function armValue(kind: Extract<KindOf<'union'>, { by: string }>, tag: st
 
 /** An arc's value (a polymorphic relation): `{ model, id }`, as the engine reads and writes it. */
 export const arcOf = (x: Value | undefined): { model: string; id: string } | null =>
-	valueObject(x) && typeof x['model'] === 'string' && typeof x['id'] === 'string'
+	value_object(x) && typeof x['model'] === 'string' && typeof x['id'] === 'string'
 		? { model: x['model'], id: x['id'] }
 		: null;
 /** State edges out of `from` (the state machine's `to`), for a badge's move menu. */
 export const edgesFrom = (kind: KindOf<'state'>, from: string): readonly string[] =>
 	kind.states[from]?.to ?? [];
-/** Whether `field` may change while the row is in `state` (the state's `edit` list); advice, the host enforces it. */
-export function editable(kind: KindOf<'state'>, state: string, field: string): boolean {
-	const e = kind.states[state]?.edit ?? 'all';
-	return e === 'all' ? true : e === 'none' ? false : e.includes(field);
-}
 /** A stable tone per state name, so the same state reads the same colour on every page. */
 const SUCCESS = /^(approv|done|complet|paid|won|closed|activ|sealed|sent|accept|confirm|deliver)/;
 export function tone(state: string): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
@@ -649,13 +624,13 @@ export function likeWhere(
 		: { or: searchable.map((f) => ({ [f]: { like: likePattern(text) } })) };
 }
 /**
- * A picker's read request root layer (`query({ [of]: pickerRead(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
- * patterned `seq` fields; sorted by `orderBy`, else by the first sortable label field (a typed search ranks instead).
+ * A picker's read request root layer (`query({ [of]: picker_read(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
+ * patterned `seq` fields; sorted by `order_by`, else by the first sortable label field (a typed search ranks instead).
  */
-export function pickerRead(
+export function picker_read(
 	target: { readonly search?: readonly string[]; readonly fields: Fields } | undefined,
 	labels: readonly string[],
-	o: { where?: Json | undefined; orderBy?: Json | undefined; limit: number },
+	o: { where?: Json | undefined; order_by?: Json | undefined; limit: number },
 	q: string
 ): { readonly [k: string]: Json } {
 	const text = q.trim(),
@@ -667,13 +642,14 @@ export function pickerRead(
 		const k = target?.fields[f];
 		return k !== undefined && sortable(k);
 	});
-	const orderBy =
-		o.orderBy ?? ((indexed && text !== '') || label === undefined ? undefined : { [label]: 'asc' });
+	const order_by =
+		o.order_by ??
+		((indexed && text !== '') || label === undefined ? undefined : { [label]: 'asc' });
 	return {
 		fields: [...labels],
 		limit: o.limit,
 		...(all.length === 0 ? {} : { where: all.length === 1 ? (all[0] ?? {}) : { and: all } }),
-		...(orderBy === undefined ? {} : { orderBy }),
+		...(order_by === undefined ? {} : { order_by }),
 		...(indexed && text !== '' ? { search: text } : {})
 	};
 }

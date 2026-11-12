@@ -25,8 +25,8 @@ const Listing = Schema.Struct({ data: Schema.Array(Model) });
 /** Both provider lists are read once; an unavailable listing remains explicit for P39. */
 export const models = Effect.fn('OpenRouter.models')(function* (endpoint: Endpoint) {
 	const call = jsonApi(
-		endpoint.baseUrl,
-		endpoint.apiKey === undefined ? {} : { authorization: `Bearer ${endpoint.apiKey}` }
+		endpoint.base_url,
+		endpoint.api_key === undefined ? {} : { authorization: `Bearer ${endpoint.api_key}` }
 	);
 	const [chat, embeddings] = yield* Effect.all(
 		['/models', '/embeddings/models'].map((path) =>

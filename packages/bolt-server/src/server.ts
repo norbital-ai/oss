@@ -1,23 +1,24 @@
-// One Bolt workspace artifact served from one process with its host file (`norbital.host.ts`): the file's Facilities
-// and `serving` parts, served through `serveRelease` (`@norbital-ai/bolt/node`), the path `bolt dev --host` takes.
-// This process owns admission and the HTTP listener around it.
-import { ByteSize, Clock, Context, Effect, Fiber, Layer, Option } from 'effect';
+// One Bolt workspace artifact served from one process with its host file (`norbital.host.ts`), through `serve`
+// (`@norbital-ai/bolt/node`): the release's routes over the engine path `bolt dev --host` takes. This process owns
+// admission, the static pages and the HTTP listener around it.
+import { ByteSize, Context, Effect, Fiber, Layer, Option } from 'effect';
 import { HttpServerRequest, HttpServerResponse, HttpIncomingMessage, HttpMiddleware } from 'effect/http';
 import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
-import { readArtifact } from '@norbital-ai/bolt/artifact';
-import { clientAddress, clientPage, renderMode, LIMITS, wireError } from '@norbital-ai/bolt/engine';
-import { isOff } from '@norbital-ai/bolt/facilities';
-import { HOST_API, type ActiveWorkspace, type Release } from '@norbital-ai/bolt/host-api';
-import { artifactPort, call, loadHost, nodePorts, serveRelease } from '@norbital-ai/bolt/node';
-import { nodeGuests } from '@norbital-ai/bolt-cli/guests';
+import { client_address, LIMITS, wire_error } from '@norbital-ai/bolt/engine';
+import { client_page } from '@norbital-ai/bolt/protocol';
+import type { HostApi } from '@norbital-ai/bolt/host-api';
+import { serve } from '@norbital-ai/bolt/node';
+import { node_guests } from '@norbital-ai/bolt-cli/guests';
 import { envelope } from './envelope.ts';
 
 export type ServeOptions = {
+	/** The workspace directory: its `norbital.host.ts` serves it unless `hostFile` names another. */
+	readonly workspace: string;
 	/** The built release directory (`<workspace>/.norbital/bundle`). */
 	readonly artifact: string;
 	/** The host file: default-exports the Facilities, optionally exports `serving`. */
-	readonly hostFile: string;
+	readonly hostFile?: string;
 	readonly host: string;
 	readonly port: number;
 	/** CIDRs whose `x-forwarded-for` is believed. */
@@ -34,7 +35,7 @@ export class Server extends Context.Service<
 	Server,
 	{
 		readonly url: string;
-		readonly workspace: ActiveWorkspace;
+		readonly workspace: Awaited<ReturnType<HostApi['activate']>>;
 	}
 >()('bolt-server/Server') {}
 
@@ -54,95 +55,39 @@ export const ServerLive = (options: ServeOptions) =>
 		Server,
 		Effect.gen(function* () {
 			const log = options.log ?? ((line: string) => console.log(`[bolt] ${line}`));
-			const { facilities, serving } = yield* loadHost(options.hostFile);
-			const artifact = yield* readArtifact(options.artifact),
-				manifest = artifact.manifest;
 			const listening = `http://${options.host.includes(':') ? `[${options.host}]` : options.host}:${options.port}`;
-			const publicUrl = isOff(facilities.ports.webhooks)
-				? listening
-				: facilities.ports.webhooks.publicUrl;
-			const database = facilities.storage.database;
-			const release: Release = { id: artifact.artifact.hash, artifact: artifactPort(artifact.dir) };
-			yield* call((signal) => HOST_API.verify(release, { signal }));
-			const branch = yield* call((signal) =>
-				HOST_API.branch({ release, database, audit: facilities.logs.audit }, { signal })
-			);
-			yield* call((signal) => branch.schema.migrate({ signal }));
-			const at = new Date(yield* Clock.currentTimeMillis).toISOString();
-			const seed = options.seed;
-			if (seed !== undefined) {
-				const load = yield* call((signal) =>
-					branch.packs.load(seed, { signal, at, files: facilities.storage.files })
-				);
-				let step = yield* call((signal) => load.step({ signal }));
-				while (step === 'more') step = yield* call((signal) => load.step({ signal }));
-				log(
-					step === 'loaded'
-						? `--seed: loaded pack ${seed}`
-						: '--seed: the database has rows; nothing seeded'
-				);
-			}
-			const founder = options.founder;
-			if (founder !== undefined)
-				yield* call((signal) => branch.identity.founder(founder, { signal, at }));
 			const admitted = yield* envelope(options.maxConcurrent ?? 8);
-			const { workspace, links } = yield* serveRelease({
-				scope: 'start',
-				release,
-				publicUrl,
-				facilities,
-				serving,
+			const { workspace, artifact, public_url, handle: route } = yield* serve({
+				workspace: options.workspace,
+				host_file: options.hostFile,
+				artifact: options.artifact,
+				listening,
 				// this host's own guest runner, never the host file's: `node:vm` contexts for operator-trusted code
-				guests: nodeGuests(),
-				native: yield* nodePorts(),
-				workspace: { name: artifact.artifact.name, handle: artifact.artifact.handle },
-				admit: (work) => admitted.admit(1, work),
+				guests: node_guests(),
+				seed: options.seed,
+				founder: options.founder,
+				admit: admitted.admit,
 				log
 			});
-			const answer = (response: Response | null) =>
-				response === null
-					? HttpServerResponse.empty({ status: 404 })
-					: HttpServerResponse.fromWeb(response);
 			const handle = Effect.gen(function* () {
 				const incoming = yield* HttpServerRequest.HttpServerRequest;
-				const address = clientAddress(
+				const address = client_address(
 					Option.getOrElse(incoming.remoteAddress, () => '0.0.0.0'),
 					incoming.headers['x-forwarded-for'],
 					options.trustProxy
 				);
-				const path = new URL(incoming.url, publicUrl).pathname;
+				const path = new URL(incoming.url, public_url).pathname;
 				const request = yield* HttpServerRequest.toWeb(incoming);
-				if (path.startsWith('/hooks/integration/') || path === '/hooks/oauth/callback')
-					return answer(yield* call(() => links.hook(request)));
-				if (path === '/__bolt/integrations' || path.startsWith('/__bolt/integrations/')) {
-					const authority = yield* call((signal) =>
-						workspace.identity.authority(request.clone(), { signal })
-					);
-					if (authority === null)
-						return json('unauthenticated', 'Sign in to manage integrations.', 401);
-					return answer(yield* call(() => links.admin(request, authority)));
-				}
-				const work = call(
-					async (signal) =>
-						(await workspace.handle(request, { address })) ??
-						(await workspace.render(request, { address, signal }))
-				);
-				const guest =
-					((request.method === 'GET' || request.method === 'HEAD') &&
-						renderMode(manifest, path) !== null) ||
-					(yield* call(() => HOST_API.needsGuest(request.clone())).pipe(
-						Effect.catch(() => Effect.succeed(true))
-					));
-				const response = yield* guest ? admitted.admit(0, work) : work;
+				const response = yield* route(request, path, address);
 				if (response !== null) return HttpServerResponse.fromWeb(response);
-				if (path.startsWith('/__bolt/')) return json('notFound', 'No such route.', 404);
-				const page = yield* clientPage(artifact.dir, path, manifest);
+				if (path.startsWith('/__bolt/')) return json('not_found', 'No such route.', 404);
+				const page = yield* client_page(artifact.dir, path, artifact.manifest);
 				return page === undefined
 					? HttpServerResponse.empty({ status: 404 })
 					: yield* compressAssets(HttpServerResponse.file(page.file, { headers: page.headers }));
 			}).pipe(
 				Effect.catch((error) => {
-					const failure = wireError(error);
+					const failure = wire_error(error);
 					return Effect.succeed(
 						HttpServerResponse.jsonUnsafe(failure.body, { status: failure.status })
 					);
@@ -162,7 +107,7 @@ export const ServerLive = (options: ServeOptions) =>
 						Effect.provideService(
 							HttpIncomingMessage.MaxBodySize,
 							ByteSize.bytes(
-								new URL(request.url, publicUrl).pathname.startsWith('/__bolt/files/')
+								new URL(request.url, public_url).pathname.startsWith('/__bolt/files/')
 									? LIMITS.storedFileBytes
 									: LIMITS.argsBytes + 1024 * 1024
 							)
@@ -176,7 +121,7 @@ export const ServerLive = (options: ServeOptions) =>
 			const url =
 				http.address._tag !== 'UnixPathAddress'
 					? `http://${options.host.includes(':') ? `[${options.host}]` : options.host}:${http.address.port}`
-					: publicUrl;
+					: public_url;
 			return { url, workspace };
 		})
 	).pipe(Layer.provideMerge(NodeHttpServer.layerHttpServices));

@@ -1,6 +1,6 @@
 <!-- The administrator's workspace connections or envoy channels, with the same native instance sheet. -->
 <script lang="ts">
-	import { fork, observeOnce } from '@norbital-ai/ui/effect';
+	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import type { Fields, Value } from '@norbital-ai/std/kind';
@@ -8,48 +8,52 @@
 	import {
 		Button,
 		Combobox,
-		confirmAction,
+		confirm_action,
 		DescriptionHint,
 		Editor,
 		Field,
 		Form,
 		format,
-		formatHandle,
-		openRecord,
+		format_handle,
+		open_record,
 		StateBadge,
 		Table,
 		Tabs,
-		valueObject,
-		type FieldEditor
+		value_object,
+		type FieldEditor,
+		type UiContext
 	} from '@norbital-ai/ui';
-	import IntegrationSetup from '../../page/IntegrationSetup.svelte';
-	import { driverLabel, workspaceConnection, type IntegrationSetupEntry } from './setup.ts';
+	import IntegrationCard from '../../page/IntegrationCard.svelte';
+	import { humanise_word } from '../i18n.ts';
+	import { driverLabel, instanceMade, workspaceConnection, type IntegrationSetupEntry } from './setup.ts';
+	import type { Json } from '../../decl/values.ts';
 	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
-	import type { ShellBolt } from '../runtime.ts';
+	import { page_context, type ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
-	import DetailSheet from '../DetailSheet.svelte';
 	import Envoys from './Envoys.svelte';
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		t,
 		settings,
 		locale,
-		integrationSetups,
+		integration_setups,
 		reload,
 		connections = false,
 		configuration = null
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
 		settings: Settings;
 		locale: string;
 		/** The definitions' own setup components (`integration/<name>/+integration.svelte`), drawn in place of the generic setup. */
-		integrationSetups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
+		integration_setups?: { readonly [integration: string]: IntegrationSetupEntry } | undefined;
 		/** Re-reads the settings after a write. */
 		reload: () => Effect.Effect<void>;
 		connections?: boolean;
@@ -58,7 +62,7 @@
 
 	type Instance = Settings['instances'][number];
 	type Definition = Settings['integrations'][number];
-	const obj = (v: Value | undefined): { readonly [k: string]: Value } => (valueObject(v) ? v : {});
+	const obj = (v: Value | undefined): { readonly [k: string]: Value } => (value_object(v) ? v : {});
 	const str = (v: Value | undefined) => (v === null || v === undefined ? '' : String(v));
 	const when = (v: Value | undefined) =>
 		typeof v === 'string' && v !== ''
@@ -80,44 +84,75 @@
 	};
 	// ── the open instance: its sheet, and its client (one per instance, so its stream is held while the sheet is open) ──
 	let open = $state<string | null>(null);
+	let creating = $state(false);
+	let creating_definition = $state<string | null>(null);
+	const new_definition = $derived(settings.integrations.find((item) => item.name === creating_definition));
+	let create_busy = $state(false);
+	let create_error = $state<string | null>(null);
+	/** A definition's own create step makes the row as the generic form does, then opens its sheet. */
+	const create_connection = (integration: string) => (input: { name: string; configuration?: Json }) =>
+		Effect.suspend(() => {
+			create_busy = true;
+			create_error = null;
+			return bolt
+				.act({ 'sys_integration.create': [{ integration, name: input.name, ...(input.configuration === undefined ? {} : { configuration: input.configuration }) }] })
+				.pipe(
+					Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.'))),
+					Effect.tap((id) => Effect.sync(() => { creating = false; open = id; })),
+					Effect.andThen(reload()),
+					Effect.catch((cause) => Effect.sync(() => { create_error = cause.message; })),
+					Effect.ensuring(Effect.sync(() => { create_busy = false; }))
+				);
+		});
 	let configured = $state<string | null>(null);
 	watch([() => configuration, () => settings], ([intent, current]) => {
+		if (intent?.request.capability === 'integration.create' && connections && configured !== intent.key) {
+			configured = intent.key;
+			creating_definition = null;
+			creating = true;
+			return;
+		}
 		if (
 			intent === null ||
 			configured === intent.key ||
 			intent.request.capability !== 'integration.manage'
 		)
 			return;
-		configured = intent.key;
 		const record = intent.request.record;
 		if (
 			current.instances.some(
 				(instance) => instance.id === record && workspaceConnection(instance) === connections
 			)
-		)
+		) {
+			configured = intent.key;
 			open = record;
+		}
 	});
 	const current = $derived(settings.instances.find((i) => i.id === open));
-	const client = $derived(open === null ? null : api.integration(open));
+	const offers = observe_once(() => api.integration_offers());
+	const setup_entry = $derived(current === undefined ? undefined : integration_setups?.[current.integration]);
+	const setup_module = $derived(setup_entry?.load());
+	let active_tab = $state('connection');
 	let error = $state<string | null>(null);
 	watch(
 		() => open,
 		() => {
 			error = null;
+			active_tab = 'connection';
 		}
 	);
 	function remove(i: Instance): void {
 		fork(
-			confirmAction({
+			confirm_action({
 				title: t('Delete {name}?').replace('{name}', i.name),
 				body: t('Its credentials, sync progress, conversations and messages are deleted with it.'),
-				confirmLabel: t('Delete'),
-				cancelLabel: t('Cancel'),
+				confirm_label: t('Delete'),
+				cancel_label: t('Cancel'),
 				destructive: true
 			}).pipe(
 				Effect.flatMap((confirmed) =>
 					confirmed
-						? bolt.act('sys_integration.delete', [{ target: i.id }]).pipe(
+						? bolt.act({ 'sys_integration.delete': [{ target: { id: i.id, revision: i.revision } }] }).pipe(
 								Effect.tap((outcome) =>
 									Effect.sync(() => {
 										if (outcome.kind === 'committed') open = null;
@@ -146,13 +181,13 @@
 		{ scope: typeof messageScope; rows: InstanceMessage[]; more: boolean } | undefined
 	>();
 	const log = $derived(messageWindow?.scope === messageScope ? messageWindow : undefined);
-	const messages = observeOnce(() => {
+	const messages = observe_once(() => {
 		const scope = messageScope;
 		const before = messageRequest?.scope === scope ? messageRequest.before : undefined;
 		return scope.instance === null
 			? null
 			: scope.api
-					.instanceMessages(scope.instance, before)
+					.instance_messages(scope.instance, before)
 					.pipe(Effect.map((rows) => ({ scope, before, rows })));
 	});
 	watch(
@@ -175,16 +210,16 @@
 			messageRequest = { scope: messageScope, ...(before === undefined ? {} : { before }) };
 		});
 
-	const syncHealth = observeOnce(() => {
+	const syncHealth = observe_once(() => {
 		const instance = current;
 		return instance === undefined || definition(instance.integration)?.syncs !== true
 			? null
-			: api.instanceSyncHealth(instance.id);
+			: api.instance_sync_health(instance.id);
 	});
 	let replaying = $state<string | null>(null);
-	const deadLetters = observeOnce(() =>
+	const dead_letters = observe_once(() =>
 		current && definition(current.integration)?.syncs === true
-			? api.instanceDeadLetters(current.id)
+			? api.instance_sync_dead_letters(current.id)
 			: null
 	);
 	let retiring = $state<string | null>(null);
@@ -192,19 +227,19 @@
 		const instance = current?.id;
 		if (instance === undefined || retiring !== null) return;
 		fork(
-			confirmAction({
+			confirm_action({
 				title: t('Retire rejected write?'),
 				body: t(
 					'This stops retrying this saved write and releases later changes for the record. Confirm that its remote state is understood.'
 				),
-				confirmLabel: t('Retire write'),
-				cancelLabel: t('Cancel')
+				confirm_label: t('Retire write'),
+				cancel_label: t('Cancel')
 			}).pipe(
 				Effect.flatMap((confirmed) => {
 					if (!confirmed) return Effect.void;
 					retiring = id;
-					return api.retireInstanceSync(instance, id).pipe(
-						Effect.andThen(deadLetters.refetch()),
+					return api.retire_instance_sync(instance, id).pipe(
+						Effect.andThen(dead_letters.refetch()),
 						Effect.andThen(syncHealth.refetch()),
 						Effect.ensuring(
 							Effect.sync(() => {
@@ -219,14 +254,14 @@
 			}
 		);
 	}
-	function replayDead(): void {
+	function replaySync(): void {
 		const instance = current?.id;
 		if (instance === undefined || replaying === instance) return;
 		replaying = instance;
 		error = null;
 		fork(
-			api.replayInstanceSync(instance).pipe(
-				Effect.andThen(deadLetters.refetch()),
+			api.replay_instance_sync(instance).pipe(
+				Effect.andThen(dead_letters.refetch()),
 				Effect.andThen(syncHealth.refetch()),
 				Effect.ensuring(
 					Effect.sync(() => {
@@ -240,37 +275,45 @@
 		);
 	}
 
-	const labelOf = (name: string, f: Fields[string]) =>
-		f.label ?? name.replace(/_/g, ' ').replace(/^\w/, (x) => x.toUpperCase());
+	const configuration_text = (definition: string, name: string, part: 'fields' | 'help') => {
+		const key = `integrations.${definition}.configuration.${part}.${name}`;
+		const text = bolt.t(key);
+		return text === key ? undefined : text;
+	};
+	const labelOf = (definition: string, name: string) =>
+		configuration_text(definition, name, 'fields') ??
+		humanise_word(name);
 </script>
 
 <!-- `configuration` by its definition's fields, each by its kind's editor: the stored value, which starts as the definition's defaults -->
-{#snippet configurationFields(fields: Fields, { value, onChange, id }: FieldEditor)}
+{#snippet configurationFields(definition: string, fields: Fields, { value, on_change, id }: FieldEditor)}
 	<div class="flex flex-col gap-3" {id}>
 		{#each Object.entries(fields) as [name, f] (name)}
+			{@const help = configuration_text(definition, name, 'help')}
 			<div class="flex flex-col gap-1 text-sm">
 				<div class="flex min-w-0 items-center gap-1">
 					<label class="text-label" for={`${id}-${name}`}
-						>{t(labelOf(name, f))}{#if f.optional === true}
+						>{labelOf(definition, name)}{#if f.optional === true}
 							<span class="text-meta">({t('optional')})</span>{/if}</label
 					>
-					{#if f.help}<DescriptionHint text={t(f.help)} />{/if}
+					{#if help}<DescriptionHint text={help} />{/if}
 				</div>
-				<Editor
+				<Editor {ctx}
 					id={`${id}-${name}`}
 					{name}
 					kind={f}
 					value={obj(value)[name] ?? null}
-					onChange={(v) => onChange({ ...obj(value), [name]: v })}
+					on_change={(v) => on_change({ ...obj(value), [name]: v })}
 				/>
 			</div>
 		{/each}
 	</div>
 {/snippet}
 
+{#if current === undefined}
 {#if connections}
 	{#snippet stateCell({ row }: { row: (typeof rows)[number] })}
-		<StateBadge
+		<StateBadge {ctx}
 			state={row.state}
 			label={t(
 				row.state === 'paused'
@@ -285,40 +328,75 @@
 			)}
 		/>
 	{/snippet}
-	<Table
+	{#if !creating}<Table {ctx}
 		of={rows}
 		key="workspace-connections"
-		onOpen={(row) => (open = row.id)}
-		toolbar={{ title: false, new: false, export: false }}
+		on_open={(row) => (open = row.id)}
+		toolbar={{ title: false, new: () => { creating_definition = null; creating = true; }, export: false }}
 		columns={[
 			{ field: 'name', label: t('Name') },
 			{ field: 'driver', label: t('Driver') },
 			{ field: 'state', label: t('Status'), cell: stateCell }
 		]}
-	/>
-{:else}<Envoys
+	/>{/if}
+	{#if creating}
+		<section class="mt-4 space-y-4 rounded-lg border bg-card p-4" data-connection-create>
+			<div class="flex items-start justify-between gap-3">
+				<div><h3 class="text-sm font-medium">{t('New connection')}</h3><p class="mt-1 text-xs text-muted-foreground">{t('Choose an integration, name the account, then pair its provider.')}</p></div>
+				<Button variant="ghost" onclick={() => { creating = false; }}>{t('Cancel')}</Button>
+			</div>
+				<Combobox aria-label={t('Integration')} placeholder={t('Choose integration')}
+					options={settings.integrations.map((item) => ({ value: item.name, label: t(humanise_word(item.name)), description: item.description }))}
+					value={creating_definition} on_change={(next) => { creating_definition = next; }} />
+				{#if new_definition !== undefined}
+					{@const creating_fields = new_definition.configuration}
+					{#key new_definition.name}
+					{#await integration_setups?.[new_definition.name]?.load().catch(() => undefined) then companion}
+					{#if companion?.configuration_tab === undefined && companion?.create !== undefined}
+						<companion.create integration={new_definition.name} create={create_connection(new_definition.name)}
+							busy={create_busy} error={create_error} {t} {locale} />
+					{:else}
+						<Form {ctx} of="sys_integration" mode="create" values={{ integration: new_definition.name }} submit={t('Create connection')}
+							on_outcome={(outcome) => {
+								if (outcome.kind !== 'committed') return;
+								const record = outcome.records.find((row) => row.model === 'sys_integration');
+								if (record === undefined) return;
+								creating = false;
+								open = record.id;
+								fork(reload());
+							}}>
+							<Field {ctx} name="name" label={t('Name')} />
+							{#if Object.keys(creating_fields).length > 0}
+								<Field {ctx} name="configuration" label={t('Configuration')}>
+									{#snippet editor(field)}{@render configurationFields(new_definition.name, creating_fields, field)}{/snippet}
+								</Field>
+							{/if}
+						</Form>
+					{/if}
+					{/await}
+					{/key}
+				{/if}
+		</section>
+	{/if}
+{:else}<Envoys {ctx}
 		{api}
 		{bolt}
 		{settings}
 		{t}
 		{locale}
 		{configuration}
-		onManage={(instance) => (open = instance)}
+		on_manage={(instance) => (open = instance)}
 		{reload}
 	/>{/if}
+{/if}
 
 {#if current !== undefined}
 	{@const i = current}
 	{@const d = definition(i.integration)}
 	{@const channel = settings.envoys.some((e) => e.id === i.envoy)}
-	<DetailSheet
-		title={i.name}
-		onClose={() => (open = null)}
-		acts={i.named ? [] : [{ label: t('Delete'), variant: 'destructive', run: () => remove(i) }]}
-		fields={[
+	{@const details_fields = [
 			{ label: t('Integration'), value: i.integration === i.name ? undefined : i.integration },
 			{ label: t('Driver'), value: channel ? driverLabel(d?.driver ?? '') : undefined },
-			{ label: t('Workspace connection'), value: i.named && i.id !== i.name ? i.id : undefined },
 			{ label: t('Owner'), value: i.owner === null ? undefined : memberName(i.owner) },
 			...(d?.conversation === true && d.sends
 				? [
@@ -335,27 +413,37 @@
 					]
 				: [])
 		]}
-	>
+	{#key i.id}
+	<section class="flex min-w-0 flex-col gap-4" data-integration-management={i.id} tabindex="-1" aria-label={i.name}
+		{@attach (element) => { element.scrollIntoView({ block: 'start' }); element.focus({ preventScroll: true }); }}>
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div><Button variant="ghost" onclick={() => { open = null; }}>{t(connections ? 'Back to connections' : 'Back to envoys')}</Button><h3 class="mt-2 text-base font-medium">{i.name}</h3></div>
+			<Button variant="ghost" onclick={() => remove(i)}>{t('Delete connection')}</Button>
+		</div>
+		<details class="text-xs text-muted-foreground">
+			<summary class="cursor-pointer">{t('Activity and account details')}</summary>
+			<dl class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+				{#each details_fields.filter((field) => field.value !== undefined) as field (field.label)}
+					<div><dt>{field.label}</dt><dd class="mt-0.5 text-sm text-foreground break-words">{field.value === null ? '—' : String(field.value)}</dd></div>
+				{/each}
+			</dl>
+		</details>
 		{#if error !== null}<p role="alert" class="text-sm text-destructive" data-instance-error>
 				{error}
 			</p>{/if}
 		<div class={channel ? 'border-t pt-3' : undefined}>
 			{#snippet connectionTab()}
-				<!-- a durable move (connected, unpaired, error) re-reads the rows, so the table never shows the old state -->
-				{#if client !== null}<IntegrationSetup
-						{client}
-						setup={integrationSetups?.[i.integration]}
-						onStateChange={(state, previous) => {
-							if (
-								previous !== undefined &&
-								state !== previous &&
-								(state === 'connected' || state === 'unpaired' || state === 'error')
-							)
-								fork(reload());
-						}}
-						{t}
-						{locale}
-					/>{/if}
+				{@const offer = offers.current?.find((item) => item.integration === i.integration)}
+				{#if offers.error !== undefined}<p role="alert" class="text-sm text-destructive">{offers.error.message}</p>{/if}
+				<div class="min-w-0">
+					<IntegrationCard driver={d?.driver ?? i.integration} description={d?.description ?? ''}
+						providers={i.owner === null ? (offer?.workspace ?? []) : (offer?.personal ?? [])}
+						instance={{ id: i.id, status: i.status, active: i.active }} client={(id) => api.integration(id)}
+						create={() => Effect.succeed(i.id)} setup={integration_setups?.[i.integration]}
+						on_state_change={(state, previous) => {
+							if (previous !== undefined && state !== previous && (state === 'connected' || state === 'unpaired' || state === 'error')) fork(reload());
+						}} {t} {locale} />
+				</div>
 			{/snippet}
 			{#snippet syncTab()}
 				<div class="flex flex-col gap-3 text-sm" data-instance-sync>
@@ -412,19 +500,24 @@
 						{#if health.webhooks_quiet}<p role="status" class="text-warning">
 								{t('Webhooks are quiet while reads still find changes.')}
 							</p>{/if}
-						{#if health.dead > 0}<div class="flex flex-col items-start gap-2 border-t pt-3">
+						{#if health.dead > 0 || health.initialization !== null}<div class="flex flex-col items-start gap-2 border-t pt-3">
+								{#if health.initialization !== null}<p role="alert" class="text-destructive break-words">
+										{t('Initial sync could not finish.')}{#if health.initialization.message !== null} {health.initialization.message}{/if}
+									</p>{/if}
 								<p class="text-meta">
-									{t('Retry deliveries that stopped after repeated failures.')}
+									{t(health.initialization === null
+										? 'Retry deliveries that stopped after repeated failures.'
+										: 'Retry the initial sync and replay dead-lettered deliveries.')}
 								</p>
-								<Button variant="outline" disabled={replaying === i.id} onclick={replayDead}
-									>{t(replaying === i.id ? 'Replaying…' : 'Replay dead letters')}</Button
+								<Button variant="outline" disabled={replaying === i.id} onclick={replaySync}
+									>{t(replaying === i.id ? 'Replaying…' : health.initialization === null ? 'Replay dead letters' : 'Retry sync')}</Button
 								>
-								{#each deadLetters.current ?? [] as letter (letter.id)}
+								{#each dead_letters.current ?? [] as letter (letter.id)}
 									<div class="w-full rounded-sm border p-2 text-sm">
 										<div class="flex flex-wrap items-center justify-between gap-2">
 											<Button
 												variant="link"
-												onclick={() => openRecord(letter.model, letter.record)}
+												onclick={() => open_record(letter.model, letter.record)}
 											>
 												{letter.model} · {t('Revision')}
 												{letter.revision}
@@ -440,15 +533,15 @@
 										<p class="text-meta">{when(letter.at)} · {letter.message ?? t('Not set')}</p>
 									</div>
 								{/each}
-								{#if deadLetters.error}<p role="alert" class="text-destructive">
-										{deadLetters.error.message}
+								{#if dead_letters.error !== undefined}<p role="alert" class="text-destructive">
+										{dead_letters.error.message}
 									</p>{/if}
 							</div>{/if}
 					{:else if syncHealth.loading}<p class="text-meta">{t('Loading…')}</p>{/if}
 				</div>
 			{/snippet}
 			{#snippet settingsTab()}
-				{#snippet envoyEditor({ value, onChange, id }: FieldEditor)}
+				{#snippet envoyEditor({ value, on_change, id }: FieldEditor)}
 					<Combobox
 						{id}
 						clearable
@@ -460,28 +553,29 @@
 							label: e.name,
 							description: t(e.audience === 'public' ? 'Public' : 'Private')
 						}))}
-						{onChange}
+						{on_change}
 					/>
 				{/snippet}
 				{#snippet configurationEditor(e: FieldEditor)}{@render configurationFields(
+						i.integration,
 						d?.configuration ?? {},
 						e
 					)}{/snippet}
-				<Form
+				<Form {ctx}
 					of="sys_integration"
 					mode="update"
 					id={i.id}
 					submit={t('Save')}
-					onOutcome={() => fork(reload())}
+					on_outcome={() => fork(reload())}
 				>
-					<Field name="name" label={t('Name')} />
-					<Field name="active" label={t('Active')} />
-					{#if d?.conversation === true && i.owner === null}<Field
+					<Field {ctx} name="name" label={t('Name')} />
+					<Field {ctx} name="active" label={t('Active')} />
+					{#if d?.conversation === true && i.owner === null}<Field {ctx}
 							name="envoy"
 							label={t('Envoy')}
 							editor={envoyEditor}
 						/>{/if}
-					{#if Object.keys(d?.configuration ?? {}).length > 0}<Field
+					{#if Object.keys(d?.configuration ?? {}).length > 0}<Field {ctx}
 							name="configuration"
 							label={t('Configuration')}
 							editor={configurationEditor}
@@ -517,16 +611,16 @@
 										<span class="font-medium text-foreground"
 											>{x.direction === 'inbound' ? '←' : '→'}
 											{x.direction === 'inbound'
-												? formatHandle(d?.driver ?? '', x.sender ?? '', x.sender_name)
+												? format_handle(d?.driver ?? '', x.sender ?? '', x.sender_name)
 												: t('sent')}</span
 										>
 										<span class="min-w-0 truncate"
 											>{x.kind === 'group'
 												? (x.title ?? x.thread)
-												: formatHandle(d?.driver ?? '', x.thread ?? '')}</span
+												: format_handle(d?.driver ?? '', x.thread ?? '')}</span
 										>
 										<span class="flex-1"></span>
-										{#if x.direction === 'outbound' && x.status !== null}<StateBadge
+										{#if x.direction === 'outbound' && x.status !== null}<StateBadge {ctx}
 												state={x.status}
 												label={t(x.status)}
 											/>{/if}
@@ -585,25 +679,15 @@
 			{#snippet instanceTabs(extra?: { title: string; body: Snippet })}
 				<Tabs
 					orientation="horizontal"
-					value={channel ? 'settings' : 'connection'}
+					bind:value={active_tab}
 					tabs={[
-						...(channel
-							? []
-							: [
-									{
-										name: 'connection',
-										title: t('Connection'),
-										icon: 'lucide:plug',
-										body: connectionTab,
-										keepAlive: true as const
-									}
-								]),
+						{ name: 'connection', title: t('Connection'), icon: 'lucide:plug', body: connectionTab, keep_alive: true },
 						{
 							name: 'settings',
 							title: t('Configuration'),
 							icon: 'lucide:settings-2',
 							body: settingsTab,
-							keepAlive: true
+							keep_alive: true
 						},
 						...(extra === undefined
 							? []
@@ -615,7 +699,7 @@
 										title: t('Sync'),
 										icon: 'lucide:refresh-cw',
 										body: syncTab,
-										keepAlive: true as const
+										keep_alive: true as const
 									}
 								]
 							: []),
@@ -626,19 +710,19 @@
 										title: t('Messages'),
 										icon: 'lucide:messages-square',
 										body: messagesTab,
-										keepAlive: true as const
+										keep_alive: true as const
 									}
 								]
 							: [])
 					]}
 				/>
 			{/snippet}
-			{#await integrationSetups?.[i.integration]?.load()}
+			{#await setup_module}
 				<p role="status" class="text-sm text-muted-foreground">{t('Loading…')}</p>
 			{:then module}
-				{#if module?.configurationTab !== undefined}
-					{#snippet extraTab()}<module.default />{/snippet}
-					{@render instanceTabs({ title: t(module.configurationTab), body: extraTab })}
+				{#if module?.configuration_tab !== undefined}
+					{#snippet extraTab()}<module.default ctx={page_context(bolt, ctx.ui)} />{/snippet}
+					{@render instanceTabs({ title: t(module.configuration_tab), body: extraTab })}
 				{:else}
 					{@render instanceTabs()}
 				{/if}
@@ -646,5 +730,6 @@
 				{@render instanceTabs()}
 			{/await}
 		</div>
-	</DetailSheet>
+	</section>
+	{/key}
 {/if}

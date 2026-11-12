@@ -1,3 +1,4 @@
+import { with_accounts } from './support/accounts.ts';
 // A wire-shaped inbound attachment (`{ name, mime, bytes, bin }`, its bytes in the event's `bins`) is stored as a FileRef
 // `{ id, name, mime, bytes }` in its message's statement, or without `id` when its bytes never arrived (any other shape is
 // dropped); the transcript and the model context read that one shape. A `messages` feed's map reads it as stored
@@ -7,11 +8,15 @@ import { Context, Effect, Layer, Result } from 'effect';
 import { messages } from '../src/engine/agent/context.ts';
 import { rowsOf, transcriptRow } from '../src/engine/agent/schema.ts';
 import { MSG } from '../src/engine/conversations/store.ts';
-import { decodeProjectedManifest } from '../src/engine/manifest.ts';
+import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 
+const runtime_accounts = [
+	{ id: 'desk_wa', integration: 'whatsapp' },
+] as const;
+
 const manifest = Result.getOrThrow(
-	decodeProjectedManifest({
+	decode_projected_manifest({
 		workspace: { tz: 'UTC', locale: 'en' },
 		models: {},
 		relationships: {},
@@ -19,12 +24,11 @@ const manifest = Result.getOrThrow(
 		integrations: {},
 		policies: {},
 		teams: {},
-		connections: { desk_wa: { integration: 'whatsapp' } },
+		
 		automations: {},
-		envoys: {},
 		mcp: {},
 		apps: {},
-		customFields: {},
+		custom_fields: {},
 		agent: { skills: {} }
 	})
 );
@@ -33,7 +37,7 @@ it.live(
 	'a wire-shaped inbound attachment is stored as a FileRef, and the transcript and model context see its name, mime and bytes',
 	() =>
 		Effect.gen(function* () {
-			const context = yield* Layer.build(TestWorkspace.layer({ manifest }));
+			const context = yield* Layer.build(with_accounts(TestWorkspace.layer({ manifest }), runtime_accounts));
 			const t = Context.get(context, TestWorkspace);
 			const pdf = new TextEncoder().encode('%PDF-1.7');
 			yield* t.receive(
@@ -41,7 +45,7 @@ it.live(
 				{
 					id: 'W1',
 					thread: '6591234567@s.whatsapp.net',
-					sentAt: '2026-09-25T10:00:00.000Z',
+					sent_at: '2026-09-25T10:00:00.000Z',
 					from: { handle: '6591234567@s.whatsapp.net', name: 'Ben' },
 					text: 'the form',
 					attachments: [
@@ -85,7 +89,7 @@ it.live(
 				{
 					id: 'W1',
 					thread: '6591234567@s.whatsapp.net',
-					sentAt: '2026-09-25T10:00:00.000Z',
+					sent_at: '2026-09-25T10:00:00.000Z',
 					from: { handle: '6591234567@s.whatsapp.net', name: 'Ben' },
 					text: 'the form',
 					attachments: [

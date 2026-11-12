@@ -1,3 +1,4 @@
+import { required } from './support/required.ts';
 // An automation's `ctx.ai.sys_2.infer` host tool steps (web search, browsing) each leave one `infer.tool` event on the
 // run: what was searched or opened, so a research run proves the steps it took.
 import { describe, expect, it } from '@effect/vitest';
@@ -7,16 +8,16 @@ import type { AiRequest, ActOutcome as Outcome } from '../src/engine/contracts.t
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { Port } from '../src/engine/port.ts';
 import { Ai } from '../src/engine/ports.ts';
-import { TestWorkspace, respondSystem1, type Kit } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, respond_system_1, type Kit } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
-import { actReply, qReply, routeFixture, type FixtureRoute } from './support/route-fixture.ts';
+import { act_reply, q_reply, route_fixture, type FixtureRoute } from './support/route-fixture.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
 	models: {
 		invoices: {
 			description: 'A supplier invoice',
-			label: 'number',
+			record_label: 'record.number',
 			fields: {
 				number: { kind: 'text' },
 				supplier: { kind: 'text' },
@@ -26,7 +27,7 @@ const manifest = {
 		},
 		purchase_orders: {
 			description: 'A purchase order',
-			label: 'number',
+			record_label: 'record.number',
 			fields: {
 				number: { kind: 'text' },
 				supplier: { kind: 'text' },
@@ -36,56 +37,57 @@ const manifest = {
 		},
 		ledgers: {
 			description: 'Not for matching',
-			label: 'title',
+			record_label: 'record.title',
 			fields: { title: { kind: 'text' } }
 		}
 	},
 	relationships: {},
 	exposures: {
 		invoices: {
-			read: { invoices: { fields: 'all' } },
-			create: { columns: { invoices: ['number', 'supplier', 'amount'] } },
-			update: { columns: { invoices: ['note'] } },
-			effect: { created: true }
+			outputs: { default: { invoices: { fields: 'all' } } },
+			create: { columns: { invoices: ['number', 'supplier', 'amount'] }, effect: true },
+			update: { columns: { invoices: ['note'] } }
 		},
 		purchase_orders: {
-			read: { purchase_orders: { fields: 'all' } },
+			outputs: { default: { purchase_orders: { fields: 'all' } } },
 			create: { columns: { purchase_orders: ['number', 'supplier', 'amount', 'margin'] } }
 		},
-		ledgers: { read: { ledgers: { fields: 'all' } }, create: { columns: { ledgers: ['title'] } } }
+		ledgers: {
+			outputs: { default: { ledgers: { fields: 'all' } } },
+			create: { columns: { ledgers: ['title'] } }
+		}
 	},
 	policies: {
 		matcher: {
 			description: 'Matches invoices',
 			grants: {
-				invoices: { read: true, update: true },
-				purchase_orders: { read: true }
+				invoices: { outputs: { default: {} }, update: {} },
+				purchase_orders: { outputs: { default: {} } }
 			},
 			capabilities: { tools: ['web_search'] }
 		},
 		clerk: {
 			description: 'Enters documents',
 			grants: {
-				invoices: { read: true, create: true, update: true },
-				purchase_orders: { read: true, create: true },
-				ledgers: { read: true, create: true }
+				invoices: { outputs: { default: {} }, create: {}, update: {} },
+				purchase_orders: { outputs: { default: {} }, create: {} },
+				ledgers: { outputs: { default: {} }, create: {} }
 			}
 		}
 	},
 	automations: {
 		match: {
 			description: 'Match new invoices',
-			input: { ids: { kind: 'list', of: { kind: 'id', of: 'invoices' } } },
+			input: { ids: { kind: 'ref', to: 'invoices', many: true } },
 			policies: ['matcher']
 		}
 	},
 	integrations: {},
 	teams: {},
-	connections: {},
-	envoys: {},
+
 	mcp: {},
 	apps: {},
-	customFields: {},
+	custom_fields: {},
 	agent: { skills: {} },
 	needs: []
 } satisfies EngineManifest;
@@ -93,15 +95,15 @@ const guest = program(`import { Effect, Result } from 'effect';
 const output = { kind: 'object', fields: { matched: { kind: 'bool' }, po: { kind: 'text' } } };
 const infer = (ctx, inv) => Effect.result(ctx.ai.sys_2.infer({ prompt: 'Match invoice ' + inv.number, output, tools: ['web_search'], steps: 2, label: inv.number }));
 export default {
-model: { invoices: { bodies: { effect: { created: function* (rows, ctx) {
-	yield* ctx.schedule('match', { ids: rows.map((row) => row.id) });
+model: { invoices: { bodies: { effect: { create: function* (changes, ctx) {
+	yield* ctx.schedule('match', { ids: changes.map((change) => change.after.id) });
 } } } } },
 automation: {
 	match: { body: function* (input, ctx) {
 		for (const id of input.ids) {
 			const inv = (yield* ctx.query({ invoices: { where: { id: { eq: id } } } })).invoices.rows[0];
 			const r = yield* infer(ctx, inv);
-			yield* ctx.act('invoices.update', [{ target: id, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }]);
+			yield* ctx.act({ 'invoices.update': [{ target: inv, set: { note: Result.isFailure(r) ? 'failed' : JSON.stringify(r.success) } }] });
 		}
 	} }
 } };`);
@@ -112,13 +114,13 @@ const use =
 	() =>
 		Stream.succeed({
 			_tag: 'Response',
-			response: { content: '', toolCalls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
+			response: { content: '', tool_calls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
 		});
 const cassette = (steps: readonly Step[]) => {
 	const requests: AiRequest[] = [];
 	let index = 0;
 	const port: Ai['Service'] = {
-		ask: respondSystem1,
+		ask: respond_system_1,
 		maxChoices: undefined,
 		models: ['default'],
 		catalog: Effect.succeed({ models: [{ id: 'default', label: 'Default' }], default: 'default' }),
@@ -146,9 +148,10 @@ const open = (steps: readonly Step[]) =>
 				ports: Layer.succeed(Ai, ai.port),
 				host: {
 					agent: {
-						hostTools: [
+						host_tools: [
 							{
 								name: 'web_search',
+								behavior: { data: true },
 								description: 'Search the web',
 								input: { type: 'object' },
 								call: async () => ({ results: [{ url: 'https://law.example/act' }] })
@@ -158,21 +161,21 @@ const open = (steps: readonly Step[]) =>
 				}
 			})
 		);
-		return { t: Context.get(context, TestWorkspace), route: yield* routeFixture(context), ai };
+		return { t: Context.get(context, TestWorkspace), route: yield* route_fixture(context), ai };
 	});
-const clerk = (t: Kit) => t.as(t.member(['clerk'])).authority;
+const clerk = (t: Kit) => t.as(t.member(['clerk'])).pipe(Effect.map((clerk) => clerk.authority));
 const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
-	actReply(route, clerk(t), { callable, input, issuedAt: t.clock.now() }).pipe(
+	clerk(t).pipe(Effect.flatMap((authority) => act_reply(route, authority, { acts: { [callable]: input }, issued_at: t.clock.now() })),
 		Effect.map((reply) => {
 			const outcome: Outcome = reply.outcome;
 			if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
-			return outcome.records[0]!.id;
+			return required(outcome.records[0]).id;
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>
-	qReply(route, clerk(t), {
+	clerk(t).pipe(Effect.flatMap((authority) => q_reply(route, authority, {
 		reads: [{ m: 'query', a: [{ invoices: { where: { id: { eq: id } }, fields: ['note'] } }] }]
-	}).pipe(
+	})),
 		Effect.map(
 			(reply) =>
 				Schema.decodeUnknownSync(
@@ -221,7 +224,7 @@ describe('sys_2.infer host tools', () => {
 							amount: 1
 						}
 					]);
-					yield* t.runDue();
+					yield* t.run_due();
 					const rows = t.fakes.logs
 						.filter((r) => r.event === 'infer.tool')
 						.map(({ severity, attributes }) => ({ severity, attributes }));
@@ -256,6 +259,8 @@ describe('sys_2.infer host tools', () => {
 						{ role: 'assistant', author: null },
 						{ role: 'tool', author: null },
 						{ role: 'assistant', author: null },
+						// edit and submit: every call of a turn has its answer
+						{ role: 'tool', author: null },
 						{ role: 'tool', author: null }
 					]);
 				})

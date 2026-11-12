@@ -1,8 +1,8 @@
 <!-- The command center's People: administrators manage members and invitations; teams, policies and approval routes belong to source. -->
 <script lang="ts">
-	import { fork, observeOnce } from '@norbital-ai/ui/effect';
+	import { fork, observe_once } from '@norbital-ai/ui/effect';
 	import { Effect, Option, Schema } from 'effect';
-	import { csvDelimiter, csvRows, csvText } from '@norbital-ai/std/csv';
+	import { csv_delimiter, csv_rows, csv_text } from '@norbital-ai/std/csv';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import { watch } from 'runed';
 	import {
@@ -15,7 +15,8 @@
 		Input,
 		PhoneInput,
 		Table,
-		Tabs
+		Tabs,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import { based } from '../nav.ts';
@@ -26,18 +27,20 @@
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 
 	let {
+		ctx,
 		api,
 		t,
 		locale,
 		configuration = null
 	}: {
-		api: Pick<ShellApi, 'settings' | 'settingsOp' | 'preview'>;
+		ctx: UiContext;
+		api: Pick<ShellApi, 'settings' | 'settings_op' | 'preview'>;
 		t: (key: string) => string;
 		locale: string;
 		configuration?: SystemUiIntent | null;
 	} = $props();
 
-	const read = observeOnce(() => api.settings());
+	const read = observe_once(() => api.settings());
 	// a re-read keeps the last answer on screen, so an open sheet stays mounted while it refreshes
 	let s = $state<NonNullable<typeof read.current> | null>(null);
 	watch(
@@ -57,7 +60,7 @@
 					value === undefined ? [] : [[key, value]]
 				)
 			);
-			const result = yield* Effect.result(api.settingsOp(name, body));
+			const result = yield* Effect.result(api.settings_op(name, body));
 			yield* read.refetch();
 			if (result._tag === 'Failure') {
 				mutationError = result.failure.message;
@@ -128,7 +131,7 @@
 	let saving = $state(false);
 	const saveMember = Effect.fn('People.saveMember')(function* (u: Member, d: Draft) {
 		const steps: { name: string; input: { [key: string]: Json | undefined } }[] = [
-			...(d.team !== u.team_id ? [{ name: 'assignTeam', input: { id: u.id, team: d.team } }] : []),
+			...(d.team !== u.team_id ? [{ name: 'assign_team', input: { id: u.id, team: d.team } }] : []),
 			...(d.admin !== u.admin ? [{ name: 'setAdmin', input: { id: u.id, admin: d.admin } }] : []),
 			...(d.active !== u.active
 				? [{ name: d.active ? 'reactivate' : 'deactivate', input: { id: u.id } }]
@@ -154,7 +157,12 @@
 	let inviting = $state(false);
 	let inviteTab = $state<'one' | 'bulk'>('one');
 	let submitting = $state(false);
-	let form = $state({ email: '', phone: null as string | null, team: '', external: false });
+	let form = $state<{ email: string; phone: string | null; team: string; external: boolean }>({
+		email: '',
+		phone: null,
+		team: '',
+		external: false
+	});
 	let configured = $state<string | null>(null);
 	watch([() => configuration, () => s], ([intent, settings]) => {
 		if (intent === null || settings === null || configured === intent.key) return;
@@ -177,7 +185,7 @@
 	const line = (key: string, n: number, team = '') =>
 		t(key).replace('{n}', String(n)).replace('{team}', team);
 	function parse(name: string, text: string): void {
-		const [head = [], ...lines] = csvRows(text, csvDelimiter(text)).filter((r) =>
+		const [head = [], ...lines] = csv_rows(text, csv_delimiter(text)).filter((r) =>
 			r.some((c) => c.trim() !== '')
 		);
 		const col = (h: string) => head.findIndex((c) => c.trim().toLowerCase() === h);
@@ -229,7 +237,7 @@
 				Effect.sync(() => void (csv = { name: file.name, rows: [], errors: [e.message] }))
 			)
 		);
-		if (bytes !== undefined) parse(file.name, csvText(new Uint8Array(bytes)));
+		if (bytes !== undefined) parse(file.name, csv_text(new Uint8Array(bytes)));
 	});
 
 	/** `inviteMany` answers the invitations whose delivery failed (`invite` refuses instead). */
@@ -295,10 +303,10 @@
 
 {#snippet membersTab()}
 	{#key s}
-		<Table
+		<Table {ctx}
 			of="sys_user"
 			key="members"
-			onOpen={(row) => {
+			on_open={(row) => {
 				if (typeof row.id === 'string') {
 					open = { kind: 'member', id: row.id };
 					draft = null;
@@ -329,16 +337,16 @@
 			<label class="flex items-center gap-2 text-sm"
 				><Checkbox
 					checked={s.signup.open}
-					onCheckedChange={(v) => fork(op('setSignup', { open: v === true }))}
+					on_checked_change={(v) => fork(op('setSignup', { open: v === true }))}
 				/>
 				{t('Newcomers may sign up')}</label
 			>
 		</Cluster>
 	{/if}
-	<Table
+	<Table {ctx}
 		of={invitations}
 		key="invitations"
-		onOpen={(row) => (open = { kind: 'invitation', id: row.id })}
+		on_open={(row) => (open = { kind: 'invitation', id: row.id })}
 		toolbar={{
 			title: t('Invitations'),
 			new: () => openInvite('one'),
@@ -431,9 +439,9 @@
 					>
 				{/if}
 			{/snippet}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={u.name || u.email}
-				onClose={close}
+				on_close={close}
 				footer={memberFoot}
 				fields={[
 					{ label: t('Email'), value: u.email },
@@ -459,7 +467,7 @@
 								placeholder={t('No team')}
 								options={teams}
 								value={draft.team}
-								onChange={(team) => {
+								on_change={(team) => {
 									if (draft !== null) draft.team = team;
 								}}
 								aria-label={t('Team')}
@@ -475,9 +483,9 @@
 						>
 						<label class="flex flex-col gap-1"
 							><span class="text-meta">{t('Mobile number')}</span>
-							<PhoneInput
+							<PhoneInput {ctx}
 								value={draft.phone}
-								onChange={(v) => {
+								on_change={(v) => {
 									if (draft !== null) draft.phone = typeof v === 'string' ? v : null;
 								}}
 							/></label
@@ -498,10 +506,10 @@
 	{:else}
 		{@const i = invitations.find((x) => x.id === open?.id)}
 		{#if i !== undefined}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={i.email}
 				acts={invitationActs(i)}
-				onClose={close}
+				on_close={close}
 				fields={[
 					{ label: t('Team'), value: i.team },
 					{ label: t('Status'), value: i.status },
@@ -522,9 +530,9 @@
 			aria-label={t('Email')}
 			bind:value={form.email}
 		/>
-		<PhoneInput
+		<PhoneInput {ctx}
 			value={form.phone}
-			onChange={(v) => (form.phone = typeof v === 'string' ? v : null)}
+			on_change={(v) => (form.phone = typeof v === 'string' ? v : null)}
 		/>
 		<p class="text-meta">{t('Enter an email or a mobile number.')}</p>
 		<Combobox
@@ -533,7 +541,7 @@
 			aria-label={t('Team')}
 			options={teams}
 			value={form.team || null}
-			onChange={(v) => (form.team = v ?? '')}
+			on_change={(v) => (form.team = v ?? '')}
 		/>
 		<label class="flex items-center gap-2 text-sm"
 			><Checkbox bind:checked={form.external} /> {t('External')}</label
@@ -595,7 +603,7 @@
 
 <Dialog.Root
 	open={inviting}
-	onOpenChange={(o) => {
+	on_open_change={(o) => {
 		if (!o) closeDialog();
 	}}
 >
@@ -613,7 +621,7 @@
 					level={2}
 					orientation="horizontal"
 					value={inviteTab}
-					onValueChange={(v) => (inviteTab = v === 'bulk' ? 'bulk' : 'one')}
+					on_value_change={(v) => (inviteTab = v === 'bulk' ? 'bulk' : 'one')}
 					tabs={[
 						{ name: 'one', title: t('One person'), icon: 'lucide:user-plus', body: one },
 						{ name: 'bulk', title: t('Bulk import'), icon: 'lucide:upload', body: bulk }

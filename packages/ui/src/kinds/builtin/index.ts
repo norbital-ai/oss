@@ -1,10 +1,10 @@
 // The built-in custom fields (`money`, `file`, `point`, `phone`): registered exactly as a tenant's
 // `src/data/custom_field/<f>/` is (`{ shape, label, renderer }`, the renderer taking `{ view: KindView }`), under
-// the name a stored kind renders as (`fieldName`). Bolt declares the same four with `customField()`, so a model may also
+// the name a stored kind renders as (`field_name`). Bolt declares the same four with `custom_field()`, so a model may also
 // reference one as `{ kind: 'custom', of: 'phone' }`. A host's entry of the same name wins (a tenant's name never clashes:
 // `bolt check` refuses it).
 import type { CustomFieldEntry, KindsHost } from '../context.js';
-import { fieldName, type Kind } from '../kind.js';
+import { field_name, type Kind } from '../kind.js';
 import FileField from './file.svelte';
 import MoneyField from './money.svelte';
 import PhoneField from './phone.svelte';
@@ -23,13 +23,13 @@ export const BUILTIN_FIELDS: { readonly [name: string]: CustomFieldEntry } = {
 };
 
 /** The custom field a kind renders through (the host's, else a built-in), and the kind its renderer reads: a custom reference's shape, else the field's own literal. */
-export function fieldEntry(
+export function field_entry(
 	kind: Kind,
 	host: KindsHost
 ): { entry: CustomFieldEntry; kind: Kind } | undefined {
-	const name = fieldName(kind);
+	const name = field_name(kind);
 	const entry =
-		name === undefined ? undefined : (host.customFields?.[name] ?? BUILTIN_FIELDS[name]);
+		name === undefined ? undefined : (host.custom_fields?.[name] ?? BUILTIN_FIELDS[name]);
 	return entry === undefined
 		? undefined
 		: { entry, kind: kind.kind === 'custom' ? entry.shape : kind };

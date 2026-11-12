@@ -1,7 +1,7 @@
 import { Effect, Fiber } from 'effect';
 import { TestClock } from 'effect/testing';
 import { expect, it } from '@effect/vitest';
-import { createBolt } from '../src/page/bolt.ts';
+import { create_bolt } from '../src/page/bolt.ts';
 
 it.effect('a stalled describe fails visibly and aborts; a retry succeeds', () =>
 	Effect.gen(function* () {
@@ -16,7 +16,8 @@ it.effect('a stalled describe fails visibly and aborts; a retry succeeds', () =>
 				v: 0
 			});
 		};
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -43,7 +44,8 @@ it.effect('describe bounds a stalled response body as well as fetch', () =>
 			new Response(new ReadableStream<Uint8Array>({ start() {} }), {
 				headers: { 'content-type': 'application/json' }
 			});
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -63,7 +65,8 @@ it.effect('the describe deadline never aborts a mutating act', () =>
 			signal = init?.signal;
 			return new Promise<Response>(() => {});
 		};
-		const bolt = yield* createBolt({
+		const bolt = yield* create_bolt({
+			operation_outputs: { automations: {} },
 			actor: null,
 			locale: 'en',
 			base: 'https://workspace.test',
@@ -71,7 +74,7 @@ it.effect('the describe deadline never aborts a mutating act', () =>
 			describe: true
 		});
 		const act = yield* bolt
-			.act('jobs.update', [{ id: 'job1', status: 'done' }])
+			.act({ 'jobs.update': [{ target: { id: 'job1', revision: 1 }, set: { status: 'done' } }] })
 			.pipe(Effect.forkScoped);
 		yield* TestClock.adjust('15 seconds');
 		expect(act.pollUnsafe() === undefined).toBe(true);

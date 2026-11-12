@@ -2,12 +2,12 @@ import { describe, expect, it } from '@effect/vitest';
 import { Deferred, Effect, Schema } from 'effect';
 import { read } from '@norbital-ai/store';
 import { catalog } from '../src/protocol/catalog.ts';
-import { fromStore } from '../src/protocol/errors.ts';
+import { from_store } from '../src/protocol/errors.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import type { GuestShape } from '../src/engine/services.ts';
 import { act } from '../src/engine/write/act.ts';
 import { admin, manifest as base, NOW, TODAY } from './write-fixture.ts';
-import { bridgeOn, open } from './write-p2.fixture.ts';
+import { bridge_on, open } from './write-p2.fixture.ts';
 
 const manifest: EngineManifest = {
 	...base,
@@ -15,19 +15,19 @@ const manifest: EngineManifest = {
 		...base.models,
 		sources: {
 			description: 'A source',
-			label: 'reference',
+			record_label: 'record.reference',
 			fields: { reference: { kind: 'text' } }
 		},
 		accounts: {
 			description: 'A ledger account',
-			label: 'code',
+			record_label: 'record.code',
 			search: { text: ['code'] },
 			fields: {
 				code: { kind: 'text' },
 				state: {
 					kind: 'state',
 					initial: 'DRAFT',
-					states: { DRAFT: { to: ['PAID'] }, PAID: { to: [], edit: 'all' } }
+					states: { DRAFT: { to: ['PAID'] }, PAID: { to: [] } }
 				},
 				number: { kind: 'seq', pattern: 'A-{0000}' },
 				amount: { kind: 'sum', of: 'entries.amount' },
@@ -37,7 +37,7 @@ const manifest: EngineManifest = {
 		},
 		entries: {
 			description: 'An immutable movement',
-			label: 'memo',
+			record_label: 'record.memo',
 			fields: { memo: { kind: 'text' }, amount: { kind: 'decimal', scale: 2 } },
 			computed: { upper_memo: { kind: 'text', expr: { upper: { field: 'memo' } } } }
 		}
@@ -51,7 +51,7 @@ const manifest: EngineManifest = {
 	exposures: {
 		...base.exposures,
 		sources: {
-			read: { sources: { fields: 'all' } },
+			outputs: { default: { sources: { fields: 'all' } } },
 			create: {
 				columns: {
 					sources: ['reference'],
@@ -61,20 +61,22 @@ const manifest: EngineManifest = {
 			}
 		},
 		accounts: {
-			read: { accounts: { fields: 'all' }, 'accounts.entries': { fields: 'all' } },
+			outputs: { default: { accounts: { fields: 'all' }, 'accounts.entries': { fields: 'all' } } },
 			create: {
 				columns: { accounts: ['code', 'source_id'], 'accounts.entries': ['memo', 'amount'] }
 			},
 			update: { columns: { accounts: ['state'], 'accounts.entries': ['memo', 'amount'] } }
 		},
 		entries: {
-			read: { entries: { fields: 'all' } },
+			outputs: { default: { entries: { fields: 'all' } } },
 			create: { columns: { entries: ['memo', 'amount', 'account_id'] }, transform: true }
 		}
 	}
 };
 const Row = Schema.Record(Schema.String, Schema.Json);
-const Rows = Schema.Array(Row);
+const Changes = Schema.Array(Schema.Struct({
+	before: Schema.NullOr(Row), set: Row, after: Schema.NullOr(Row)
+}));
 const Identity = Schema.Struct({ id: Schema.String, code: Schema.String });
 const Page = Schema.Struct({ rows: Schema.Array(Identity), next: Schema.NullOr(Schema.String) });
 type Mode =
@@ -105,7 +107,8 @@ const fixture = Effect.gen(function* () {
 			invokeProgram: () => Effect.die('The fixture invokes native callbacks only.'),
 			invoke: (inv, bridge) =>
 				Effect.gen(function* () {
-					const rows = yield* Schema.decodeUnknownEffect(Rows)(inv.input).pipe(Effect.orDie);
+					const changes = yield* Schema.decodeUnknownEffect(Changes)(inv.input).pipe(Effect.orDie);
+					const rows = changes.map(({ set }) => set);
 					const query = yield* read(
 						cat,
 						mode === 'unread'
@@ -163,10 +166,10 @@ const fixture = Effect.gen(function* () {
 																	}
 																}
 												}),
-							...(mode === 'order' ? { orderBy: { amount: 'desc' } } : {}),
+							...(mode === 'order' ? { order_by: { amount: 'desc' } } : {}),
 							...(mode === 'search' ? { search: code } : {})
 						}
-					).pipe(Effect.mapError(fromStore), Effect.orDie);
+					).pipe(Effect.mapError(from_store), Effect.orDie);
 					const [answer] = yield* bridge.cross([
 						{
 							_tag: 'read',
@@ -185,7 +188,7 @@ const fixture = Effect.gen(function* () {
 						}
 						return { kind: 'refused', message: 'The native prospective read failed.' };
 					}
-					if (mode === 'unread') return { kind: 'ok', output: inv.input };
+					if (mode === 'unread') return { kind: 'ok', output: rows };
 					if (mode === 'related_filter') {
 						const related = yield* Schema.decodeUnknownEffect(
 							Schema.Struct({
@@ -201,7 +204,7 @@ const fixture = Effect.gen(function* () {
 						expect(related.rows).toHaveLength(1);
 						expect(related.rows[0]?.account_id).toBe(rows[0]?.account_id);
 						expect(related.rows[0]?.memo).toBe('new-entry');
-						return { kind: 'ok', output: inv.input };
+						return { kind: 'ok', output: rows };
 					}
 					const page = yield* Schema.decodeUnknownEffect(Page)(answer.value).pipe(Effect.orDie);
 					if (mode === 'nested_identity') {
@@ -228,7 +231,7 @@ const fixture = Effect.gen(function* () {
 				})
 		};
 		return act(
-			{ manifest, db, guest, bridge: bridgeOn(db, manifest) },
+			{ manifest, db, guest, bridge: bridge_on(db, manifest) },
 			{
 				model: existing === undefined ? 'sources' : 'accounts',
 				verb: existing === undefined ? 'create' : 'update',
@@ -347,7 +350,7 @@ describe('native prospective identities', () => {
 					message:
 						'prospective reads require native generated fields to be materialized before they can be read'
 				});
-				expect(failures).toEqual(['preparedComputed']);
+				expect(failures).toEqual(['prepared_computed']);
 				for (const table of ['sources', 'accounts', 'entries'])
 					expect(
 						yield* db.value(Schema.Number, {

@@ -1,6 +1,8 @@
 // WeCom (企业微信), through a self-built app's API: no WeCom SDK is installed. A person writes to the app, so every thread
 // is one person, in direct. The callback is the same safe mode as WeChat's. WeCom offers no history, typing, edit or
 // delete event, and its duplicate check compares content rather than a key, so a send is not idempotent.
+import { loadToken, tokenCache } from '../token.ts';
+import { Effect, Schema } from 'effect';
 import type { ChatConnection, ChatPlatform } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { signed } from '../verify.ts';
@@ -14,7 +16,10 @@ const FILE_MIME: Readonly<Record<string, string>> = {
 	voice: 'audio/*',
 	video: 'video/*'
 };
-type Answer = { readonly errcode: number; readonly errmsg?: string };
+const Answer = Schema.Struct({
+	errcode: Schema.Number,
+	errmsg: Schema.optionalKey(Schema.String)
+});
 
 export const wecom: ChatPlatform = {
 	id: 'wecom',
@@ -42,33 +47,36 @@ export const wecom: ChatPlatform = {
 			throw new PlatformError('EncodingAESKey must be 43 characters', 400);
 		if (!Number.isInteger(Number(agentId)))
 			throw new PlatformError('Agent ID must be a number', 400);
-		let cached: { readonly value: string; readonly until: number } | null = null;
 		const url = (path: string, query: Readonly<Record<string, string>>) => {
 			const made = new URL(path, API);
 			for (const [name, value] of Object.entries(query)) made.searchParams.set(name, value);
 			return made;
 		};
 		// WeCom answers a refusal with 200 and an `errcode`; a refusal may be a revoked token, so the next call fetches one
-		const answered = async <A>(response: Response) => {
+		const answered = async <A>(schema: Schema.Decoder<A>, response: Response) => {
 			if (!response.ok)
 				throw new PlatformError(`WeCom answered ${response.status}`, response.status);
-			const answer = (await response.json()) as Answer & A;
-			if (answer.errcode === 0) return answer;
-			cached = null;
+			const raw: unknown = await response.json();
+			const answer = await Schema.decodeUnknownPromise(Answer)(raw);
+			if (answer.errcode === 0) return Schema.decodeUnknownPromise(schema)(raw);
+			Effect.runSync(tokens.invalidate);
 			throw new PlatformError(`WeCom ${answer.errcode}: ${answer.errmsg ?? 'refused'}`, 502);
 		};
-		const accessToken = async () => {
-			if (cached !== null && Date.now() < cached.until) return cached.value;
-			const { access_token, expires_in } = await answered<{
-				access_token: string;
-				expires_in?: number;
-			}>(await host.fetch(url('/cgi-bin/gettoken', { corpid: corpId, corpsecret: corpSecret })));
-			cached = {
-				value: access_token,
-				until: Date.now() + (expires_in ?? TOKEN_LIFE_S) * 1000 - TOKEN_EARLY_MS
-			};
-			return access_token;
-		};
+		const tokens = await Effect.runPromise(
+			tokenCache(() =>
+				loadToken(async () => {
+					const { access_token, expires_in } = await answered(
+						Schema.Struct({
+							access_token: Schema.String,
+							expires_in: Schema.optionalKey(Schema.Number)
+						}),
+						await host.fetch(url('/cgi-bin/gettoken', { corpid: corpId, corpsecret: corpSecret }))
+					);
+					return { token: access_token, ttl: (expires_in ?? TOKEN_LIFE_S) * 1000 - TOKEN_EARLY_MS };
+				})
+			)
+		);
+		const accessToken = () => Effect.runPromise(tokens.get());
 		await accessToken();
 		const verified = (query: URLSearchParams, encrypted: string) => {
 			signed(
@@ -87,7 +95,7 @@ export const wecom: ChatPlatform = {
 			);
 			// a refusal is JSON, however it is carried
 			if (!response.ok || response.headers.get('content-type')?.includes('json') === true)
-				await answered(response);
+				await answered(Schema.Unknown, response);
 			return new Uint8Array(await response.arrayBuffer());
 		};
 		const connection: ChatConnection = {
@@ -107,7 +115,7 @@ export const wecom: ChatPlatform = {
 						{
 							id,
 							thread: from,
-							sentAt: new Date(Number(xmlField(xml, 'CreateTime')) * 1000).toISOString(),
+							sent_at: new Date(Number(xmlField(xml, 'CreateTime')) * 1000).toISOString(),
 							from: { handle: from, name: null },
 							text:
 								xmlField(xml, 'Content') ??
@@ -130,7 +138,10 @@ export const wecom: ChatPlatform = {
 				};
 			},
 			async send(thread, text, key) {
-				const sent = await answered<{ msgid?: string }>(
+				const sent = await answered(
+					Schema.Struct({
+						msgid: Schema.optionalKey(Schema.String)
+					}),
 					await host.fetch(url('/cgi-bin/message/send', { access_token: await accessToken() }), {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },

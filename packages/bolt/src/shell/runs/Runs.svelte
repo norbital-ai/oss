@@ -6,9 +6,11 @@
 -->
 <script lang="ts">
 	import { watch } from 'runed';
+	import { equal_json } from '@norbital-ai/std/json';
 	import { fork, observe } from '@norbital-ai/ui/effect';
-	import { Effect, Schedule, Stream } from 'effect';
+	import { Effect, Stream } from 'effect';
 	import {
+		automation_outcome,
 		Badge,
 		Button,
 		Combobox,
@@ -18,58 +20,73 @@
 		Icon,
 		Show,
 		Table,
-		useKinds
+		type UiContext
 	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
-	import type { LogRow } from '../../engine/contracts.ts';
-	import type { RunView } from '../../engine/runs/index.ts';
+	import { LIMITS, type LogRow } from '../../engine/contracts.ts';
+	import type { RunView } from '../../engine/runs/rows.ts';
 	import type { Act } from '../Acts.svelte';
 	import Acts from '../Acts.svelte';
 	import DetailSheet from '../DetailSheet.svelte';
 	import type { ShellBolt } from '../runtime.ts';
-	import type { ShellApi } from '../api-types.ts';
+	import { RunsReadAnswer, type ShellApi } from '../api-types.ts';
+	import { date_time } from '../i18n.ts';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		t,
 		startable = [],
 		run = null,
-		onRun,
-		initialAutomation = null,
-		onAutomationClose
+		on_run,
+		initial_automation = null,
+		on_automation_close
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
 		startable?: readonly {
 			readonly name: string;
 			readonly description: string;
-			readonly needsInput?: boolean;
+			readonly needs_input?: boolean;
 		}[];
 		run?: string | null;
-		onRun: (id: string | null) => void;
-		initialAutomation?: string | null;
-		onAutomationClose?: () => void;
+		on_run: (id: string | null) => void;
+		initial_automation?: string | null;
+		on_automation_close?: () => void;
 	} = $props();
 
-	const kinds = useKinds();
 	const runs = observe(() =>
-		bolt.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ limit: 500, brief: true }] } })
+		bolt.observe({ read: { m: 'runs', a: [{ limit: 500, brief: true }] } }, RunsReadAnswer)
 	);
-	// the open run's detail (attempts, output files, log) is the shell's one-off read, asked again when its live row
-	// changes; a log grows with no row change, so it is read again for as long as the run runs
+	// Run metadata follows the live row. Its external log store supplies only newly appended lines between row changes.
 	const detail = observe(() => {
 		if (run === null) return null;
 		const id = run;
 		return bolt
-			.observe<{ rows: RunView[] }>({ read: { m: 'runs', a: [{ id, limit: 1, brief: true }] } })
+			.observe({ read: { m: 'runs', a: [{ id, limit: 1, brief: true }] } }, RunsReadAnswer)
 			.pipe(
-				Stream.changesWith((a, b) => JSON.stringify(a.rows) === JSON.stringify(b.rows)),
+				Stream.changesWith((a, b) => equal_json(a.rows, b.rows)),
 				Stream.switchMap((answer) =>
-					answer.rows.some((row) => row.status === 'running')
-						? Stream.fromEffectSchedule(api.run(id), Schedule.spaced('2 seconds'))
-						: Stream.fromEffect(api.run(id))
+					Stream.fromEffect(api.run(id)).pipe(Stream.flatMap((detail) => {
+						const access = detail.log_access;
+						if (!answer.rows.some((row) => row.status === 'running') || detail.logs === undefined || access === undefined)
+							return Stream.succeed(detail);
+						let lines = typeof detail.logs === 'string' ? [] : detail.logs;
+						let after = lines.at(-1)?.id;
+						const tail = Stream.tick(LIMITS.runLog.pollMs).pipe(
+							Stream.drop(1),
+							Stream.mapEffect(() => api.run_log(id, access, after).pipe(Effect.map((appended) => {
+								if (typeof appended === 'string') return { ...detail, logs: appended };
+								after = appended.at(-1)?.id ?? after;
+								lines = [...lines, ...appended].slice(-LIMITS.runLog.lines);
+								return { ...detail, logs: lines };
+							})))
+						);
+						return Stream.succeed(detail).pipe(Stream.concat(tail));
+					}))
 				)
 			);
 	});
@@ -133,37 +150,39 @@
 	const retryable = (status: string) => status === 'failed' || status === 'stopped';
 	const stop = Effect.fn('Runs.stop')(function* (id: string) {
 		mutationError = null;
-		const r = yield* Effect.result(api.stopRun(id));
+		const r = yield* Effect.result(api.stop_run(id));
 		if (r._tag === 'Failure') mutationError = r.failure.message;
 	});
 	const retry = Effect.fn('Runs.retry')(function* (id: string) {
 		mutationError = null;
 		const r = yield* Effect.result(api.run(id));
 		if (r._tag === 'Failure') return void (mutationError = r.failure.message);
-		const o = yield* bolt.start(r.success.automation, r.success.input ?? {});
-		if (o.kind === 'refused') mutationError = o.message;
+		const o = yield* Effect.result(automation_outcome(bolt.run(r.success.automation, r.success.input ?? {})));
+		if (o._tag === 'Failure') mutationError = o.failure.message;
+		else if (o.success.kind === 'refused') mutationError = o.success.message;
 	});
 	let chosen = $state<string | null>(null);
 	/** The automation whose native input form is open (one that needs a required input). */
 	let entering = $state<string | null>(null);
 	function closeAutomation(): void {
 		entering = null;
-		onAutomationClose?.();
+		on_automation_close?.();
 	}
 	watch(
-		() => initialAutomation,
+		() => initial_automation,
 		(name) => {
 			if (name !== null && startable.some((item) => item.name === name)) entering = name;
 		}
 	);
 	const runNow = Effect.fn('Runs.runNow')(function* (automation: string) {
 		mutationError = null;
-		if (startable.find((a) => a.name === automation)?.needsInput === true) {
+		if (startable.find((a) => a.name === automation)?.needs_input === true) {
 			entering = automation;
 			return;
 		}
-		const o = yield* bolt.start(automation, {});
-		if (o.kind === 'refused') mutationError = o.message;
+		const o = yield* Effect.result(automation_outcome(bolt.run(automation, {})));
+		if (o._tag === 'Failure') mutationError = o.failure.message;
+		else if (o.success.kind === 'refused') mutationError = o.success.message;
 	});
 	const acts = (r: Pick<RunView, 'id' | 'status'>): Act[] => [
 		...(stoppable(r.status) ? [{ label: t('Stop'), run: () => fork(stop(r.id)) }] : []),
@@ -178,7 +197,7 @@
 			? row.attributes.line
 			: row.event;
 	const when = (v: string | null | undefined) =>
-		v ? new Date(v).toLocaleString(bolt.locale) : '—';
+		v ? date_time(v, bolt.locale) : '—';
 	const warnings = (r: RunView) => (r.attempts ?? []).flatMap((attempt) => attempt.warnings ?? []);
 </script>
 
@@ -226,7 +245,7 @@
 			}))}
 			value={chosen}
 			placeholder={t('Choose an automation')}
-			onChange={(next) => (chosen = next)}
+			on_change={(next) => (chosen = next)}
 		/>
 		<Button disabled={chosen === null} onclick={() => chosen !== null && fork(runNow(chosen))}
 			>{t('Run now')}</Button
@@ -244,10 +263,10 @@
 	{#if rows === null}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:else}
-		<Table
+		<Table {ctx}
 			of={rows}
 			key="runs"
-			onOpen={(r) => onRun(r.id)}
+			on_open={(r) => on_run(r.id)}
 			toolbar={{ export: true, ...(startable.length > 0 ? { trailing: runNowControls } : {}) }}
 			columns={[
 				{ field: 'namespace', label: t('Namespace'), cell: namespace },
@@ -275,11 +294,11 @@
 
 {#if run !== null && one !== null}
 	{@const w = warnings(one)}
-	{@const input = kinds.automations?.[one.automation]?.input}
-	<DetailSheet
+	{@const input = bolt.automations?.[one.automation]?.input}
+	<DetailSheet {ctx}
 		title={`${one.automation} · ${t(one.status)}`}
 		acts={acts(one)}
-		onClose={() => onRun(null)}
+		on_close={() => on_run(null)}
 		fields={[
 			{ label: t('Triggered by'), value: triggerOf(one.trigger) },
 			{ label: t('Cause'), value: one.cause },
@@ -308,8 +327,8 @@
 			{#if one?.files?.length}
 				<div class="grid gap-2" data-run-output-files>
 					<p class="text-meta">{t('Files')}</p>
-					<Show
-						kind={{ kind: 'file', accept: ['*/*'], max: '1024GiB', multiple: true }}
+					<Show {ctx}
+						kind={{ kind: 'file', accept: ['*/*'], max: '1024GiB', many: true }}
 						value={one.files}
 						readonly
 					/>
@@ -341,7 +360,7 @@
 {#if entering !== null}
 	<Dialog.Root
 		open
-		onOpenChange={(next) => {
+		on_open_change={(next) => {
 			if (!next) closeAutomation();
 		}}
 	>
@@ -352,7 +371,7 @@
 					>{t('Fill in this automation’s input before it runs.')}</Dialog.Description
 				>
 			</Dialog.Header>
-			<Form of={{ automation: entering }} submit={t('Run')} onOutcome={closeAutomation} />
+			<Form {ctx} of={{ automation: entering }} submit={t('Run')} on_outcome={closeAutomation} />
 		</Dialog.Content>
 	</Dialog.Root>
 {/if}

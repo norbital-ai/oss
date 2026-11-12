@@ -62,7 +62,7 @@ const Fields = Schema.Struct({
 	splash: Schema.optionalKey(
 		Schema.Struct({ color: Hex, image: Schema.optionalKey(Schema.NonEmptyString) })
 	),
-	themeColor: Schema.optionalKey(Hex),
+	theme_color: Schema.optionalKey(Hex),
 	/** The server the app belongs to, as an origin: a Norbital platform origin or a self-hosted Bolt server. */
 	host: Schema.String.check(Schema.makeFilter(hostProblem)),
 	/**
@@ -73,19 +73,19 @@ const Fields = Schema.Struct({
 		Schema.String.check(Schema.makeFilter((value: string) => addressProblem('workspace', value)))
 	),
 	/** Extra hosts the WebView may stay on; everything else opens in the system browser. */
-	allowNavigation: Schema.optionalKey(Schema.Array(Host)),
+	allow_navigation: Schema.optionalKey(Schema.Array(Host)),
 	capabilities: Schema.Struct({
 		location: Schema.optionalKey(Schema.Struct({ background: Schema.Boolean, purpose: Purpose })),
 		notifications: Schema.optionalKey(Schema.Boolean),
 		camera: Schema.optionalKey(Schema.Struct({ purpose: Purpose }))
 	}),
 	ios: Schema.Struct({
-		teamId: Schema.String.check(Schema.isPattern(/^[A-Z0-9]{10}$/)),
-		apsEnvironment: Schema.Literals(['development', 'production'])
+		team_id: Schema.String.check(Schema.isPattern(/^[A-Z0-9]{10}$/)),
+		aps_environment: Schema.Literals(['development', 'production'])
 	}),
 	android: Schema.Struct({
 		/** A PEM certificate authority the debug build also trusts (a local HTTPS host); release builds never carry it. */
-		debugCa: Schema.optionalKey(Schema.NonEmptyString)
+		debug_ca: Schema.optionalKey(Schema.NonEmptyString)
 	})
 });
 
@@ -99,7 +99,7 @@ export const AppConfig = Fields.check(
 export type AppConfig = typeof AppConfig.Type;
 
 /** Types a `norbital.app.ts` default export; the CLI validates it when it loads the file. */
-export const defineApp = (config: typeof AppConfig.Encoded): typeof AppConfig.Encoded => config;
+export const define_app = (config: typeof AppConfig.Encoded): typeof AppConfig.Encoded => config;
 
 const CONFIG_FILES = ['norbital.app.ts', 'norbital.app.json'] as const;
 
@@ -124,7 +124,7 @@ export const loadApp = Effect.fn('AppShell.loadApp')(
 							Effect.flatMap(Schema.decodeUnknownEffect(Module)),
 							Effect.map((module) => module.default)
 						);
-			return yield* Schema.decodeUnknownEffect(AppConfig)(input).pipe(
+			return yield* Schema.decodeUnknownEffect(AppConfig, { onExcessProperty: 'error' })(input).pipe(
 				Effect.mapError((error) => new AppConfigInvalid({ message: `${file}: ${error.message}` }))
 			);
 		}
