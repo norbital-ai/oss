@@ -1,4 +1,4 @@
-// The agent engine's pure parts (rules 60, 62, 63): bounded tool results, context projection and native AI streams.
+// The agent engine's pure parts: bounded tool results, context projection and native AI streams.
 import { describe, expect, it } from '@effect/vitest';
 import { TestClock } from 'effect/testing';
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Stream } from 'effect';
@@ -159,7 +159,7 @@ const done =
 		response({ content: text, tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } });
 const elapsed = clock_probe;
 
-describe('tool results are bounded (rule 62)', () => {
+describe('tool results are bounded', () => {
 	it('a result is bounded once when stored and rides the transcript as stored: whole within its bound, its start past it', () => {
 		// stored as the engine settles a call: bounded once, the whole kept for read_file
 		const stored = (bytes: number) => {
@@ -205,7 +205,7 @@ describe('tool results are bounded (rule 62)', () => {
 	});
 });
 
-describe('the context projection (rule 60)', () => {
+describe('the context projection', () => {
 	it('keeps the whole transcript except superseded, ambient, queued, pre-checkpoint and pre-plan rows', () => {
 		const rows = [
 			row(1),
@@ -234,7 +234,7 @@ describe('the context projection (rule 60)', () => {
 			'm5'
 		]);
 	});
-	it('every message carries its sender header, which says whom the turn serves (rule 57, P32); engine notes are user text', () => {
+	it('every message carries its sender header, which says whom the turn serves; engine notes are user text', () => {
 		const dm = {
 			envoy: { name: 'desk', instance: 'wa', sender: '+65', member: 'u-ann', dm: true }
 		};
@@ -256,7 +256,7 @@ describe('the context projection (rule 60)', () => {
 			{ role: 'user', content: '[note]\nok' }
 		]);
 	});
-	it('the system prompt is the kernel, skills list, brief, envoy and task only: no date, actor or conversation state (rule 62)', () => {
+	it('the system prompt is the kernel, skills list, brief, envoy and task only: no date, actor or conversation state', () => {
 		const s = system({
 			envoy: 'Norbius',
 			brief: 'Brief.',
@@ -284,7 +284,7 @@ describe('the context projection (rule 60)', () => {
 	});
 });
 
-describe('the AI port under the 20 s idle wall (rule 63)', () => {
+describe('the AI port under the 20 s idle wall', () => {
 	const req: AiRequest = { model: 'default', messages: [{ role: 'user', content: 'hi' }] };
 	it.effect('keeps the native response and records prompt sizes at the model boundary', () =>
 		Effect.gen(function* () {
@@ -1109,7 +1109,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer: a reasoning-only reply is continued, at most 3 times running (L-BOLT-371)',
+		'sys_2.infer: a reasoning-only reply is continued, at most 3 times running',
 		() =>
 			Effect.gen(function* () {
 				const { p, requests } = port([done(''), done('hi')]);
@@ -1294,7 +1294,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	);
 
 	it.effect(
-		'sys_2.infer with tools: the model calls them beside the draft tools (L-BOLT-372)',
+		'sys_2.infer with tools: the model calls them beside the draft tools',
 		() =>
 			Effect.gen(function* () {
 				const seen: Json[] = [];

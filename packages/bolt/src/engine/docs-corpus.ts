@@ -1,4 +1,4 @@
-// The docs corpus (§3.3.10, §7.3) over any reader of its JSON documents (one per namespace, one per authoring skill, plus
+// The docs corpus over any reader of its JSON documents (one per namespace, one per authoring skill, plus
 // `index.json`, written by `scripts/docs.ts`): `docs/index.ts` reads them from `build/docs/`; a cell's host serves them
 // through `Docs`. Every document is read and decoded once, up front; the corpus then only answers.
 

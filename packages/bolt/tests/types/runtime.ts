@@ -1,4 +1,4 @@
-// Type corpus for the runtime roles (§3.3.1, §3.3.5, §3.3.6, §3.3.8, §3.4, rules 50–63b). Each `@ts-expect-error` line
+// Type corpus for the runtime roles. Each `@ts-expect-error` line
 // is a planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import { app, automation, id_of, group, mcp, secrets, workspace } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
@@ -53,7 +53,7 @@ const mixed = automation({
 			model: 'fast',
 			output: { kind: 'int' }
 		});
-		// ctx.ai.sys_1.decide (P36, P37): each answer typed from its question literal; the state is text only
+		// ctx.ai.sys_1.decide: each answer typed from its question literal; the state is text only
 		const { answers } = yield* ctx.ai.sys_1.decide({
 			state: { subject: 'Invoice twice', photo: { name: ref0.name, mime: ref0.mime } },
 			questions: {
@@ -80,7 +80,7 @@ const mixed = automation({
 		void answers.blocked.confidence;
 		yield* ctx.ai.sys_1.decide({
 			state: {},
-			// @ts-expect-error — `yesno` is `noul` (P37)
+			// @ts-expect-error — `yesno` is `noul`
 			questions: { q: { type: 'yesno', instructions: 'x', criteria: { true: 'a', false: 'b' } } }
 		});
 		yield* ctx.ai.sys_1.decide({
@@ -115,7 +115,7 @@ const mixed = automation({
 			// @ts-expect-error — structured question entries cannot contain stored FileRefs either
 			questions: { q: { type: 'noul', instructions: { photo: ref0 } } }
 		});
-		// ctx.ai.embed takes text and files (P39)
+		// ctx.ai.embed takes text and files
 		void ((yield* ctx.ai.embed(['a caption', ref0])) satisfies readonly (readonly number[])[]);
 		const hits = yield* ctx.geo.search('Kismis');
 		if (!('kind' in hits)) void hits.map((h) => h.point.lat);
@@ -310,7 +310,7 @@ automation({
 		yield* ctx.schedule('nightly', { force: true });
 		// @ts-expect-error B6 an email message through a chat connection
 		yield* ctx.send(whatsapp_account, { to: ['a@b.co'], subject: 'x' });
-		// @ts-expect-error B7 a union-typed connection (§3.3.9)
+		// @ts-expect-error B7 a union-typed connection
 		yield* ctx.send(either, { to: '+65', text: 'x' });
 		// @ts-expect-error B8 an unknown connection
 		yield* ctx.request(billing_account, { method: 'GET', path: 'x', output: { kind: 'text' } });
@@ -554,13 +554,13 @@ app({
 });
 // @ts-expect-error AP3 the path names the app
 app('crm', { title: 'x', description: 'x', icon: 'x', pages: {} });
-// @ts-expect-error AP4 there is no thumbnail option (P4)
+// @ts-expect-error AP4 there is no thumbnail option
 app({ title: 'x', description: 'x', icon: 'x', thumbnail: 'x.svg', pages: {} });
 group({ title: 'Operations', icon: 'lucide:folder', default_child: 'sales' });
 // @ts-expect-error GR1 default_child must be a child folder
 group({ title: 'x', icon: 'x', default_child: 'finance' });
 
-// ── automation bodies can schedule, notify and request (§3.4); write callbacks and policy checks stay without I/O (g1) ──
+// ── automation bodies can schedule, notify and request; write callbacks and policy checks stay without I/O (g1) ──
 
 automation({
 	...rt.order_lines_chase.spec,

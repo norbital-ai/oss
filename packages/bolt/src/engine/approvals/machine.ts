@@ -1,4 +1,4 @@
-// The approval state machine (rules 44–46, spec §8): the one table the engine enforces and the approval view's buttons
+// The approval state machine: the one table the engine enforces and the approval view's buttons
 // read. A routed write is committed at once (provisional); the request decides whether that change stands or rolls back.
 
 export type ApprovalState =

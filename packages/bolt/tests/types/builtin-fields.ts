@@ -1,4 +1,4 @@
-// Type corpus for custom fields, built-in and workspace alike (§3.3.2): the built-ins (`money`, `file`, `point`, `phone`)
+// Type corpus for custom fields, built-in and workspace alike: the built-ins (`money`, `file`, `point`, `phone`)
 // sit in the same namespace as a workspace's `src/data/custom_field/<f>/` (here the registry's `rating`), so a model
 // references either as `{ kind: 'custom', of }`, the value type flows from the shape, and a renderer's view is typed by
 // the name. Each `@ts-expect-error` is a planted mistake `bolt check` must refuse.

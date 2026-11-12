@@ -175,8 +175,7 @@ once; `yield*` composes it as an Effect. Identical reads share a subscription, r
 last reactive reader leaves. `aggregate` and `history` use the same live/once contract. Capture
 reactive inputs in `$derived`; use `ctx.clock('day' | 'minute' | 'hour')` for explicit time.
 The generated module also exposes `run`, `fork` and `attach` for mutations and mounted resources.
-An act succeeds with `committed` or `pending_approval`; refusals, conflicts and unknown write
-outcomes remain typed failures. See [the workspace contract](./workspace-contract.md) and
+An act's outcomes are listed once in [act outcomes](./apis.md#act-outcomes). See [the workspace contract](./workspace-contract.md) and
 [APIs and execution](./apis.md).
 
 Members-only pages use the workspace SPA; its opening cover remains until all emitted main-thread
@@ -232,9 +231,55 @@ per read. Requestor expressions bind server-side; time expressions (`{ var: 'tod
 `{ var: 'start_of_month(today)' }`, `{ var: 'now - hours(1)' }`) are evaluated at the edge and refused by the
 store.
 
+## Policies
+
+A policy grants each model's default and named `outputs`. The model fixes each output's shape.
+Use `{}` for every row or `{ where, relation: { where } }` for nested scopes. The root
+`where` scopes roots and may follow relations. A child scope filters its related rows or nulls a
+ref. The granting policies' scopes union for that output.
+
+Set `history: true` on an output grant to allow its revisions under that grant's root scope.
+Another policy's broader current-row scope adds current rows while the history grant keeps its
+scope. Every member
+reads `sys_user`'s `directory` output (id, name): staff read staff, externals themselves and their
+party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
+`default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only
+lists files. A `create` or `update`
+grant is `{ columns?: { fields: [...], '<relation>': { fields: [...] } }, verdict? }`; `{}` admits
+every declared column. Columns are always this tree, as outputs are: `fields`, then one key per
+relation. An update grant also lists allowed state edges in `moves`. A delete grant is
+`{ verdict? }`. Columns are checked before the verdict judges the batch, including nested rows.
+Return `ctx.allow()`, `ctx.approve({ steps, superseded_by })` or
+`yield* ctx.refuse(message_key, { row?, field?, values? })`, where `message_key` is a catalogue key,
+`values` its `{placeholders}` and `field` a root column. Among the holder's policies any allow
+executes. Otherwise the first approval in team-policy order holds the batch for review, or the
+first refusal supplies the failure
+(`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row` and `field`). A grant
+guards its root's whole tree: a layer is never judged by its own model's policy.
+
+```ts
+create: {
+  columns: { fields: ['job', 'title', 'amount'] },
+  verdict: function* (changes, ctx) {
+    const big = changes.some((c) => c.after.amount.gte('5000'));
+    return ctx.approve({
+      steps: [
+        { name: 'Controller review', teams: ['controllers'] },
+        ...(big ? [{ name: 'Commercial sign-off', teams: ['commercial'] }] : [])
+      ],
+      superseded_by: ['controllers']
+    });
+  }
+}
+```
+
+A verdict reads with `ctx.query(read_request)` as the workspace, at most 10 crossings per call, and does
+no I/O or writes. Each change carries `before`, `set`, `after` and `changed(...)`. A create has
+null `before`; a delete has null `after`. The stored trees include the verb's declared layers.
+
 ## Rate limits
 
-A policy's `limits` throttle requests per holder (rule 38): `act` (every `/act`), `read` (`/q`, live
+A policy's `limits` throttle requests per holder: `act` (every `/act`), `read` (`/q`, live
 registrations and public page loaders, members per actor and visitors per IP), `upload`, `convert`,
 `agent` (agent posts and filter descriptions), visitor `register` (minting an anonymous user), and envoy
 `receive`/`unrecognised`. A visitor's limits count per IP, anonymous user or not.
@@ -352,62 +397,19 @@ copies. Unresolved recovery fences remain during an audit-store outage.
 
 ## Approvals
 
-A policy grants each model's default and named `outputs`. The model fixes each output's shape.
-Use `{}` for every row or `{ where, relation: { where } }` for nested scopes. The root
-`where` scopes roots and may follow relations. A child scope filters its related rows or nulls a
-ref. The granting policies' scopes union for that output.
-
-Set `history: true` on an output grant to allow its revisions under that grant's root scope.
-Another policy's broader current-row scope adds current rows while the history grant keeps its
-scope. Every member
-reads `sys_user`'s `directory` output (id, name): staff read staff, externals themselves and their
-party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
-`default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only
-lists files. A `create` or `update`
-grant is `{ columns?: { fields: [...], '<relation>': { fields: [...] } }, verdict? }`; `{}` admits
-every declared column. Columns are always this tree, as outputs are: `fields`, then one key per
-relation. An update grant also lists allowed state edges in `moves`. A delete grant is
-`{ verdict? }`. Columns are checked before the verdict judges the batch, including nested rows.
-Return `ctx.allow()`, `ctx.approve({ steps, superseded_by })` or
-`yield* ctx.refuse(message_key, { row?, field?, values? })`, where `message_key` is a catalogue key,
-`values` its `{placeholders}` and `field` a root column. Among the holder's policies any allow
-executes. Otherwise the first approval in team-policy order holds the batch for review, or the
-first refusal supplies the failure
-(`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row` and `field`). A grant
-guards its root's whole tree: a layer is never judged by its own model's policy.
-
-```ts
-create: {
-  columns: { fields: ['job', 'title', 'amount'] },
-  verdict: function* (changes, ctx) {
-    const big = changes.some((c) => c.after.amount.gte('5000'));
-    return ctx.approve({
-      steps: [
-        { name: 'Controller review', teams: ['controllers'] },
-        ...(big ? [{ name: 'Commercial sign-off', teams: ['commercial'] }] : [])
-      ],
-      superseded_by: ['controllers']
-    });
-  }
-}
-```
-
-A verdict reads with `ctx.query(read_request)` as the workspace, at most 10 crossings per call, and does
-no I/O or writes. Each change carries `before`, `set`, `after` and `changed(...)`. A create has
-null `before`; a delete has null `after`. The stored trees include the verb's declared layers.
-
+A verdict that returns `ctx.approve(...)` holds the write for review; see [Policies](#policies).
 `steps` lists named team-review steps. Use ordinary conditions to select steps and immediate
 verdicts. The flow is snapshotted when the request opens and evaluated again on resubmit. Changed
 steps restart at the first step. A new release does not rewrite an open request's saved flow.
 
 A routed write commits provisionally with history and a checkpoint of every held record.
 The shared approval panel shows the request and each named step as a timeline; its request
-selector preserves all earlier requests. `ctx.approvals.decide(id, { decision, reason? })`
+selector preserves all earlier requests. On a page, `ctx.approvals.decide(id, { decision, reason? })`
 accepts `approve`, `reject`, `request_changes` or `withdraw`. Reject and request-changes require a
 reason; approval and withdrawal may include one. A superseder uses Approve with a reason. Comments
-exist only as decision reasons. Only the requester withdraws, while the request is open: the member
-who asked, or any run of the automation that did (`ctx.approvals.withdraw(request_id, reason?)`).
-An approver who is not the requester rejects instead.
+exist only as decision reasons. Only the requester withdraws, while the request is open; an approver
+who is not the requester rejects instead. An automation never approves, so server code has only
+`ctx.approvals.withdraw(request_id, reason?)`, for a request any run of that automation asked for.
 
 | State             | Decision                                   | Result                                        |
 | ----------------- | ------------------------------------------ | --------------------------------------------- |
@@ -526,7 +528,7 @@ The CLI is `@norbital-ai/bolt-cli` (a workspace devDependency that never enters 
 with `effect/cli` in its `src/cli/main.ts` beside the compiler and the test kit. `bolt sync`, `check`,
 `build`, `test` and `dev` operate on one workspace ([the dev loop](./dev-loop.md)). From a template repository root,
 `bolt templates` provides `check`, `lock`, `test`, `verify` and `publish`; `publish --out=<dir>` packs
-each built template's release, by digest, for CI's R2 upload ([releases](./releases.md)). Repository
+each built template's release, by digest, for CI to publish ([releases](./releases.md)). Repository
 scripts may delegate to those commands.
 
 Package builds and publication validation use the maintained TypeScript entries

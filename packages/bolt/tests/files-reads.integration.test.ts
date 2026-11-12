@@ -1,4 +1,4 @@
-// `ctx.files.get` and `ctx.files.image` (§5.8.1): the engine reads a stored file host-side, over real small files.
+// `ctx.files.get` and `ctx.files.image`: the engine reads a stored file host-side, over real small files.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect } from '@effect/vitest';

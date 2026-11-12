@@ -1,4 +1,4 @@
-// `ctx.ai.sys_1.decide` (P36, P37; §11.2 G12 (11)) through the engine entry and a built guest: a scripted `ai.sys_1`
+// `ctx.ai.sys_1.decide` through the engine entry and a built guest: a scripted `ai.sys_1`
 // (no vendor) answers the Desk's routing questions; the answers come back typed, a FileRef in the state is refused
 // `invalid` before any call (text only, P37 (3)), and every call is one `decision.made` (`use: 'author'`). Failures are the
 // facility's typed errors.
@@ -226,7 +226,7 @@ const upload = (
 			)
 		);
 
-describe('ctx.ai.sys_1.decide (P36, P37)', () => {
+describe('ctx.ai.sys_1.decide', () => {
 	it.live('answers typed from the literals, one event per call; a refusal is its typed error', () =>
 		Effect.scoped(
 			Effect.gen(function* () {

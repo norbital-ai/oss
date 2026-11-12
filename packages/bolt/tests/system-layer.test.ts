@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The built-in layer (`src/system/**`, owner rule 2026-09-26): bolt's own models, relationships and models are
+// The built-in layer (`src/system/**`): bolt's own models, relationships and models are
 // declared as a workspace's are, discovered and loaded by the same compiler, merged into every workspace's schema plan,
 // catalogue and names, and reserved against a workspace. The expectations below cover the native schema contract.
 import { dirname, join } from 'node:path';

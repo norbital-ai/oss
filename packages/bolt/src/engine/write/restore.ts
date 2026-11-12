@@ -1,4 +1,4 @@
-// Per-record restore (rule 17): one live record's own stored fields back to a past revision, as one ordinary `update`
+// Per-record restore: one live record's own stored fields back to a past revision, as one ordinary `update`
 // that history records `restored` from that revision. Later history stays; restoring an earlier entry undoes it. Not
 // point-in-time recovery (the whole database to a moment) and not a source rollback (the workspace code).
 import { Effect, Option, Predicate, Schema } from 'effect';
@@ -33,7 +33,7 @@ const Probe = Schema.Struct({ kept: Row, differs: Schema.Array(Schema.String) })
 
 /**
  * What restoring `target` writes and leaves. `authority` null is the engine's own rollback of an approval request
- * (rules 44–46): the workspace's stored past, every own stored field, no grant or state edge to honour. Only that
+ *: the workspace's stored past, every own stored field, no grant or state edge to honour. Only that
  * internal rollback may count targets its same plan will recreate as present.
  */
 export const restorePreview = Effect.fn('Bolt.restorePreview')(function* (
@@ -264,7 +264,7 @@ FROM kept, ${q(table)} t WHERE t.id::text = $3`,
 	};
 });
 
-/** Restores the record's own fields as one ordinary update against the observed live revision (rule 25). */
+/** Restores the record's own fields as one ordinary update against the observed live revision. */
 export const restoreRecord = Effect.fn('Bolt.restoreRecord')(function* (
 	e: Pick<WriteEngine, 'manifest' | 'db' | 'guest' | 'bridge'>,
 	write: (request: ActRequest) => Effect.Effect<ActResult, EngineError>,

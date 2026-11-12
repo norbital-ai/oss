@@ -1,6 +1,6 @@
 import { actor_ref } from '../access/actor.ts';
 import { runPiece } from './rows.ts';
-// The one queue (rules 48–52a): `sys_run` rows with a `due_at`. A causing write queues its free effects and freezes
+// The one queue: `sys_run` rows with a `due_at`. A causing write queues its free effects and freezes
 // held effects with their approval; the accepting decision releases them. Distant due times use five-minute buckets.
 // Crons are not queued: the host's clock fires them (`Runs.fire`), automations' and remote syncs' reads alike
 // (`syncTriggers`, engine/sync/index.ts).

@@ -22,7 +22,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		form: FormState;
 	};
 	/**
-	 * One field of the enclosing `Form`, by its exposed name (§3.6). Without an `editor` it renders the kind's editor;
+	 * One field of the enclosing `Form`, by its exposed name. Without an `editor` it renders the kind's editor;
 	 * `address` names the text field a `point` field's geocoded address is written to.
 	 */
 	export type FieldProps = {

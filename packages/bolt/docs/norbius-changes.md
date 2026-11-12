@@ -87,19 +87,6 @@ is unsaved. Nobody is signed out.
 
 The same path without Norbius is [Workspace Studio](./studio-changes.md).
 
-## Screenshots to capture
-
-| File                 | Must show                                                                                            |
-| -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `norbius-flow-1.jpg` | The Norbius panel on the live workspace with a plain-language change request typed or just sent.     |
-| `norbius-flow-2.jpg` | A running step group: the shimmering "Building the preview…" line and a spinning step, not expanded. |
-| `norbius-flow-3.jpg` | The finished turn with the panel header's New preview button.                                        |
-| `norbius-flow-4.jpg` | The Preview panel opened from that button: the framed, signed-in preview.                            |
-| `norbius-flow-5.jpg` | The approval card after Approve: buttons disabled, "Working on it… you can keep using the app."      |
-| `norbius-flow-6.jpg` | After the switch-over: the "Applied — …" line with View live, then Norbius's closing reply.          |
-| `norbius-flow-7.jpg` | A merge card before Approve: plain title, the summary below it, then the last commit's message.      |
-| `norbius-flow-8.jpg` | A rollback card: the summary, "Checkpoint: <time> — <description>" and the red discard warning.      |
-
 ## Questions and queued instructions
 
 When Norbius needs a decision, its question appears in a card with selectable choices and a field for your own answer. Choose an answer and send it; answering resumes the conversation. You can also continue in the ordinary composer. A question accepts one submitted card answer, and another tab cannot submit a second answer. Editing a queued answer updates the message itself; removing it before admission reopens its question.

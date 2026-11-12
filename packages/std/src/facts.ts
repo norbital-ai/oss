@@ -1,4 +1,4 @@
-// std/facts (§3.7): runtime-declared fields. An administrator declares the keys a record may carry (a jurisdiction's
+// std/facts: runtime-declared fields. An administrator declares the keys a record may carry (a jurisdiction's
 // statutory facts, an intake form's questions) as rows; the record stores the values in one `json` field, and the
 // model's transform validates them with `validate_facts`. `facts` checks the declarations themselves.
 

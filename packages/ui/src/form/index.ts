@@ -1,4 +1,4 @@
-// `Form` and `Field` (§3.6): generated from a model's exposure, drafts kept until the outcome, only changed fields sent.
+// `Form` and `Field`: generated from a model's exposure, drafts kept until the outcome, only changed fields sent.
 export { default as Field, type FieldEditor, type FieldProps } from './field.svelte';
 export { default as DescriptionHint } from './description-hint.svelte';
 export { default as Section, type RecordSection, type SectionProps } from './section.svelte';

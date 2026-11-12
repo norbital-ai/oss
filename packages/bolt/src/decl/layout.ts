@@ -1,6 +1,6 @@
-// The source layout (§3.2): the file roles discovery reads, and the help text that prints them. Discovery and the
+// The source layout: the file roles discovery reads, and the help text that prints them. Discovery and the
 // agent's prompt both read this table, so the layout a model is told is the layout the compiler enforces.
-/** The file roles of §3.2. `dir` is under `src/`: `*` is one name segment, `**` one or more; `*` in `file` is the name. */
+/** The workspace file roles. `dir` is under `src/`: `*` is one name segment, `**` one or more; `*` in `file` is the name. */
 export const ROLES = [
 	{
 		role: 'workspace',
@@ -137,7 +137,7 @@ const placeholders = (dir: string) =>
 					: seg
 		)
 		.join('/');
-/** The help text of every layout error prints the §3.2 table. */
+/** The help text of every layout error prints the file-role table. */
 export const LAYOUT_HELP = `A + file is a compiler role; files without + are ordinary modules and may sit anywhere.
 If the folder names the thing the file is +<role>.<ext>, otherwise +<name>.<role>.<ext>. Folder names are singular;
 names match ${NAME.source}. Model folders may nest under models or plain grouping folders; only the leaf folder names

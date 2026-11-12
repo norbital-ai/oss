@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `bolt check`'s type stage (compute model §5, "Check: one type service for every tenant"): the type service over the
+// `bolt check`'s type stage ("Check: one type service for every tenant"): the type service over the
 // workspace on disk, every package (svelte2tsx's shims' `svelte` included) from the workspace's own `node_modules`.
 import {
 	cpSync,

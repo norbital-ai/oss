@@ -46,7 +46,7 @@ const bad = (message: string, field?: string): Outcome => ({
 	message,
 	...(field === undefined ? {} : { field })
 });
-/** Decodes `{ rows, on_conflict?, on_missing?, prune?, dry_run? }` (final-models §2.4). */
+/** Decodes `{ rows, on_conflict?, on_missing?, prune?, dry_run? }`. */
 export const importPlan = Effect.fnUntraced(function* (
 	m: EngineManifest,
 	model: string,

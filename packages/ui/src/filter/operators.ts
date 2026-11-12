@@ -137,7 +137,7 @@ export function operatorsFor(
 	}));
 }
 
-/** The kind of value a variable must produce in a value position, or `null` where none is taken (§3.3.9 `Dyn`). */
+/** The kind of value a variable must produce in a value position, or `null` where none is taken. */
 function varResult(r: Resolved, op: Op): VarResult | null {
 	if (op === 'in' || op === 'not_in') return 'list';
 	if (!['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'contains'].includes(op)) return null;

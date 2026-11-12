@@ -1,4 +1,4 @@
-// A remote sync's read (spec §3.1): the run `'<model>.sync.<sync>'` reads each active instance (× partition) from its
+// A remote sync's read: the run `'<model>.sync.<sync>'` reads each active instance (× partition) from its
 // cursor. One page per guest call — what `read` returns from the cursor, the driver's pushed `items` (calendar) and the
 // deliveries the inbox holds for it (webhooks, a conversation's messages and the reports of messages the sync sent) — is
 // committed as ONE act statement on the sync's model (H4 `Sync` mode, judged by no grant, writing only the fields the
@@ -36,7 +36,7 @@ import { syncActor, syncs_of, type RemoteSync, type SyncEngine } from './index.t
 import { remoteVersionNewer } from './version.ts';
 
 type Obj = { readonly [k: string]: Json };
-/** Rows a page commits at most (rule 25a). */
+/** Rows a page commits at most. */
 const PAGE_ROWS = 1000;
 /** Pages a run reads before it queues its continuation. */
 export const PAGES = 1000;
@@ -592,7 +592,7 @@ export function makeRead(e: SyncEngine) {
 		for (;;) {
 			if (state.phase !== 'reconcile' && done) return { state, pages };
 			if (pages >= PAGES) {
-				// rule 25a: a continuation run resumes this instance and partition, never an in-process loop past the cap
+				// a continuation run resumes this instance and partition, never an in-process loop past the cap
 				yield* enqueue_read(s.name, { instance: x.inst.id, partition }, {
 					cause: 'continue', key: JSON.stringify(['sync:continue', s.name, x.inst.id, partition, state.version])
 				});

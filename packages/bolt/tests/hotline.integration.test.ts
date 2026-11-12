@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// A payroll hotline on PGlite (§2.5, §2.7, §4.3, §4.4): one envoy deployed on two WhatsApp connections, one per legal
+// A payroll hotline on PGlite: one envoy deployed on two WhatsApp connections, one per legal
 // entity (`entities.hotline` names the instance), under `dm: 'envoy'`. A turn's `{ var: 'requestor.instance' }` is the instance
 // the message arrived on, so the same member reads only the entity whose hotline they wrote to, and only their own rows;
 // an administrator's DM holds the envoy's policies alone (no bypass); `history`'s 'mine' stays on the instance. Admission
@@ -323,7 +323,7 @@ describe("an entity hotline ({ var: 'requestor.instance' }, dm: 'envoy')", () =>
 	);
 });
 
-describe('durable admission (§4.3)', () => {
+describe('durable admission', () => {
 	it.live(
 		'one ingest statement queues the admission, which the run then turns; a paused instance stores without admitting',
 		() =>

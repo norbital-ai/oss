@@ -1,4 +1,4 @@
-// The workspace and its navigation (§3.3.1, X-19): `workspace()`, `app()` with its page files, `group()`.
+// The workspace and its navigation (X-19): `workspace()`, `app()` with its page files, `group()`.
 // The path supplies an app or group's name and the compiler checks its child declarations.
 import { Schema } from 'effect';
 import type { Checked, Exact } from '../fields.ts';
@@ -53,7 +53,7 @@ type WorkspaceBase = {
 	csp?: { connect?: readonly `https://${string}`[] };
 	/** `triage: false` turns off System 1 triage of the in-app agent. */
 	agent?: { triage?: false }; // hook:triage
-	/** Who may join without an invitation (§5.11.2); absent, only invited members join. */
+	/** Who may join without an invitation; absent, only invited members join. */
 	signup?: Signup;
 };
 /**

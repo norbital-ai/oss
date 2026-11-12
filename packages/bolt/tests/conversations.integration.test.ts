@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// engine/conversations on PGlite (§4.3, rule 61, rule 41's exception, G12 (3)): serial-pcn's
+// engine/conversations on PGlite: a
 // `customer_notices` shape — a `sent_emails` row's create sends its mail through the `customer_mail` connection, delivery
 // reports and the customer's reply land on the row after it is closed — plus one-statement inbound keyed by instance
 // (dedupe, edits, revokes, files, the import cutoff, the `messages` feed it queues), serial at-least-once delivery and
@@ -394,7 +394,7 @@ const fixture = () =>
 		};
 	});
 
-describe('delivery status (§5.9)', () => {
+describe('delivery status', () => {
 	it.live('commits an inbound reply, delivery correlation, sync hint and envoy admission together', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const f = yield* fixture();
@@ -636,7 +636,7 @@ describe('delivery order', () => {
 	);
 });
 
-describe('inbound (§4.3)', () => {
+describe('inbound', () => {
 	const chat = (over: { [k: string]: Json } = {}): Json => ({
 		id: 'W1',
 		thread: '6591234567@s.whatsapp.net',
@@ -880,7 +880,7 @@ describe('inbound (§4.3)', () => {
 	);
 });
 
-describe('what a send does not know (§5.9)', () => {
+describe('what a send does not know', () => {
 	const timedOut = () =>
 		Effect.fail(new FacilityFailure({ kind: 'timeout', message: 'no answer in time' }));
 	const statuses = (f: Effect.Success<ReturnType<typeof fixture>>) =>

@@ -1,4 +1,4 @@
-// What `download` keeps (compute model §3, "Agents' files"): a body is media by its first bytes, never by the
+// What `download` keeps ("Agents' files"): a body is media by its first bytes, never by the
 // `content-type` it was sent with: images, audio, video, PDFs and CAD models and drawings. Everything else (executables, source code, archives, the unrecognized) is refused;
 // an HTML page is kept as a document beside PDFs.
 

@@ -150,7 +150,7 @@ export const copiedBatch = (batch: DbBatch): DbBatch => {
 	};
 };
 
-/** `lock table … ; select pg_advisory_xact_lock(…)`, sorted (rule 26: one global order, no deadlock). */
+/** `lock table … ; select pg_advisory_xact_lock(…)`, sorted (one global order, no deadlock). */
 export function lockStatements(lock: Lock | undefined): string[] {
 	if (lock === undefined) return [];
 	const tables = [...(lock.tables ?? [])].sort();

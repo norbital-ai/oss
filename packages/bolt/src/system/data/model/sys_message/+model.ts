@@ -1,4 +1,4 @@
-// A message (§5.9 "messages are rows"): the transcript, the queue and an integration instance's conversations are these
+// A message: the transcript, the queue and an integration instance's conversations are these
 // rows. `seq` is the database's order; the inbound (provider_id … addressed) and outbound (status … epoch) columns are
 // the conversations area's. A sync's pending writes are `sys_outbox` rows, never messages. Grantable; written through the
 // agent panel's actions and the conversation integrations.
@@ -55,7 +55,7 @@ export default bind_system_model('sys_message')({
 		message: { kind: 'json', optional: true },
 		thread: { kind: 'text', optional: true },
 		epoch: { kind: 'text', optional: true },
-		/** The delivery timeline (§5.9): `DeliveryEntry[]`, oldest first. */
+		/** The delivery timeline: `DeliveryEntry[]`, oldest first. */
 		delivery: { kind: 'json', default: [] },
 		/** When a sent message with no report yet counts as delivered, presumed (the provider's quiet window). */
 		presume_at: { kind: 'instant', optional: true }

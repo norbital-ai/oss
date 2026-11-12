@@ -1,4 +1,4 @@
-// The primitive layer (§3.6 "Primitive"): single components, and compound ones as namespaces (`Dialog.Root`, `Dialog.Content`).
+// The primitive layer: single components, and compound ones as namespaces (`Dialog.Root`, `Dialog.Content`).
 /** Collapsible sections: `Accordion.Root` holds `Accordion.Item`s, each a `Trigger` and its `Content`. */
 export * as Accordion from './accordion/index.js';
 /** A message box in a tone: `Alert.Root` with `Alert.Title` and `Alert.Description`. */

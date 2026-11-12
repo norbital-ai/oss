@@ -1,4 +1,4 @@
-// AI filtering (rule 16a, P33, P34, P37): the view popover's "Describe what to show…" becomes a typed `Where` and an
+// AI filtering: the view popover's "Describe what to show…" becomes a typed `Where` and an
 // `OrderBy` key through ONE `sys_1` call. System 1 never writes a filter: it chooses among conditions the engine built.
 //
 //   1. Fields: the model's exposure narrowed to what the caller reads — own fields, one-relations and
@@ -781,7 +781,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 								});
 					}
 				}
-			// the search index and the embedding, to a caller who reads every field they cover (rule 14)
+			// the search index and the embedding, to a caller who reads every field they cover
 			const whole = (fs: readonly string[]) => fs.every((x) => exposed_field(tc, x));
 			const about = () =>
 				topics(text, [target, human(target), ...[...tc.model.fields.keys()].map(human), prefix], lit.strings).map(
@@ -1799,7 +1799,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		if (where === undefined && order_by === undefined)
 			return fail('No field here matches that description. Try naming a field and a value.');
 		if (!local) {
-			// rule 11a: the same strict decode as any read literal, held to the caller's exposure
+			// the same strict decode as any read literal, held to the caller's exposure
 			const checked = yield* viewOf(o.authority, o.model).pipe(
 				Effect.flatMap((view) =>
 					decodeDescribed(
@@ -1863,7 +1863,7 @@ export const filter_describe = Effect.gen(function* () {
 
 const refuse = (message: string) => BoltError.make('invalid', 'decode', message);
 /**
- * The strict decode of a described filter and sort (rule 11a, rule 16a): `ir.where`/`ir.order`'s grammar, and every
+ * The strict decode of a described filter and sort: `ir.where`/`ir.order`'s grammar, and every
  * field, relation and sort key within what the caller reads — the models it reads, their exposed fields
  * and relations, one-relation keys it reads. Anything else is `invalid`; nothing is dropped silently.
  */

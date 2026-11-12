@@ -42,7 +42,7 @@
 
 	type IdIn<R> = R extends { readonly id: infer I extends string } ? I : string;
 	/**
-	 * An author's actions-menu item (§3.6): an icon, a name, a line of description and the handler itself. The menu owns
+	 * An author's actions-menu item: an icon, a name, a line of description and the handler itself. The menu owns
 	 * the rest: a promise the handler returns is the item's pending state, a rejection or a refused outcome its error (in
 	 * place and as a toast), an `Outcome` (`ctx.act`) is toasted, and a run handle (`ctx.run`) shows its run under the
 	 * toolbar. A handler that returns nothing closes the menu (it opened a sheet or a file picker of its own).
@@ -75,7 +75,7 @@
 				description?: string | false;
 				/** Default on where the model declares search fields. */
 				search?: boolean;
-				/** The filter-and-sort popover (rule 16b). Default on. */
+				/** The filter-and-sort popover. Default on. */
 				filter?: boolean;
 				/** Author items in the actions menu, in a group of their own; `false` hides the menu. */
 				actions?: readonly ToolbarItem<R>[] | false;
@@ -228,7 +228,7 @@
 		cfg?.error ?? (cfg?.description === false ? '' : (cfg?.description ?? x?.description ?? ''))
 	);
 	const offered = $derived(searchable && cfg?.search !== false);
-	// L-BOLT-495: `/` at the start of the box lists the model's search modes; the picked one is a chip. `semantic` keeps
+	// `/` at the start of the box lists the model's search modes; the picked one is a chip. `semantic` keeps
 	// the box as its text, searched on Enter; a search index swaps the box for its input's editors (custom datatypes in
 	// their own renderers) and hands the view its probe. Backspace on an empty box (or the chip's ×) is back to the text search.
 	const t = ui_text();
@@ -966,7 +966,7 @@
 				)
 		);
 	}
-	// a download the browser builds (§3.6): the rows in view, the view's columns; enums in their words, dates as ISO text,
+	// a download the browser builds: the rows in view, the view's columns; enums in their words, dates as ISO text,
 	// behind a BOM so Excel reads UTF-8 (Chinese included)
 	function exportCsv() {
 		return Effect.gen(function* () {

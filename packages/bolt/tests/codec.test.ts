@@ -1,4 +1,4 @@
-// The value codec without a database: wire tags become std's values in the guest (§3.3.10, §5.8).
+// The value codec without a database: wire tags become std's values in the guest.
 import { describe, expect, it } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
 import { Effect, Schema } from 'effect';

@@ -1,6 +1,6 @@
 # `@norbital-ai/std`
 
-Value libraries and shared boundary codecs for Bolt workspaces (RFC §3.7).
+Value libraries and shared boundary codecs for Bolt workspaces.
 
 See the [standard library overview](./docs/README.md) for the package goal and import guidance.
 

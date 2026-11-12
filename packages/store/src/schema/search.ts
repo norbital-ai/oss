@@ -1,4 +1,4 @@
-// The multilingual search tokenizer (rules 16, L-BOLT-121/122), ported as is: installed as SQL functions by the schema
+// The multilingual search tokenizer, ported as is: installed as SQL functions by the schema
 // plan, so the stored document (a generated column) and the typed query are folded and tokenized by one implementation.
 import { Result } from 'effect';
 import * as Base64 from 'effect/encoding/Base64';

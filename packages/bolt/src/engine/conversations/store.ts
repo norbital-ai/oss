@@ -1,4 +1,4 @@
-// The conversation rows (§4.3, §5.9 "messages are rows"): inbound history, the outbox and envoy transcripts are
+// The conversation rows: inbound history, the outbox and envoy transcripts are
 // `sys_message` rows in a `sys_conversation` (one per provider chat or mail thread of an instance), the system models the
 // agents area shares. The notice writer queues each connection delivery in the same captured statement.
 import { uuid } from '../port.ts';
@@ -28,7 +28,7 @@ type MessageInsert = {
 	readonly supersedes?: string | null | undefined;
 };
 
-/** The platform run an ingest queues for a new live message an envoy may answer (§4.4). */
+/** The platform run an ingest queues for a new live message an envoy may answer. */
 export const ADMIT = 'envoys.admit';
 
 /** Stable ids: a redelivery of the same provider message is the same row (deduplicated by `(instance, provider_id)`). */

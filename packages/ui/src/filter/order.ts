@@ -15,7 +15,7 @@ type SortObject = { readonly [field: string]: 'asc' | 'desc' | SortObject };
 export type OrderBy = string | SortObject | readonly (string | SortObject)[];
 
 // ── sorting ──
-/** `Sortable<C>`: readable, ordered fields and `created_at`/`updated_at` (§3.3.9); with the catalog, also each
+/** `Sortable<C>`: readable, ordered fields and `created_at`/`updated_at`; with the catalog, also each
  * one-relation's target fields the viewer reads (`account.name`, shown "Account › Name"), one hop. */
 export function sortable(x: ModelExposure | undefined, system = true, cat?: Catalog): string[] {
 	if (x === undefined) return [];

@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// engine/envoys on PGlite with the agent area's real turn loop and a scripted model (§4.4, P22, P32, rules 57–61; G12 (4), (5)):
+// engine/envoys on PGlite with the agent area's real turn loop and a scripted model ((5)):
 // Envoys and their account deployments are durable runtime rows; ingestion queues each admission.
 // A DM holds the envoy's policies joined by the linked sender's own authority (a contractor's DM does what the
 // contractor's team grants where the envoy's policies would refuse it), a group turn
@@ -35,7 +35,7 @@ const runtime_accounts = [
 ] as const;
 
 const manifest = {
-	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
+	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
 	models: {
 		jobs: {
 			description: 'A job',
@@ -304,7 +304,7 @@ layer(
 				expect(present(sent('field_wa').at(-1)).message).toMatchObject({
 					to: '6598765432@s.whatsapp.net'
 				});
-				expect(ai.sentBeforeEnd.at(-1)).toBe('On it.'); // streamed while the turn worked (parity 2.12)
+				expect(ai.sentBeforeEnd.at(-1)).toBe('On it.'); // streamed while the turn worked
 				expect(present((yield* rows(`close ${other}`))[0])['as']).toEqual({
 					envoy: {
 						name: fieldOpsEnvoy,
@@ -372,7 +372,7 @@ layer(
 	);
 
 	it.effect(
-		'a public desk admits anyone unlinked, ignores groups, and shares a desk-wide turn limit (G12 (4))',
+		'a public desk admits anyone unlinked, ignores groups, and shares a desk-wide turn limit',
 		() =>
 			Effect.gen(function* () {
 				const { say, rows, steps } = yield* setup;
@@ -404,7 +404,7 @@ layer(
 
 	const group = { thread: '1203@g.us', group: true };
 	it.effect(
-		"a group admits a mention, keeps the rest ambient and holds the envoy's policies alone (P32)",
+		"a group admits a mention, keeps the rest ambient and holds the envoy's policies alone",
 		() =>
 			Effect.gen(function* () {
 				const { job, status, say, rows, sent, steps } = yield* setup;

@@ -13,7 +13,7 @@ logic and tenant presentation decisions in the workspace that uses them.
 | ------------------- | ---------------------------------------------------------------------------------------- |
 | Design foundation   | Tokens, base styles, typography, colour, editor themes, logos, and favicons.             |
 | Portable primitives | Buttons, cards, dialogs, inputs, layout primitives, navigation, and feedback components. |
-| Views               | Table, Board, Form, RecordShell and the other model views of RFC §3.6.                   |
+| Views               | Table, Board, Form, RecordShell and the other model views.                               |
 
 ## Boundaries
 

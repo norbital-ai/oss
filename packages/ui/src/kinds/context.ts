@@ -94,7 +94,7 @@ export type SyncExposure =
 	  }
 	| { kind: 'remote'; with: string };
 /** What a custom field's renderer receives, a tenant's `src/data/custom_field/<f>/+renderer.svelte` and a built-in's
- * (`money`, `file`, `point`, `phone`) alike (spec §6). `row` is the record's other field values (the form's draft in
+ * (`money`, `file`, `point`, `phone`) alike. `row` is the record's other field values (the form's draft in
  * edit mode), absent when a page embeds the renderer; `kind` is the field's literal (a custom reference's `shape`);
  * `dense` asks for one compact line (a table cell, a card); `address` is a `point` field's address sibling. */
 type ViewCommon<V> = {
@@ -146,7 +146,7 @@ export type KindsHost = {
 		Extract<ActFailure, { _tag: 'ActRefused' }> | Extract<ReadError, { _tag: 'TransportFailed' }>
 	>;
 	file_url?(ref: FileRef, options?: FileUrlOptions): string;
-	/** The host's geocoder (P19); without one, address search uses the keyless `photon_geocoder`. */
+	/** The host's geocoder; without one, address search uses the keyless `photon_geocoder`. */
 	geocoder?: Geocoder;
 	/** A keyless tile template; the host may override the OpenStreetMap default. */
 	basemap?: { url: string; attribution: string };
@@ -162,7 +162,7 @@ export type KindsHost = {
 	>;
 	locale?: string | undefined;
 	zone?: string | undefined;
-	/** The workspace default currency for a money field without one (X-8). */
+	/** The workspace default currency for a money field without one. */
 	currency?: string | undefined;
 };
 

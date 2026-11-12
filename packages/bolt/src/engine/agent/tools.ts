@@ -1,7 +1,7 @@
 import { actor_ref } from '../access/actor.ts';
 import { EFFECT_VERBS } from '../../decl/model.ts';
 import { decode_acts } from '../callables/parse.ts';
-// The agent catalogue (rule 58): `read` (a layer map over what the actor may read), `act` (guarded writes, approval decisions,
+// The agent catalogue: `read` (a layer map over what the actor may read), `act` (guarded writes, approval decisions,
 // automation starts), `sync` (native refresh and file transfer), `describe_workspace`, `page` (the person's open tab), `read_file` (files, ingests and clipped
 // results), `run_js`, the plan and checklist tools, skills, `history`, `runs`, `logs`, `geocode`, `read_messages` on envoy
 // turns, the workspace source tools for staff, `document`, `download`, `subagent` and `wait` under delegation, MCP tools a held
@@ -9,7 +9,7 @@ import { decode_acts } from '../callables/parse.ts';
 // schema and decoder; the step binds its handler under the current actor.
 // A tool's text is static across workspaces and turns so providers cache the shared prefix: it says what the tool does, in a
 // line or two, and names no model, path or sample; what an actor holds is `describe_workspace`'s, and a wrong name's error
-// lists the right ones. The agent has no authority of its own (decision 10): every call runs as the actor, so a refusal is
+// lists the right ones. The agent has no authority of its own: every call runs as the actor, so a refusal is
 // the engine's answer, never the agent's.
 import { describe_kind, kind_label, kind_signature } from '@norbital-ai/std/kind';
 import { Validator } from '@cfworker/json-schema';
@@ -348,11 +348,11 @@ export type ToolContext = {
 	bindings: Bindings;
 	turn: string;
 	mode: 'agent' | 'plan';
-	/** The person's own IANA zone when their client sent one (their clock, rule 57). */
+	/** The person's own IANA zone when their client sent one (their clock). */
 	tz?: string | undefined;
 	/** The person's latest message (`HostToolContext.question`). */
 	question?: string | undefined;
-	/** Envoy turns have no confirmation card: `confirm` executes directly there (§3.9). */
+	/** Envoy turns have no confirmation card: `confirm` executes directly there. */
 	inApp: boolean;
 	delegation: boolean;
 	/** A sub-agent's turn: no plan of its own and no sub-agents (one level deep); it keeps its own checklist. */
@@ -382,7 +382,7 @@ export type ToolContext = {
 				read?: { readonly page?: number; readonly password?: string }
 		  ) => Effect.Effect<Ingested | { readonly unsupported: string }, PortFailure>)
 		| undefined;
-	/** What the last step's calls opened, for the next request alone (rule 62's budget), each after the call that opened it. */
+	/** What the last step's calls opened, for the next request alone, each after the call that opened it. */
 	files: {
 		mime: string;
 		bytes: Uint8Array;
@@ -726,7 +726,7 @@ export function readPaths(m: EngineManifest, a: Authority): string[] {
 		)
 	]);
 }
-/** What the actor may write, by model: the generated verbs its write arms admit (rules 33a, 58), and approval decisions. */
+/** What the actor may write, by model: the generated verbs its write arms admit, and approval decisions. */
 function callablesFor(m: EngineManifest, a: Authority, identity = false): Map<string, Spec> {
 	const acts = new Map<string, Spec>();
 	for (const [c, spec] of Object.entries(m.exposures)) {
@@ -1486,8 +1486,8 @@ const ReadNode = Schema.StructWithRest(ReadOptions, [Schema.Record(
 )]);
 const ReadInput = Schema.Struct({ request: Schema.Record(Schema.String, ReadNode) });
 /**
- * `read` (rule 58, P3): one read request, a layer map over the models and declared layers the actor may read, answered in
- * one engine read as the actor and bounded by rule 62 (a lone root's page keeps whole rows); `undefined` when nothing is
+ * `read`: one read request, a layer map over the models and declared layers the actor may read, answered in
+ * one engine read as the actor and bounded by the tool-result budget (a lone root's page keeps whole rows); `undefined` when nothing is
  * readable. What the bound cut stays readable with `read_file { call }`.
  */
 export function readTool(x: ReadToolContext) {
@@ -1581,7 +1581,7 @@ export function readTool(x: ReadToolContext) {
 		}
 	};
 }
-/** `read` as a tool an inference is lent (`ai.sys_2.infer` naming `read`, rule 58): the same tool, as the actor. */
+/** `read` as a tool an inference is lent (`ai.sys_2.infer` naming `read`): the same tool, as the actor. */
 export function readInferTool(x: ReadToolContext): InferTool | undefined {
 	const read = readTool(x);
 	if (read === undefined) return undefined;
@@ -1606,7 +1606,7 @@ export function readInferTool(x: ReadToolContext): InferTool | undefined {
 			)
 	};
 }
-/** The actor may change at a steer (rule 60), so a step binds every handler under its admitted authority. */
+/** The actor may change at a steer, so a step binds every handler under its admitted authority. */
 export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolContext) {
 	const e = x.engine,
 		a = x.authority,
@@ -2916,7 +2916,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		const limit = Math.min(Math.max(1, i.limit ?? 20), 100),
 			detail = i.id !== undefined;
 		const name = i.automation;
-		// the visible runs (rule 56); one run in detail also reads its log lines from the host's log store
+		// the visible runs; one run in detail also reads its log lines from the host's log store
 		const rows = yield* e.db.rows(RunList, {
 			text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished
 	FROM sys_run

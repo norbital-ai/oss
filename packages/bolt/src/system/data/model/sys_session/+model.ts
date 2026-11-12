@@ -1,4 +1,4 @@
-// A sign-in session (§5.11.2): the token is stored only as its SHA-256. Engine only: not exposed.
+// A sign-in session: the token is stored only as its SHA-256. Engine only: not exposed.
 import { bind_system_model } from '../../../../decl/model.ts';
 
 export default bind_system_model('sys_session')({

@@ -120,13 +120,13 @@ export const triggerOf = (
 				actor: a.actor,
 				...(agent === undefined ? {} : { agent: { conversation: agent.conversation } })
 			};
-/** A start's due time: now, rounded as every due time is (rule 52a). */
+/** A start's due time: now, rounded as every due time is. */
 function scheduledAt(now: string): string {
 	const time = Date.parse(now);
 	return new Date(roundedDueAt(time, time)).toISOString();
 }
 const START_LIMIT = '30/min';
-/** Manual starts are limited per automation and starter (rule 38). */
+/** Manual starts are limited per automation and starter. */
 export const startCharge = (automation: string, authority: Authority): Charge => ({
 	rule: `start:${automation}:${START_LIMIT}`,
 	bucket: actor_ref(authority.actor),
@@ -141,7 +141,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	// runs, and the acts a run's body performs, are never rate limited
 	const starts = new RateWindows();
 
-	/** Rule 33: a start or schedule needs the automation in `capabilities.automations`; its input decodes (rule 23). */
+	/** Rule 33: a start or schedule needs the automation in `capabilities.automations`; its input decodes. */
 	function startable(name: string, auth: Authority): Refused | null {
 		if (auth.actor.kind === 'visitor') return refused('forbidden', 'Visitors may not start runs.');
 		const spec = m.automations[name];
@@ -212,7 +212,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	/**
 	 * Each act records into the one commit; the first (in order) that does not commit is the outcome, recorded (it ran
 	 * guest code). The acts are planned at once over one coalesced reader — one round trip, one statement per step for
-	 * the whole batch — so they are independent: one names no row another creates (rule 36 sees the stored rows).
+	 * the whole batch — so they are independent: one names no row another creates (the check sees the stored rows).
 	 */
 	const acts = (r: ActsRequest): Effect.Effect<CallResult, import('../errors.ts').EngineError> => {
 		const input = encode_wire(r.outputs === undefined ? r.acts : { acts: r.acts, outputs: r.outputs });
@@ -331,7 +331,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 			return none(answer?.outcome ?? outcome);
 		});
 
-		// rule 26: a serialization failure replays the body once with the same clock and minted ids
+		// a serialization failure replays the body once with the same clock and minted ids
 		return yield* replayOnce<CallResult, import('../errors.ts').EngineError, never>(
 			Effect.fn('Callables.replay')(function* (replay) {
 				const rec: Recorder = {
@@ -367,7 +367,7 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 					return yield* record(
 						refused(
 							'invalid_input',
-							`The batch writes ${twice.model} ${twice.id} twice; one act writes a row once (rule 21).`
+							`The batch writes ${twice.model} ${twice.id} twice; one act writes a row once.`
 						)
 					);
 				const approvals = rec.commits.flatMap((x) =>
@@ -649,9 +649,9 @@ function makeCallables(config: CallablesConfig): CallablesShape {
 	};
 }
 
-// ── visitors (rule 38d, §3.9) and what an outcome may say to whom (rule 32) ──
+// ── visitors and what an outcome may say to whom ──
 
-/** The surfaces a visitor request may reach (rule 38d (a)): `read`/`get` of granted reads and generated `create` only. */
+/** The surfaces a visitor request may reach: `read`/`get` of granted reads and generated `create` only. */
 type Surface = { read: string } | { act: string; verb: string } | { other: string };
 export function admit_visitor(auth: Authority, s: Surface): Refused | null {
 	if (auth.actor.kind !== 'visitor') return null;

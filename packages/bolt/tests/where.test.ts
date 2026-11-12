@@ -31,7 +31,7 @@ const code = <E extends { readonly code: string }>(effect: Effect.Effect<unknown
 	);
 const nest = (n: number): object => (n === 0 ? { qty: { eq: 1 } } : { not: nest(n - 1) });
 
-describe('rule 11a: one invalid row per shape', () => {
+describe('one invalid row per shape', () => {
 	const rows: [string, string, object][] = [
 		['orders', 'empty operator object on a field', { status: {} }],
 		['orders', 'eq: undefined (on the wire: {})', { status: { eq: undefined } }],
@@ -239,7 +239,7 @@ describe('one wire literal per kind', () => {
 	);
 });
 
-describe('P34: the widened language', () => {
+describe('the widened language', () => {
 	it('materializes Monday weeks, months, quarters, years and zoned midnight as ISO values', () => {
 		expect(startOfDate({ unit: 'week' }, '2026-09-27')).toBe('2026-09-21'); // a Sunday belongs to the week of Monday the 21st
 		expect(startOfDate({ unit: 'week', shift: -1 }, '2026-09-21')).toBe('2026-09-14');
@@ -380,7 +380,7 @@ describe('P34: the widened language', () => {
 			})
 	);
 	it.effect(
-		"rule 14: a related key compiles to a subselect only through a layer the caller's output reads, else invalidInput",
+		"a related key compiles to a subselect only through a layer the caller's output reads, else invalidInput",
 		() =>
 			Effect.gen(function* () {
 				const sql = (order_by: unknown, reader: Reader = { as: 'caller', authority: rep }) =>
@@ -435,7 +435,7 @@ describe('P34: the widened language', () => {
 	);
 });
 
-describe('bolt.decode (rule 11a in the browser, rule 16b)', () => {
+describe('bolt.decode in the browser', () => {
 	it.effect(
 		'keeps valid conditions and sort keys, drops each invalid one alone with its path',
 		() =>

@@ -1,4 +1,4 @@
-// The cell (compute model §14), `@norbital-ai/bolt/cell`: this release's HOST_API run inside an isolate. `pnpm build`
+// The cell, `@norbital-ai/bolt/cell`: this release's HOST_API run inside an isolate. `pnpm build`
 // bundles this module into `build/cell.js`, one classic script that, evaluated, defines `globalThis.__bolt_cell`. The
 // kernel calls `open` with its system calls; from then on it reaches HOST_API only through membrane messages, and
 // every execution here — a call, a system call's answer, a timer, a stream's chunk — is an entry it starts and meters.

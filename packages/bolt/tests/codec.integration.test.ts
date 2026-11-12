@@ -1,5 +1,5 @@
 // The value codec on PGlite: periods written on every path (act, nested relation action, seed restore), and the
-// update callback's `before` handed over in wire form (X-11, rule 70, §5.8).
+// update callback's `before` handed over in wire form (X-11).
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -165,7 +165,7 @@ describe('codec: periods reach Postgres as ranges on every write path (X-11)', (
 	);
 });
 
-describe('codec: the update callback reads `before` in wire form (§5.8)', () => {
+describe('codec: the update callback reads `before` in wire form', () => {
 	it.effect(
 		'an update hands the guest the stored row as `db.query` would: ISO ends, not range text',
 		() =>

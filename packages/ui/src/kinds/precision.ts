@@ -1,5 +1,5 @@
-// A time field's `precision` (§3.3.2): the unit a picker offers and the value it emits, snapped to that unit's start.
-// Weeks start on Monday, as the workspace's weeks do (rule 16a). Pure: `YYYY-MM-DD` and `HH:MM` text only.
+// A time field's `precision`: the unit a picker offers and the value it emits, snapped to that unit's start.
+// Weeks start on Monday, as the workspace's weeks do. Pure: `YYYY-MM-DD` and `HH:MM` text only.
 /** The date units a picker offers and snaps to. */
 export type { DatePrecision, TimePrecision, Precision } from '@norbital-ai/std/kind';
 import type { DatePrecision, TimePrecision, Precision } from '@norbital-ai/std/kind';

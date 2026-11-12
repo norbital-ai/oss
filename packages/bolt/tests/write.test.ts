@@ -36,7 +36,7 @@ describe('engine/write decode and flatten', () => {
 		).toMatchObject({ _tag: 'BoltError', code: 'unknown_model' });
 		expect(values).toEqual({ title: 'Unchanged' });
 	});
-	it('decode names every offender at once, derived fields included (rule 23)', () => {
+	it('decode names every offender at once, derived fields included', () => {
 		const f = new Flattener(manifest, cat, () => 'id');
 		f.create(
 			'orders',
@@ -53,7 +53,7 @@ describe('engine/write decode and flatten', () => {
 		]);
 	});
 
-	it('a vector input is exactly `dim` finite numbers (rule 16)', () => {
+	it('a vector input is exactly `dim` finite numbers', () => {
 		const f = new Flattener(q.manifest, catalog_of(q.manifest), () => 'id');
 		for (const color of [[0, 1, 2], [0, 1], [0, 1, Number.NaN], 'x'])
 			f.update('orders', 'any', 'o1', { color }, null, []);
@@ -124,7 +124,7 @@ describe('engine/write decode and flatten', () => {
 		expect(empty.items.map((item) => item.refs)).toEqual([[]]);
 	});
 
-	it('relation actions flatten to one change per row; omitted relations write nothing (rules 21, 22)', () => {
+	it('relation actions flatten to one change per row; omitted relations write nothing', () => {
 		const f = new Flattener(manifest, cat, () => 'new');
 		f.update(
 			'orders',
@@ -159,7 +159,7 @@ describe('engine/write decode and flatten', () => {
 		expect(required(f.problems[0]).message).toMatch(/never changes its parent/);
 	});
 
-	it('defaults: a state lands in initial, a required field missing is named (rule 23a)', () => {
+	it('defaults: a state lands in initial, a required field missing is named', () => {
 		const v: Record<string, Json> = {};
 		expect(withDefaults(manifest, cat, 'orders', v, member, { now: NOW, today: TODAY })).toBe(
 			'title'
@@ -167,7 +167,7 @@ describe('engine/write decode and flatten', () => {
 		expect(v).toMatchObject({ status: 'draft' });
 	});
 
-	it('an update equal to the stored values changes nothing (rule 29)', () => {
+	it('an update equal to the stored values changes nothing', () => {
 		expect(storedChanges(cat, 'orders', { title: 'a', total: '10.50' }, { title: 'a' })).toEqual(
 			{}
 		);
@@ -197,7 +197,7 @@ describe('engine/write decode and flatten', () => {
 		).toEqual({});
 	});
 
-	it('ids minted in an invocation derive from (invocationId, n) and are uuidv7 (rule 24)', () => {
+	it('ids minted in an invocation derive from (invocationId, n) and are uuidv7', () => {
 		const [a, b] = [minter('inv-1', NOW), minter('inv-1', NOW)];
 		const first = [a(), a()];
 		expect([b(), b()]).toEqual(first);
@@ -218,7 +218,7 @@ describe('engine/write decode and flatten', () => {
 });
 
 describe('engine/write statement', () => {
-	it.effect('every data-modifying piece reads through the idempotency gate (rule 20)', () =>
+	it.effect('every data-modifying piece reads through the idempotency gate', () =>
 		Effect.gen(function* () {
 			const statement = yield* compileCommit(manifest, cat, {
 				key: 'k',

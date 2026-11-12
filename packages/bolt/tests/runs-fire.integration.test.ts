@@ -1,4 +1,4 @@
-// Crons on the host's clock (rule 52): `Runs.crons` lists what the manifest declares, and `Runs.fire` runs one slot once.
+// Crons on the host's clock: `Runs.crons` lists what the manifest declares, and `Runs.fire` runs one slot once.
 // A fired run writes its `sys_run` row only with its first effect, so a run that only reads leaves nothing behind.
 import { randomUUID } from 'node:crypto';
 import { expect, layer } from '@effect/vitest';

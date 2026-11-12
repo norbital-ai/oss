@@ -1,4 +1,4 @@
-// The write area's SQL plumbing (A5): the `WITH` chain builder behind rule 20's one statement, its idempotency gate and
+// The write area's SQL plumbing: the `WITH` chain builder behind the one write statement, its idempotency gate and
 // outcome, notices and rate charges, the SQLSTATE map (G3), invocation-minted ids and the transform's fingerprints.
 import type { Json } from '../../decl/values.ts';
 import type { TeamEntries } from '../../decl/access/team.ts';
@@ -21,7 +21,7 @@ import { BoltError } from '../../protocol/errors.ts';
 import { refusalOf, type RuleMeta } from '../schema/refusal.ts';
 import { noticePiece } from '../notifications/queue.ts';
 
-/** The idempotency gate's condition (rule 20): every data-modifying piece reads its rows through it. */
+/** The idempotency gate's condition: every data-modifying piece reads its rows through it. */
 export const GATED = 'EXISTS (SELECT 1 FROM idem)';
 
 /**
@@ -121,7 +121,7 @@ export class Chain {
 }
 
 /**
- * The gate piece (rule 20). `context` (a write statement's) is set before any gated row is written: `store.write`
+ * The gate piece. `context` (a write statement's) is set before any gated row is written: `store.write`
  * stamps the row trigger reads, and `bolt.write`, this statement's own marker, so the raw-SQL audit trigger leaves its
  * rows to the statement's history.
  */
@@ -144,7 +144,7 @@ export function gate(
 	AND NOT EXISTS (SELECT 1 FROM bolt_audit_receipt a WHERE a.outcome_key=bolt_idem.key AND a.acknowledged_at IS NULL AND a.expired_at IS NULL) RETURNING key`
 	);
 }
-/** The statement's answer: the new outcome, or the stored one when the digest matches, else `key_reuse` (rule 31). */
+/** The statement's answer: the new outcome, or the stored one when the digest matches, else `key_reuse`. */
 export function answer(c: Chain, key: string, digest: string, expr: string): string {
 	c.cte(
 		'out',
@@ -164,7 +164,7 @@ export const storedOutcome = (
 ): string => `(SELECT CASE WHEN i.digest = ${digest} THEN o.outcome
 	ELSE '${JSON.stringify(KEY_REUSE)}'::jsonb END FROM bolt_idem i JOIN bolt_idem_outcome o USING (key) WHERE i.key = ${key})`;
 
-/** A rate increment gated on the idempotency gate, re-checked against its limit (rule 38 persistence). */
+/** A rate increment gated on the idempotency gate, re-checked against its limit. */
 export function rate(
 	c: Chain,
 	charges: readonly { rule: string; bucket: string; limit: number; windowStart: string }[]
@@ -186,7 +186,7 @@ export function rate(
 	);
 }
 
-// ── SQLSTATE → outcome (rule 20 "Postgres-decided outcomes"): the schema area's map, plus `bolt_assert`'s codes ──
+// ── SQLSTATE → outcome: the schema area's map, plus `bolt_assert`'s codes ──
 type Decided = { outcome: Outcome; record: boolean; replay: boolean };
 export function decided(e: unknown, constraints: ReadonlyMap<string, RuleMeta>): Decided {
 	if (!(e instanceof DbError)) throw e;
@@ -201,10 +201,10 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, RuleMeta>):
 				record: true,
 				replay: false
 			};
-		// rule 26: a transform read moved between the read and the commit: replayed once, then `conflict`
+		// a transform read moved between the read and the commit: replayed once, then `conflict`
 		if (code === 'fingerprint')
 			return { outcome: { kind: 'conflict', records: [] }, record: true, replay: true };
-		// a recorded `rate_limited` would answer the client's resend after `retryAfter` for 24 h (rule 20)
+		// a recorded `rate_limited` would answer the client's resend after `retryAfter` for 24 h
 		if (code === 'rate_limited')
 			return {
 				outcome: { kind: 'refused', code, message: RATE_LIMITED },
@@ -269,11 +269,11 @@ const conflictRecords = (detail: string): { model: string; id: string }[] =>
 		onFailure: () => []
 	});
 
-// ── ids (rules 24, 31) ──
+// ── ids ──
 export const hex = (b: Uint8Array): string =>
 	[...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 /**
- * Ids minted inside an invocation derive from `(invocationId, n)` (rule 24): a uuidv7 whose time is the invocation's
+ * Ids minted inside an invocation derive from `(invocationId, n)`: a uuidv7 whose time is the invocation's
  * `now` and whose random bits are the invocation's hash with `n` folded in, so a replay mints the same ids.
  */
 export function minter(invocationId: string, now: string): () => string {
@@ -293,7 +293,7 @@ export function minter(invocationId: string, now: string): () => string {
 	};
 }
 
-// ── rule 26: optimistic transform reads ──
+// ── optimistic transform reads ──
 /** A read statement and the digest of its rows as they were read. */
 export type Fingerprint = { sql: Sql; digest: string };
 /** Native read dependencies retained until a fresh act commits them. */
@@ -459,7 +459,7 @@ export function fingerprinting(db: TenantDbShape): {
 		})
 	};
 }
-/** One assert per fingerprint: the rows read then are the rows now (rule 26). */
+/** One assert per fingerprint: the rows read then are the rows now. */
 export function fingerprintAsserts(c: Chain, fps: readonly Fingerprint[], when = GATED): void {
 	for (const f of fps) c.assert(`${digestOf(inline(f.sql))} = ${c.p(f.digest)}`, 'fingerprint', null, when);
 }

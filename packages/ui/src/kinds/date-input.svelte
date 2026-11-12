@@ -17,7 +17,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		/**
 		 * The unit picked and emitted, snapped to its start (a field's declared `precision`): `year`, `month` and `week`
 		 * (from Monday) pick from a unit grid, `day` from the calendar, `hour` a day and an hour; `minute` (the default of
-		 * an instant or a time) as typed. An instant snaps in the viewer's zone (rule 68).
+		 * an instant or a time) as typed. An instant snaps in the viewer's zone.
 		 */
 		precision?: Precision;
 		id?: string;
@@ -52,7 +52,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 			() => undefined
 		);
 	}
-	/** The picker's value as stored: a date's `YYYY-MM-DD`, an instant's ISO UTC (edited in the viewer's zone, rule 68; an unzoned pick is read there). */
+	/** The picker's value as stored: a date's `YYYY-MM-DD`, an instant's ISO UTC (edited in the viewer's zone; an unzoned pick is read there). */
 	export const dateText = (of: 'date' | 'instant', v: DateValue | undefined): string | null =>
 		v === undefined
 			? null

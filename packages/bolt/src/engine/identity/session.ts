@@ -1,5 +1,5 @@
-// Sessions and sign-in (§5.11.2, rules 38, 38a): a one-time code, emailed or texted, against a persisted challenge, sessions stored
-// only as a SHA-256 of their token, the host operations `session.mint` and `founder.bootstrap` (§5.11.3). Every act is
+// Sessions and sign-in: a one-time code, emailed or texted, against a persisted challenge, sessions stored
+// only as a SHA-256 of their token, the host operations `session.mint` and `founder.bootstrap`. Every act is
 // one write statement that also persists its rate increments; reads and pre-statement refusals are memory-only.
 import type { Json } from '../../decl/values.ts';
 import { Audit } from '../audit.ts';
@@ -104,8 +104,8 @@ export type IdentityHost = {
 	/** The workspace's `signup` declaration; absent, only invited members join. */
 	signup?: Signup | undefined;
 	/**
-	 * §5.11.3: present when the host binds the `membership` port. Member lifecycle verbs then queue `bolt.membership` in
-	 * their statement, and `announce` wakes the run queue for it (rule 52a).
+	 * present when the host binds the `membership` port. Member lifecycle verbs then queue `bolt.membership` in
+	 * their statement, and `announce` wakes the run queue for it.
 	 */
 	membership?: {
 		announce(at: string): Effect.Effect<void>;
@@ -192,7 +192,7 @@ export const load_keys = Effect.fn('Bolt.load_keys')(function* (db: TenantDb) {
 		);
 	return { session: fromHex(session.value), ipMac: fromHex(ipMac.value) };
 });
-// ── pre-sign-in limits (rule 38): constants, per address MAC and per IP MAC ──
+// ── pre-sign-in limits: constants, per address MAC and per IP MAC ──
 /** The keys, read once on first need; a failed read is tried again by the next. */
 export const lazyKeys = (db: TenantDb) => {
 	let loaded: Keys | undefined;
@@ -429,7 +429,7 @@ export const by = (auth: Authority | null): string =>
 	auth !== null && auth.actor.kind === 'member' ? `member:${auth.actor.id}` : 'host';
 export const MEMBERSHIP = 'bolt.membership';
 /**
- * §5.11.3: the piece that queues one `bolt.membership` run per `sys_user` row `cte` wrote where `gate`
+ * the piece that queues one `bolt.membership` run per `sys_user` row `cte` wrote where `gate`
  * holds, or nothing when the host binds no membership port.
  */
 export function projection(
@@ -705,7 +705,7 @@ export const verify_code = Effect.fn('Bolt.verify_code')(function* (
 	WHERE id = ${s.p(userId)} AND party IS NULL AND EXISTS (SELECT 1 FROM used)`);
 		identityHistory(s, 'sys_user', 'bound', now, `member:${userId}`);
 	}
-	// §5.11.3: a member born by accepting an invitation or signing up is projected, in this statement
+	// a member born by accepting an invitation or signing up is projected, in this statement
 	const project = born && projection(h, s, 'born', now, signup ? 'true' : 'EXISTS (SELECT 1 FROM accepted)');
 	capturePiece(s, 'sess', 'sys_session', `INSERT INTO sys_session ${SESSION_COLUMNS} SELECT v.id, ${s.p(userId)}, v.h, v.via, v.c, v.e, v.r
 	FROM (VALUES (${sessionValues(s, now, via, sha256(token), sessionId)})) v(id, h, via, c, e, r)
@@ -864,7 +864,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 	};
 });
 /**
- * `session.mint { user }` (§5.11.3): host authority only; refused unless the user exists and is active. `agent`: the
+ * `session.mint { user }`: host authority only; refused unless the user exists and is active. `agent`: the
  * session is the agent's browser, acting for `user` in that conversation; every request made with it carries the mark.
  */
 export const mint = Effect.fn('Bolt.mint')(function* (
@@ -968,7 +968,7 @@ export const defaultName = (a: Address): string =>
 				.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
 				.join(' ') || a.value;
 /**
- * `founder.bootstrap { address, name? }` (§5.11.3): host only; creates the first admin and a session for the proven
+ * `founder.bootstrap { address, name? }`: host only; creates the first admin and a session for the proven
  * address (an email or a mobile number); idempotent per address (a second call mints a session for the same member);
  * refused once another admin exists. A seeded active staff member keeps their identity when adopted as founder.
  */

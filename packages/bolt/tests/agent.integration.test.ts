@@ -56,7 +56,7 @@ const runtime_accounts = [
 
 const manifest: EngineManifest = {
 	needs: [],
-	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
+	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
 	models: {
 		quotes: {
 			description: 'A quote',
@@ -904,7 +904,7 @@ describe('in-app turns', () => {
 		)
 	);
 	it.live(
-		'acts as the member, records tool rows, and ends on a reply carrying its receipts (rule 59)',
+		'acts as the member, records tool rows, and ends on a reply carrying its receipts',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -945,7 +945,7 @@ describe('in-app turns', () => {
 								.map((row) => row.status)
 								.slice(-2)
 						).toEqual(['running', 'idle']);
-						// the tool call was a `running` row, then the same row finished (rule 65: each write published as written)
+						// the tool call was a `running` row, then the same row finished (each write published as written)
 						const tool = published.messages().filter((row) => row.role === 'tool');
 						expect(tool.map((row) => row.state)).toEqual(['running', null]);
 						expect(new Set(tool.map((x) => x.id)).size).toBe(1);
@@ -961,7 +961,7 @@ describe('in-app turns', () => {
 	);
 
 	it.live(
-		"lists only the MCP servers the actor's capabilities name, every skill to everyone, and calls the MCP tool (rules 58, 63b)",
+		"lists only the MCP servers the actor's capabilities name, every skill to everyone, and calls the MCP tool",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1004,7 +1004,7 @@ describe('in-app turns', () => {
 	);
 
 	it.live(
-		"compacts past 90% of the catalogue's default model's window; the next call starts from the checkpoint (rule 62)",
+		"compacts past 90% of the catalogue's default model's window; the next call starts from the checkpoint",
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1122,7 +1122,7 @@ describe('in-app turns', () => {
 	);
 });
 
-/** An envoy sender's `as` (P32): the envoy, the instance it arrived on, the linked member if any, and whether it is a DM. */
+/** An envoy sender's `as`: the envoy, the instance it arrived on, the linked member if any, and whether it is a DM. */
 const envoyAs = (name: string, sender: string, member: string | null, dm: boolean) => ({
 	envoy: { name, instance: name === fieldEnvoy ? 'field' : 'desk', sender, member, dm }
 });
@@ -1197,7 +1197,7 @@ describe('envoy conversations', () => {
 	);
 
 	it.live(
-		'a failed turn sends a public sender the fixed reply, never the internal error, and writes an error event (§5.12)',
+		'a failed turn sends a public sender the fixed reply, never the internal error, and writes an error event',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -1291,7 +1291,7 @@ describe('envoy conversations', () => {
 	);
 });
 
-describe('durable turns (rule 48)', () => {
+describe('durable turns', () => {
 	it.live('a native turn refuses malformed input before any database or model work', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const fixture = yield* setup([]);
@@ -2142,7 +2142,7 @@ describe('a turn never settles silently', () => {
 	);
 });
 
-describe('metering (L-BOLT-432, L-BOLT-547)', () => {
+describe('metering', () => {
 	const events = (t: Kit, conversation: string) =>
 		Effect.sync(() =>
 			t.fakes.logs

@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-// G1 (§11.2): the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
+// G1: the families the per-area corpora (data.ts, access.ts, runtime.ts) leave open, one clean case and at least
 // one planted mistake each. Each `@ts-expect-error` line is a planted mistake.
 import { Decimal } from '@norbital-ai/std/decimal';
 import { automation, policy } from '../../src/index.ts';
@@ -14,7 +14,7 @@ type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
 declare const erp_account: InstanceId<'erp'>;
 
-// ── union and record input kinds (§3.3.2) ──
+// ── union and record input kinds ──
 type Payment = {
 	kind: 'union';
 	by: 'method';
@@ -88,14 +88,14 @@ bind_model('probe')({
 });
 automation({
 	...rt.nightly.spec,
-	// @ts-expect-error U7 a union option misspelt (exact at depth, rule 5)
+	// @ts-expect-error U7 a union option misspelt (exact at depth)
 	input: { u: { kind: 'union', by: 't', arms: {}, strict: true } },
 	run: function* () {
 		return 0;
 	}
 });
 
-// ── write callbacks and workspace reads (rules 10, 15, 27) ──
+// ── write callbacks and workspace reads ──
 bind_model('orders')({
 	...m.orders.spec,
 	create: {
@@ -147,7 +147,7 @@ bind_model('orders')({
 		...m.orders.spec.update,
 		transform: function* (changes) {
 			const before = changes[0]?.before;
-			// @ts-expect-error T4 an update's before row has no computed fields (rule 10)
+			// @ts-expect-error T4 an update's before row has no computed fields
 			const derived = before?.due_soon;
 			void derived;
 			return changes.map(({ set }) => set);
@@ -159,12 +159,12 @@ bind_model('orders')({
 	create: {
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
-			// @ts-expect-error T5 a transform has no I/O facility (rule 63)
+			// @ts-expect-error T5 a transform has no I/O facility
 			return (yield* ctx.ai.sys_2.infer({ prompt: 'x' }), inputs.map(({ set }) => set));
 		}
 	}
 });
-// T6 the transform's workspace reads pick the fields they need (rule 72: read only the needed columns)
+// T6 the transform's workspace reads pick the fields they need (read only the needed columns)
 bind_model('orders')({
 	...m.orders.spec,
 	create: {
@@ -212,7 +212,7 @@ policy({
 		orders: {
 			create: {
 				verdict: function* (_, ctx) {
-					// @ts-expect-error T7 a policy check has no I/O facility (rule 63)
+					// @ts-expect-error T7 a policy check has no I/O facility
 					yield* ctx.request(erp_account, { method: 'GET', path: 'x', output: { kind: 'json' } });
 					return ctx.allow();
 				}
@@ -230,7 +230,7 @@ automation({
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('errors.refused');
 		yield* ctx.act({ 'orders.update': [
-			// @ts-expect-error Q1 `set` naming a computed field (rule 38e)
+			// @ts-expect-error Q1 `set` naming a computed field
 			{
 				target,
 				set: { due_soon: target.due_soon }
@@ -245,7 +245,7 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('errors.refused');
-		// @ts-expect-error Q2 a relation array never replaces a set (rule 22): relation actions are explicit
+		// @ts-expect-error Q2 a relation array never replaces a set: relation actions are explicit
 		yield* ctx.act({ 'orders.update': [{ target, set: { lines: [] } }] });
 	}
 });
@@ -256,7 +256,7 @@ automation({
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
 		if (target === null) return yield* ctx.refuse('errors.refused');
-		// @ts-expect-error Q3 a state value outside the state's states (rule 40)
+		// @ts-expect-error Q3 a state value outside the state's states
 		yield* ctx.act({ 'orders.update': [{ target, set: { status: 'shipped' } }] });
 	}
 });
@@ -278,7 +278,7 @@ automation({
 				)
 			);
 		if (out.kind === 'refused') return out.code === 'locked' ? 1 : 0;
-		// @ts-expect-error Q5 the outcome union has no 'error' kind (rule 32)
+		// @ts-expect-error Q5 the outcome union has no 'error' kind
 		if (out.kind === 'error') return 2;
 		return 0;
 	}
@@ -292,7 +292,7 @@ automation({
 	}
 });
 
-// ── rule 10: a caller row is its output's fields, plain values; policies filter rows, never mask a field ──
+// ── a caller row is its output's fields, plain values; policies filter rows, never mask a field ──
 is<Eq<Row<'customers'>['email'], string | null>>();
 is<Eq<Row<'customers', 'directory'>['name'], string>>();
 // @ts-expect-error K0 a field outside the named output is not on its row
@@ -323,7 +323,7 @@ automation({
 	}
 });
 
-// ── state transitions and owned relationships (rules 40, 41) ──
+// ── state transitions and owned relationships ──
 bind_model('probe')({
 	description: 'x',
 	record_label: 'record.s',
@@ -339,7 +339,7 @@ bind_model('probe')({
 bind_model('probe')({
 	description: 'x',
 	record_label: 'record.s',
-	// @ts-expect-error S3 a state takes no default (a create lands in `initial`, X-30)
+	// @ts-expect-error S3 a state takes no default (a create lands in `initial`)
 	fields: { s: { kind: 'state', initial: 'a', default: 'a', states: { a: {} } } }
 });
 bind_model('order_lines')({
@@ -351,12 +351,12 @@ bind_model('order_lines')({
 bind_model('order_lines')({
 	...m.order_lines.spec,
 	outputs: { default: { fields: 'all' } },
-	// @ts-expect-error O1 an owned child's parent key never changes after create (rule 41)
+	// @ts-expect-error O1 an owned child's parent key never changes after create
 	update: { columns: { fields: ['order', 'qty'] } }
 });
 // (a write layer naming the FK that ties it to its parent, `'orders.lines': ['order']`, is `bolt check`'s `model/layer`)
 
-// ── the `{ var: 'requestor.email' }` operand (§3.3.9) ──
+// ── the `{ var: 'requestor.email' }` operand ──
 const mine: Where<'customers'> = { email: { eq: { var: 'requestor.email' } } };
 void mine;
 policy({
@@ -382,7 +382,7 @@ bind_model('probe')({
 	description: 'x',
 	record_label: 'record.e',
 	fields: { e: { kind: 'text', format: 'email' } },
-	// @ts-expect-error E4 not in a static position (`check`, rule 4)
+	// @ts-expect-error E4 not in a static position (`check`)
 	constraints: { mine: { check: { e: { eq: { var: 'requestor.email' } } } } }
 });
 
@@ -403,7 +403,7 @@ policy({
 	}
 });
 
-// ── the run ledger (rule 56, X-18): an `Id<>` target, never granted, read or written ──
+// ── the run ledger: an `Id<>` target, never granted, read or written ──
 const run: Id<'sys_run'> | undefined = undefined;
 void run;
 // @ts-expect-error L1 run-grant: no grant names sys_run

@@ -8,7 +8,7 @@ and the browser's location also set the point.
 	import type { Value, Point } from './kind.js';
 
 	/**
-	 * A `point` field (P19, rule 69). Typing an address geocodes it (the host's geocoder, else the keyless default) and the
+	 * A `point` field. Typing an address geocodes it (the host's geocoder, else the keyless default) and the
 	 * map and value follow the best match; typed "lat, lng" is taken as is. A pick on the map, a marker drag or "use my
 	 * location" set the point and look up its address. `address` is the sibling text field's value, shown in the trigger;
 	 * `on_address` receives what the box holds (`Field address="<field>"` wires both).

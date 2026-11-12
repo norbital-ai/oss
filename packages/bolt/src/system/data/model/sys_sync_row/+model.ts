@@ -1,4 +1,4 @@
-// A remote sync's id map (spec §3): which record a remote row (`remote_id`, the read's `$id`) is, the remote version last
+// A remote sync's id map: which record a remote row (`remote_id`, the read's `$id`) is, the remote version last
 // seen (the `$version` guard), the snapshot cycle it was last seen in, and the record revision the remote acknowledged
 // (what a refused write restores). A replica may acknowledge without returning a remote id. Engine only: not exposed.
 import { bind_system_model } from '../../../../decl/model.ts';

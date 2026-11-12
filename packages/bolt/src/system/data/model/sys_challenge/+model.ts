@@ -1,4 +1,4 @@
-// A pending sign-in code (rule 38a), keyed by the address's MAC. Engine only: not exposed.
+// A pending sign-in code, keyed by the address's MAC. Engine only: not exposed.
 import { bind_system_model } from '../../../../decl/model.ts';
 
 export default bind_system_model('sys_challenge')({

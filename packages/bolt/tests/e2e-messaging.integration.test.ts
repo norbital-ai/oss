@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// End to end through the engine entry and the test kit (§4.2–§4.4, P22, rules 57–61, §3.8): inbound messages reach the
+// End to end through the engine entry and the test kit: inbound messages reach the
 // engine's conversations by instance, its envoys run the agent's real turn loop over a scripted model, a model sync
 // sends through `integrations.deliver`, and notification callbacks reach the approvers' inbox and conversation links.
 import { describe, expect, it } from '@effect/vitest';
@@ -28,7 +28,7 @@ const runtime_accounts = [
 ] as const;
 
 const manifest = {
-	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
+	workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
 	models: {
 		jobs: {
 			description: 'A job',
@@ -276,7 +276,7 @@ const setup = Effect.runSync(
 	)
 );
 
-describe('connections through the engine entry (rule 61)', () => {
+describe('connections through the engine entry', () => {
 	it.live(
 		"a notification callback is queued by the writing statement and reaches each named member's inbox and conversation handle",
 		() =>
@@ -345,7 +345,7 @@ describe('connections through the engine entry (rule 61)', () => {
 	);
 
 	it.live(
-		'an approval request notifies the step approvers in their inbox, one row per member (L-BOLT-354)',
+		'an approval request notifies the step approvers in their inbox, one row per member',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {

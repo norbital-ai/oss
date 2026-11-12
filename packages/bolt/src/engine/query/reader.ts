@@ -1,6 +1,6 @@
 // Who reads, as the store's read compiler takes it (A4): a caller's Authority as the store's `Scope` — its read arms per
-// output and path conjoined at every level (rule 13), and the open approval request a root row of a holdable model
-// carries (rule 46b), for every reader — and the invocation's bindings as the operand resolver. A workspace read (the transform, rule 15) has no scope. Statements a batch may fold into one are marked here.
+// output and path conjoined at every level, and the open approval request a root row of a holdable model
+// carries, for every reader — and the invocation's bindings as the operand resolver. A workspace read (the transform) has no scope. Statements a batch may fold into one are marked here.
 import { Effect } from 'effect';
 import { literal as lit } from '@norbital-ai/std/sql';
 import { local_of } from '@norbital-ai/std/zone';
@@ -48,7 +48,7 @@ export const heldColumns =
 	ORDER BY ap.seq DESC LIMIT 1) AS "$approval"`
 				]
 			: [];
-/** The invocation's requestor variables (`{ var: 'requestor.…' }`), fixed per invocation (rule 26). */
+/** The invocation's requestor variables (`{ var: 'requestor.…' }`), fixed per invocation. */
 export const resolverOf =
 	(bindings: Bindings, authority: Authority | null) =>
 	(o: Operand): Effect.Effect<Json, StoreError> =>

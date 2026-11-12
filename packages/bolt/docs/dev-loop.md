@@ -32,9 +32,8 @@ and a few dozen others (about 30, not about 280), and only the workspace's modul
 | a page or component `.svelte` only the internal SPA reaches                             | Vite hot update in the open tab; the rebuild keeps the bundle's client and source copy, so the artifact hash holds |
 | `+model.ts`, automations, policies, server or public pages, `seed/`, `migrations/*.sql` | a new build and artifact hash; the host cuts over and reloads open pages                                           |
 
-In the realm, `env start` runs one `bolt dev --tethered` per template checkout, so a `norbital.host.ts` there is ignored. Local Colony serves each checkout's
-`.norbital/`, follows a new artifact hash onto the template's demo workspace (same schema: no pause, then a reload) and,
-in its local composition only, serves the record's document and proxies its base. No reset.
+With `--tethered`, a `norbital.host.ts` is ignored. A local host serves the checkout's `.norbital/` and follows a new
+artifact hash onto the template's demo workspace (same schema: no pause, then a reload). No reset.
 
 ## `bolt dev` with a host file, untethered
 

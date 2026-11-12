@@ -16,7 +16,7 @@ import type { WebhookScheme } from '../src/decl/runtime/integration.ts';
 const at = (s: string) => Date.parse(s);
 const iso = (ms: number) => new Date(ms).toISOString();
 
-describe('buckets (rule 52a)', () => {
+describe('buckets', () => {
 	it('a due time under 5 minutes ahead is exact; 5 minutes or more rounds up to the bucket', () => {
 		const now = at('2026-09-25T09:01:17Z');
 		expect(iso(due_at(now, now + 60_000))).toBe('2026-09-25T09:02:17.000Z');
@@ -133,7 +133,7 @@ describe('the in-process deadlines port', () => {
 		}))
 	);
 	it.effect(
-		'stays silent about a wake that a stop interrupted, and never wakes again (rule 71a)',
+		'stays silent about a wake that a stop interrupted, and never wakes again',
 		() =>
 			Effect.gen(function* () {
 				const errors = vi.spyOn(console, 'error');
@@ -289,7 +289,7 @@ describe('integration webhook signatures', () => {
 	});
 });
 
-describe('attempts (rule 54)', () => {
+describe('attempts', () => {
 	const failed = (code: Code, message = '') => ({
 		kind: 'failed' as const,
 		error: BoltError.make(code, 'guest', message)

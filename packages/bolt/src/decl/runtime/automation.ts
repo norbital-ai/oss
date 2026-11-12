@@ -40,7 +40,7 @@ type Macro = '@yearly' | '@annually' | '@monthly' | '@weekly' | '@daily' | '@hou
 type Fields<S, N extends unknown[] = [0]> = S extends `${string} ${infer R}`
 	? Fields<R, [...N, 0]>
 	: N['length'];
-/** Five space-separated fields or a macro (rule 52: tsc checks the count; the build parses the fields). */
+/** Five space-separated fields or a macro (tsc checks the count; the build parses the fields). */
 export type Cron<S> = S extends Macro
 	? S
 	: Fields<S> extends 5
@@ -116,7 +116,7 @@ export type RunInput<S> = Simplify<S extends { input: infer I } ? AutomationInpu
 export type RunOutput<S> = S extends { output: infer O } ? ValueOf<O> : void;
 
 /**
- * `run`'s ctx (§3.4): reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. A failed
+ * `run`'s ctx: reads (`ctx.query`), writes and schedules as its `policies`; the only place for I/O. A failed
  * `yield*` ends the body: `try`/`catch` never sees it, so recover with `Effect.catch` or `Effect.catchTag` on the yielded
  * Effect (`yield* ctx.browser.download(url, options).pipe(Effect.catch(...))`). `actor` is
  * the reserved system identity; `run.trigger` records who or what started the run. Code acting for a starter checks it

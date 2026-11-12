@@ -1,4 +1,4 @@
-// std/date (§3.7, rule 68, X-11): a `date` is a zone-free calendar day, an `instant` is UTC, and a date period is
+// std/date (X-11): a `date` is a zone-free calendar day, an `instant` is UTC, and a date period is
 // inclusive `{ from, to | null }` (null = open). Values are branded strings, so they are their own wire form.
 import { Duration as EffectDuration, Result } from 'effect';
 import { DAY_MS, utc_of } from './zone.ts';

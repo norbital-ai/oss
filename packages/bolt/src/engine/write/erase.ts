@@ -1,6 +1,6 @@
 import { Array as EffectArray, Effect, Schema } from 'effect';
 import { WriteOutcome as OutcomeSchema } from '../../protocol/schema.ts';
-// `<c>.erase` (rule 38e, §5.13): the engine write of an administrator's generated `delete` (remove) or `update`
+// `<c>.erase`: the engine write of an administrator's generated `delete` (remove) or `update`
 // (anonymise) with no transform, never routed. Durable audit delays history purge until its full
 // external acknowledgement. Admission (admin-only, `locked`, erasable fields) is identity's `judgeErase`; this file
 // decodes, reads, and compiles the act.

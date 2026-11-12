@@ -264,7 +264,7 @@ it.effect(
 );
 
 layer(IdentityFixtureLive)((it) => {
-	describe('engine/identity (§5.11, rules 37–39)', () => {
+	describe('engine/identity', () => {
 		let founder = '',
 			invited = '';
 		it.effect(
@@ -308,7 +308,7 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'sign-in: strangers are refused before sending, 3 attempts per code, single use, session authenticates (rule 38a)',
+			'sign-in: strangers are refused before sending, 3 attempts per code, single use, session authenticates',
 			() =>
 				Effect.gen(function* () {
 					const { h, one, outbox, lastCode } = yield* IdentityFixture;
@@ -375,7 +375,7 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'the 6th send_code for an address in an hour is refused; a fresh cell still refuses it; no plain address is stored (rule 38)',
+			'the 6th send_code for an address in an hour is refused; a fresh cell still refuses it; no plain address is stored',
 			() =>
 				Effect.gen(function* () {
 					const { db, h, as, one } = yield* IdentityFixture;
@@ -401,7 +401,7 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'invitations: admin-only; inspection is read-only; the invited member holds only its source team policies (rule 38b)',
+			'invitations: admin-only; inspection is read-only; the invited member holds only its source team policies',
 			() =>
 				Effect.gen(function* () {
 					const { h, as, one, outbox, lastCode } = yield* IdentityFixture;
@@ -501,7 +501,7 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'the last active admin cannot be demoted, even by two concurrent demotions; admin ⇒ staff (rule 38c)',
+			'the last active admin cannot be demoted, even by two concurrent demotions; admin ⇒ staff',
 			() =>
 				Effect.gen(function* () {
 					const { db, h, as, one, external } = yield* IdentityFixture;
@@ -557,7 +557,7 @@ layer(IdentityFixtureLive)((it) => {
 				})
 		);
 
-		it.effect('preview-as is admin-only and clears the administrator flag (rule 39)', () =>
+		it.effect('preview-as is admin-only and clears the administrator flag', () =>
 			Effect.gen(function* () {
 				const { db, as, authorities, external } = yield* IdentityFixture;
 				const boss = yield* as(founder);
@@ -571,7 +571,7 @@ layer(IdentityFixtureLive)((it) => {
 		);
 
 		it.effect(
-			'member and invitation writes retain history while source teams and grants have no mutable history (§5.11.1)',
+			'member and invitation writes retain history while source teams and grants have no mutable history',
 			() =>
 				Effect.gen(function* () {
 					const { one } = yield* IdentityFixture;

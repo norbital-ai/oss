@@ -1,4 +1,4 @@
-// Rate limits over HTTP (rule 38): a tiny declared limit admits two calls and refuses the third, and each path's
+// Rate limits over HTTP: a tiny declared limit admits two calls and refuses the third, and each path's
 // refusal is pinned exactly as the client receives it (status, body, Retry-After). No model call is made.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, layer } from '@effect/vitest';
@@ -112,7 +112,7 @@ const act = (cookie: string, callable: string, input: unknown) =>
 	});
 const statuses = (answers: readonly Answer[]) => answers.map((a) => a.status);
 
-layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
+layer(workspace)('rate limits over HTTP', (it) => {
 	describe('declared tiny limits', () => {
 		it.effect(
 			'act 2/min: the third act is a 429 refused outcome with Retry-After; the persisted bucket stops at 2',
@@ -268,7 +268,7 @@ layer(workspace)('rate limits over HTTP (rule 38)', (it) => {
 	});
 });
 
-describe('RateWindows (rule 72)', () => {
+describe('RateWindows', () => {
 	const charge = (bucket: string, windowMs = 60_000) => [
 		{ rule: 'read:2/min:actor', bucket, limit: 2, windowMs }
 	];
@@ -306,7 +306,7 @@ describe('RateWindows (rule 72)', () => {
 	});
 });
 
-// Automations (rule 38): only a manual start counts, against the per-automation quota for the starter. Cron and
+// Automations: only a manual start counts, against the per-automation quota for the starter. Cron and
 // model effect runs, and the acts any run's body performs, are never limited.
 const runs = Result.getOrThrow(
 	decode_projected_manifest({
@@ -374,7 +374,7 @@ const automations = Effect.gen(function* () {
 	});
 });
 
-layer(Layer.unwrap(automations))('automation limits (rule 38)', (it) => {
+layer(Layer.unwrap(automations))('automation limits', (it) => {
 	it.effect(
 		'a manual start beyond the quota is a 429 with Retry-After; cron and effect runs and run bodies are unaffected',
 		() =>

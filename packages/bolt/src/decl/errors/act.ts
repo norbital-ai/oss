@@ -4,7 +4,7 @@ import { act_failure_tag } from './act-failure-tag.ts';
 import { MessageValues } from './refusal.ts';
 
 /**
- * A write refused (rule 32): `code` is `refused` for an authored refusal, else the engine's code (`forbidden`, `unique`,
+ * A write refused: `code` is `refused` for an authored refusal, else the engine's code (`forbidden`, `unique`,
  * …), with the field or rows it names and, for tenant code, the `rule` that refused. `message` is the text a person
  * reads; an authored refusal also carries its catalogue `key` and placeholder `values`.
  */

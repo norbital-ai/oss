@@ -239,7 +239,7 @@
 			: []
 	);
 	const tb = $derived(toolbar === false ? {} : toolbar);
-	// search where the model declares search fields (rule 16), else `like` over its label's text fields, or over a
+	// search where the model declares search fields, else `like` over its label's text fields, or over a
 	// local array's columns, or through `search.semantic` or a search index (the toolbar's `/<name>`)
 	const exposed = $derived(kinds.catalog?.[model]);
 	const indexed = $derived((exposed?.search?.length ?? 0) > 0);
@@ -360,7 +360,7 @@
 			() => undefined
 		);
 	};
-	// ── view state in the URL (rule 8) ──
+	// ── view state in the URL ──
 	let st = $state<TableState>(
 		untrack(() => (controlled ? { after: null, q: '' } : readTableState(currentSearchParams(), urlKey)))
 	);
@@ -392,7 +392,7 @@
 		{ lazy: true }
 	);
 
-	// ── the page (rule 7: cursor-only, live) ──
+	// ── the page (cursor-only, live) ──
 	const scope = $derived(and(and(where, hidden_where), vs.where));
 	const order = $derived(vs.order.length > 0 ? orderOf(vs.order) : order_by);
 	/** The page's search: the declared index's `search`, else a `where` over the label fields. */

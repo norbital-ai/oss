@@ -1,8 +1,8 @@
-// The host contract of integration drivers (§4.5). A driver is a kind bolt names (`DRIVERS`); a provider is a host's
+// The host contract of integration drivers. A driver is a kind bolt names (`DRIVERS`); a provider is a host's
 // implementation of one (Baileys or Twilio for `whatsapp`, a mailbox for `email`, the host's own for `http`/`sqlserver`).
 // The host registers its providers; the links manager (`links.ts`) opens one `Link` per instance from the provider the
 // operator chose at pairing (sealed as the credential `provider`), hands it the instance's credentials under its epoch,
-// and turns what the link reports into the one `InstanceStatus` the shell draws. Nothing here knows a provider (P18):
+// and turns what the link reports into the one `InstanceStatus` the shell draws. Nothing here knows a provider:
 // a provider's setup is data (`SetupDescription`), its state one of a few words, its facts an `about` object.
 import type { DriverName, IntegrationSpec } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';

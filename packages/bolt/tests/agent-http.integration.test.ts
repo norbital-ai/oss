@@ -1,8 +1,8 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// The agent's conversation controls over `/__bolt/act` (§5.9's generated actions; parity 2.17, 3.2–3.6, 3.13): the
+// The agent's conversation controls over `/__bolt/act`: the
 // author alone revises, reorders and removes queued input; stop, resume, the model class, plan execution and discard;
-// an envoy conversation is read-only here (rule 61) and visible only to its own DM sender, a group's participants, or
+// an envoy conversation is read-only here and visible only to its own DM sender, a group's participants, or
 // any internal member on a `public` envoy — never to an admin as such.
 import { describe, expect, it } from '@effect/vitest';
 import { afterAll } from 'vitest';

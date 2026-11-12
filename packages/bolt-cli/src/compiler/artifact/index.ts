@@ -92,7 +92,7 @@ const templateMeta = Effect.fn('bolt.templateMeta')(function* (root: string) {
 	return { handle: t.key, name: t.name };
 });
 
-/** `schema.sql`: the plan from an empty database, in apply order (review aid; hosts apply `plan`, rule 69). */
+/** `schema.sql`: the plan from an empty database, in apply order (review aid; hosts apply `plan`). */
 export const schemaSql = (m: EngineManifest) =>
 	Effect.map(
 		plan(null, m),
@@ -235,7 +235,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 	if (c.guest.source_map === undefined)
 		yield* fs.remove(join(out, 'guest.mjs.map'), { force: true });
 	else yield* fs.writeFileString(join(out, 'guest.mjs.map'), c.guest.source_map);
-	// `?bytes` imports (§5.8), by sha256; server-only, never under the browser-served `assets/`. guest.mjs names each sha, so its hash covers them
+	// `?bytes` imports, by sha256; server-only, never under the browser-served `assets/`. guest.mjs names each sha, so its hash covers them
 	yield* fs.remove(join(out, 'guest-assets'), { recursive: true, force: true });
 	for (const [hash, bytes] of Object.entries(c.guest.assets ?? {})) {
 		yield* fs.makeDirectory(join(out, 'guest-assets'), { recursive: true });

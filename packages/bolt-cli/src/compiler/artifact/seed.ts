@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Seed packs (rule 70, docs/seeding.md): the public `base` pack from `seed/public/**` and the `test` pack from
+// Seed packs (docs/seeding.md): the public `base` pack from `seed/public/**` and the `test` pack from
 // `seed/test/**`, rows as stored (the template's own tests seed from `test`; no host provisions it). A pack is a sibling of the artifact with its own hash: `pack.json`, `rows/<model>.jsonl`,
 // `assets/**`. A bank tree's private `rows/**` are never a pack: `seedRows` reads them into memory for `bolt seed`.
 import { createHash } from 'node:crypto';
@@ -108,7 +108,7 @@ const seederOf = Effect.fn('bolt.seederOf')(function* (root: string, cache: stri
 	).pipe(Effect.mapError((cause) => new SeedSourceError({ cause })));
 });
 
-/** `<dir>/assets.json` (`{ path, sha256, bytes, content_type }`) checked against `<dir>/assets/**` (rule 70). */
+/** `<dir>/assets.json` (`{ path, sha256, bytes, content_type }`) checked against `<dir>/assets/**`. */
 const assetList = Effect.fn('bolt.seedAssets')(function* (
 	root: string,
 	dir: 'seed/public' | 'seed/test',

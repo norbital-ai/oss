@@ -59,7 +59,7 @@ const run = (events: InvocationEvents, bridge: Bridge) =>
 		return yield* Context.get(context, Guest).invoke(invocation, bridge);
 	});
 
-describe('next guest telemetry (§5.12)', () => {
+describe('next guest telemetry', () => {
 	it.live("writes each of a long invocation's events to the host's log as it happens", () =>
 		Effect.gen(function* () {
 			const log = yield* eventLog({ invocation: 'run-1', run: 'run-1' });

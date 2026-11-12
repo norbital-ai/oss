@@ -1,6 +1,6 @@
 <!--
 @component
-A record's approval requests (spec §7): a scope selector when there are several, the chosen request's timeline (one
+A record's approval requests: a scope selector when there are several, the chosen request's timeline (one
 node for the request, one per step; each node a button whose popover holds that step's back-and-forth) and, for whoever
 may decide now, a two-step form: pick Approve, Reject, Request changes or (the requester) Withdraw, then give the
 reason and confirm.

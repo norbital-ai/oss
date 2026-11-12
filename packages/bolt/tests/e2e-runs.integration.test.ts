@@ -3,7 +3,7 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import { Context, Effect, Layer, Schema } from 'effect';
 // End to end through the engine entry and the test kit: a model's create effect is queued by the act's own
 // statement and runs as the writer; the delayed follow-up it schedules is announced to the deadlines port and runs its
-// body when the deadline wakes (rules 49, 52a).
+// body when the deadline wakes.
 import { describe, expect, it } from '@effect/vitest';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';

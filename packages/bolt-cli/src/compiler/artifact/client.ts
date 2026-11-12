@@ -4,7 +4,7 @@
 // page and shared wrapper; the internal shell, agent and session registry remain in the private SPA.
 // The SPA imports the shell, Bolt's page entries, ui, svelte and effect from the platform layer (`platform.ts`, under
 // `client/assets/platform/`), the same bytes in every artifact on this Bolt, and bundles only the workspace's code.
-// There is no template Vite config (§3.2: `vite.config.ts` is deleted with no successor). Runtime assets live in the
+// There is no template Vite config (`vite.config.ts` is deleted with no successor). Runtime assets live in the
 // workspace `assets/` directory, which the artifact ships as `assets/**` and hosts serve at `/assets/*` after the
 // client's own chunks; a page reaches a file there by that path, or imports one through Vite's `?url` / `?worker`,
 // which this build fingerprints into `client/assets/`.
@@ -353,7 +353,7 @@ const spaEntry = Effect.fn('bolt.spaEntry')(function* (
 	});
 	const base = files.find((f) => f.role === 'messages'),
 		locales = files.filter((f) => f.role === 'locale');
-	// hook:shell — the account menu's versions (L-BOLT-073): the workspace's, this Bolt's and the building Node's. The
+	// hook:shell — the account menu's versions: the workspace's, this Bolt's and the building Node's. The
 	// entry sets them: the shared platform layer (Nav's module) carries nothing of one workspace or build host
 	const versions = {
 		workspace: yield* version(join(root, 'package.json')),

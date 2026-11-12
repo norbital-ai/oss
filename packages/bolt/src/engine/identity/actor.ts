@@ -173,7 +173,7 @@ export class Authorities {
 		);
 	}
 	/**
-	 * A member's authority, or `null` for an unknown or deactivated user. One pipelined read. `preview` (rule 39) clears
+	 * A member's authority, or `null` for an unknown or deactivated user. One pipelined read. `preview` clears
 	 * the administrator flag, so the previewed member's grants and approval eligibility apply.
 	 */
 	member(db: TenantDb, publication: CommitPublication, userId: string, preview = false) {
@@ -191,7 +191,7 @@ export class Authorities {
 					external: u.kind === 'external',
 					teams: team === null ? [] : [team],
 					team_path: team === null ? [] : path(graph, team),
-					// an administrator has the workspace's full authority; a rule 39 preview clears it
+					// an administrator has the workspace's full authority; a preview clears it
 					admin: !preview && u.admin && u.kind === 'staff',
 					party: u.party === null ? null : { model: u.party.model, id: u.party.id }
 				};
@@ -272,7 +272,7 @@ export class Authorities {
 		);
 	}
 	/**
-	 * hook:envoys — an envoy's turn on `instance` (P32, §4.4): the envoy's declared `policies`, never admin by itself, no
+	 * hook:envoys — an envoy's turn on `instance`: the envoy's declared `policies`, never admin by itself, no
 	 * party; `{ var: 'requestor.instance' }` is the instance. On a DM from a linked sender, `dm: 'union'` (the default) joins the
 	 * member's own authority (their policies, team tree, or the admin bypass): the least constraining grant admits;
 	 * `dm: 'envoy'` holds the envoy's policies alone with every operand bound to the member — never admin, no member route,
@@ -326,7 +326,7 @@ export class Authorities {
 				if (!o.dm || o.member === null) return own;
 				const mine = yield* this.member(db, publication, o.member);
 				if (mine === null || mine.actor.kind !== 'member') return null;
-				// ponytail: every arm's `actor` operands resolve against the linked member, the envoy's too; the member directory arms (rule 35a) do not join
+				// ponytail: every arm's `actor` operands resolve against the linked member, the envoy's too; the member directory arms do not join
 				const linked = { ...actor, linked: mine.actor };
 				if (spec.dm === 'envoy')
 					return yield* this.compile(
@@ -354,7 +354,7 @@ export class Authorities {
 		);
 	}
 	/**
-	 * A visitor holds exactly the app's public policies (rule 38d). `visitor` is the visitor's anonymous user when
+	 * A visitor holds exactly the app's public policies. `visitor` is the visitor's anonymous user when
 	 * `anonymous`, else a per-request id that owns nothing.
 	 */
 	visitor(app: string, visitor: string, anonymous = false): Effect.Effect<Authority, BoltError> {

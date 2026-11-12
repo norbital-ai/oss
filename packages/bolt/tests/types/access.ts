@@ -1,6 +1,6 @@
 import { id_of } from '../../src/decl/id.ts';
 import { Schema } from 'effect';
-// Type corpus for access (§3.3.7, §3.9, rules 33–38c, spec §8). Each `@ts-expect-error` line is a planted mistake; a
+// Type corpus for access. Each `@ts-expect-error` line is a planted mistake; a
 // clean tsc proves every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
 import type { Actor } from '../../src/index.ts';
@@ -108,7 +108,7 @@ export const salesRep = policy({
 		'envoys.unrecognised': '1/15min'
 	}
 });
-// A visitor policy (rule 38d): the shape is ordinary; what a public policy may hold is the build's `access/visitor-grant`.
+// A visitor policy: the shape is ordinary; what a public policy may hold is the build's `access/visitor-grant`.
 export const applicant = policy({
 	description: 'Anyone may apply',
 	grants: {
@@ -188,7 +188,7 @@ policy({ description: 'x', grants: { orders: { update: { previous: { status: { e
 // @ts-expect-error A6b a write `where` is gone: the check reads what it needs
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { create: { where: { note: { is_null: true } } } } } });
-// @ts-expect-error A7 `via` is gone: a child is a layer of its root (decision 3)
+// @ts-expect-error A7 `via` is gone: a child is a layer of its root
 // prettier-ignore
 policy({ description: 'x', grants: { order_lines: { via: 'order' } } });
 // @ts-expect-error A8 a write layer is a declared write path (orders.customer is a read layer only)
@@ -206,7 +206,7 @@ policy({ description: 'x', grants: { orders: { queries: ['open_total'] } } });
 // @ts-expect-error A12 an automation the workspace does not declare
 // prettier-ignore
 policy({ description: 'x', grants: {}, capabilities: { automations: ['orders_ship'] } });
-// @ts-expect-error A13 `erase` is admin-only, never grantable (rule 38e)
+// @ts-expect-error A13 `erase` is admin-only, never grantable
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { erase: true } } });
 // @ts-expect-error A14 a create grant on a model that declares no create
@@ -225,7 +225,7 @@ policy({ description: 'x', grants: { orders: { outputs: { default: {} }, delete:
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { mutate: true } } });
 
-// ── verdicts and approval flows of a write check (spec §8) ──
+// ── verdicts and approval flows of a write check ──
 policy({
 	description: 'x',
 	grants: {
@@ -333,7 +333,7 @@ policy({ description: 'x', grants: {}, limits: { 'envoys.receive': { rate: '1/s'
 // prettier-ignore
 policy({ description: 'x', grants: {}, limits: { read: { rate: '1/s', per: 'surface' } } });
 
-// ── Actor (§3.9) ──
+// ── Actor ──
 const user_id = Schema.decodeUnknownSync(id_of('sys_user'))('0199a000-0000-7000-8000-0000000000a1');
 const run_id = Schema.decodeUnknownSync(id_of('sys_run'))('0199a000-0000-7000-8000-0000000000b1');
 const instance_id = Schema.decodeUnknownSync(id_of('sys_integration'))('0199a000-0000-7000-8000-0000000000c1');

@@ -396,7 +396,7 @@ const run = (
 							if (forbidden !== undefined)
 								return failed('forbidden', `page rendering cannot call '${forbidden[0]}'`);
 						}
-						// a policy check reads through `ctx.query` only (rule 35)
+						// a policy check reads through `ctx.query` only
 						if (invocation.kind === 'policy') {
 							const forbidden = calls.find(([member]) => member !== 'db.query');
 							if (forbidden !== undefined)
@@ -659,7 +659,7 @@ export const GuestLive = Layer.effect(
 						error: BoltError.make(
 							'interrupted',
 							'guest',
-							'the invocation was interrupted: its generation is draining (rule 71a)'
+							'the invocation was interrupted: its generation is draining'
 						)
 					} satisfies GuestOutcome;
 				const work = Effect.scoped(

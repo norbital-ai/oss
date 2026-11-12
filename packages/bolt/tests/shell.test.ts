@@ -1,4 +1,4 @@
-// The workspace shell's pure halves (§5.10, §3.9): app visibility, the nav tree, routes, and the visitor fetch.
+// The workspace shell's pure halves: app visibility, the nav tree, routes, and the visitor fetch.
 import { required } from './support/required.ts';
 import { readFileSync } from 'node:fs';
 import { beforeEach, afterEach, describe, expect, it } from '@effect/vitest';
@@ -148,7 +148,7 @@ const member = (
 const names = (ns: ReturnType<typeof nav>): unknown[] =>
 	ns.map((n) => (n.kind === 'group' ? { [n.name]: names(n.children) } : n.name));
 
-describe('app visibility (§3.9, capabilities.apps)', () => {
+describe('app visibility (capabilities.apps)', () => {
 	it('a member whose policy names a public app opens it as themselves; `*`, other staff and administrators stay its visitor', () => {
 		expect(can_open(m, member(['careers'], { external: true }), 'careers')).toBe(true);
 		expect(holds_public(member(['careers'], { external: true }), 'careers')).toBe(true);
@@ -1001,7 +1001,7 @@ describe('routes and hrefs', () => {
 			{ kind: 'not_found' }
 		]);
 		expect([at('/studio'), at('/studio/x')]).toEqual([{ kind: 'studio' }, { kind: 'not_found' }]);
-		// L-BOLT-528: each Studio tab is a stable deep link; Live moved to the command center
+		// each Studio tab is a stable deep link; Live moved to the command center
 		expect([
 			at('/studio/changes'),
 			at('/studio/versions'),
@@ -1026,7 +1026,7 @@ describe('routes and hrefs', () => {
 	});
 });
 
-describe('visitor fetch (§5.10, GAPS r5 11)', () => {
+describe('visitor fetch', () => {
 	it.live(
 		'names the app on every /__bolt request and spends one fresh token per act and upload',
 		() =>
@@ -1334,7 +1334,7 @@ describe('Studio port boundary', () => {
 			decodeOp({ op: 'preview', id: 3 })
 		]).toEqual([null, null, null, null, null, null]);
 	});
-	it('cuts the workbench manifest to the Manifest chips, each entry with its source path (L-BOLT-527)', () => {
+	it('cuts the workbench manifest to the Manifest chips, each entry with its source path', () => {
 		const manifest = Result.getOrThrow(
 			decode_manifest({
 				...baseManifest,

@@ -31,6 +31,7 @@ request's current step against active staff members, excludes its requester, and
 after the request closes. The same effect can handle the other approval moves.
 
 A notice has `title`, optional `description`, `to`, optional `via`, `attachments`, `link` and `once`.
+`title` and `description` are plain text, stored and shown as written, not message keys.
 Recipients are `{ team }`, `{ user }` or `{ policy }`; approval effects may also name
 `'requester'` and `'approvers'`. Inbox delivery is automatic. `via` names persisted conversation
 accounts, resolved from runtime records and narrowed with `instance_id`; source slots do not exist. Attachments may be stored files or

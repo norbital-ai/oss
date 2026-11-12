@@ -1,4 +1,4 @@
-// The AI port's `sys_2` (the LLM) under the 20 s idle wall (rules 63, 72): each model request is one facility call. The wall is
+// The AI port's `sys_2` (the LLM) under the 20 s idle wall: each model request is one facility call. The wall is
 // idle time: every token received (answer or reasoning) restarts it, so a model streaming its reasoning is never cut. A
 // stream silent for the wall is closed and its partial output kept as a cut step the next request continues; a request
 // that yields nothing within it is `timeout` (OD-13). `model` is a class or a catalog id; any other is `unavailable`.
@@ -231,7 +231,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 });
 
 /** `confirm`: an in-app call the person must approve first; it executes later under key `(turn, callId)`. */
-/** `bounded`: the tool already bounded its result (rule 62), so the loop does not clip it again; `full` is what it cut it from. */
+/** `bounded`: the tool already bounded its result, so the loop does not clip it again; `full` is what it cut it from. */
 export const ToolAnswer = Schema.Union([
 	Schema.Struct({
 		result: Schema.Json,
@@ -241,7 +241,7 @@ export const ToolAnswer = Schema.Union([
 	Schema.Struct({ confirm: Schema.Literal(true) })
 ]);
 export type ToolAnswer = typeof ToolAnswer.Type;
-/** A tool `ctx.ai.sys_2.infer` offers the model (rule 58: a host tool its automation's policies name); a throw is a failed result. */
+/** A tool `ctx.ai.sys_2.infer` offers the model (a host tool its automation's policies name); a throw is a failed result. */
 export type InferTool = {
 	name: string;
 	description: string;
@@ -392,11 +392,11 @@ export function applyEdit(draft: Json, op: typeof EditOp.Type, kind: Kind): Resu
 		: Result.succeed(edited.success);
 }
 
-/** A declared output kind (§3.3.2) as the JSON Schema the provider constrains its answer by. */
+/** A declared output kind as the JSON Schema the provider constrains its answer by. */
 /**
  * Without the author's `steps`, an inference has no step budget and no time limit: it goes on while it progresses, until
  * it answers (a structured one, until a submission matches). What ends a runaway is the stall window — no model token,
- * reply or tool result for STALL_MS (compute model §3, one liveness clock) — and the stall guards (an empty or prose
+ * reply or tool result for STALL_MS (one liveness clock) — and the stall guards (an empty or prose
  * reply 3 times running, or a draft-only turn that leaves the answer unchanged 3 times running).
  */
 export const STALL_MS = 5 * 60_000;
@@ -499,7 +499,7 @@ function ruleChecker(
 }
 
 /**
- * `ctx.ai.sys_2.infer` for automations (rule 63, L-BOLT-371/372): a prompt, optional files and an `output`, continued
+ * `ctx.ai.sys_2.infer` for automations (L-BOLT-371/372): a prompt, optional files and an `output`, continued
  * across cut steps while it progresses (STALL_MS of silence ends it). Files are FileRefs the host loads. A
  * structured `output` — a declared kind, or `{ json_schema, rules }` — is built, not written in one piece: the model edits a
  * draft with `edit` (keyed pointers: a keyed list's items by key) as it finds each part, inspects it with `read`, `find`
@@ -694,7 +694,7 @@ export function infer_facility(
 		const offered = definitions.map(({ name, description, input }) => ({ name, description, input }));
 		const finishingOffers = finishing.map(({ name, description, input }) => ({ name, description, input }));
 		const behaviorOf = new Map(definitions.map((tool): [string, ToolBehavior] => [tool.name, tool.behavior]));
-		/** The draft checked against `output` and the rules: every offending field named (rule 23), as keyed pointers. */
+		/** The draft checked against `output` and the rules: every offending field named, as keyed pointers. */
 		const decoded = (raw: Json): CrossAnswer => {
 			let problems: string[];
 			let value = raw;
@@ -962,7 +962,7 @@ export function infer_facility(
 					continue;
 				}
 				if (typeof whole === 'string' && whole.trim() === '') {
-					// a reply of reasoning alone: ask it to go on (L-BOLT-371)
+					// a reply of reasoning alone: ask it to go on
 					if (++pauses > PAUSES) return invalid(`the model answered nothing ${PAUSES + 1} times running`);
 					messages.push({ role: 'user', content: 'Continue, and give your answer.' });
 					continue;

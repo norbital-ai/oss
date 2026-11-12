@@ -506,7 +506,7 @@ describe('next guest runner', () => {
 			expect(crossings).toHaveLength(1);
 		})
 	);
-	it.live('crosses the calls made before the microtask queue drains together (rule 12)', () =>
+	it.live('crosses the calls made before the microtask queue drains together', () =>
 		Effect.gen(function* () {
 			const { crossings, bridge } = recorder((c) => ({
 				ok: true,
@@ -620,7 +620,7 @@ describe('next guest runner', () => {
 				}).pipe(Effect.ensuring(Deferred.succeed(slow, undefined)));
 			})
 	);
-	it.live('moves bytes beside the JSON as $bin, both ways (§5.8.1)', () =>
+	it.live('moves bytes beside the JSON as $bin, both ways', () =>
 		Effect.gen(function* () {
 			const { crossings, bridge } = recorder((c) =>
 				c._tag === 'files.get'
@@ -761,7 +761,7 @@ describe('next guest runner', () => {
 			})
 	);
 
-	it.live('keeps a guest throw as the cause, with its stack and line (rule 72a)', () =>
+	it.live('keeps a guest throw as the cause, with its stack and line', () =>
 		Effect.gen(function* () {
 			const o = yield* runIn(automation('async () => {\n  throw new TypeError("");\n}'));
 			expect(o.kind).toBe('failed');
@@ -802,7 +802,7 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('counts each call as a crossing, not each batch (rule 12)', () =>
+	it.live('counts each call as a crossing, not each batch', () =>
 		Effect.gen(function* () {
 			const o = yield* runIn(
 				automation(
@@ -825,7 +825,7 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.live('refuses read bytes past the invocation budget (rule 72)', () =>
+	it.live('refuses read bytes past the invocation budget', () =>
 		Effect.gen(function* () {
 			const { bridge } = recorder(() => ({ ok: true, value: 'x'.repeat(600) }));
 			const o = yield* runIn(
@@ -840,7 +840,7 @@ describe('next guest runner', () => {
 	);
 
 	it.live(
-		'reports the total when concurrent read answers together exceed the crossing limit (rule 9)',
+		'reports the total when concurrent read answers together exceed the crossing limit',
 		() =>
 			Effect.gen(function* () {
 				const each = 5 * 1024 * 1024;
@@ -864,7 +864,7 @@ describe('next guest runner', () => {
 			})
 	);
 
-	it.live('stops a guest spinning past its CPU budget across awaits (rule 71)', () =>
+	it.live('stops a guest spinning past its CPU budget across awaits', () =>
 		Effect.gen(function* () {
 			const spin =
 				'const spin = (ms) => { const end = Date.now() + ms; while (Date.now() < end); };';
@@ -886,7 +886,7 @@ describe('next guest runner', () => {
 		})
 	);
 
-	it.effect('does not count I/O waits, and has no invocation wall clock (rule 71)', () =>
+	it.effect('does not count I/O waits, and has no invocation wall clock', () =>
 		Effect.gen(function* () {
 			let metered = 0n;
 			const { bridge, started } = yield* slow(50, () => 1);
@@ -911,7 +911,7 @@ describe('next guest runner', () => {
 	);
 
 	it.live(
-		'a read request crosses once as one read: every root and layer in one call, lowered from the request itself (rule 12)',
+		'a read request crosses once as one read: every root and layer in one call, lowered from the request itself',
 		() =>
 			Effect.gen(function* () {
 				const lowered: Json[] = [];
@@ -1053,7 +1053,7 @@ describe('next guest runner', () => {
 	);
 });
 
-describe('next guest globals (rule 6)', () => {
+describe('next guest globals', () => {
 	// tsc holds this literal to exactly the keys of IsolateGlobals; the test holds the isolate to exactly this literal.
 	const surface = {
 		console: true,
@@ -1171,7 +1171,7 @@ describe('next guest globals (rule 6)', () => {
 	);
 
 	it.live(
-		'runs queueMicrotask and zero-delay timers as tasks within the invocation, refusing any other delay (rule 6)',
+		'runs queueMicrotask and zero-delay timers as tasks within the invocation, refusing any other delay',
 		() =>
 			Effect.gen(function* () {
 				expect(

@@ -210,7 +210,7 @@ class JudgeFixture extends Context.Service<JudgeFixture, Effect.Success<typeof f
 ) {}
 const JudgeFixtureLive = Layer.effect(JudgeFixture, fixture).pipe(Layer.provide(TestDb.layer(m)));
 
-describe('engine/write: columns, then one check over the stored and the written row (rule 35)', () => {
+describe('engine/write: columns, then one check over the stored and the written row', () => {
 	it.effect(
 		"each supplied column needs an admitting arm; an update's check judges both images",
 		() =>

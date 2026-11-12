@@ -1,4 +1,4 @@
-// The guest half of the runner (§5.8, rule 6): the isolate's globals and the `ctx` bridge, as source evaluated once per
+// The guest half of the runner: the isolate's globals and the `ctx` bridge, as source evaluated once per
 // fresh context. It runs as an `evalClosure` body, so the host hooks ($0 log, $1 random, $2 digest, $3 asset) stay in its closure
 // and never become globals; it returns `{ start, take, give }` for the host to call.
 // Kept as `String.raw` so regex escapes survive; its text holds no backtick and no `${` but the one splice: std's
@@ -311,7 +311,7 @@ class AbortController {
 define('AbortController', AbortController);
 define('AbortSignal', AbortSignal);
 
-// ── server assets: an import of './x?bytes' reads the artifact's bytes by sha256, synchronously, host-side (§5.8) ──
+// ── server assets: an import of './x?bytes' reads the artifact's bytes by sha256, synchronously, host-side ──
 Object.defineProperty(G, Symbol.for('norbital.bolt.asset'), { value: (sha) => {
 	const bytes = typeof hostAsset === 'function' ? hostAsset(String(sha)) : undefined;
 	if (!(bytes instanceof Uint8Array)) throw named('BoltError', 'the artifact has no server asset ' + String(sha));
@@ -330,13 +330,13 @@ define('queueMicrotask', function queueMicrotask(task) {
 });
 define('setTimeout', function setTimeout(task, delay, ...args) {
 	if (typeof task !== 'function') throw new TypeError('setTimeout takes a function');
-	if (Number(delay) > 0) throw Object.assign(named('BoltError', 'setTimeout: guest code has no clock to wait on; only a delay of 0 runs (rule 6)'), { code: 'timerDelay' });
+	if (Number(delay) > 0) throw Object.assign(named('BoltError', 'setTimeout: guest code has no clock to wait on; only a delay of 0 runs'), { code: 'timerDelay' });
 	timers.set(++timerId, () => task(...args));
 	return timerId;
 });
 define('clearTimeout', function clearTimeout(id) { timers.delete(id); });
 
-// ── the ctx bridge (rule 12): calls queue until the microtask queue drains, then cross together ──
+// ── the ctx bridge: calls queue until the microtask queue drains, then cross together ──
 let queue = [], state = null, ids = 0;
 const inflight = new Map();
 const frame = () => {

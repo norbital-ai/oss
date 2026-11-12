@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// A `.svelte` component as the checker sees it (compute model §5, "The language tool"), built as svelte-check's
+// A `.svelte` component as the checker sees it ("The language tool"), built as svelte-check's
 // TypeScript 7 mode builds it: svelte2tsx's TypeScript is a virtual `X_virtual__.ts` beside `X.svelte` (checked as
 // source), and `X.d.svelte.ts` re-exports it, which is what `import './X.svelte'` resolves to under
 // `allowArbitraryExtensions`. Positions map both ways through svelte2tsx's source map; generated code maps to nothing.

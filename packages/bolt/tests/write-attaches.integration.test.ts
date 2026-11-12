@@ -33,7 +33,7 @@ const guest = program(`export default { model: { orders: { bodies: {
 const fixture = Effect.gen(function* () {
  const context = yield* Layer.build(TestWorkspace.layer({ manifest: m, guest: yield* guest }));
  const t = Context.get(context, TestWorkspace);
- // the writer reads the tag it links (rule 36); it holds no write on tags
+ // the writer reads the tag it links; it holds no write on tags
  const tags = grants('tags', { create: [], update: [], delete: [] });
  const caller = authority({ orders: grants('orders', { create: [write_arm({ orders: ['title', 'tag'] })] }), tags });
  const sealed = authority({ orders: grants('orders', { create: [write_arm({ orders: ['title'] })] }), tags });

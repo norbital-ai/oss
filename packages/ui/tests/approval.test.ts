@@ -1,5 +1,5 @@
 import { single_act } from './act-envelope.ts';
-// The approval panel (spec §7): a scope selector over a record's requests and a two-step decision form showing exactly
+// The approval panel: a scope selector over a record's requests and a two-step decision form showing exactly
 // the host's decisions.
 import './dom.ts';
 import assert from 'node:assert/strict';

@@ -1,4 +1,4 @@
-// Type corpus for the shell's view props (§3.2 role 5): an embedded renderer is handed a view without the record's row.
+// Type corpus for the shell's view props: an embedded renderer is handed a view without the record's row.
 import type { CustomFieldView } from '../../src/shell/runtime.ts';
 import type { KindView as KitView } from '../../../ui/src/kinds/context.ts';
 

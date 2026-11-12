@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Discovery (§3.1, §3.2, rule 1): names come from paths, never from file contents.
+// Discovery: names come from paths, never from file contents.
 import { Effect, FileSystem, Path } from 'effect';
 import { join } from 'node:path';
 import {
@@ -141,7 +141,7 @@ export const discover = Effect.fn('bolt.discover')(function* (
 			);
 		else declarations.set(identity, file);
 	}
-	// Folder-level rules of §3.2.
+	// Folder-level layout rules.
 	const has = (role: Role, name: string) => files.some((f) => f.role === role && f.name === name);
 	const of = (role: Role) => files.filter((f) => f.role === role);
 	if (!system && !has('workspace', ''))

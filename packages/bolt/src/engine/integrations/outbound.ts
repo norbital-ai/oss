@@ -48,7 +48,7 @@ export const DELIVER = 'integrations.deliver';
 const EPOCH_KEY = 'integrations.epoch';
 /** The epoch new outbound rows carry; a row of another epoch (a fork, a restore) is never sent. */
 export const EPOCH = `coalesce((SELECT value FROM sys_config WHERE key = '${EPOCH_KEY}'), '')`;
-/** A new row's timeline: accepted by bolt, not yet handed to the provider (§5.9). */
+/** A new row's timeline: accepted by bolt, not yet handed to the provider. */
 export const QUEUED = (c: Chain, now: string) =>
 	`jsonb_build_array(jsonb_build_object('kind', 'queued', 'at', ${c.p(now)}::text, 'provider', 'bolt'))`;
 /** A statement's delivery run, queued when its `rows` piece inserted any. */
@@ -574,7 +574,7 @@ function makeOutbound(cfg: OutboundConfig) {
 				)
 			);
 		}),
-		/** A provider's report on a message an instance sent, by the id its `send` answered (§5.9). */
+		/** A provider's report on a message an instance sent, by the id its `send` answered. */
 		delivered: (
 			instance: string,
 			provider_id: string,
@@ -587,7 +587,7 @@ function makeOutbound(cfg: OutboundConfig) {
 					? { ...report, reason: report.code ?? report.kind }
 					: report
 			),
-		/** The platform run the outbound pieces queue (rule 48): `runs.platform`. */
+		/** The platform run the outbound pieces queue: `runs.platform`. */
 		handlers: { [DELIVER]: (_input: Json) => deliver() }
 	};
 }

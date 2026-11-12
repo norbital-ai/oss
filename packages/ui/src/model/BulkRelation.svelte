@@ -1,7 +1,7 @@
 <!--
 @component
 A many-relation in "Edit selected", one level deep: new children for every selected record and, over one selected
-record, existing children to link, unlink or delete. Explicit commands only (rule 22); its parent sends them in the one
+record, existing children to link, unlink or delete. Explicit commands only; its parent sends them in the one
 `<c>.update` act.
 -->
 <script lang="ts" module>

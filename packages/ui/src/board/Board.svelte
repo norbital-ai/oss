@@ -63,7 +63,7 @@
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import { watch as watchRead } from '../read/live.svelte.js';
 	// Each lane loads infinitely: live keyset pages read by its lane condition, the next one as the lane scrolls near its end
-	// (final-ui rule 9); lane counts are one aggregate. A drop is one generated `update` of `by`,
+	//; lane counts are one aggregate. A drop is one generated `update` of `by`,
 	// painted optimistically and rolled back by a refusal, which shows on the board.
 	import { Debounced, watch } from 'runed';
 	import { onDestroy } from 'svelte';
@@ -197,7 +197,7 @@
 				.pipe(Effect.map((answer) => page_of(answer, of)?.rows ?? []))
 	});
 
-	// lane values and counts: one aggregate by `by` (the one-shot count rule 7 applies per lane)
+	// lane values and counts: one aggregate by `by` (the one-shot count applies per lane)
 	let countsInvalid = $state(false);
 	let countsRevision = 0;
 	let refreshCounts = () => {};

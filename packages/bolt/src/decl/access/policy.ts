@@ -1,6 +1,6 @@
-// `policy()` (§3.3.7): per model, the read outputs holders may read and the rows of each (decision 3: a model's policy
+// `policy()`: per model, the read outputs holders may read and the rows of each (a model's policy
 // alone guards its access points and every layer under them), one typed `verdict` per write verb returning a `Verdict` (an
-// approval flow among them, spec §8), capabilities, manual starts and limits. A grant never changes an output's shape.
+// approval flow among them), capabilities, manual starts and limits. A grant never changes an output's shape.
 // Everything a grant says is typed from the model's own declaration; nothing else type-checks.
 import { Schema } from 'effect';
 import type { CreateVerdict, DeleteVerdict, UpdateVerdict } from '../ctx.ts';
@@ -192,8 +192,8 @@ type VerdictSlots = {
 	} & { readonly [key: string]: unknown };
 };
 
-// ── limits (rule 38) ──
-/** A rate limit (rule 38): `'<n>/<unit>'`, optionally `per` actor or IP; a list applies every rule. */
+// ── limits ──
+/** A rate limit: `'<n>/<unit>'`, optionally `per` actor or IP; a list applies every rule. */
 export type Limit =
 	Rate | { rate: Rate; per: 'actor' | 'ip' } | readonly { rate: Rate; per: 'actor' | 'ip' }[];
 /** A rate limit on an envoy's inbound traffic, counted `per` sender or per subject. */

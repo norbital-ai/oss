@@ -1,4 +1,4 @@
-// Host ports as services (D4, B.1; P18, P19): what the engine asks of its host, by capability, never by provider.
+// Host ports as services (D4, B.1): what the engine asks of its host, by capability, never by provider.
 // Every member fails typed — the facility's failure or `Unavailable`. A port is required; one the host may leave out
 // takes `off` explicitly (`@norbital-ai/bolt/facilities`), and only then answers `Unavailable`. Walls are the caller's
 // (`Port.call`). The tenant database is `TenantDb` (`db/tenant-db.ts`).
@@ -111,7 +111,7 @@ const turnedOff = (facility: string) =>
 	Port.unavailable(facility, 'the host turned this facility off');
 
 // ── files ──
-/** Stored blobs; the `sys_file` row is the engine's (rule 18). `get` answers at most `max` bytes (more is `invalid`). */
+/** Stored blobs; the `sys_file` row is the engine's. `get` answers at most `max` bytes (more is `invalid`). */
 export class Files extends Context.Service<
 	Files,
 	{
@@ -352,7 +352,7 @@ export class Geo extends Context.Service<
 				});
 	}
 }
-/** The runtime log (§5.12), held by the host: `write` never waits or fails. */
+/** The runtime log, held by the host: `write` never waits or fails. */
 export type LogsShape = {
 	readonly write: (event: LogEvent) => Effect.Effect<void>;
 	readonly query: (query: LogQuery) => Effect.Effect<readonly LogRow[], PortFailure>;
@@ -456,7 +456,7 @@ const messageBody = (m: TransportMessage): Json =>
 	});
 
 // ── deadlines ──
-/** One next-due instant per scope, held in host memory; no polling (rule 52a). */
+/** One next-due instant per scope, held in host memory; no polling. */
 export class DeadlinePort extends Context.Service<
 	DeadlinePort,
 	{
@@ -486,7 +486,7 @@ export const RunUnits = Context.Reference<{
 
 // ── drivers ──
 /**
- * The live links' driver calls, by instance (§4.5): a conversation driver sends (a provider refusal is `SendRefused`,
+ * The live links' driver calls, by instance: a conversation driver sends (a provider refusal is `SendRefused`,
  * permanent or retried) and shows typing, a request driver answers `request` with the instance's credential host-side, a
  * pushing driver (a calendar) reads a page of items for a sync; `changed` reopens a link from its row as it is now.
  */
@@ -595,8 +595,8 @@ export type AiEvent =
 	| { readonly _tag: 'Progress'; readonly reasoning: string | undefined }
 	| { readonly _tag: 'Response'; readonly response: AiResponse };
 /**
- * The AI facility (P35, P39): `ask` is `sys_1` (structured decisions from text and resolved images), `infer` the `sys_2` LLM
- * (multimodal; the 20 s idle wall cuts a stream into a `cut` step, rule 63), `embed` the embedding model. `models` are the
+ * The AI facility: `ask` is `sys_1` (structured decisions from text and resolved images), `infer` the `sys_2` LLM
+ * (multimodal; the 20 s idle wall cuts a stream into a `cut` step), `embed` the embedding model. `models` are the
  * classes the host maps; `catalog` the concrete models a person may pick and the one a conversation starts on.
  */
 export class Ai extends Context.Service<
@@ -672,7 +672,7 @@ export class Ai extends Context.Service<
 	}
 }
 
-// ── kernel ports (compute model §14, wave 1) ──
+// ── kernel ports (wave 1) ──
 /** The release's files, read-only (`ArtifactPort`): the engine's `FileSystem` is built over it. */
 export class ArtifactFiles extends Context.Service<
 	ArtifactFiles,

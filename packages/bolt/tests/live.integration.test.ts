@@ -1,5 +1,5 @@
 // The browser path end to end on PGlite: $bolt → fetch → the /__bolt handler → engine → live hub → SSE → $bolt.
-// One guarantee per test (rules 25, 32, 64–67). Two cells, each shared by its suite in order: a test reads only the
+// One guarantee per test. Two cells, each shared by its suite in order: a test reads only the
 // rows it wrote, or compares a view with a fresh read.
 import { randomUUID } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
@@ -295,7 +295,7 @@ layer(Layer.effect(Cell, cellOf({ ...callbacks, teams: manifest.teams }, approvi
 	excludeTestServices: true
 })('optimistic writes on PGlite', (it) => {
 	it.effect(
-		'a refused optimistic write painted while in flight and leaves no painted row (rule 67)',
+		'a refused optimistic write painted while in flight and leaves no painted row',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {
@@ -350,7 +350,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 	'live + protocol + $bolt on PGlite',
 	(it) => {
 		it.effect(
-			'an act resolves only once its committed row is on the live read (rule 66); await q reads once',
+			'an act resolves only once its committed row is on the live read; await q reads once',
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
@@ -378,7 +378,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 		);
 
 		it.effect(
-			'an update carries the revision the page read; a row that moved since is conflict and the paint lifts (rule 25)',
+			'an update carries the revision the page read; a row that moved since is conflict and the paint lifts',
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
@@ -411,7 +411,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 		);
 
 		it.effect(
-			"a committed act reaches a view as a patch stamped with the act's sequence (rule 65)",
+			"a committed act reaches a view as a patch stamped with the act's sequence",
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
@@ -647,7 +647,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 		);
 
 		it.effect(
-			'the inbox refreshes its complete unread count and marks only committed arrivals (L-BOLT-354)',
+			'the inbox refreshes its complete unread count and marks only committed arrivals',
 			() =>
 				Effect.scoped(
 					Effect.gen(function* () {
@@ -668,7 +668,7 @@ layer(Layer.effect(Cell, cellOf(imaged, guest.source)), { excludeTestServices: t
 								.run([inbox], { as: 'caller', authority: rep }, b())
 								.pipe(Effect.map(([answer]) => answer));
 						expect(w.held.get('inbox')).toEqual({ rows: [], unread: 0 });
-						// the one writer (L-BOLT-356) hands its inserted rows to the lane, as every writer's statement does
+						// the one writer hands its inserted rows to the lane, as every writer's statement does
 						const c = new Chain();
 						noticeInsert(
 							c,

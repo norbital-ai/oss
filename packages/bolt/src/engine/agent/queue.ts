@@ -1,5 +1,5 @@
 import { runPiece } from '../runs/rows.ts';
-// The message queue (rules 58, 60): how a person's message reaches a turn. A message goes at once: it is queued in one
+// The message queue: how a person's message reaches a turn. A message goes at once: it is queued in one
 // statement with the conversation's `agent.turn` run, so no process death strands it, the next step of a running turn takes
 // it (an open `wait` gives way, so the step ends) and an idle conversation starts a turn. Only the sender holds a message
 // back: `schedule` keeps it until a time (its own run) or until the running work has finished, one message per finish, after
@@ -91,7 +91,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		return Option.getOrUndefined(found)?.r;
 	});
 	const post = Effect.fn('MessageQueue.post')(function* (o: Parameters<AgentsShape['post']>[0]) {
-		// a follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled (L-BOLT-408)
+		// a follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled
 		// an untitled conversation is named by its first message (the panel's list). Its own statement: posting a file
 		// writes the same conversation row, and one statement cannot write a row twice
 		const opened = new Chain();

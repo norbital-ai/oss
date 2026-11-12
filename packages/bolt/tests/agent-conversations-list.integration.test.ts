@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// The panel's `conversations` read (§5.9, §5.10), answered by the engine's reader as the live hub asks it: a member lists
+// The panel's `conversations` read, answered by the engine's reader as the live hub asks it: a member lists
 // their own root in-app conversations, newest first, titled by the engine or the first message, plus the envoy threads
 // they may read and (as an administrator) automation transcripts; only Web UI conversations take a post (real handler).
 import { expect, layer } from '@effect/vitest';

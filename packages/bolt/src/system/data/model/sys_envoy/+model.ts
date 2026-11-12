@@ -1,4 +1,4 @@
-// An envoy (P22, §4.4): the tenant-created agent that answers outside senders on its channel instances. Its authority is
+// An envoy: the tenant-created agent that answers outside senders on its channel instances. Its authority is
 // the declared policies by handle; its `task` is the supplementary prompt added to the workspace agent's brief. The
 // channel's credentials never live here: `sys_integration` owns the link and `bolt_credential` seals the secret.
 import { bind_system_model } from '../../../../decl/model.ts';

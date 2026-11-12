@@ -70,7 +70,7 @@ const rep = Effect.runSync(compile_authority(
 ));
 const bindings = { now: '2026-01-01T00:00:00.000Z', today: '2026-01-01', tz: 'UTC' };
 
-describe('engine/identity: erasure admission (rule 38e(d))', () => {
+describe('engine/identity: erasure admission', () => {
 	it('erasable = stored authored fields outside keys, unique, states, relations, checks and roll-ups', () => {
 		expect(erasableFields(m, 'payslips').sort()).toEqual(['bank', 'employee_name', 'gross']);
 		expect(erasableFields(m, 'lines').sort()).toEqual(['kept', 'memo']); // `amount` is summed by the parent

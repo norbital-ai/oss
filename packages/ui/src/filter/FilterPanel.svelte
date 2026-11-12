@@ -2,8 +2,8 @@
 	import type { UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import { fork } from '../effect/index.js';
-	// The view popover of `Table` and `Board` (rule 16b, P34): one filter-and-sort toolbar icon. The main control is
-	// "Describe what to show…" (when the host can describe, rule 16a); the author's scope read-only, relations by their
+	// The view popover of `Table` and `Board`: one filter-and-sort toolbar icon. The main control is
+	// "Describe what to show…" (when the host can describe); the author's scope read-only, relations by their
 	// label; explicit conditions and sort (≤ 4 keys) stay in a collapsed accordion when a describer is available.
 	import type { ModelExposure } from '../kinds/context.js';
 	import Icon from '@iconify/svelte';

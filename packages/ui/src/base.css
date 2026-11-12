@@ -261,7 +261,7 @@
 	--shadow-deep: 0 8px 32px rgb(0 0 0 / 0.12);
 
 	/* ================================================================ */
-	/* Canonical type scale (DESIGN.md §3)                              */
+	/* Canonical type scale                              */
 	/* Marketing tiers are fluid; product tiers are fixed.              */
 	/* ================================================================ */
 	--text-display: clamp(1.875rem, 1.4rem + 1.6vw, 3rem);
@@ -452,7 +452,7 @@
 }
 
 /* ================================================================ */
-/* 2b ▸ Type roles (DESIGN.md §3)                                    */
+/* 2b ▸ Type roles                                    */
 /* ================================================================ */
 /*
 	The `--text-*` tokens above are a scale: they answer "how big", and each one carries
@@ -534,7 +534,7 @@
 	/* A note attached to something else: figure captions, footnotes, footer copy. Leading
 		 comes from `text-sm`, for the same reason as `text-meta` above. Plain de-emphasised UI
 		 text is *not* this role — `text-sm text-muted-foreground` is a size and a colour, which
-		 is exactly what rule 5 asks for, and does not need a name. */
+		 is exactly what the type scale asks for, and does not need a name. */
 	.text-caption {
 		@apply text-sm;
 		font-weight: 400;

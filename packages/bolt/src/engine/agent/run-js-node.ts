@@ -1,4 +1,4 @@
-// A file run's virtual Node (compute model §3, "Running a file"): guest source appended to the bundle, so the bundle's
+// A file run's virtual Node ("Running a file"): guest source appended to the bundle, so the bundle's
 // source map keeps its lines. It defines `globalThis[Symbol.for('norbital.node')]` — `builtin(name)` for the bundle's
 // built-in imports, `run(input, load)` for its entry — and the globals a Node script expects: `Buffer`, `process` (an
 // empty `env`), `global` and a `require` of the built-ins. `fs` works over the mounts the run is handed by one crossing

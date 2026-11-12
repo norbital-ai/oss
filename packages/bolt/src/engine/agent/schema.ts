@@ -1,4 +1,4 @@
-// Conversations and messages (§5.9, rules 57–63): the transcript, the queue and an instance's message history are the same
+// Conversations and messages: the transcript, the queue and an instance's message history are the same
 // `sys_message` rows. Each system model lives under `src/system/data/model/<name>/+model.ts`.
 import { Effect, Option, Predicate, Schema, type Types } from 'effect';
 import { BoltError } from '../../protocol/errors.ts';
@@ -17,14 +17,14 @@ export const textOf = (content: Json): string => {
 };
 
 /**
- * Whose authority a message carries (rules 57, 60, 63a): resolved per message, so each steer acts as its own sender.
- * `team`: posted while previewing that team (rule 39): the turn holds the team's grants, as the request did.
- * `envoy` is a sender on an envoy's instance (P32): `member` the linked member, if any; `dm` whether it is a direct message.
+ * Whose authority a message carries: resolved per message, so each steer acts as its own sender.
+ * `team`: posted while previewing that team: the turn holds the team's grants, as the request did.
+ * `envoy` is a sender on an envoy's instance: `member` the linked member, if any; `dm` whether it is a direct message.
  * `policies` is an automation's declared set; a sub-agent copies its parent's `as`, never wider.
  */
 export type As = typeof AsSchema.Type;
 
-/** `verdicts` counts incomplete verdicts; the verifier runs again after each, with no stall (rule 63a, today's behaviour). */
+/** `verdicts` counts incomplete verdicts; the verifier runs again after each, with no stall (today's behaviour). */
 export type Plan = Types.Mutable<typeof PlanSchema.Type>;
 /** The conversation's checklist (today's `todo`): unique ids, at most one `doing`, `done` is terminal with its text unchanged. */
 export type Goal = Types.Mutable<typeof GoalSchema.Type>;
@@ -255,7 +255,7 @@ export const rowsOf = (rows: readonly { readonly [c: string]: Json }[]) =>
 /** The panel's conversation list: a member's own in-app conversations, most recently active first. */
 export const CONVERSATIONS = 100;
 /**
- * Whether a `sys_conversation` image belongs to the member's own list (§5.9) — the same set the `conversations` read
+ * Whether a `sys_conversation` image belongs to the member's own list — the same set the `conversations` read
  * returns, so a live patch never carries a row a re-read would not. An instance's thread has no owner (`conversations/index.ts`
  * inserts it without one), so channel visibility requires the read's runtime envoy or participant check.
  */
@@ -440,7 +440,7 @@ const scrub = (value: Json): Json =>
 			: Array.isArray(value)
 				? value.map(scrub)
 				: Object.fromEntries(Object.entries(value).map(([k, v]) => [k.replaceAll('\0', '\ufffd'), scrub(v)]));
-/** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
+/** Staff read a failed turn's reason and every instance's thread. */
 export const isStaff = (a: Authority) =>
 	a.admin || (a.actor.kind === 'member' && !a.actor.external);
 /**
@@ -520,7 +520,7 @@ export function transcriptRow(r: MessageRow, staff: boolean, thread: boolean): A
 				}),
 		...(staff && meta?.tag === 'failed' && meta.detail !== undefined
 			? { detail: meta.detail }
-			: {}), // hook:agent-ui — rule 59: the reason reaches staff, never a sender
+			: {}), // hook:agent-ui — the reason reaches staff, never a sender
 		...(r.copied_from == null && meta?.tag === 'confirm'
 			? {
 					call: { name: meta.call.name, input: meta.call.input }

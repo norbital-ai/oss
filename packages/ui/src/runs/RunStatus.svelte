@@ -19,7 +19,7 @@ The live status of one automation run: queued, running with its progress, or its
 </script>
 
 <script lang="ts">
-	// One run, live (rule 56): status, progress, the error code, and download links for the files it returned.
+	// One run, live: status, progress, the error code, and download links for the files it returned.
 	import { bolt_of } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
 	import { humanize, msg, catalogText } from '../text/messages.js';

@@ -54,7 +54,7 @@ test('tone: whole words, and a negation is never a success', () => {
 	assert.equal(k.tone('in_progress'), 'info');
 	assert.equal(k.tone('on_hold'), 'warning');
 	assert.equal(k.tone('skipped'), 'neutral', 'a message with nothing to send is not a failure');
-	// delivery statuses (bolt §5.9)
+	// delivery statuses
 	assert.equal(k.tone('bounced'), 'danger');
 	assert.equal(k.tone('complained'), 'danger');
 	assert.equal(k.tone('deferred'), 'warning');

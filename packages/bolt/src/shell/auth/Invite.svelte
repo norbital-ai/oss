@@ -1,5 +1,5 @@
 <!--
-	Invitation accept (§5.11, rule 38b): inspecting the link consumes nothing. A new address signs in with a code, which
+	Invitation accept: inspecting the link consumes nothing. A new address signs in with a code, which
 	creates the member and accepts in one act; a signed-in member of the invited address accepts here.
 -->
 <script lang="ts">

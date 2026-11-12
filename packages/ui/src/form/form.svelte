@@ -145,7 +145,7 @@
 	) => bolt.act(acts, options);
 
 	// an update needs its row: the page's, else the record shell's shown one (the scrubbed revision while one is picked),
-	// else one read; a stale link shows "Not found or no access" (§5.10)
+	// else one read; a stale link shows "Not found or no access"
 	const view = use_record_view();
 	const shown = $derived.by(() => {
 		const v = view?.current;

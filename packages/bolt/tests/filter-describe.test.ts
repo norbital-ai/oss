@@ -1,4 +1,4 @@
-// AI filtering's schema and strict decode (rule 16a, P34, P35) without a database: the options System 1 chooses among
+// AI filtering's schema and strict decode without a database: the options System 1 chooses among
 // are the caller's exposure (own fields, one hop through exposed relations: `is`, has any / all / none, count, child
 // aggregates) and nothing else. The real native read boundary also exercises strict exposure, variable and sort
 // refusals, independently of the planner's internal validator.
@@ -342,7 +342,7 @@ const nativeDescriber = (
 			system2: {
 				models: ['x'],
 				infer: async () => {
-					throw new Error('System 2 is never asked (P35)');
+					throw new Error('System 2 is never asked');
 				}
 			},
 			embed: off

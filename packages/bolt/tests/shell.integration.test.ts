@@ -1,4 +1,4 @@
-// The shell's host half over HTTP on PGlite (§5.10, §5.11, rules 38a, 38d, 39): sign-in and sign-out, the boot,
+// The shell's host half over HTTP on PGlite: sign-in and sign-out, the boot,
 // settings as an administrator only, preview-as, the PWA manifest, and a visitor applying through the
 // public careers page with a Turnstile token, composed by the native workspace host.
 import { describe, expect, it, layer } from '@effect/vitest';
@@ -370,7 +370,7 @@ layer(workspace)('shell routes', (it) => {
 	let admin: Jar = jar(),
 		rep: Jar = jar(),
 		repId = '';
-	describe('shell host (§5.10)', () => {
+	describe('shell host', () => {
 		it.effect('refuses a stranger who has not passed the check before sending a sign-in code', () =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
@@ -427,7 +427,7 @@ layer(workspace)('shell routes', (it) => {
 		);
 
 		it.effect(
-			'serves GET /__bolt/openapi.json: OpenAPI 3.1 of the callables the caller may invoke (L-BOLT-294)',
+			'serves GET /__bolt/openapi.json: OpenAPI 3.1 of the callables the caller may invoke',
 			() =>
 				Effect.gen(function* () {
 					const r = yield* call(admin, 'GET', '/__bolt/openapi.json');
@@ -510,7 +510,7 @@ layer(workspace)('shell routes', (it) => {
 				})
 		);
 
-		it.effect('preview-as is admin-only and clears the administrator flag (rule 39)', () =>
+		it.effect('preview-as is admin-only and clears the administrator flag', () =>
 			Effect.gen(function* () {
 				expect((yield* call(rep, 'POST', '/__bolt/shell/preview', { user: repId })).status).toBe(
 					403
@@ -655,7 +655,7 @@ layer(workspace)('shell routes', (it) => {
 		);
 	});
 
-	describe('visitor pages (§5.10, rule 38d)', () => {
+	describe('visitor pages', () => {
 		const V = { 'Bolt-App': 'careers' };
 
 		it.effect(
@@ -944,7 +944,7 @@ layer(workspace)('shell routes', (it) => {
 });
 
 it.effect(
-	'shell_api.act states the contract the shell booted against in Bolt-Contract (L-BOLT-171)',
+	'shell_api.act states the contract the shell booted against in Bolt-Contract',
 	() =>
 		Effect.gen(function* () {
 			const stated: (string | null)[] = [];

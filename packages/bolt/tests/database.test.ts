@@ -1,4 +1,4 @@
-// The database request driver (`sqlserver`, §2.6): the op checked before the host's link runs it, the result bounded
+// The database request driver (`sqlserver`): the op checked before the host's link runs it, the result bounded
 // after, and a driver's diagnostics never reaching the guest.
 import { expect, it } from '@effect/vitest';
 import { Effect, Exit, Fiber } from 'effect';

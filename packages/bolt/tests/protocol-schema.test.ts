@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The wire's Schemas (§5.7, A.4) and the C9 artifact a host reads: each body decodes and encodes back to itself, the
+// The wire's Schemas (A.4) and the C9 artifact a host reads: each body decodes and encodes back to itself, the
 // status map runs both ways, the own callables keep their refusals, an instance status drops what it cannot read, the
 // artifact's files are decoded once (`ManifestInvalid`) as native Effects, and a workspace's pages resolve alike
 // on every host.
@@ -223,7 +223,7 @@ describe('the wire Schemas', () => {
 	});
 });
 
-describe('the status map (rule 32)', () => {
+describe('the status map', () => {
 	it("answers each outcome's status, and the client reads a failure's status back as its refusal", () => {
 		const refused = (code: Extract<Outcome, { kind: 'refused' }>['code']): Outcome => ({
 			kind: 'refused',

@@ -1,4 +1,4 @@
-// Field kinds and input kinds: one literal language for stored fields and every typed input (§3.3.2).
+// Field kinds and input kinds: one literal language for stored fields and every typed input.
 import type { ModelName, CustomFieldName, CustomShape, NamesPart, Row } from './names.ts';
 import type { ModelWhere } from './where.ts';
 import type {
@@ -33,7 +33,7 @@ import type {
  */
 /** A `file` field's cap. */
 type FileSize = `${bigint}KiB` | `${bigint}MiB` | `${bigint}GiB`;
-/** `markdown`: the text is Markdown, rendered as prose; the others are checked on write (rule 68). */
+/** `markdown`: the text is Markdown, rendered as prose; the others are checked on write. */
 /**
  * How a text field is shown and edited: `cel` is a CEL expression, a wrapped code editor; `team` holds a team handle
  * declared in source (`+team.ts`), refused on write when undeclared.
@@ -279,7 +279,7 @@ type DefaultOf<K> = K extends { kind: 'date' }
 					? never
 					: Literal<K>;
 
-// ── exact-literal validation (rule 5): every options object is exact at every depth ──
+// ── exact-literal validation: every options object is exact at every depth ──
 type Fn = (...args: never[]) => unknown;
 type Leaf = string | number | boolean | null | undefined;
 /** A declaration's parameter: `T` checked by `V`, except while TS computes the literal's contextual type from the

@@ -2,7 +2,7 @@ import { Effect, Stream } from 'effect';
 import { input_schema } from '@norbital-ai/std/kind';
 import { encode_wire } from '@norbital-ai/std/wire';
 import { Schema } from 'effect';
-// Seed mode (rule 70, X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
+// Seed mode (X-13): a restore. Stored values go in as given (kept ids of any uuid version, non-initial states,
 // `seq` values, sealed rows) in relationship order, one statement per model per ≤ 1 MiB chunk, each chunk a step
 // of its own (`restorer`) in one statement; the database's constraints apply; roll-ups are derived and compared with any given value (`seed_drift`); each `seq`
 // counter is raised to the highest seeded value. No transform, trigger, run, outbox row, approval route or rate limit.
@@ -23,7 +23,7 @@ import { decided, Chain } from './sql.ts';
 export type SeedPack = {
 	readonly [model: string]: readonly RowData[];
 };
-/** Seed decode (rule 70): throws `seed_decode` on the first bad row. hook:callables — `bolt check` runs it at build. */
+/** Seed decode: throws `seed_decode` on the first bad row. hook:callables — `bolt check` runs it at build. */
 export function decode_seed(m: EngineManifest, pack: SeedPack): void {
 	const cat = catalog_of(m);
 	for (const [c, rows] of Object.entries(pack))
@@ -79,7 +79,7 @@ const Drift = Schema.fromJsonString(
 	})
 );
 /**
- * A restore in bounded steps, each one unit of work (compute model §3, "Limits and liveness"): one model, or one
+ * A restore in bounded steps, each one unit of work ("Limits and liveness"): one model, or one
  * chunk within the shared seed byte budget, per step in relationship order; then one last step derives the roll-ups (compared with
  * every given value the steps kept) and raises the `seq` counters. Each step is its own transaction, so a failed restore
  * keeps the steps before it: a host restores into a branch it drops on failure. `step` answers `true` while steps remain.

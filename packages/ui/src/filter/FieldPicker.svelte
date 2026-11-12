@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { UiContext } from '../client/contract.js';
-	// The view popover's field tree with search (rule 16b): own fields, one-relations (a record condition, or expanded to
+	// The view popover's field tree with search: own fields, one-relations (a record condition, or expanded to
 	// the target's fields, two hops) and, at the top, many-relations — exactly the paths the engine's catalogue offers.
 	import FieldIndicator from './FieldIndicator.svelte';
 	import * as Popover from '../primitives/popover/index.js';

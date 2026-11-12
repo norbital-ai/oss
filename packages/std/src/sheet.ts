@@ -1,4 +1,4 @@
-// std/sheet (§3.7, §5.4, D15): the one `Cell[][]` ⇄ rows codec. The host reads file references through
+// std/sheet (D15): the one `Cell[][]` ⇄ rows codec. The host reads file references through
 // Native spreadsheet readers provide the worksheet cells; this module
 // only maps cells to typed rows and back. The first row is the header; a header matches a column name, a date
 // period is two columns `<name>.from` / `<name>.to` (inclusive, blank `to` = open), and an unknown header is an error.

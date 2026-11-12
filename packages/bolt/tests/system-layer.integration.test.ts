@@ -1,6 +1,6 @@
 import { seed_envoys } from './support/envoys.ts';
 // The built-in layer's integration instances on PGlite: `sys_integration` written through ordinary acts and its
-// engine-side transform (FINAL §3), and the instance credential store's epoch fence (§4.5).
+// engine-side transform, and the instance credential store's epoch fence.
 import { randomBytes } from 'node:crypto';
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto';
 import { describe, expect, it } from '@effect/vitest';

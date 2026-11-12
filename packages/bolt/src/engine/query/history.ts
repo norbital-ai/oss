@@ -143,7 +143,7 @@ export const read_history = Effect.fn('Bolt.read_history')(function* (
 		if (existence === undefined || scope === undefined)
 			return yield* BoltError.make('corrupt', 'decode', 'The history admission read returned an incomplete answer.');
 		const exists = existence.rows.length > 0;
-		// a live row needs the history scope; a deleted one, an unconditional grant of the output (rule 17)
+		// a live row needs the history scope; a deleted one, an unconditional grant of the output
 		const visible = exists ? scope.rows.length > 0 : granted.some((a) => isTrue(a.where));
 		if (!visible) return read.full === true || read.view === true ? null : [];
 	}

@@ -1,4 +1,4 @@
-// A model's file syncs (spec §3.2, §3.3): the view toolbar's Import, Download template and Export. Each is a platform
+// A model's file syncs: the view toolbar's Import, Download template and Export. Each is a platform
 // run `<model>.sync.<sync>` started by a member (its `starter`), so RunStatus shows it and a template's or export's
 // FileRef is the run's output: `{ mode: 'import', file, context? }` | `{ mode: 'template' | 'export', format?,
 // to?, context?, where? }`.

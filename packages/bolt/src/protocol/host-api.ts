@@ -181,7 +181,7 @@ export const MintedSession = Schema.Struct({
 	expires_at: Schema.String
 });
 export type MintedSession = typeof MintedSession.Type;
-/** `founder.bootstrap` (§5.11.3): the first administrator, or the identity refusal (`forbidden`: one exists already). */
+/** `founder.bootstrap`: the first administrator, or the identity refusal (`forbidden`: one exists already). */
 export const FounderAnswer = Schema.Union([
 	Schema.TaggedStruct('Founded', { user: Schema.String }),
 	Schema.TaggedStruct('FounderRefused', { code: Schema.String, message: Schema.String })
@@ -192,7 +192,7 @@ export type FounderAnswer = typeof FounderAnswer.Type;
 export type Signal = { readonly signal: AbortSignal };
 /** A built workspace: `bolt build`'s release, with source, format and digests verified by this release. */
 export type Release = {
-	/** The host's release id (the artifact digest it records): authorities are compiled per release (rule 37). */
+	/** The host's release id (the artifact digest it records): authorities are compiled per release. */
 	readonly id: string;
 	/** The release's files (`artifact.json`, `client/…`) and its seed packs (`../seed/<pack>/…`), read-only. */
 	readonly artifact: ArtifactPort;
@@ -206,7 +206,7 @@ export type HostCredentials = {
 	readonly [K in keyof Credentials]: (...args: Parameters<Credentials[K]>) =>
 		Promise<Effect.Success<ReturnType<Credentials[K]>>>;
 };
-/** The shell's host parts (§5.10); `studio` and `organization.write` may reject with an encoded `HostFailure`. */
+/** The shell's host parts; `studio` and `organization.write` may reject with an encoded `HostFailure`. */
 export type ShellPorts = Pick<
 	ShellHostConfig,
 	| 'workspace'
@@ -221,7 +221,7 @@ export type ShellPorts = Pick<
 	| 'ai'
 >;
 /**
- * The agent's host parts (§5.9); the release's source (`workspace_search`) and attachments are this release's own. `ingest`
+ * The agent's host parts; the release's source (`workspace_search`) and attachments are this release's own. `ingest`
  * (Norbital Convert's `document_ingester`) serves the agent's `read_file` and `ctx.convert.ingest`; absent, neither ingests.
  */
 export type AgentPorts = Pick<
@@ -275,7 +275,7 @@ export type BranchPorts = {
 	/** The environment's durable host store; founder bootstrap, which mutates identity, refuses without it. */
 	readonly audit?: AuditPort;
 };
-/** An environment's integration links (§4.5): they outlive idle generations and re-enter the current one. */
+/** An environment's integration links: they outlive idle generations and re-enter the current one. */
 export type LinkHost = {
 	readonly release: Release;
 	readonly database: HostTenantDb;
@@ -290,7 +290,7 @@ export type LinkHost = {
 	enter<T>(work: (workspace: ActiveWorkspace) => Promise<T>): Promise<T>;
 	/** As `enter`, admitted under the compute envelope (a guest body: a custom conversation's webhook, a test send). */
 	admit<T>(work: (workspace: ActiveWorkspace) => Promise<T>): Promise<T>;
-	/** FINAL §4.5: wraps the sealed credentials the links write through, so credential I/O can survive a retirement. */
+	/** wraps the sealed credentials the links write through, so credential I/O can survive a retirement. */
 	credentials?(sealed: HostCredentials): HostCredentials;
 	/** The providers' network: a cell has no `fetch` of its own. */
 	readonly fetch: typeof fetch;
@@ -312,7 +312,7 @@ export type ActiveWorkspace = {
 		request: Request,
 		options: Signal & { readonly address: string }
 	): Promise<Response | null>;
-	/** One deadline wake (rule 52a): every due run of the environment, then `deadlines.settle`. */
+	/** One deadline wake: every due run of the environment, then `deadlines.settle`. */
 	wake(options: Signal): Promise<void>;
 	/** Signal work due during an existing wake without entering another compute envelope. */
 	pulse(options: Signal): Promise<boolean>;
@@ -341,7 +341,7 @@ export type ActiveWorkspace = {
 export type WorkspaceBranch = {
 	readonly schema: {
 		/**
-		 * Engine tables, then the release's schema plan (rule 69; destructive steps only when accepted). Answers what it
+		 * Engine tables, then the release's schema plan (destructive steps only when accepted). Answers what it
 		 * did (v13): each pending step's rows and the whole duration, measured on this branch.
 		 */
 		migrate(
@@ -381,12 +381,12 @@ export type WorkspaceBranch = {
 		administered(email: string, options: Signal): Promise<readonly AdministeredMember[] | null>;
 	};
 	readonly integrations: {
-		/** FINAL §4.5: a restored branch's session instances lose their credentials and read `unpaired`. */
+		/** a restored branch's session instances lose their credentials and read `unpaired`. */
 		unpair_sessions(options: Signal): Promise<void>;
 	};
 };
 /**
- * A pack load in bounded steps (compute model §3, "Limits and liveness"): the host enters `step` once per unit of work
+ * A pack load in bounded steps ("Limits and liveness"): the host enters `step` once per unit of work
  * until it answers other than `more`; `hadRows` when the branch had rows and nothing changed. Each step commits on its
  * own, so a failed load leaves the steps before it: load into a branch the host drops on failure.
  */
@@ -412,7 +412,7 @@ export type HostApi = {
 	readonly guest_execution: 'source';
 	/** `HOST_API_VERSION` of the release that answers. */
 	readonly version: number;
-	/** The artifact contract this release implements (rule 69). */
+	/** The artifact contract this release implements. */
 	readonly contract: string;
 	readonly cookies: { readonly session: string; readonly preview: string };
 	/** The session cookie's site attributes. */
@@ -426,7 +426,7 @@ export type HostApi = {
 	/** The host's own authority over a workspace (signed operations, Studio as the host). */
 	authority(release: Release, holder: Holder, key: string, options: Signal): Promise<Authority>;
 	readonly schema: {
-		/** The schema state the release plans from (X-16: what a successor's plan is diffed against). */
+		/** The schema state the release plans from (what a successor's plan is diffed against). */
 		slice(release: Release, options: Signal): Promise<SchemaSlice>;
 		/** The destructive steps planning `release` over `applied` (another release's `slice`) would take. */
 		destructive(

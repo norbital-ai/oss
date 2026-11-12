@@ -1,6 +1,6 @@
 // Hosts: `sys_2.infer` over any OpenAI-compatible `/chat/completions` endpoint (bolt-server's `openai` provider, another host's
 // OpenRouter). One call is one streamed completion: text deltas reach `onDelta` as they arrive, so the engine's 20 s idle wall
-// (`modelCall`) cuts a long generation into a continued step instead of a `timeout` (rule 63); tool calls assemble from
+// (`modelCall`) cuts a long generation into a continued step instead of a `timeout`; tool calls assemble from
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
 import { Clock, Effect, Option, Queue, Schema, Stream } from 'effect';
@@ -95,7 +95,7 @@ function messagesOf(r: AiRequest): Wire[] {
 				reply = typeof said === 'object' ? said : null,
 				calls = reply?.toolCalls ?? [];
 			pending.push(...calls.map((t) => t.id).filter((id) => id !== ''));
-			// L-BOLT-412: the stored reasoning goes back with its reply (OpenRouter's `reasoning` on an assistant message)
+			// the stored reasoning goes back with its reply (OpenRouter's `reasoning` on an assistant message)
 			out.push({
 				role: 'assistant',
 				content: textOf(m.content),

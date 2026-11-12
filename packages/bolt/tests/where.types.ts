@@ -1,4 +1,4 @@
-// Type corpus for the P34 filter language (§3.3.9, rule 11a): each `@ts-expect-error` is a shape the decoder refuses too.
+// Type corpus for the P34 filter language: each `@ts-expect-error` is a shape the decoder refuses too.
 import { date_period, Instant, PlainDate } from '@norbital-ai/std/date';
 import type { OrderBy, Sortable, Where } from '../src/decl/where.ts';
 import './types/registry.ts';
@@ -20,7 +20,7 @@ const ok: Where<'orders'>[] = [
 const ok2: Where<'sites'>[] = [{ open: { overlaps: date_period('2026-03-01', '2026-03-25') } }];
 void ok;
 void ok2;
-// @ts-expect-error P1 a count takes eq…gte only (rule 11a: type and decoder admit the same shapes)
+// @ts-expect-error P1 a count takes eq…gte only (type and decoder admit the same shapes)
 const p1: Where<'customers'> = { sites: { count: { in: [1] } } };
 // @ts-expect-error P2 `startOf` on text
 const p2: Where<'orders'> = { note: { eq: { startOf: 'month' } } };

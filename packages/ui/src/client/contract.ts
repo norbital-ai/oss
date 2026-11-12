@@ -17,7 +17,7 @@ export type ReadError = Error &
 	);
 /** A read request's answer (`query`): one page per root. */
 export type QueryAnswer<R = Row> = { readonly [root: string]: Page<R> };
-/** One revision of a record as `history` answers it (rule 17). */
+/** One revision of a record as `history` answers it. */
 export type HistoryEntry = {
 	readonly revision: number;
 	readonly at: string | null;
@@ -239,7 +239,7 @@ export type ViewBolt = {
 		options?: { key?: string }
 	): Effect.Effect<ActSuccess, ActFailure>;
 	/**
-	 * Per-record restore (rule 17): `preview` says what taking a live record's own fields back to a past revision would
+	 * Per-record restore: `preview` says what taking a live record's own fields back to a past revision would
 	 * write; `run` writes it as one update observed at `live`, recorded in history as restored from that revision.
 	 */
 	restore?: {
@@ -254,15 +254,15 @@ export type ViewBolt = {
 	run(automation: string, input: Value | readonly Value[]): AutomationHandle;
 	/** Native manual refresh/file transfer; these are never authored automation starts. */
 	sync_control(model: string, sync: string, input: Value): RunHandle;
-	/** §3.5 `runs(automation, { where?, limit })`; absent until the client serves it (views then say so). */
+	/** `runs(automation, { where?, limit })`; absent until the client serves it (views then say so). */
 	runs?(automation: string, options: { where?: Json; limit: number }): Live<Page<RunRow>>;
 	file_url(ref: Pick<FileRef, 'id'>, options?: FileUrlOptions): string;
-	/** §3.5 rule 11a in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
+	/** The where check in the browser: each top-level condition and sort key kept or dropped alone. Absent → the view's own check. */
 	decode?(
 		model: string,
 		q: { where?: Json; order_by?: Json }
 	): { where: Json; order_by?: Json; dropped: readonly { path: string; message: string }[] };
-	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai` (P19); rejects when no filter could be built. */
+	/** Rule 16a `filter.describe`: present only when the host binds `decisions` or `ai`; rejects when no filter could be built. */
 	describe?:
 		| ((
 				model: string,

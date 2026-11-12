@@ -1,4 +1,4 @@
-// An integration instance's status (§4.5): the host's answer decoded at the trust boundary and the state wording every
+// An integration instance's status: the host's answer decoded at the trust boundary and the state wording every
 // provider's frame shares. The pairing itself is the host's; what is testable here is that the shell cannot be misled
 // by a malformed answer and never words a retry as a failure.
 import { required } from './support/required.ts';

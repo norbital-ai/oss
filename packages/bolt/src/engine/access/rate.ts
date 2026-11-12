@@ -1,4 +1,4 @@
-// Rate limits (rule 38): fixed windows counted first in the serving cell's memory, persisted by acts as a piece of their
+// Rate limits: fixed windows counted first in the serving cell's memory, persisted by acts as a piece of their
 // one statement (`bolt_rate`), and loaded in one read when a cell takes a tenant (`OPEN_WINDOWS_SQL`). Client addresses
 // are resolved through the trusted-proxy list; IPv6 counts by its /64; an address never reaches a bucket key in plain text.
 // Limits charge requests (HTTP acts, reads, uploads, agent posts, sign-in, envoy traffic) and an automation's manual starts
@@ -48,7 +48,7 @@ export const resetAfter = (charges: readonly Charge[], nowMs: number): number =>
 const DAY = 86_400_000;
 
 /**
- * One tenant's open windows in one cell, at most `max` buckets (rule 72). Buckets group by the instant their window
+ * One tenant's open windows in one cell, at most `max` buckets. Buckets group by the instant their window
  * starts, each a number key and a small-integer count; a hit only increments. When full, every group whose windows all
  * ended is dropped, then the oldest buckets until half remain, so eviction is amortized O(1). An evicted bucket restarts
  * at 0.
@@ -82,7 +82,7 @@ export class RateWindows {
 		window.counts.set(k, next);
 		return next;
 	}
-	/** Increments every bucket, then refuses if any is over: refusals count (rule 38). */
+	/** Increments every bucket, then refuses if any is over: refusals count. */
 	charge(charges: readonly Charge[], nowMs: number): RateVerdict {
 		let retryAfter = 0;
 		for (const c of charges) {
@@ -132,7 +132,7 @@ export const OPEN_WINDOWS_SQL = `SELECT rule, bucket, (extract(epoch FROM window
 /**
  * The persisted piece of an act's statement: CTE `rate` upserts every bucket and returns only the ones still under
  * their limit, so `(SELECT count(*) FROM rate) = charges.length` is the gate the rest of the statement conditions on
- * (rule 20's shape: a refused increment still counts, and the act's writes do not happen).
+ * (as the one write statement: a refused increment still counts, and the act's writes do not happen).
  */
 export function ratePiece(
 	c: Chain,
@@ -248,14 +248,14 @@ export function addressBucket(address: string): string {
 		.map((w) => w.toString(16))
 		.join(':')}::/64`;
 }
-/** `HMAC-SHA256(ip_mac, key)`: IP and pre-sign-in address buckets never hold the value (rule 38, §5.13). */
+/** `HMAC-SHA256(ip_mac, key)`: IP and pre-sign-in address buckets never hold the value. */
 export const macKey = (ipMac: Uint8Array, value: string): string =>
 	toBase64url(hmacSha256(ipMac, value));
 
 // ── the buckets of one request ──
 export type RateKind =
 	'act' | 'read' | 'upload' | 'agent' | 'register' | 'envoys.receive' | 'envoys.unrecognised';
-/** Whom `per` counts: resolved by the host before decode (the IP already MAC'd, rule 38). */
+/** Whom `per` counts: resolved by the host before decode (the IP already MAC'd). */
 type Who = { actor?: string; ip?: string; sender?: string; subject?: string };
 /** Every applicable bucket of a request: the kind key and, when named, the callable key (`<c>.<query|action>`). */
 export function charges_for(

@@ -1,4 +1,4 @@
-// A file sync's built-in parsers (spec §3.3), run on the host: an uploaded file's bytes as records of the sync's columns
+// A file sync's built-in parsers, run on the host: an uploaded file's bytes as records of the sync's columns
 // (its `schema`, else the model's writable fields), each with `$at` (its sheet row or line) so findings point at it. A
 // header or key matches a column's name or catalogue caption, any case; an unknown one is ignored. A custom parser runs in the guest
 // (`sync/file.ts`); this module only says which parser an upload is read with.

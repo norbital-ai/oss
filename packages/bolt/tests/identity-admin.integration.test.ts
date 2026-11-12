@@ -1,4 +1,4 @@
-// Member administration beyond the basics (rules 38c, 39, §5.11.3): source team selection and hierarchy, invitation resend, a
+// Member administration beyond the basics: source team selection and hierarchy, invitation resend, a
 // previewed team's Authority, and the membership projection (`bolt.membership` queued in the verb's statement only
 // when the host binds the port, and handed to the port by its platform run).
 import { describe, expect, layer } from '@effect/vitest';
@@ -178,7 +178,7 @@ layer(AdministrationFixtureLive)((it) => {
 		);
 	});
 
-	describe('invitation resend (rule 38c)', () => {
+	describe('invitation resend', () => {
 		it.effect(
 			'an open or expired invitation gets a fresh expiry and its notice again; an accepted one is refused',
 			() =>
@@ -214,7 +214,7 @@ layer(AdministrationFixtureLive)((it) => {
 		);
 	});
 
-	describe('preview as a team (rule 39)', () => {
+	describe('preview as a team', () => {
 		it.effect(
 			'holds the source team policies, never admin; admin-only; an unknown team is not_found',
 			() =>
@@ -235,7 +235,7 @@ layer(AdministrationFixtureLive)((it) => {
 						},
 						teamTree: [team]
 					});
-					expect(p.authority.key.startsWith('preview:')).toBe(true); // never links a sender handle (rule 39)
+					expect(p.authority.key.startsWith('preview:')).toBe(true); // never links a sender handle
 					expect(p.impersonatedBy).toBe(founder);
 					expect(
 						yield* Effect.flip(preview_as(boss, authorities, db, 'bootstrap', { team: 'nope' }))
@@ -247,7 +247,7 @@ layer(AdministrationFixtureLive)((it) => {
 		);
 	});
 
-	describe('membership projection (§5.11.3)', () => {
+	describe('membership projection', () => {
 		it.effect('no port bound: lifecycle verbs queue nothing', () =>
 			Effect.gen(function* () {
 				const { db, h, founder, as, external, projected } = yield* AdministrationFixture;

@@ -1,4 +1,4 @@
-// Portals carry their policies (§3.3.1, rule 38d): a kiosk with `auth: 'none'` runs a signed-out visitor as exactly
+// Portals carry their policies: a kiosk with `auth: 'none'` runs a signed-out visitor as exactly
 // its policies; one with `shell: 'kiosk', audience: 'external'` sends a signed-out caller to sign in (or sign up), and every external who
 // signs in holds exactly its policies there — and nothing of it anywhere else. A visitor is an anonymous user (a
 // `sys_user` its cookie holds) that owns its rows, is limited by itself, and links to the account it signs in to.

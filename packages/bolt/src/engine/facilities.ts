@@ -564,7 +564,7 @@ function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatc
 			}
 		}).pipe(
 			Effect.provideService(Images, ports.images),
-			// an inference has no wall: its stall window ends it (compute model §3 "Limits and liveness")
+			// an inference has no wall: its stall window ends it
 			<A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | FacilityFailure, R> => {
 				const wall = facility_wall_ms(call._tag);
 				return wall === undefined ? self : Port.call(call._tag, wall)(self);

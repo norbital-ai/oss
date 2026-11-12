@@ -1,7 +1,7 @@
 # Releases
 
 A release is one `bolt build` of a template, named by digests. It is built once, in the template repository's CI,
-and the same bytes run on staging and production.
+and the same bytes run in every environment.
 
 ## Parts
 
@@ -16,7 +16,7 @@ and the same bytes run on staging and production.
 ```json
 {
 	"format": 1,
-	"handle": "norbital_hr",
+	"handle": "<handle>",
 	"bundle": "<sha256>",
 	"source": "<sha256>",
 	"seed": { "base": "<sha256>" }
@@ -27,7 +27,7 @@ Each digest is a SHA-256 over the part's file tree, leaving out `*.map` (the bun
 maps). Identical source gives an identical bundle digest, and a comment-only edit keeps it.
 `release.json` is written last: a reader that finds it finds every part it names.
 
-## From push to tenants
+## From push to workspaces
 
 ```
 template push (main)
@@ -36,31 +36,23 @@ template push (main)
   -> bolt templates publish --out=<dir>
        bundle/<b>.tar.gz  source/<s>.tar.gz  seed/<p>.tar.gz
        template/<directory>/<b>.json   (the release.json)
-  -> upload to R2 under releases/, every object named by its digest
+  -> the host stores every part by its digest
 
-env deploy promote --target=staging --template=<directory> --release=<b>
-  -> Colony reads releases/template/<directory>/<b>.json,
-     records it as the template's current release
-  -> fetches each part from R2, verifies its digest
+the host is told to serve bundle <b>
+  -> fetches each part, verifies its digest
   -> cuts the template's demo workspaces over
        same schema: flip, no pause
        changed schema: pause, migrate, flip
   -> running automations get 60 s, then turns stop at a step, at most 90 s
   -> open pages reconnect, and reload for a new client
-
-production: promote the SAME <b>
 ```
 
-Nothing reaches a tenant until `promote` names the bundle digest. A pull request runs the checks, the build and the
-tests, but uploads nothing.
+Nothing reaches a workspace until the host names the bundle digest, and every environment serves the same digest.
+A pull request runs the checks, the build and the tests, but publishes nothing.
 
-## Tethered tenants never rebuild
+## Hosts never rebuild
 
-Colony builds no template release: it serves the bundle CI built, by digest, on every host. Wiping a host's volume
-loses nothing; the parts are fetched from R2 again. Promote moves only the template's demo workspaces. A customer
-workspace owns its source (Studio) and never follows a template release; Studio's own previews build that source.
-
-## Untethered hosts
-
-An untethered host takes the same `bundle/` and activates it with its own facilities ([hosts](./hosts.md)). How it
-receives bundles is its own business; the needs check at activation is the only gate.
+A host builds no template release: it serves the bundle CI built, by digest. Only a template's demo workspaces follow
+its releases. A customer workspace owns its source (Studio) and never follows a template release; Studio's own previews
+build that source. Any host takes the same `bundle/` and activates it with its own facilities ([hosts](./hosts.md));
+the needs check at activation is the only gate.

@@ -1,4 +1,4 @@
-// Delivery status (§5.9): one order for every provider. A message's status is the most advanced kind reported; a
+// Delivery status: one order for every provider. A message's status is the most advanced kind reported; a
 // terminal failure wins over anything after it; an auto-reply is recorded and never moves the status.
 import type { DeliveryKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';

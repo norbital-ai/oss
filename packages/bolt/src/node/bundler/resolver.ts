@@ -1,4 +1,4 @@
-// Node's resolution over a file run's tree (compute model §3, "Running a file", P24): extensions, `index` files,
+// Node's resolution over a file run's tree ("Running a file"): extensions, `index` files,
 // `package.json` `exports`, `module` and `main`, and the tree's own `node_modules`, inside `/app` only. It runs in the
 // bundler process beside rolldown, over the bytes the kernel sent: nothing on disk is consulted, so a link, a host path
 // or a path out of the tree never resolves. Self-contained: the confined process may read nothing but its own code.

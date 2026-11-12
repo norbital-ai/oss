@@ -35,9 +35,8 @@ export function refLabel(cat: Catalog, of: string, rel: string): readonly string
 export const MANY_SHOWN = 20;
 /**
  * A list read of `of` as one read request: the root's `root` options and its fields (visible light ones and the FKs,
- * plus any hidden, json, custom or file field `named`, X-33), and each relation
- * in `refs` its root declares as a read layer read with its target's label in the same statement (no read per row,
- * rule 12): a one-relation as a nested row, a named many-relation as its first `MANY_SHOWN + 1` rows, or every row when
+ * plus any hidden, json, custom or file field `named`), and each relation
+ * in `refs` its root declares as a read layer read with its target's label in the same statement (no read per row): a one-relation as a nested row, a named many-relation as its first `MANY_SHOWN + 1` rows, or every row when
  * `all` (an export).
  */
 export function listRequest(

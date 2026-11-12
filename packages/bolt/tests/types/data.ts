@@ -1,4 +1,4 @@
-// Type corpus for the data layer (§3.3.2–§3.3.4, §3.3.9, rules 3–5, 9, 10, P14). Each `@ts-expect-error` line is a
+// Type corpus for the data layer. Each `@ts-expect-error` line is a
 // planted mistake; a clean tsc proves every valid line compiles and every mistake is refused at its literal.
 import { automation, custom_field } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
@@ -127,7 +127,7 @@ is<
 is<
 	Eq<StoredRow<'sites'>['checklist'], readonly { readonly item: string; readonly done: boolean }[]>
 >();
-is<Eq<'total' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // transforms never see derived values (rule 10)
+is<Eq<'total' extends keyof StoredRow<'orders'> ? 1 : 0, 0>>(); // transforms never see derived values
 // an input takes a row's value or the plain literal decode accepts (ISO text, decimal text or an integer)
 type Dec = Decimal | number | `${number}`;
 // a create tree: the root's declared columns and, per declared write layer, an array of that layer's rows
@@ -166,7 +166,7 @@ is<Eq<ValidInput<{ kind: never; fields: {} }>, ValidInput<{ kind: 'object'; fiel
 is<Eq<ValueOf<{ kind: 'ref'; to: 'customers'; optional: true }>, Id<'customers'> | null>>();
 is<Eq<ValueOf<{ kind: never; of: 'customers' }>, string>>();
 
-// ── predicates (K3) ──
+// ── predicates ──
 const w1: Where<'orders'> = {
 	status: { in: ['draft', 'submitted'] },
 	due: { lte: plainDate('2026-11-24') },
@@ -239,7 +239,7 @@ bind_model('data_case')({
 bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
-	// @ts-expect-error M6 a misspelt modifier (options are exact, rule 5)
+	// @ts-expect-error M6 a misspelt modifier (options are exact)
 	fields: { a: { kind: 'text', optinal: true } }
 });
 bind_model('data_case')({

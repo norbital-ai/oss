@@ -1,4 +1,4 @@
-// Integration instances (FINAL §3): the definitions an instance names, its row as the engine acts for it, the native
+// Integration instances: the definitions an instance names, its row as the engine acts for it, the native
 // `sys_integration` transform, an instance's live request (`ctx.request`, paced by the definition's `rate` and a `429`'s
 // `Retry-After`) and the body runner sync bodies and the `test` body share. The transform reads the manifest's definitions and envoys, which no guest transform sees: the model's
 // allowlists fix `integration` and `owner` at create; this keeps the rest true of the definition — a known definition,

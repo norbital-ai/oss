@@ -1,6 +1,6 @@
-// P38 on PGlite: every run ends (a host call that ignores its signal ends at its wall, rule 72), a drain interrupts
-// what it waits on (rule 71a: aborting the generation disposes a guest stuck on a facility that never answers, and the
-// run is re-queued as a lost lease), and engine loops prove progress (rule 25a: `bolt.embed` stops `noProgress` when its
+// P38 on PGlite: every run ends (a host call that ignores its signal ends at its wall), a drain interrupts
+// what it waits on (aborting the generation disposes a guest stuck on a facility that never answers, and the
+// run is re-queued as a lost lease), and engine loops prove progress (`bolt.embed` stops `noProgress` when its
 // guarded write stores 0 rows; a revision guard writes a row whose `updated_at` has microseconds). The crossing budget
 // itself is guest.test's.
 import { describe, expect, it, layer } from '@effect/vitest';
@@ -179,7 +179,7 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 	);
 
 	it.effect(
-		'bolt.embed stops noProgress on a pass whose guarded write stores 0 rows; a microsecond updated_at embeds once (rule 25a)',
+		'bolt.embed stops noProgress on a pass whose guarded write stores 0 rows; a microsecond updated_at embeds once',
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;
@@ -226,7 +226,7 @@ layer(shared, { excludeTestServices: true })('P38: facility calls in a body', (i
 });
 
 describe('P38: every run ends, drains interrupt, loops prove progress', () => {
-	it.effect('a host call that ignores its signal still ends at its wall (rule 72)', () =>
+	it.effect('a host call that ignores its signal still ends at its wall', () =>
 		Effect.gen(function* () {
 			let signal: AbortSignal | undefined;
 			const call = yield* Effect.forkChild(
@@ -247,7 +247,7 @@ describe('P38: every run ends, drains interrupt, loops prove progress', () => {
 	);
 
 	it.live(
-		'aborting the generation interrupts a guest stuck on a facility that never answers; the run is re-queued (rule 71a), or failed when its generation overran',
+		'aborting the generation interrupts a guest stuck on a facility that never answers; the run is re-queued, or failed when its generation overran',
 		() =>
 			Effect.scoped(
 				Effect.gen(function* () {

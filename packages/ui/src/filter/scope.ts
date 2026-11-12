@@ -1,6 +1,6 @@
 import type { Json } from '@norbital-ai/std/wire';
 import { Predicate } from 'effect';
-/** `and` of the author's scope and the viewer's clauses; the viewer never widens the author's `where` (final-ui rule 6). */
+/** `and` of the author's scope and the viewer's clauses; the viewer never widens the author's `where`. */
 export function and(...parts: readonly (Json | undefined)[]): Json | undefined {
 	const list = parts.filter(
 		(p): p is Json =>

@@ -1,4 +1,4 @@
-// Name unions of the runtime roles, read from the names index like the data-layer names (§3.1).
+// Name unions of the runtime roles, read from the names index like the data-layer names.
 import type { AutomationName, InstanceId, NamesPart } from '../names.ts';
 import type { ConvertTarget } from './facilities.ts';
 
@@ -16,7 +16,7 @@ type ConvertDecl =
 /** A document target `+workspace.ts` declares under `convert.to`; `ctx.convert.document` takes only these. */
 export type DeclaredConvertTarget = ConvertDecl & ConvertTarget;
 /** A `sys_2` model class an agent or `ctx.ai.sys_2.infer` asks for; the host maps each to a model. */
-export type AiModelClass = 'default' | 'fast' | 'strong'; // every sys_2 model takes images (P39): no 'vision' class
+export type AiModelClass = 'default' | 'fast' | 'strong'; // every sys_2 model takes images: no 'vision' class
 export type GroupName = keyof NamesPart<'groups'> & string;
 /** The `+<page>.page.svelte` files in app `A`'s folder. */
 export type PageName<A> = A extends keyof NamesPart<'pages'>

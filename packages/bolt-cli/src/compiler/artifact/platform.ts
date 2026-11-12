@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The platform layer (§8, "Sharing package code in memory"): the browser code of Bolt's shell and page entries, ui,
+// The platform layer ("Sharing package code in memory"): the browser code of Bolt's shell and page entries, ui,
 // svelte, effect, std and the packages they pin, built with no workspace input at all. Every artifact on one Bolt
 // release carries the same `assets/platform/**` byte for byte, so the CAS, a host's byte cache and a browser's cache
 // hold one copy. A workspace's own build imports every module the layer exposes (an entry, its exports kept exactly)

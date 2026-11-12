@@ -1,4 +1,4 @@
-// Value types and literal grammars (§3.3.9, §3.3.10 "values"). Type-only: the runtime values are std's, and a row
+// Value types and literal grammars. Type-only: the runtime values are std's, and a row
 // holds exactly them (the guest prelude and the page client decode the wire into them): a `Decimal` instance, and a date and an
 // instant as std's branded ISO strings.
 import type { CurrencyCode as Iso4217, Decimal } from '@norbital-ai/std/decimal';

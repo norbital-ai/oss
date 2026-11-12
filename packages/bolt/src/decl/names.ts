@@ -1,4 +1,4 @@
-// The names index (§3.1, rule 8). `bolt sync` evaluates the declarations and prints each part's data into
+// The names index. `bolt sync` evaluates the declarations and prints each part's data into
 // `.norbital/names.ts` as literal type text (functions dropped), augmenting `Names`; every cross-file type below is read
 // from it. No part reads its own file, so a body typed from it is never circular; it is one sync behind an edit.
 import type { InitialStampFields } from '@norbital-ai/std/kind';
@@ -46,7 +46,7 @@ type NamesShape = {
 	pages: { [app: string]: string };
 	/** Each group (its folder path) → the union of its child app and group folder names. */
 	groups: { [group: string]: string };
-	/** The tools the host advertises (rule 58), written by the build from the host it compiles for. */
+	/** The tools the host advertises, written by the build from the host it compiles for. */
 	host_tools: { [tool: string]: unknown };
 };
 // Indexed access touches only the one part, so a part may depend on another (models ← relationships ← models).
@@ -58,13 +58,13 @@ export type NamesPart<K extends keyof NamesShape> = K extends keyof Names ? Name
  */
 export type RelationshipSpec = typeof RelationshipData.Type;
 
-// The built-in layer (`src/system/**`, X-18): its models are declared as a workspace's are and its index holds the same
+// The built-in layer (`src/system/**`): its models are declared as a workspace's are and its index holds the same
 // three parts. Its models are the exposed system models; its private models (sys_session, sys_challenge,
 // sys_config) declare no `read`, so no author position names them.
 type SystemModels = SystemNames['models'];
 /** A built-in layer model: a system model's, or one of the engine's private models. */
 export type SystemModelName = keyof SystemModels & string;
-/** The system models (X-18). */
+/** The system models. */
 export type SystemName = keyof SystemNames['exposures'] & string;
 
 type Models = NamesPart<'models'>;
@@ -74,9 +74,9 @@ type Exposed = NamesPart<'exposures'>;
 export type AuthoredModelName = keyof Models & string;
 /** Anything a ref field or an `Id<>` may name: authored models and system models. */
 export type TargetName = AuthoredModelName | SystemName;
-/** Every surface addresses models (P9): authored ones, plus the system models. */
+/** Every surface addresses models: authored ones, plus the system models. */
 export type ModelName = (keyof Exposed & string) | SystemName;
-/** Ledgers (X-18): an `Id<>` target, never granted, read by server code, written or triggered on. */
+/** Ledgers: an `Id<>` target, never granted, read by server code, written or triggered on. */
 export type Ledger = 'sys_run';
 /** A model a trigger or a read may name: every model but the ledgers. */
 export type ReadableName = Exclude<ModelName, Ledger>;
@@ -216,7 +216,7 @@ type DuplicateInverseOf<M, R = ManyRelKeys<M>, Keys extends keyof R = keyof R> =
 	[I in Keys]: IsUnion<R[I]> extends true ? I : never;
 }[Keys] &
 	string;
-/** FKs of `M` to an owning parent: set on create, never updated (rule 41). */
+/** FKs of `M` to an owning parent: set on create, never updated. */
 export type OwnedFk<M> = [M] extends [never]
 	? {
 			[F in keyof OneRels<M>]: OneRels<M>[F] extends { owned: true } ? F : never;
@@ -247,7 +247,7 @@ type InstanceRef<R> = R extends { where: { integration: { eq: infer D extends st
 export type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : true) : never;
 
 // ── columns ──
-/** Read-only system columns on every workspace row (§3.3.9); a built-in layer row has its key alone (`table`). */
+/** Read-only system columns on every workspace row; a built-in layer row has its key alone (`table`). */
 export type SystemColumns<M> = M extends SystemModelName
 	? { id: { kind: 'ref'; to: M & string } }
 	: {
@@ -284,7 +284,7 @@ type OwnColumns<M> = [M] extends [never]
 /** A field name of `M` as author positions use it: own fields, computed values and FKs. */
 export type FieldName<M> = (keyof OwnColumns<M> | keyof OneRels<M>) & string;
 /** Fields a create/update selection may list: stored, non-derived fields and FKs. */
-/** Own and computed fields of `M` of kind `K` (§3.3.10 signature helpers). */
+/** Own and computed fields of `M` of kind `K`. */
 type OfKind<M, K> = KeyFor<OwnColumns<M>, K>;
 type NotBtree =
 	| { kind: 'json' | 'file' | 'point' | 'vector' | 'period' | 'custom' | 'sum' | 'count' }
@@ -359,7 +359,7 @@ export type LayerRelation<P, O = 'default'> =
 export type ReadRelation<C, O = 'default'> = LayerRelation<C, O>;
 export type ExposureSpecOf<C> = SpecOf<C>;
 
-// ── layer paths (decision 1): generated literal unions, so a path's type is a lookup, never a recursive walk ──
+// ── layer paths: generated literal unions, so a path's type is a lookup, never a recursive walk ──
 type Layers = NamesPart<'layers'>;
 /** The read paths output `O` of `C` declares: `'<C>'` and each `'<C>.<rel>…'` layer. */
 export type ReadPath<C, O = 'default'> = keyof ReadSpec<C, O> & string;
@@ -450,7 +450,7 @@ export type ColumnValue<M, P> = P extends keyof OneRels<M>
 	: P extends keyof Columns<M>
 		? ValueOf<Columns<M>[P]>
 		: never;
-/** A column an insert may omit: optional, defaulted, or an FK filled from the writer (rule 23a). */
+/** A column an insert may omit: optional, defaulted, or an FK filled from the writer. */
 export type OmittableOnInsert<M, P> = P extends InitialStampFields<FieldsOf<M>>
 	? true
 	: P extends keyof OneRels<M>
@@ -477,7 +477,7 @@ type ColumnValues<M, P extends PropertyKey, Rels = OneRels<M>> = {
  * @see ActInput
  */
 export type Row<C, O = 'default'> = RowOf<C, O> & RowState;
-/** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects (§4.2, rule 46b). */
+/** What a read, the caller's or the workspace's, attaches to each root row beside its fields, whatever it selects. */
 export type RowState = {
 	/** An authorized relation-dependent record_label or live reference's target label; derived at read time, never copied to a field. */
 	readonly $label?: string | null;
@@ -485,7 +485,7 @@ export type RowState = {
 	readonly $approval?: RowApproval;
 };
 /**
- * A record an open approval request holds (rule 46b): its request, `Pending` at `step` (from 0) of its named `steps` (each
+ * A record an open approval request holds: its request, `Pending` at `step` (from 0) of its named `steps` (each
  * decided by its teams or users) or `ChangesRequested`, and who asked. Absent once the request closes.
  */
 export type RowApproval = {
@@ -504,5 +504,5 @@ type RowOf<C, O> = Simplify<{
 	readonly [P in ReadField<C, O> & (keyof Columns<C> | keyof OneRels<C>)]: ColumnValue<C, P>;
 }>;
 /** A stored row as write callbacks see it (`before`, `ctx.query`): never masked, every stored field,
- * no seq, roll-up or computed (rule 10). */
+ * no seq, roll-up or computed. */
 export type StoredRow<M> = Simplify<ColumnValues<M, WritableField<M> | keyof SystemColumns<M>>>;

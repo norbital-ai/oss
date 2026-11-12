@@ -1,4 +1,4 @@
-// The cell's globals (compute model §14): the web surface Bolt's engine and Effect use, installed into a bare isolate
+// The cell's globals: the web surface Bolt's engine and Effect use, installed into a bare isolate
 // before any engine module evaluates, over the kernel's system calls where they need the host (timers, random bytes,
 // log lines). Nothing else: no `process`, `require`, `fs` or `fetch`. A runtime that has its own globals (Node, a
 // browser) keeps them: nothing is installed there.

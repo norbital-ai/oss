@@ -428,7 +428,7 @@ export function fromWhere(
 	return out;
 }
 
-/** Child fields a many-relation aggregate may name (§3.3.9: numbers; `min`/`max` also dates). */
+/** Child fields a many-relation aggregate may name (numbers; `min`/`max` also dates). */
 function aggregable(cat: Catalog, child: string, q: Quant): string[] {
 	const x = cat[child];
 	if (x === undefined) return [];

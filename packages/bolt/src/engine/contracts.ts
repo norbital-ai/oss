@@ -38,9 +38,9 @@ export type FacilityError =
 	| (Pick<FacilityFailure, 'kind' | 'message'> & { readonly status?: number | undefined })
 	| ({ readonly kind: 'unavailable' } & Pick<Unavailable, 'facility' | 'reason'>);
 
-// ── budgets (rule 72; §4.9) ──
+// ── budgets ──
 const MiB = 1024 * 1024;
-/** Every wall and cap as one table; each overrun is a typed `BoltError`, never a clamp (rule 9). */
+/** Every wall and cap as one table; each overrun is a typed `BoltError`, never a clamp. */
 export const LIMITS = {
 	automationCache: { entries: 256 },
 	runLog: { lines: 100, pollMs: 2_000 },
@@ -48,7 +48,7 @@ export const LIMITS = {
 	guestCpuMs: 3_000,
 	guestMemoryMiB: 256,
 	/**
-	 * Per I/O response, never per invocation (X-28). Streaming model responses reset their idle deadline on progress;
+	 * Per I/O response, never per invocation. Streaming model responses reset their idle deadline on progress;
 	 * a multi-step inference keeps its separate whole-call ceiling.
 	 */
 	callMs: {
@@ -118,26 +118,26 @@ export type Lock = {
 	mode?: 'SHARE ROW EXCLUSIVE';
 	advisory?: readonly string[];
 };
-/** What operands resolve against, fixed per invocation (rule 26: a replay keeps `now` and `today`). */
+/** What operands resolve against, fixed per invocation (a replay keeps `now` and `today`). */
 export type Bindings = {
 	now: string;
 	today: string;
 	tz: string;
 };
-/** Who reads (rule 15): a caller's Authority (scoped to the outputs it holds), or the workspace (the transform: unscoped). */
+/** Who reads: a caller's Authority (scoped to the outputs it holds), or the workspace (the transform: unscoped). */
 export type Reader = { as: 'caller'; authority: Authority } | { as: 'workspace' };
-// ── changes: everything one act's statement writes besides the engine's bookkeeping (A5) ──
+// ── changes: everything one act's statement writes besides the engine's bookkeeping ──
 /** A row's stored values in wire form: `$dec` preserves decimal scale; dates and instants are ISO strings. */
 export type RowData = { readonly [field: string]: Json };
-/** Where a change came from in the caller's input, for `refused { field, row }` (rule 32). */
+/** Where a change came from in the caller's input, for `refused { field, row }`. */
 export type InputPath = readonly (string | number)[];
 /** Native keyed writes choose replacement or retention; authored imports separately permit refusal. */
 export type NativeWriteConflict = 'update' | 'keep';
-/** One write per row (rule 21); relation actions are already flattened (`link`/`unlink` are FK updates). */
+/** One write per row; relation actions are already flattened (`link`/`unlink` are FK updates). */
 export type Change = { model: string; id: string; path: InputPath } & (
 	| { op: 'create'; values: RowData }
 	| { op: 'upsert'; values: RowData; on: readonly string[]; on_conflict: NativeWriteConflict }
-	/** `revision` is the one the caller observed (rule 25); `null` writes blind. */
+	/** `revision` is the one the caller observed; `null` writes blind. */
 	| { op: 'update'; set: RowData; revision: number | null }
 	| { op: 'delete'; revision: number | null }
 );
@@ -156,7 +156,7 @@ export type QueuedRun = {
 };
 export type { Captured } from './db/captured.ts';
 
-// ── outcomes (rule 32): the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
+// ── outcomes: the author types of decl/ctx with names erased; a write's own `Outcome` is never `running` ──
 export type Written = typeof WrittenSchema.Type;
 export type Outcome = typeof WriteOutcome.Type;
 /** Past the person-wait the write continues in the background as run `run`; its row reports the outcome (`Running`). */
@@ -164,7 +164,7 @@ export type Running = Extract<ActOutcome, { kind: 'running' }>;
 /** What an act answers its caller: the write's outcome, or `running` once it outlives the person-wait. */
 export type ActOutcome = typeof ActOutcomeSchema.Type;
 
-// ── actors and authority (A6) ──
+// ── actors and authority ──
 /** The decl `Actor` with names erased: one engine serves any workspace. */
 export type MemberActor = Extract<EngineActor, { kind: 'member' }>;
 export type EngineActor = typeof EngineActorSchema.Type;
@@ -172,7 +172,7 @@ export type EngineActor = typeof EngineActorSchema.Type;
 export type RunTrigger = typeof RunTriggerSchema.Type;
 /** A run's trigger as the ledger shows it (decl `RunTriggerView`): a person by actor ref and display name. */
 export type RunTriggerView = typeof RunTriggerViewSchema.Type;
-/** One read arm of one layer of one output: its policy's row filter; arms of every held policy union (rule 35). */
+/** One read arm of one layer of one output: its policy's row filter; arms of every held policy union. */
 export type Arm = { policy: string; where: Pred; history?: true };
 /**
  * A create or update arm: the columns it admits per write path (checked before any guest code) and whether its policy
@@ -188,7 +188,7 @@ export type WriteArm = {
 /** A delete arm: its policy, and whether it declares a verdict callback. */
 export type DeleteArm = { policy: string; check: boolean };
 /**
- * A model's access points as one actor holds them (decision 3): only this model's policies guard its reads and writes,
+ * A model's access points as one actor holds them: only this model's policies guard its reads and writes,
  * every layer under them included; a layer's own model's policies are never consulted on that path.
  */
 export type ModelAuthority = {
@@ -205,7 +205,7 @@ export type ModelAuthority = {
 	moves: { readonly [stateField: string]: 'all' | readonly string[] };
 };
 export type LimitRule = { key: string; rate: string; per: 'actor' | 'ip' | 'sender' | 'subject' };
-/** Compiled once per `key` = (actor, affiliation revision, source release) (rule 37). */
+/** Compiled once per `key` = (actor, affiliation revision, source release). */
 export type Authority = {
 	key: string;
 	actor: EngineActor;
@@ -239,7 +239,7 @@ export type Authority = {
 	scopes: { readonly [policy: string]: readonly string[] };
 };
 
-// ── the guest (C2, A10) ──
+// ── the guest (C2) ──
 export type InvocationKind =
 	| 'create'
 	| 'update'
@@ -331,8 +331,8 @@ export type GuestOutcome =
 	  }
 	/** A throw, a budget (`cpu_budget`, `crossing_budget`, `read_budget_exceeded`, `memory`) or a bad answer. */
 	| { kind: 'failed'; error: BoltError };
-// ── host ports (§3.3.10 `/engine` types; P18, P19): optional ports are absent when the host lacks the provider ──
-/** A stored blob; the `sys_file` row is the engine's (rule 18). */
+// ── host ports (`/engine` types): optional ports are absent when the host lacks the provider ──
+/** A stored blob; the `sys_file` row is the engine's. */
 export type Blob = { key: string; bytes: number; sha256: string; mime: string };
 /** A media file the host fetched for a tool: classified by its bytes, stored, never run. */
 export type Downloaded = Blob & { name: string };
@@ -429,7 +429,7 @@ export type AiRequest = {
 };
 /**
  * A model answer as the engine reads it: the port's own shape. `cut`: the 60 s wall ended a stream; `continuation`
- * resumes it as the next step (rule 63).
+ * resumes it as the next step.
  */
 export type AiResponse = typeof AiPortResponseSchema.Type;
 /** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */
@@ -464,7 +464,7 @@ export interface EmbeddingsPort {
 	): Promise<readonly (readonly number[])[]>;
 }
 /**
- * The AI facility (P35, P39): `sys_1` (fast structured decisions, text only) and `sys_2` (the LLM, multimodal) are both
+ * The AI facility: `sys_1` (fast structured decisions, text only) and `sys_2` (the LLM, multimodal) are both
  * required when the port is bound; `embed` (multimodal) is present when the host maps an embedding model. The host
  * verifies at activation that every `sys_2` and `embed` model takes images; nothing here branches on modality.
  */
@@ -478,7 +478,7 @@ export interface AiPort {
 		 * cached as it likes; it answers even offline). `infer` takes any of their ids as `model`, beside the classes.
 		 */
 		catalog?(): Promise<{ models: readonly AiModel[]; default: string }>;
-		/** `onDelta` streams text as it arrives; on the wall the agent keeps it as a cut step (rule 63). */
+		/** `onDelta` streams text as it arrives; on the wall the agent keeps it as a cut step. */
 		/** `onProgress`: the stream produced something that is not text (a tool call's arguments, or `reasoning` as it arrives). */
 		infer(
 			request: AiRequest,
@@ -495,7 +495,7 @@ export interface GeocoderPort {
 }
 export interface WebReadPort {
 	/** Refuses private, loopback and link-local addresses. */
-	/** `raw`: also the markup and its links, for a page that is markup (§5.8; P19: a provider may omit what it lacks). */ // hook:runtime
+	/** `raw`: also the markup and its links, for a page that is markup (a provider may omit what it lacks). */ // hook:runtime
 	read(url: string, signal: AbortSignal, options?: { raw?: boolean }): Promise<WebPage>;
 }
 /** Where the agent's browser goes: a page, or back, forward or a reload of the one open. */
@@ -561,9 +561,9 @@ export interface BrowserPort {
 	download(profile: string, url: string, signal: AbortSignal): Promise<Downloaded>;
 }
 /**
- * What an instance's link hands the engine (§4.5, `integrations.receive`): inbound conversation messages (each attachment
+ * What an instance's link hands the engine (`integrations.receive`): inbound conversation messages (each attachment
  * `{ name, mime, bytes, bin? }`, its bytes in `bins` at `bin`; `history` is a backfill nobody waits on), a provider's
- * report on a message it sent (§5.9; `provider_id` is what its `send` answered), a chat the account cleared or deleted
+ * report on a message it sent (`provider_id` is what its `send` answered), a chat the account cleared or deleted
  * (`clear`: every message of `thread` sent at or before `before` is tombstoned), or a pushing driver's changed sync
  * partition (`sync`: `'<model>.<sync>'`).
  */
@@ -593,7 +593,7 @@ export interface TransportPort {
 	/** `kind` names what it sends (`email`, `sms`, `inbox` for push); the address is the message's. Any throw is a failed send. */
 	send(kind: string, message: Json, signal: AbortSignal): Promise<{ provider_id: string }>;
 }
-// ── the runtime log (§5.12) ──
+// ── the runtime log ──
 export type LogLevel = 'info' | 'warn' | 'error';
 /** One runtime event as it happens: the host writes it to its log pipe, never to the workspace's database. */
 export type LogEvent = {
@@ -654,7 +654,7 @@ export interface MembershipPort {
 		signal: AbortSignal
 	): Promise<void>;
 }
-/** One next-due instant per scope, held in host memory; no polling (rule 52a). */
+/** One next-due instant per scope, held in host memory; no polling. */
 export interface DeadlinesPort {
 	announce(scope: string, notLaterThan: string): Promise<void>;
 	settle(scope: string, nextDue: string | null): Promise<void>;
@@ -683,7 +683,7 @@ export type ReconcilePage = {
 	bins?: readonly Uint8Array[];
 };
 /**
- * The host's live side of integration instances (§4.5), by instance id: a conversation driver `send`s (and shows `typing`),
+ * The host's live side of integration instances, by instance id: a conversation driver `send`s (and shows `typing`),
  * a request driver (http, sqlserver) answers `request` with the instance's credential host-side, a pushing driver `read`s
  * a sync partition's page. A throw is a facility failure; `SendRefused` refuses a send (permanent or retried). An http `request`
  * answers `{ status, body }`, a database one the `DatabaseResult`.
@@ -712,7 +712,7 @@ export interface LinksPort {
 	changed?(instance: string): void;
 }
 
-// ── kernel ports (compute model §14, wave 1): the engine's former Node dependencies, served by the host ──
+// ── kernel ports (wave 1): the engine's former Node dependencies, served by the host ──
 /**
  * The release's files, read-only. Paths are posix and relative to the release directory (`artifact.json`,
  * `client/index.html`), with no `.`, empty, `\` or NUL segment; `..` only as `../seed/<pack>/…`, the build's seed packs
@@ -727,7 +727,7 @@ export interface ArtifactPort {
 }
 export type ArtifactStat = { readonly kind: 'file' | 'directory'; readonly size: number };
 /**
- * The tenant's secrets key, held by the host (F21): AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to `aad`
+ * The tenant's secrets key, held by the host: AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to `aad`
  * (`bolt\0<owner>\0<name>`), so a copied envelope never opens under another owner or name. `open` answers `null` for
  * an envelope that does not open under this key and `aad`. A host without a key provides no port.
  */
@@ -797,7 +797,7 @@ export type HttpResponse = {
 	readonly body: Uint8Array;
 };
 /**
- * Outbound HTTP under the public-network policy (L-BOLT-366): HTTPS on 443 without credentials, DNS resolved once and
+ * Outbound HTTP under the public-network policy: HTTPS on 443 without credentials, DNS resolved once and
  * the checked address pinned, private and reserved networks refused, every redirect hop re-checked (a cross-origin hop
  * keeps only `accept`; a 301-303 of a write becomes a GET), transport headers (`host`, `connection`, `content-length`,
  * `transfer-encoding`, `upgrade`, `te`, `trailer`, `accept-encoding`, `proxy-*`) refused, gzip decoded. A refusal
@@ -852,7 +852,7 @@ export type BundleRequest = {
 export type Bundled =
 	{ readonly code: string; readonly map: string } | { readonly errors: readonly string[] };
 /**
- * The confined bundler (compute model §3, "Running a file"): the host resolves the entry's imports inside the tree by
+ * The confined bundler ("Running a file"): the host resolves the entry's imports inside the tree by
  * Node's rules and bundles them in a confined process that serves one tenant, caching by (digest, entry, bundler version).
  */
 export interface BundlerPort {
@@ -913,7 +913,7 @@ export type McpToolInfo = {
 	readonly input_schema: Json;
 };
 /**
- * MCP over streamable HTTP on the current protocol revision (rule 63b): `connect` answers an opaque session id, `call`
+ * MCP over streamable HTTP on the current protocol revision: `connect` answers an opaque session id, `call`
  * answers `{ content, structured?, isError? }`; `close` ends the session (idempotent).
  */
 export interface McpPort {

@@ -431,7 +431,7 @@ describe('next schema: fingerprint and plan', () => {
 	);
 });
 
-describe('next schema: SQLSTATE → refusal (§5.2, every row)', () => {
+describe('next schema: SQLSTATE → refusal (every row)', () => {
 	const idx = Effect.runSync(constraint_index(slice()));
 	const name = (model: string, kind: string) =>
 		[...idx].find(([, m]) => m.model === model && m.kind === kind)?.[0];

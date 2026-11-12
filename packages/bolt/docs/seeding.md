@@ -44,8 +44,8 @@ import { seeder } from '@norbital-ai/bolt';
 
 export default seeder({
 	bank: {
-		/** The bank tree `bolt seed` reads: `<bank>/norbital_hr/rows/**`. */
-		tree: 'norbital_hr',
+		/** The bank tree `bolt seed` reads: `<bank>/<tree>/rows/**`. */
+		tree: 'example',
 		/** Automations queued once with the rows when they load. */
 		start: ['recompute_balances']
 	}
@@ -60,12 +60,12 @@ way, checks `start` names automations (`seed/start`) and that every named asset 
 
 - `bolt build` writes the `base` pack (the public rows) and the `test` pack. A release carries `base` only.
 - `bolt test` seeds each test from the `test` pack unless the test passes its own rows.
-- `bolt seed --bank=<checkout> --target=<colony url> --tenant=<handle>` reads the bank tree, runs the seeder in
+- `bolt seed --bank=<checkout> --target=<host url> --tenant=<handle>` reads the bank tree, runs the seeder in
   memory, decodes the rows, and asks the target to reset the environment to public ∪ private rows. Assets go to the
   host's object store, rows in the request; the host restores them into the tenant database and keeps neither. The
   call is a signed host operation (`NORBITAL_OPS_SECRET` for `NORBITAL_OPS_SCOPE`, default `local`).
 
-`bun run env -- reset` and `env deploy reset` call `bolt seed` for each template whose seeder names a bank tree, so a
+A host's reset calls `bolt seed` for each template whose seeder names a bank tree, so a
 demo environment gets its private rows after every reset. A template without one stays at its public rows.
 
 ## Datatypes in seeded JSON Schemas

@@ -1,5 +1,5 @@
-// The read engine (A4, rule 12): one batch = one pipelined round trip. Identical reads run once; an index search's
-// probe runs before the round trip and its re-rank after. Nothing is clamped (rule 9): `all` past its cap is `too_large`.
+// The read engine (A4): one batch = one pipelined round trip. Identical reads run once; an index search's
+// probe runs before the round trip and its re-rank after. Nothing is clamped: `all` past its cap is `too_large`.
 import { uuid } from '../port.ts';
 import {
 	Cache,
@@ -76,7 +76,7 @@ type ReadEngineConfig = {
 	/** What must settle before a read reads `held`. */
 	ready?: Effect.Effect<void, DbError>;
 	index?: (model: string, name: string, bindings: Bindings) => IndexBodies | undefined;
-	/** Reads another area answers: `history` (§5.2), `transcript` (the agent). */
+	/** Reads another area answers: `history`, `transcript` (the agent). */
 	delegate?: Partial<
 		Record<
 			'history' | 'transcript' | 'inbox' | 'conversations' | 'runs',
@@ -90,7 +90,7 @@ type ReadEngineConfig = {
 	>;
 	/** The byte cap of an `all` read: 8 MiB on `/q` (the default), 4 MiB per guest crossing. */
 	allBytes?: number;
-	/** `search.semantic`'s probe (L-BOLT-123): one text embedded on the model's model class; absent → `/semantic` and `similar({ to: text })` are `unavailable`. */
+	/** `search.semantic`'s probe: one text embedded on the model's model class; absent → `/semantic` and `similar({ to: text })` are `unavailable`. */
 	embed?: (model: string, text: string) => Effect.Effect<readonly number[], EngineError>;
 };
 const checkedRead = <A>(read: () => A) =>
@@ -316,13 +316,13 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 				error instanceof BoltError ? error : BoltError.make('corrupt', 'decode', 'The similarity predicate did not assemble.', error) });
 			ir = { ...ir, where };
 		}
-		// L-BOLT-123: `/semantic <text>` and `similar(c, { to })` over `search.semantic`
+		// `/semantic <text>` and `similar(c, { to })` over `search.semantic`
 		const embed = Effect.fnUntraced(function* (text: string) {
 			if (
 				(yield* exposure_of(cat, ir.model).pipe(Effect.mapError(from_store))).model.semantic ===
 				undefined
 			)
-				return yield* BoltError.make('invalid', 'decode', `'${ir.model}' declares no search.semantic (rule 16)`);
+				return yield* BoltError.make('invalid', 'decode', `'${ir.model}' declares no search.semantic`);
 			if (config.embed === undefined)
 				return yield* BoltError.make('unavailable', 'facility', 'this host embeds no text: semantic search is unavailable');
 			return yield* config.embed(ir.model, text);
@@ -468,14 +468,14 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		}
 		if (c.limit === 'all') {
 			if (js.length > LIMITS.page.all)
-				return yield* too_large(`the read${of} matches more than ${LIMITS.page.all} rows; page it (rule 9)`);
+				return yield* too_large(`the read${of} matches more than ${LIMITS.page.all} rows; page it`);
 			if (over)
-				return yield* too_large(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`);
+				return yield* too_large(`the read${of} is larger than ${allBytes} bytes; page it`);
 			return { rows: js, next: null, ...total };
 		}
 		// a page ends early at one crossing's bytes, its cursor after the last row that fits
 		if (over && js.length === 0)
-			return yield* too_large(`a row${of} is larger than ${LIMITS.crossingBytes} bytes; select fewer fields (rule 9)`);
+			return yield* too_large(`a row${of} is larger than ${LIMITS.crossingBytes} bytes; select fewer fields`);
 		if (c.limit === null) return yield* BoltError.make('corrupt', 'decode', 'The paged read has no limit.');
 		const more = over || js.length > c.limit;
 		const page = js.slice(0, c.limit);
@@ -547,7 +547,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		});
 		const unique = [...distinct.keys()];
 		const irs = [...distinct.values()];
-		// rule 12: `get`s of one shape merge into one lateral statement
+		// `get`s of one shape merge into one lateral statement
 		const merged = new Map<
 			number,
 			{
@@ -644,7 +644,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 			),
 			{ concurrency: 'unbounded' }
 		);
-		// every reader's root rows carry `$sync` and the open request holding them as `$approval` (rule 46b)
+		// every reader's root rows carry `$sync` and the open request holding them as `$approval`
 		const exposed = yield* Effect.all(
 			answers.map(
 				Effect.fnUntraced(function* (answer: Json, index: number) {
@@ -667,7 +667,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 					const states = yield* syncState(config.manifest, config.db, ir.model, ids).pipe(
 						Effect.provideService(SqlReadCapture, undefined)
 					);
-					// rule 46b: the statement read the open request holding each row as a raw `$approval` (sql.ts `root`)
+					// the statement read the open request holding each row as a raw `$approval` (sql.ts `root`)
 					const names = approvals.has(ir.model) ? rowApproval : undefined;
 					if (states === undefined && names === undefined) return answer;
 					const attach = (row: Json): Json => {
@@ -883,7 +883,7 @@ export const coalescing = Effect.fn('Bolt.coalescing')(function* (
 		})
 	};
 });
-/** A many-relation arm asked for `all` holds at most `LIMITS.page.relationArm` rows (rule 9), at any depth. */
+/** A many-relation arm asked for `all` holds at most `LIMITS.page.relationArm` rows, at any depth. */
 function armsFit(
 	ir: ReadIR,
 	rows: readonly {
@@ -910,7 +910,7 @@ function armsFit(
 					list.length > LIMITS.page.relationArm
 				)
 					throw too_large(
-						`relation '${rel}' holds more than ${LIMITS.page.relationArm} rows; state a limit (rule 9)`
+						`relation '${rel}' holds more than ${LIMITS.page.relationArm} rows; state a limit`
 					);
 				for (const item of list) {
 					const target = typeof item.model === 'string' ? item.model : r.target;
@@ -1104,7 +1104,7 @@ export const ReadsLive = Layer.effect(
 							BoltError.make(
 								'invalid',
 								'decode',
-								`'${model}' declares no search.semantic (rule 16)`
+								`'${model}' declares no search.semantic`
 							)
 						);
 					return ai.embed([text], semantic.model, semantic.dim).pipe(

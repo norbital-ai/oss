@@ -1,4 +1,4 @@
-// Conversations (§4.3, rule 61): what a conversation instance's link hands the engine, and the messages it sends. Each
+// Conversations: what a conversation instance's link hands the engine, and the messages it sends. Each
 // inbound message is one statement keyed by its instance: the conversation (a DM or a group), the message by
 // `(instance, provider_id)` — a newer version converges it, a revoke tombstones it, an admitted row keeps the transcript
 // the agent saw — its files, the sync inbox and, for a new live message on an active workspace
@@ -754,7 +754,7 @@ export function conversations(cfg: ConversationsConfig) {
 		recent,
 		repair,
 		send,
-		/** The notices' platform run (rule 48): `runs.platform`. */
+		/** The notices' platform run: `runs.platform`. */
 		handlers: { [NOTICE_DELIVER]: notify }
 	};
 }
