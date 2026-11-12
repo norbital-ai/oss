@@ -229,18 +229,15 @@ export const store_media = <U, E>(
 			);
 		const upload = yield* sink.begin(mime);
 		const stored = yield* Effect.gen(function* () {
-			let part: Uint8Array[] = [first],
-				partBytes = first.byteLength;
+			// S3 and R2 refuse a multipart upload whose non-final parts differ in length: every part but the last is exactly
+			// DOWNLOAD_PART_BYTES, the remainder carried into the next
+			let held: Buffer = first;
 			for (let chunk = yield* read; chunk !== undefined; chunk = yield* read) {
-				part.push(chunk);
-				partBytes += chunk.byteLength;
-				if (partBytes >= DOWNLOAD_PART_BYTES) {
-					yield* sink.part(upload, Buffer.concat(part));
-					part = [];
-					partBytes = 0;
-				}
+				held = Buffer.concat([held, chunk]);
+				for (; held.byteLength >= DOWNLOAD_PART_BYTES; held = held.subarray(DOWNLOAD_PART_BYTES))
+					yield* sink.part(upload, held.subarray(0, DOWNLOAD_PART_BYTES));
 			}
-			if (partBytes > 0) yield* sink.part(upload, Buffer.concat(part));
+			if (held.byteLength > 0) yield* sink.part(upload, held);
 			const sha256 = hash.digest('hex');
 			return { key: yield* sink.complete(upload, sha256), sha256 };
 		}).pipe(Effect.onError(() => sink.abort(upload)));
