@@ -224,3 +224,47 @@ it.live('file captions round trip through exports and imports, with schema capti
 		expect((yield* exported('plain')).split(/\r?\n/)[0]).toBe('Code du modèle,Nom,internal_note');
 	}))
 );
+
+it.live('a member exports, downloads a template and imports through the sync_control route', () =>
+	Effect.scoped(Effect.gen(function* () {
+		const sheets: EngineManifest = {
+			...base,
+			models: { orders: {
+				description: 'Orders', record_label: 'record.customer',
+				unique: [{ fields: ['customer'], import_key: true }],
+				fields: { customer: { kind: 'text' }, note: { kind: 'text', optional: true } }
+			} },
+			relationships: {},
+			exposures: { orders: {
+				outputs: { default: { orders: { fields: 'all' } } },
+				create: { columns: { orders: ['customer', 'note'] } },
+				update: { columns: { orders: ['customer', 'note'] } },
+				syncs: { sheet: { with: 'file', parser: ['csv'], schema: {
+					customer: { kind: 'text' }, note: { kind: 'text', optional: true }
+				} } }
+			} }
+		};
+		const t = Context.get(yield* Layer.build(TestWorkspace.layer({ manifest: sheets })), TestWorkspace);
+		const member = yield* t.as(t.admin);
+		const ran = Effect.fnUntraced(function* (input: Parameters<typeof member.sync_control<'orders', 'sheet'>>[2]) {
+			const started = yield* member.sync_control('orders', 'sheet', input);
+			if (started.kind !== 'committed') throw new Error('start held');
+			yield* t.run_due();
+			return yield* t.db.value(Schema.Unknown, {
+				text: 'SELECT output FROM sys_run WHERE id = $1', params: [started.output.id]
+			});
+		});
+		const csv = Effect.fnUntraced(function* (output: unknown) {
+			const { file } = yield* Schema.decodeUnknownEffect(Schema.Struct({ file: Schema.Struct({ id: Schema.String }) }))(output);
+			const key = yield* t.db.value(Schema.String, { text: 'SELECT key FROM sys_file WHERE id = $1', params: [file.id] });
+			return new TextDecoder().decode(t.fakes.files.blobs.get(key));
+		});
+		expect((yield* csv(yield* ran({ mode: 'template', format: 'csv' }))).split(/\r?\n/)[0]).toBe('customer,note');
+		const uploaded = yield* member.upload('orders.$import.sheet', {
+			name: 'rows.csv', mime: 'text/csv', bytes: new TextEncoder().encode('customer,note\nAcme,Imported\n')
+		});
+		if (uploaded.kind !== 'committed') throw new Error('upload held');
+		expect(yield* ran({ mode: 'import', file: uploaded.output.id })).toMatchObject({ applied: true, findings: [] });
+		expect(yield* csv(yield* ran({ mode: 'export', format: 'csv' }))).toContain('Acme,Imported');
+	}))
+);

@@ -168,13 +168,13 @@ const answer = (response: AiResponse): Stream.Stream<AiEvent, PortFailure> =>
 const say =
 	(text: string, input = 10): Step =>
 	() =>
-		answer({ content: text, toolCalls: [], finish: 'stop', usage: { input, output: 5 } });
+		answer({ content: text, tool_calls: [], finish: 'stop', usage: { input, output: 5 } });
 const use =
 	(name: string, input: Json, id: string = randomUUID(), used = 10): Step =>
 	() =>
 		answer({
 			content: '',
-			toolCalls: [{ id, name, input }],
+			tool_calls: [{ id, name, input }],
 			finish: 'tool',
 			usage: { input: used, output: 5 }
 		});
@@ -1738,7 +1738,7 @@ describe('an agent-started automation run is a job', () => {
 				const waitOnJob: Step = (request) =>
 					answer({
 						content: '',
-						toolCalls: [
+						tool_calls: [
 							{
 								id: randomUUID(),
 								name: 'wait',
@@ -2111,7 +2111,7 @@ describe('a turn never settles silently', () => {
 					const garbled: Step = () =>
 						answer({
 							content: '',
-							toolCalls: [
+							tool_calls: [
 								{
 									id: 'g1',
 									name: 'read',
@@ -2157,7 +2157,7 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 						expect(fixture.t.fakes.logs.some((row) => row.event === 'ai.request')).toBe(true);
 						return answer({
 							content: '',
-							toolCalls: [{ id: 'd1', name: 'history', input: { query: 'x' } }],
+							tool_calls: [{ id: 'd1', name: 'history', input: { query: 'x' } }],
 							finish: 'tool',
 							usage: { input: 3, output: 1, cost: 6, call: 'gen-1' }
 						});
@@ -2165,7 +2165,7 @@ describe('metering (L-BOLT-432, L-BOLT-547)', () => {
 					const unpriced: Step = () =>
 						answer({
 							content: 'Done.',
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage: { input: 3, output: 1 }
 						});

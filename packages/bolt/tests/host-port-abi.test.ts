@@ -394,7 +394,7 @@ describe('fromAbi', () => {
 					{ _tag: 'Delta', text: 'hel' },
 					{ _tag: 'Progress', reasoning: 'thinking' },
 					{ _tag: 'Delta', text: 'lo' },
-					{ _tag: 'Response', response: { content: response.content, toolCalls: response.tool_calls, finish: response.finish, usage: response.usage } }
+					{ _tag: 'Response', response: { content: response.content, tool_calls: response.tool_calls, finish: response.finish, usage: response.usage } }
 				]);
 				expect(response).not.toHaveProperty('toolCalls');
 				expect(response.tool_calls).toEqual([{ id: 'call-1', name: 'lookup', input: { query: 'hello' } }]);

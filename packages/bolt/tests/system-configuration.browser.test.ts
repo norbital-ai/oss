@@ -4,6 +4,7 @@ import { mount_edge } from '@norbital-ai/ui/effect';
 import { mount, unmount } from 'svelte';
 import { page } from 'vitest/browser';
 import Configuration from './support/system-configuration.svelte';
+import ConfigurationTab from './support/configuration-tab.svelte';
 import type { Settings } from '../src/shell/settings/data.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { SystemUiIntent } from '../src/protocol/system-ui.ts';
@@ -339,6 +340,71 @@ it('deleting a connection is guarded by the revision the settings read', async (
 		await expect.poll(() => acts).toEqual([
 			{ 'sys_integration.delete': [{ target: { id: 'erp', revision: 3 } }] }
 		]);
+	} finally {
+		await unmount(view);
+		await runtime.runPromise(Scope.close(scope, Exit.void));
+		await dispose();
+		target.remove();
+	}
+});
+
+it("a definition's configuration tab receives the page context", async () => {
+	const runtime = ManagedRuntime.make(Layer.empty),
+		dispose = mount_edge(runtime);
+	const scope = Effect.runSync(Scope.make());
+	const bolt = await runtime.runPromise(
+		shell_bolt(
+			{
+				workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+				actor: null,
+				name: null,
+				admin: true,
+				preview: null,
+				nav: [],
+				inbox: 0,
+				kiosks: [],
+				push: null,
+				visitor: null,
+				automations: {},
+				read_catalog: {},
+				operation_outputs: { automations: {} },
+				surfaces: { inbox: false, runs: false, settings: true, agent: false, studio: false },
+				catalog: {}
+			},
+			{
+				fetch: async () => Response.json({ answers: [] }),
+				open_stream: () => ({ onmessage: null, onerror: null, close() {} })
+			}
+		).pipe(Effect.provideService(Scope.Scope, scope))
+	);
+	const api = {
+		...nativeApi,
+		settings: () => Effect.succeed(settings),
+		integration_offers: () => Effect.succeed([]),
+		integration: (instance: string) => ({
+			...nativeApi.integration(instance),
+			watch: () => Stream.never
+		})
+	};
+	const target = document.createElement('div');
+	document.body.replaceChildren(target);
+	const view = mount(Configuration, {
+		target,
+		props: {
+			api,
+			bolt,
+			t: (x: string) => x,
+			tab: 'integrations',
+			workspace: { name: 'Fixture', locale: 'en', tz: 'UTC' },
+			configuration: { key: 'tab', request: { capability: 'integration.manage', record: 'erp' } },
+			integration_setups: {
+				erp: { load: async () => ({ default: ConfigurationTab, configuration_tab: 'Commercial' }) }
+			}
+		}
+	});
+	try {
+		await page.getByRole('tab', { name: 'Commercial', exact: true }).click();
+		await expect.element(page.getByText('Tab reads function', { exact: true })).toBeVisible();
 	} finally {
 		await unmount(view);
 		await runtime.runPromise(Scope.close(scope, Exit.void));

@@ -313,7 +313,7 @@ describe('the Decisions API sys_1 client', () => {
 								urgency: { probabilities: { 0: 0.1, 1: 0.9 } },
 								refund: { noul: 0.8 }
 							},
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage: { input: 30, output: 10 }
 						}

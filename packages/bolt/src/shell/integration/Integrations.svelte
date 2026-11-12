@@ -27,7 +27,7 @@
 	import { driverLabel, workspaceConnection, type IntegrationSetupEntry } from './setup.ts';
 	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
-	import type { ShellBolt } from '../runtime.ts';
+	import { page_context, type ShellBolt } from '../runtime.ts';
 	import type { ShellApi } from '../api-types.ts';
 	import Envoys from './Envoys.svelte';
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
@@ -693,7 +693,7 @@
 				<p role="status" class="text-sm text-muted-foreground">{t('Loading…')}</p>
 			{:then module}
 				{#if module?.configuration_tab !== undefined}
-					{#snippet extraTab()}<module.default />{/snippet}
+					{#snippet extraTab()}<module.default ctx={page_context(bolt)} />{/snippet}
 					{@render instanceTabs({ title: t(module.configuration_tab), body: extraTab })}
 				{:else}
 					{@render instanceTabs()}

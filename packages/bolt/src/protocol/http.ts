@@ -279,10 +279,15 @@ const ipFor = (
 	authority.actor.kind === 'visitor' || authority.limits.some((rule) => rule.per === 'ip')
 		? limits.ipBucket(Option.getOrElse(request.remoteAddress, () => '0.0.0.0'))
 		: Effect.succeed(undefined);
+/** The limit keys an `/act` body names: its callables (a PDF preview is `convert`). */
+const actCallables = (request: HttpServerRequest.HttpServerRequest) =>
+	Effect.map(requestBody(request, ActBody), (body) =>
+		'acts' in body ? Object.keys(body.acts) : [body.callable === 'convert.previewPdf' ? 'convert' : body.callable]);
 /** Shell admission and dispatch share one charge; direct protocol hosts use the same native peer address. */
 export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 	request: HttpServerRequest.HttpServerRequest,
-	authority: Authority
+	authority: Authority,
+	callables: (request: HttpServerRequest.HttpServerRequest) => Effect.Effect<readonly string[], BoltError> = actCallables
 ): Effect.fn.Return<ActRateAdmission, EngineError, RateLimits> {
 	return yield* memoized(actAdmissions, request, () => Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis;
@@ -306,12 +311,7 @@ export const requestActRate = Effect.fn('protocol.requestActRate')(function* (
 			});
 			const verdict = yield* limits.charge(common, now);
 			if (!verdict.ok) return { verdict, ...persistent(common) };
-			const body = yield* requestBody(request, ActBody);
-			const named = charges_for(
-				authority,
-				'acts' in body ? Object.keys(body.acts) : [body.callable === 'convert.previewPdf' ? 'convert' : body.callable],
-				who
-			).filter(
+			const named = charges_for(authority, yield* callables(request), who).filter(
 				(charge) =>
 					!common.some((prior) => prior.rule === charge.rule && prior.bucket === charge.bucket)
 			);
@@ -729,7 +729,8 @@ export const BoltRoutes = {
 				return yield* Effect.fail(invalid('The idempotency key must equal the sync run id.'));
 			const changed = yield* releaseChanged(request);
 			if (changed !== undefined) return changed;
-			const admitted = yield* requestActRate(request, authority);
+			const admitted = yield* requestActRate(request, authority, () =>
+				Effect.succeed([`${body.model}.sync.${body.sync}`]));
 			if (!admitted.verdict.ok) return rateLimitedResponse(admitted.verdict.retryAfter);
 			const b = yield* bindings;
 			if (!uuidv7_within(body.id, Date.parse(b.now)))

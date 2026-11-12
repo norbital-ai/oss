@@ -155,7 +155,7 @@ const stalls =
 const done =
 	(text: string): Step =>
 	() =>
-		response({ content: text, toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } });
+		response({ content: text, tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } });
 const elapsed = clock_probe;
 
 describe('tool results are bounded (rule 62)', () => {
@@ -290,7 +290,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 			const native: AiResponse = {
 				content: { text: 'ready', extra: [1, 2] },
 				reasoning: 'received reasoning',
-				toolCalls: [{ id: 'c1', name: 'read', input: { id: 'one' }, invalid: 'provider note' }],
+				tool_calls: [{ id: 'c1', name: 'read', input: { id: 'one' }, invalid: 'provider note' }],
 				finish: 'cut',
 				continuation: 'next',
 				usage: {
@@ -368,7 +368,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						).pipe(Stream.mapEffect((event) => Effect.sleep('15 seconds').pipe(Effect.as(event)))),
 						response({
 							content: 'ready',
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage: { input: 1, output: 1 }
 						})
@@ -433,7 +433,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 				const own: Step = () =>
 					response({
 						content: 'x',
-						toolCalls: [],
+						tool_calls: [],
 						finish: 'cut',
 						continuation: 'k',
 						usage: { input: 1, output: 1 }
@@ -510,7 +510,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 		(): Stream.Stream<AiEvent, PortFailure> =>
 			response({
 				content: '',
-				toolCalls: [{ id, name, input }],
+				tool_calls: [{ id, name, input }],
 				finish: 'tool',
 				usage: { input: 1, output: 1 }
 			});
@@ -1025,7 +1025,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 						).pipe(Stream.mapEffect((event) => Effect.sleep('10 millis').pipe(Effect.as(event)))),
 						response({
 							content: '{"n":5}',
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage: { input: 1, output: 1 }
 						})
@@ -1213,7 +1213,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 					() =>
 						response({
 							content: '',
-							toolCalls: [
+							tool_calls: [
 								{ id: `e${id}`, name: 'edit', input: { ops } },
 								{ id: `s${id}`, name: 'submit', input: {} }
 							],
@@ -1343,7 +1343,7 @@ describe('the AI port under the 20 s idle wall (rule 63)', () => {
 	const editAndSubmit = (): Stream.Stream<AiEvent, PortFailure> =>
 		response({
 			content: '',
-			toolCalls: [
+			tool_calls: [
 				{ id: 'e', name: 'edit', input: { ops: [{ path: '/n', set: 3 }] } },
 				{ id: 's', name: 'submit', input: {} }
 			],

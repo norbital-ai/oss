@@ -104,7 +104,7 @@ const panel = () =>
 							content: verifying
 								? JSON.stringify({ complete, gaps: complete ? [] : ['not done'] })
 								: 'On it.',
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop' as const,
 							usage: { input: 1, output: 1 }
 						}

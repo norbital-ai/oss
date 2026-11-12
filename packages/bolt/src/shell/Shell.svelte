@@ -69,6 +69,7 @@
 		shell_bolt,
 		type AgentRequest,
 		type ShellBolt,
+		page_context,
 		type ShellPageContext
 	} from './runtime.ts';
 	import Access from './auth/Access.svelte';
@@ -219,8 +220,7 @@
 	let bolt = $state.raw<ShellBolt | null>(null);
 	const pageContext = (): ShellPageContext => {
 		if (bolt === null) throw new Error('The workspace shell has not booted.');
-		const { native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored } = bolt;
-		return authored;
+		return page_context(bolt);
 	};
 	const viewContext = () => {
 		if (bolt === null || boot === null) throw new Error('The workspace shell has not booted.');

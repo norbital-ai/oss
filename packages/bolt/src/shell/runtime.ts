@@ -663,6 +663,8 @@ export function shell_bolt(
 export type ShellBolt = Effect.Success<ReturnType<typeof shell_bolt>>;
 /** What a mounted page receives: the shell client without its native transport members. */
 export type ShellPageContext = Omit<ShellBolt, 'native_query' | 'observe' | 'closed' | 'sync'>;
+export const page_context = ({ native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored }: ShellBolt): ShellPageContext =>
+	authored;
 
 /** Each shell mount owns its configured runtime and every child resource. */
 class ShellConfiguration extends Context.Service<ShellConfiguration, ShellMountConfig>()(

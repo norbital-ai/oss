@@ -97,7 +97,7 @@ The browser uses `bolt.integration(instance)`: status, pair, unpair, test and di
 
 An optional `+integration.svelte` supplies the definition's setup component through the lazy `integration_setups` registry. Its props carry the instance's status and `pair`, `unpair` and `test` as Effects that never fail (a refusal arrives as `error`), run with `fork`. Otherwise `IntegrationSetup` renders the provider's setup metadata, pairing and connected view. Source declarations do not duplicate provider authentication protocols.
 
-A module that exports `configuration_tab` as a translated title key adds its default component as a separate tab in the administrator's inline connection view. The connection keeps the provider's standard pairing and test controls.
+A module that exports `configuration_tab` as a translated title key adds its default component as a separate tab in the administrator's inline connection view; that component receives the page context as its `ctx` prop (`let { ctx }: { ctx: PageContext } = $props()`), as a page does. The connection keeps the provider's standard pairing and test controls.
 
 ## Daily messages and follow-up questions
 

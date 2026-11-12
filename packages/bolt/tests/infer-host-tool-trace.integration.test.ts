@@ -113,7 +113,7 @@ const use =
 	() =>
 		Stream.succeed({
 			_tag: 'Response',
-			response: { content: '', toolCalls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
+			response: { content: '', tool_calls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
 		});
 const cassette = (steps: readonly Step[]) => {
 	const requests: AiRequest[] = [];

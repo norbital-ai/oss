@@ -658,7 +658,7 @@ export class Ai extends Context.Service<
 									)
 								).pipe(
 									Effect.flatMap((response) => Schema.decodeUnknownEffect(AiPortResponseSchema)(response).pipe(Effect.mapError(Port.failure('ai')))),
-									Effect.flatMap(({ tool_calls, ...response }) => Queue.offer(queue, { _tag: 'Response', response: { ...response, toolCalls: tool_calls } })),
+									Effect.flatMap((response) => Queue.offer(queue, { _tag: 'Response', response })),
 									Effect.andThen(Queue.end(queue)),
 									Effect.catch((e) => Queue.fail(queue, e))
 								)

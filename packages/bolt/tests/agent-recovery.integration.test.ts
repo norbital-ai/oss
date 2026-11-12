@@ -38,7 +38,7 @@ const recoverable_agent = Effect.gen(function* () {
 				fault.unavailable = true;
 				return Stream.fail(Port.failure('ai')({ kind: 'invalid', message: 'Provider refused the request.' }));
 			}
-			const event: AiEvent = { _tag: 'Response', response: { content: 'Recovered answer.', toolCalls: [], finish: 'stop', usage: { input: 1, output: 1 } } };
+			const event: AiEvent = { _tag: 'Response', response: { content: 'Recovered answer.', tool_calls: [], finish: 'stop', usage: { input: 1, output: 1 } } };
 			return Stream.succeed(event);
 		}))
 	};

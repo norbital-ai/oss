@@ -82,7 +82,7 @@ const runtimeEnvoys = [
 
 const reply = (text: string): AiResponse => ({
 	content: text,
-	toolCalls: [],
+	tool_calls: [],
 	finish: 'stop',
 	usage: { input: 1, output: 1 }
 });

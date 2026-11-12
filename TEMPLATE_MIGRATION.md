@@ -5,13 +5,14 @@
 | `model(name, spec)` and `integration(name, spec)` imported from the package root | Run `bolt check` to generate declaration bindings. Import `model` from `.norbital/models/<name>.ts` or `integration` from `.norbital/integrations/<name>.ts` using the declaration file’s relative path, then call `model(spec)` or `integration(spec)`. The generated binding supplies its path-derived callback types. |
 | `Insert<M>` or `CreateTree<M>` | `CreateInput<M>` |
 | `Patch<M>` or `UpdateTree<M>` | `UpdateInput<M>` |
-| `CreateRow<M>` in a transform | Infer the row from the model's create transform signature. Use `CreateInput<M>` for rows the caller supplies. |
-| `UpdateSet<M>` in a transform | Infer the set from the model's update transform signature. Use `UpdateInput<M>` for sets the caller supplies. |
+| `CreateRow<M>` in a transform | Leave the callback's parameters unannotated: the generated `model(spec)` binding types each change's row. Use `CreateInput<M>` for rows the caller supplies. |
+| `UpdateSet<M>` in a transform | Leave the callback's parameters unannotated: the binding types each change's `set`. A helper shared by the create and update transforms takes only the fields it reads, `Partial<Pick<CreateInput<M>, 'a' \| 'b'>>`; use `UpdateInput<M>` for sets the caller supplies. |
 | `ctx.transaction(function* (tx) { … })` | Read before the act and pass observed revisions on writes. Group writes in one `ctx.act.many` batch. Use nested write layers or carried rows when one write supplies rows for another. |
 | `ctx.ai.speak(...)`, `SpeakOptions`, `SpeechFormat` | Remove these uses and any host speech configuration. Audio transcription still uses `ctx.convert.ingest`. |
 | `src/agent/envoy/+<id>.envoy.ts` and `envoy(spec)` | Create an active `sys_envoy` row in Settings, then bind its UUID on the connection. Move `groupMessages` to `group_messages` and map `triage: { scope }` to `triage: true` plus `triage_scope`. |
 | `EnvoyName` and `EnvoySpec` | Use `Id<'sys_envoy'>` for a runtime envoy's ID and `Row<'sys_envoy'>` for its readable row. |
 | `connections.<slot>.envoy` | Set `sys_integration.envoy` to the envoy row's UUID after provisioning the slot. |
+| A sync row's ref to its integration instance filled by the sync (a `sys_integration` ref with `where: { integration }`) | A remote sync no longer stamps it; a required ref then refuses the page. Return it from `read`: `read: function* ({ instance }) { … rows.map((row) => ({ ...row, account: instance })) }`. |
 | `CursorValue` from `@norbital-ai/bolt/protocol/cursor` | Import `CursorValue` from `@norbital-ai/bolt/protocol`. |
 | `jsonDiff` from `@norbital-ai/bolt` | Use the inference draft's `diff` tool for draft changes. Code comparing values directly owns that comparison. |
 | `import { bolt } from '$bolt'` or `useBolt()` in an authored view | Accept `ctx` as a prop. Use `PageContext` for shell pages and `PublicPageContext` for public pages, both from `@norbital-ai/bolt/page`. Pass the whole context or the operations a child needs. |

@@ -131,7 +131,7 @@ const use =
 	() =>
 		Stream.succeed({
 			_tag: 'Response',
-			response: { content: '', toolCalls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
+			response: { content: '', tool_calls: calls, finish: 'tool', usage: { input: 1, output: 1 } }
 		});
 /** The provider's script: `arm` replaces its steps and clears its requests for the next test. */
 const cassette = () => {

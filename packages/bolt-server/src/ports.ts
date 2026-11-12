@@ -314,8 +314,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 							return yield* Effect.fail(
 								Port.failure('ai')(new Error('the model stream ended without a response'))
 							);
-						const { toolCalls, ...response } = answer;
-						return { ...response, tool_calls: toolCalls };
+						return answer;
 					}),
 					{ signal }
 				)

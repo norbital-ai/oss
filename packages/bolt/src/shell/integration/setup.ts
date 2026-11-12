@@ -6,6 +6,7 @@ import { Effect, Schema } from 'effect';
 import { ActRefused } from '../../decl/errors.ts';
 import type { ActOutcome } from '../../engine/contracts.ts';
 import type { Component } from 'svelte';
+import type { ShellPageContext } from '../runtime.ts';
 import type { Json } from '../../decl/values.ts';
 import {
 	local_text,
@@ -47,7 +48,7 @@ export const sayOf =
 /** A definition can supply its own setup or add an administrator-only settings tab. */
 export type IntegrationSetupLoader = () => Promise<
 	| { default: Component<IntegrationSetupProps>; configuration_tab?: undefined }
-	| { default: Component; configuration_tab: string }
+	| { default: Component<{ ctx: ShellPageContext }>; configuration_tab: string }
 >;
 /** The compiled registry's entry for a definition's `+integration.svelte`. */
 export type IntegrationSetupEntry = { load: IntegrationSetupLoader };

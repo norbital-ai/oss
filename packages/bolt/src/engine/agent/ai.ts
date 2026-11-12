@@ -177,7 +177,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						);
 					const cut: AiResponse = {
 						content: partial,
-						toolCalls: [],
+						tool_calls: [],
 						finish: 'cut',
 						...(reasoning === '' ? {} : { reasoning }),
 						usage: { input: 0, output: 0 }
@@ -890,7 +890,7 @@ export function infer_facility(
 				}
 				finished = spent && (calls.length === 0 || ++finals >= FINAL_TURNS);
 				carry = undefined;
-				if (r.toolCalls.length > 0) {
+				if (r.tool_calls.length > 0) {
 					const before = JSON.stringify(draft);
 					messages.push({
 						role: 'assistant',
@@ -1036,12 +1036,12 @@ export function infer_facility(
 					// `steps` budget a read-only turn is exploration the budget already bounds, not a stall.
 					if (
 						structured &&
-						r.toolCalls.every((c) => drafting.has(c.name)) &&
-						(a.steps === undefined || r.toolCalls.some((c) => !inspecting.has(c.name))) &&
+						r.tool_calls.every((c) => drafting.has(c.name)) &&
+						(a.steps === undefined || r.tool_calls.some((c) => !inspecting.has(c.name))) &&
 						JSON.stringify(draft) === before
 					) {
 						// a model that re-edits instead of submitting: a draft that already holds is the answer
-						const held = r.toolCalls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
+						const held = r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
 						if (held?.ok === true) return held;
 						if (++stalls > FAILURES)
 							return (

@@ -151,14 +151,14 @@ function scriptedAi(sent: (instance: string) => string[]) {
 					); // the step's closing note is the engine's, not a message
 					if (last.role === 'tool') {
 						sentBeforeEnd.push(sent('field_wa').at(-1) ?? '');
-						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
+						return { content: 'Done.', tool_calls: [], finish: 'stop', usage };
 					}
 					// the command is its own line of the message, after the envelope's header (never a word inside the header)
 					const close = /^(?:\[[^\]\n]*\] )?close (\S+)$/m.exec(text(last.content));
 					if (close !== null)
 						return {
 							content: 'On it.',
-							toolCalls: [
+							tool_calls: [
 								{
 									id: `c${++n}`,
 									name: 'act',
@@ -171,7 +171,7 @@ input: [{ target: { id: present(close[1]), revision: 1 }, set: { status: 'done' 
 							finish: 'tool',
 							usage
 						};
-					return { content: `echo: ${text(last.content)}`, toolCalls: [], finish: 'stop', usage };
+					return { content: `echo: ${text(last.content)}`, tool_calls: [], finish: 'stop', usage };
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});

@@ -125,7 +125,7 @@ function scriptedAi() {
 	const usage = { input: 10, output: 5 };
 	const call = (name: string, input: Json) => ({
 		content: '',
-		toolCalls: [{ id: `c${++n}`, name, input }],
+		tool_calls: [{ id: `c${++n}`, name, input }],
 		finish: 'tool' as const,
 		usage
 	});
@@ -149,7 +149,7 @@ function scriptedAi() {
 						)
 					);
 					if (last.role === 'tool')
-						return { content: 'Done.', toolCalls: [], finish: 'stop', usage };
+						return { content: 'Done.', tool_calls: [], finish: 'stop', usage };
 					const said = text(last.content);
 					if (/^(?:\[[^\]\n]*\] )?slips$/m.test(said))
 						return call('read', { request: { payslips: {} } });
@@ -161,7 +161,7 @@ input: [{ target: present(pay[1]), set: { status: 'paid' } }]
 						});
 					const find = /^(?:\[[^\]\n]*\] )?find (\S+)$/m.exec(said);
 					if (find !== null) return call('history', { query: present(find[1]), scope: 'mine' });
-					return { content: `echo: ${said}`, toolCalls: [], finish: 'stop', usage };
+					return { content: `echo: ${said}`, tool_calls: [], finish: 'stop', usage };
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});

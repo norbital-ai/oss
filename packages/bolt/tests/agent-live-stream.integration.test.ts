@@ -104,7 +104,7 @@ layer(TestWorkspace.layer({ manifest, ports }))('agent streaming', (it) => {
 						{ _tag: 'Delta', text: 'done.' },
 						{
 							_tag: 'Response',
-							response: { content: 'Half done.', toolCalls: [], finish: 'stop', usage }
+							response: { content: 'Half done.', tool_calls: [], finish: 'stop', usage }
 						}
 					]);
 					const { replies, streamed, turn } = yield* start;

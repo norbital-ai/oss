@@ -1,11 +1,11 @@
 import { actor_id, actor_ref } from '../access/actor.ts';
 import { Cause, Clock, Effect, Exit, Schedule, Schema, Semaphore } from 'effect';
-import { canonical, q } from '@norbital-ai/store';
-import type { EngineActor } from '../contracts.ts';
+import { canonical, q, SYSTEM_COLUMNS } from '@norbital-ai/store';
+import type { EngineActor, RowData } from '../contracts.ts';
 import type { EngineManifest } from '../manifest.ts';
 import type { TenantDbShape } from '../db/tenant-db.ts';
 import { CapturedResult, capturePiece, nativeCommit } from '../db/captured.ts';
-import { storedImageSql } from '../db/stored.ts';
+import { storedField, storedImageSql } from '../db/stored.ts';
 import { msg as messagePiece } from '../conversations/store.ts';
 import { catalog_of } from '../access/pred.ts';
 import { BoltError } from '../../protocol/errors.ts';
@@ -29,6 +29,26 @@ const DELIVERY_BATCH = 32;
 const DELIVERY_CONNECTIONS = 4;
 const queues = new WeakMap<Chain, number>();
 const BACKOFF = [60_000, 300_000, 900_000, 1_800_000, 3_600_000];
+
+/**
+ * A frozen outbox image as `write` reads its row, through the read codecs (int8 and numeric cells are stored as text):
+ * system columns and declared fields only, and `changed` names only declared fields.
+ */
+function syncChange(m: EngineManifest, model: string, image: RowData, changed: readonly string[]) {
+	const declared = Object.keys(m.models[model]?.fields ?? {}), fields = catalog_of(m).models.get(model)?.fields;
+	const columns = (name: string) => {
+		const field = fields?.get(name);
+		return field?.arms === undefined ? [field?.column ?? name] : field.arms.map((arm) => `${field.column}__${arm}`);
+	};
+	const touched = new Set(changed);
+	return {
+		row: Object.fromEntries([...new Set([...SYSTEM_COLUMNS, ...declared, ...(fields?.keys() ?? [])])].flatMap((name) => {
+			const field = fields?.get(name), value = field === undefined ? image[name] : storedField(field, image);
+			return value === undefined ? [] : [[name, value]];
+		})),
+		changed: declared.filter((name) => columns(name).some((column) => touched.has(column)))
+	};
+}
 
 /** The transactional outbox: one entry per sync, instance and row, with the committed image frozen for retries. */
 export function syncOutboxPiece(
@@ -408,7 +428,7 @@ export function makeDeliver(e: SyncEngine) {
 				configuration: inst.configuration,
 				fence: admitted(r, s.definition).pipe(Effect.flatMap((active) => active ? Effect.void
 					: Effect.fail(BoltError.make('fenced', 'admission', 'This delivery claim has expired.')))),
-				args: [{ op: r.delivery_op, instance: r.instance, row: r.image, changed: r.changed,
+				args: [{ op: r.delivery_op, instance: r.instance, ...syncChange(m, r.model, r.image, r.changed),
 					$id: r.remote_id, $version: r.remote_version }, { $ctx: true }]
 			}).pipe(Effect.flatMap((value) => Schema.decodeUnknownEffect(Ack)(value).pipe(
 				Effect.mapError((error) => BoltError.make('bad_answer', 'guest', `${s.name}: write returns { $id?, $version? } or null.`, error))

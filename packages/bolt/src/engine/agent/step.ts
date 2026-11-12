@@ -18,7 +18,7 @@ export const model_step = Effect.fn('Agent.modelStep')(function* <E, R>(
 	const response = yield* work;
 	const ids = new Set<string>();
 	const calls: ToolCall[] = [];
-	if (response.finish !== 'cut') for (const call of response.toolCalls) {
+	if (response.finish !== 'cut') for (const call of response.tool_calls) {
 		if (call.id === '' || ids.has(call.id))
 			return yield* Effect.fail(new FacilityFailure({ kind: 'invalid', message: 'The model returned an empty or duplicate tool-call id.' }));
 		ids.add(call.id);

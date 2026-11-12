@@ -201,7 +201,7 @@ const scriptedAi = () => {
 					if (last.role === 'tool')
 						return {
 							content: `result: ${JSON.stringify(last.content)}`,
-							toolCalls: [],
+							tool_calls: [],
 							finish: 'stop',
 							usage
 						};
@@ -209,7 +209,7 @@ const scriptedAi = () => {
 					if (close !== null)
 						return {
 							content: '',
-							toolCalls: [
+							tool_calls: [
 								{
 									id: `c${ai.requests}`,
 									name: 'act',
@@ -222,7 +222,7 @@ input: [{ target: present(close[1]), set: { status: 'done' } }]
 							finish: 'tool',
 							usage
 						};
-					return { content: `echo: ${text(last.content)}`, toolCalls: [], finish: 'stop', usage };
+					return { content: `echo: ${text(last.content)}`, tool_calls: [], finish: 'stop', usage };
 				})
 			).pipe(Stream.map((response) => ({ _tag: 'Response' as const, response })))
 	});

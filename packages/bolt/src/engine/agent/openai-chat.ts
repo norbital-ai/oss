@@ -388,7 +388,7 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 						: Option.getOrElse(parseJson(text), () => text);
 				const response: AiResponse = {
 					content,
-					toolCalls,
+					tool_calls: toolCalls,
 					finish: finishReason === 'length' ? 'cut' : toolCalls.length > 0 ? 'tool' : 'stop',
 					...(reasoning === '' ? {} : { reasoning }),
 					usage: {

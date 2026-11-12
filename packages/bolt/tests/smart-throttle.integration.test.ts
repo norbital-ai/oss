@@ -114,7 +114,7 @@ const ai: Pick<Ai['Service'], 'models' | 'infer'> & {
 					_tag: 'Response' as const,
 					response: {
 						content: asks ? 'Want me to assign a contractor to them?' : 'Done.',
-						toolCalls: [],
+						tool_calls: [],
 						finish: 'stop' as const,
 						usage: { input: 10, output: 5 }
 					}

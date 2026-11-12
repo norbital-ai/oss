@@ -241,6 +241,31 @@ describe('durable model sync', () => {
 			]);
 		}))
 	);
+	it.live('a write reads its row through the model codecs, and changed names only declared fields', () =>
+		Effect.scoped(Effect.gen(function* () {
+			const typed: EngineManifest = {
+				...manifest,
+				models: { contacts: { description: 'Contacts', record_label: 'record.name', fields: {
+					name: { kind: 'text' }, note: { kind: 'text', optional: true }, visits: { kind: 'int' }
+				} } },
+				exposures: { contacts: {
+					outputs: { default: { contacts: { fields: 'all' } } },
+					create: { columns: { contacts: ['name', 'note', 'visits'] } },
+					syncs: { crm: { with: 'crm', read: true, write: true } }
+				} }
+			};
+			const f = yield* setupFor(typed, `export default { model: { contacts: { bodies: { syncs: { crm: {
+	read: function* () { return { rows: [], cursor: null, more: false }; },
+	write: function* ({ op, row, changed }, ctx) {
+		return yield* ctx.request({ method: 'POST', path: '/contacts',
+			body: { name: [op, typeof row.visits, row.visits, 'bolt_search' in row, changed.join('+')].join(' ') } });
+	}
+} } } } } };`);
+			yield* f.act('create', [{ name: 'Typed', visits: 0 }]);
+			yield* f.handler('sync.deliver');
+			expect(f.calls.map((call) => call.body?.name)).toEqual(['create number 0 false name+note+visits']);
+		}))
+	);
 	it.live('refuses inbound updates and deletes of a locked row atomically with the sync page', () =>
 		Effect.scoped(Effect.gen(function* () {
 			const contacts = manifest.models.contacts;

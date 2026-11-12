@@ -23,7 +23,7 @@ it.live('a daily cron sends once through a runtime envoy account and its later r
 			catalog: Port.unavailable('ai.catalog'), embed: () => Port.unavailable('ai.embed'),
 			infer: (request) => {
 				requests.push(request);
-				return Stream.succeed({ _tag: 'Response' as const, response: { content: 'The report improved today.', toolCalls: [], finish: 'stop' as const, usage: { input: 1, output: 1 } } });
+				return Stream.succeed({ _tag: 'Response' as const, response: { content: 'The report improved today.', tool_calls: [], finish: 'stop' as const, usage: { input: 1, output: 1 } } });
 			}
 		});
 		const guest = yield* program(`export default { automation: { daily_report: { body: function* (_input, ctx) {

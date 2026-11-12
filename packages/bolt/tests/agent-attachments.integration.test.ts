@@ -155,7 +155,7 @@ const setup = Effect.gen(function* () {
 						last?.role !== 'tool' && id !== ''
 							? {
 									content: '',
-									toolCalls: [
+									tool_calls: [
 										{
 											id: 'r1',
 											name: 'read_file',
@@ -167,7 +167,7 @@ const setup = Effect.gen(function* () {
 								}
 							: {
 									content: 'A pump.',
-									toolCalls: [],
+									tool_calls: [],
 									finish: 'stop',
 									usage: { input: 1, output: 1 }
 								};

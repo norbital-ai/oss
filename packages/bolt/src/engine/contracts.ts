@@ -429,8 +429,8 @@ export type AiRequest = {
 };
 /** `cut`: the 60 s wall ended a stream; `continuation` resumes it as the next step (rule 63). */
 export type AiPortResponse = typeof AiPortResponseSchema.Type;
-/** Native model events and stored assistant content retain their existing transcript shape. */
-export type AiResponse = Omit<AiPortResponse, 'tool_calls'> & { readonly toolCalls: AiPortResponse['tool_calls'] };
+/** A model answer as the engine reads it: the port's own shape. */
+export type AiResponse = AiPortResponse;
 /** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */
 export type EmbedInput =
 	| string

@@ -247,7 +247,7 @@ describe('open_ai_chat', () => {
 				expect(sent.messages[3]).toMatchObject({ tool_call_id: 't0', content: '{"ok":true}' });
 				expect(response).toEqual({
 					content: '',
-					toolCalls: [{ id: 't1', name: 'read_messages', input: { limit: 3 } }],
+					tool_calls: [{ id: 't1', name: 'read_messages', input: { limit: 3 } }],
 					finish: 'tool',
 					usage: { input: 11, output: 2 }
 				});
@@ -273,7 +273,7 @@ describe('open_ai_chat', () => {
 					})
 				);
 				const { response } = yield* collect(open_ai_chat(config, { fetch: f }));
-				expect(response.toolCalls).toEqual([
+				expect(response.tool_calls).toEqual([
 					{ id: 't1', name: 'read_model', input: {}, invalid: expect.stringMatching(/JSON/) }
 				]);
 			})
@@ -317,7 +317,7 @@ describe('open_ai_chat', () => {
 						{ role: 'tool', content: { id: '', name: 'x', result: { ok: true } } }
 					]
 				});
-				expect(first(response.toolCalls).id).toMatch(/^call_/);
+				expect(first(response.tool_calls).id).toMatch(/^call_/);
 				expect(first(seen).sent.messages.at(-1)).toMatchObject({
 					role: 'tool',
 					tool_call_id: 't9',
@@ -372,7 +372,7 @@ describe('open_ai_chat', () => {
 				expect(deltas).toEqual(['Mar', 'ch']);
 				expect(response).toEqual({
 					content: 'March',
-					toolCalls: [{ id: 't1', name: 'read_model', input: { aggregate: {} } }],
+					tool_calls: [{ id: 't1', name: 'read_model', input: { aggregate: {} } }],
 					finish: 'tool',
 					usage: { input: 9, output: 4, cost: 0.001, call: 'gen-1' }
 				});
