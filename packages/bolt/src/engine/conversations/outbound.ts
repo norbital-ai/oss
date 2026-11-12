@@ -50,7 +50,7 @@ export function sendPiece(c: Chain, s: Send, now: string, gated = false): string
 	return sent;
 }
 /**
- * `ctx.send(to, message)` checked and placed (§2.6): `to` is a persisted instance id of a conversation
+ * `ctx.send(to, message)` checked and placed: `to` is a persisted instance id of a conversation
  * definition; a personal (owner) instance never sends. What `sendPiece` takes, or why the message cannot go.
  */
 export const prepareSend = Effect.fn('Agents.prepareSend')(function* (

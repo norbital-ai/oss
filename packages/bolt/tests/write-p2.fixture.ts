@@ -15,7 +15,7 @@ export const manifest = Result.getOrThrow(
 		...base,
 		models: {
 			...base.models,
-			// a ref names its order by the import key's values (rule 30)
+			// a ref names its order by the import key's values
 			orders: { ...base.models.orders, key: ['title'], unique: [{ fields: ['title'], import_key: true }] },
 			tags: {
 				description: 'A tag',

@@ -1,4 +1,4 @@
-// Mounting the workspace shell in the browser (§5.10). The build hands it the app and group literals (routes are
+// Mounting the workspace shell in the browser. The build hands it the app and group literals (routes are
 // resolved client-side), one lazy chunk per page (`'<app>/<page>'`), and the components other areas own: the agent's
 // conversation, each model's representation, each integration definition's setup and each custom field's renderer.
 import { mount, unmount, type Component } from 'svelte';

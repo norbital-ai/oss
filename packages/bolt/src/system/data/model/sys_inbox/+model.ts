@@ -1,4 +1,4 @@
-// A verified webhook delivery (spec §3): a hint that a sync's next read has news, or the data itself for a provider with
+// A verified webhook delivery: a hint that a sync's next read has news, or the data itself for a provider with
 // no list API; passed to the sync's `read` as a delivery and marked consumed by the act that read it. Deduplicated by the
 // provider's delivery id per instance, so a delivery sent twice is stored once. Engine only: not exposed.
 import { bind_system_model } from '../../../../decl/model.ts';

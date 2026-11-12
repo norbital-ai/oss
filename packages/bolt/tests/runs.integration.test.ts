@@ -1,4 +1,4 @@
-// The runs area on PGlite (rules 48–56a, 70): the one queue, the deadlines port, buckets, model effects written in the
+// The runs area on PGlite: the one queue, the deadlines port, buckets, model effects written in the
 // causing statement and run as its writer, re-queues, attempts, visibility, restart recovery (a dropped run reruns from the start).
 // One engine per mechanism group; each test's phases share it. Crons: runs-fire. Observed revisions: callables.
 import { randomUUID } from 'node:crypto';
@@ -638,7 +638,7 @@ describe('run browser scope', () => {
 	);
 });
 
-describe('lost leases (rules 52a, 70)', () => {
+describe('lost leases', () => {
 	it.effect('a dropped run reruns from the start at most 3 times, then fails lost_lease', () =>
 		Effect.gen(function* () {
 			let starts = 0,
@@ -734,7 +734,7 @@ const effectTargets = (input: Json) => Schema.decodeUnknownSync(EffectImages)(in
 	if (row === null) throw new Error('An effect must carry a stored row image.');
 	return row;
 });
-describe('model effects and starts (rules 49, 50, 51)', () => {
+describe('model effects and starts', () => {
 	it.effect(
 		'each committed verb queues one effect run as its writer, due at its commit, its rows the writer’s view output; its schedule needs no start grant and records the effect as its trigger; a write that changes nothing queues none; a manual start keeps its rows',
 		() =>
@@ -1009,7 +1009,7 @@ describe('a run is the system holding its policies; its trigger records who star
 	);
 });
 
-describe('re-queues, attempts and notices (rules 21, 54, 55, 70)', () => {
+describe('re-queues, attempts and notices', () => {
 	it.effect(
 		'a same-key re-queue replaces and its chain ends; only a Transient failure retries the same run from the start, a bug never; a notice resolves its holders once across retries, and one to no one is refused or reported',
 		() =>
@@ -1164,7 +1164,7 @@ describe('run visibility and removed automation webhooks', () => {
 	);
 });
 
-describe('lanes (rules 48, 51)', () => {
+describe('lanes', () => {
 	it.effect('twelve automations run side by side in one workspace; the thirteenth waits', () =>
 		Effect.gen(function* () {
 			const full = yield* Deferred.make<void>(),

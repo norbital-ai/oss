@@ -1,10 +1,10 @@
-// The agent engine (§5.9, rules 57–63b): a turn is a loop over a conversation's rows. Each step claims the queued inputs
+// The agent engine: a turn is a loop over a conversation's rows. Each step claims the queued inputs
 // (a steer joins at the next step and acts as its own sender), builds the context, makes one model request (60 s to its
 // first byte, then the 20 s idle wall) and runs the tool calls it asks for as the actor. A turn ends on a reply with no tool calls, a confirmation
 // card or a stop: no step count ends it, only guards against no progress. An executed plan is checked by an independent verifier sub-run; a sub-agent is a
 // child conversation run under the delegating turn's `as`, never wider. Hosts drive `drain`; nothing here names a host.
 // A claimed turn holds a three-minute lease its heartbeat renews and queues the platform run `agent.turn`, so a turn
-// whose process died is taken over once the lease lapses (rule 48), and never runs twice at once.
+// whose process died is taken over once the lease lapses, and never runs twice at once.
 import { sql } from '../db/sql.ts';
 import type { Sql } from '../contracts.ts';
 import {
@@ -201,7 +201,7 @@ export type AgentConfig = {
 	engine: AgentEngine;
 	ai?: Ai['Service'];
 	bindings: Effect.Effect<Bindings>;
-	/** A message's authority (rules 57, 60); default: members from `sys_user`, public senders and policy sets by the manifest. */
+	/** A message's authority; default: members from `sys_user`, public senders and policy sets by the manifest. */
 	resolve?: (as: As) => Effect.Effect<Authority | null, EngineError>;
 	mcp?: McpHost;
 	attachments?: AttachmentPort;
@@ -236,7 +236,7 @@ export type AgentConfig = {
 	skill_files?: (skill: string, path: string) => Promise<Uint8Array>;
 	/** A host call that has not answered by then becomes a background job (default 30 s). */
 	host_inline_ms?: number;
-	/** The deadlines port's `announce` for this scope: a recovery run's due time (rule 52a). */
+	/** The deadlines port's `announce` for this scope: a recovery run's due time. */
 	announce?: (at: string) => Effect.Effect<void>;
 	/** Context windows by model class; default 200,000 tokens. */
 	windows?: {
@@ -245,7 +245,7 @@ export type AgentConfig = {
 	wall_ms?: number;
 };
 class Unusable extends Schema.TaggedError<Unusable>()('Unusable', { message: Schema.String }) {}
-/** L-BOLT-432: flag costly calls on their observation; the gauge does not stop the turn or change the billed charge. */
+/** flag costly calls on their observation; the gauge does not stop the turn or change the billed charge. */
 const AI_GAUGE_USD = 5;
 export const AGENT_LIMITS = {
 	/** Checkpoints in a row with no model step between them: compaction that frees nothing stops here. */
@@ -559,7 +559,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	const detached = yield* FiberSet.make<unknown, never>();
 	/** The conversations inside a step: a planned close waits for none, and holds each turn at its next step. */
 	const stepping = makeParking();
-	/** A shared message piece: the rows reach live transcripts as written, with no re-read (rule 65). */
+	/** A shared message piece: the rows reach live transcripts as written, with no re-read. */
 	const changed = Effect.fn('Agents.changed')(function* (statement: Sql) {
 		const chain = new Chain();
 		chain.params.push(...statement.params);
@@ -761,7 +761,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		if (yield* queue.finished(id)) return false;
 		return (yield* idle(id, true)) === 1;
 	});
-	/** Static per agent (rule 62): an envoy's by its audience, the in-app agent's by the member kind it serves. */
+	/** Static per agent: an envoy's by its audience, the in-app agent's by the member kind it serves. */
 	/** A public envoy's or an external member's turn: the external brief, and no view of the workspace's source. */
 	const outward = Effect.fn('Agents.outward')(function* (conv: ConversationRow, a: Authority) {
 		const envoy = conv.envoy ?? (a.actor.kind === 'envoy' ? a.actor.envoy : null);
@@ -996,7 +996,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				current.usage.providers = [...new Set([...(current.usage.providers ?? []), u.provider])];
 		};
 		/**
-		 * L-BOLT-432: each provider call is one immutable `ai.call` observation: its call id (the metering key), model, tokens
+		 * each provider call is one immutable `ai.call` observation: its call id (the metering key), model, tokens
 		 * and charge, `settlement: 'pending'` for the meter; a call reported without a charge or id is `attention`, never a guessed cost.
 		 */
 		const used = Effect.fn('Agents.recordUsage')(function* (r: AiResponse, request: string) {
@@ -1221,7 +1221,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				...(detail !== undefined && inApp(conv) ? { detail } : {}),
 				...(current.usage.calls === 0 ? {} : { usage: { ...current.usage } })
 			});
-			// hook:wiring — a failed turn is a workspace log line (§5.12) naming the real reason; only an absent port is the missing provider
+			// hook:wiring — a failed turn is a workspace log line naming the real reason; only an absent port is the missing provider
 			const message =
 				code === 'unavailable' && detail === NO_AI
 					? 'AI provider not configured'
@@ -1233,7 +1233,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				attributes: { code, message }
 			});
 		});
-		/** L-BOLT-425/546: retry an empty four-row summary once; retain its origin and waiting inputs after the boundary. */
+		/** retry an empty four-row summary once; retain its origin and waiting inputs after the boundary. */
 		const compact = Effect.fn('Agents.compact')(function* (
 			conv: ConversationRow,
 			rows: readonly MessageRow[],
@@ -1375,7 +1375,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							yield* appendNote(NUDGE.discoveryPaused);
 						}
 					}
-					// rule 62: the model sees a bounded result; a clipped one keeps the whole output for `read_file { call }`
+					// the model sees a bounded result; a clipped one keeps the whole output for `read_file { call }`
 					const own = 'bounded' in answer && answer.bounded === true,
 						whole = own && answer.full !== undefined ? answer.full : result,
 						shown = own ? result : bounded(result).value;
@@ -1695,7 +1695,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		});
 		const advance = Effect.fn('Agents.step')(function* () {
 			// a planned close: the turn holds here, between steps, until its generation closes; its interruption hands it to
-			// the next generation (`release`, rule 48). ponytail: a parent in `wait` on a held sub-agent only ends at the host's cap
+			// the next generation (`release`). ponytail: a parent in `wait` on a held sub-agent only ends at the host's cap
 			stepping.leave(id);
 			if (stepping.parked) yield* Effect.never;
 			stepping.enter(id);
@@ -1707,8 +1707,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			const conv = { ...stored, model: allowedModel(settings, stored.model) };
 			current.model = conv.model;
 			if (conv.status === 'stopped') return true;
-			// hook:triage — `delivered_turn` marks each row new input at most once (rule 60a)
-			// rule 60: one sender's inputs per step, oldest first; a later sender's steer is claimed at the next step under its own authority
+			// hook:triage — `delivered_turn` marks each row new input at most once
+			// one sender's inputs per step, oldest first; a later sender's steer is claimed at the next step under its own authority
 			const claimChain = new Chain();
 			const claimed = [
 				...(yield* messageStatement(claimChain, claimMessage(claimChain, id, turn)))
@@ -1720,7 +1720,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				current.as = claimed.findLast((r) => r.as !== null)?.as ?? current.as;
 				current.mode = last.mode ?? 'agent';
 				current.inputs = claimed.map((r) => r.id);
-				// L-BOLT-423: a draft plan locks the conversation; only `execute_plan` starts execution
+				// a draft plan locks the conversation; only `execute_plan` starts execution
 				if (current.mode === 'agent' && conv.plan?.status === 'draft' && conv.parent === null)
 					current.mode = 'plan';
 			} else if (current.steps === 0 && !current.force) {
@@ -1818,7 +1818,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					.filter((p): p is string => p !== undefined)
 					.join('\n')
 			);
-			// the note closes the context, before a reply cut at the wall that this step continues (rule 63)
+			// the note closes the context, before a reply cut at the wall that this step continues
 			const history = modelTranscript(rows, conv);
 			if (note !== undefined) {
 				const tail = projection(rows, conv).at(-1);
@@ -1984,7 +1984,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					]
 						.filter((s) => s !== '')
 						.join('\n');
-					// no stall: an incomplete verdict sends the plan back to work, as many times as it takes (rule 63a, today)
+					// no stall: an incomplete verdict sends the plan back to work, as many times as it takes (today)
 					const verdicts = conv.plan.verdicts + (verdict?.complete ? 0 : 1);
 					const status: Plan['status'] = verdict?.complete ? 'verified' : 'active';
 					yield* setConv(id, 'plan = $2::jsonb', j({ ...conv.plan, status, verdicts }));
@@ -1999,7 +1999,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			return yield* executeCalls(conv, sender, toolset, row, calls, window);
 		});
 		yield* Effect.gen(function* () {
-			// rule 48: a turn taken over mid-work (its generation closed, its process died) goes on from its transcript and
+			// a turn taken over mid-work (its generation closed, its process died) goes on from its transcript and
 			// answers; its input was already consumed, so only a turn that had replied or was waiting on a card settles
 			if (admitted === 'takeover') {
 				for (const row of yield* unfinished(id))
@@ -2018,7 +2018,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				if (yield* advance()) break;
 			}
 		}).pipe(
-			// a turn that breaks (a failure or a defect, never an interruption: rule 48 hands that turn on) answers its sender
+			// a turn that breaks (a failure or a defect, never an interruption: a durable turn hands that turn on) answers its sender
 			Effect.catchCause((cause) =>
 				Cause.hasInterruptsOnly(cause)
 					? Effect.interrupt
@@ -2414,7 +2414,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			}));
 			return yield* drain(r.conversation, { force: true, receipts });
 		}),
-		/** The agent's live surface: the model classes and the MCP servers this actor may use (rule 63b). */
+		/** The agent's live surface: the model classes and the MCP servers this actor may use. */
 		surface: (a: Authority) => ({ models: config.ai?.models ?? [], mcp: mcpServers(m, a) }),
 		models: Effect.fn('Agents.models')(function* () {
 			const cat =

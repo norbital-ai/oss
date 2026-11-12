@@ -1,4 +1,4 @@
-// The run queue's shared time arithmetic (rules 52a and 54).
+// The run queue's shared time arithmetic.
 import { Array as EffectArray } from 'effect';
 import { duration_seconds } from '@norbital-ai/std/date';
 import type { Json } from '../../decl/values.ts';

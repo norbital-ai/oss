@@ -34,7 +34,7 @@ import {
 type Obj = { readonly [k: string]: unknown };
 const invalid = (message: string) => BoltError.make('invalid', 'decode', message);
 
-/** `{ instant } | { revision } | { before }` of `history` (rule 17). */
+/** `{ instant } | { revision } | { before }` of `history`. */
 type HistoryAt =
 	| { readonly _tag: 'Instant'; readonly instant: string }
 	| { readonly _tag: 'Revision'; readonly revision: number }
@@ -86,7 +86,7 @@ export type ReadIR =
 			/** Native row fetch uses the same visibility and projection as the list. */
 			readonly id?: string;
 	  }
-	/** Automation runs as the caller may see them (rule 56), newest first: one automation's, or one run by id. */
+	/** Automation runs as the caller may see them, newest first: one automation's, or one run by id. */
 	| {
 			readonly kind: 'runs';
 			readonly model: 'sys_run';

@@ -1,5 +1,5 @@
 <!--
-	A run of tool steps (§5.9), the agent panel's and each sub-agent's: one quiet line per step (its own icon, what it did in
+	A run of tool steps, the agent panel's and each sub-agent's: one quiet line per step (its own icon, what it did in
 	words, on what, how long), opening to that tool's own view (`ToolBody`). A failed step is red and says why in one line
 	(the whole reason on hover). A piece of reasoning opens to its text.
 -->

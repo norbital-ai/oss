@@ -2,7 +2,7 @@
 /**
  * `bolt check`, the one diagnosis entry point: the compiler's checks, then the type check. A repository's CI runs it
  * on each template, and the sandbox's check job runs it once per tree. The type check is one `tsc --api`
- * whole-program diagnose (compute model §5, "Check: one type service for every tenant") over the workspace on disk:
+ * whole-program diagnose ("Check: one type service for every tenant") over the workspace on disk:
  * every package, `svelte` and svelte2tsx's shims included, resolves from the workspace's own `node_modules`, so a
  * component and the shims type against one copy. The audit is the host's, never part of a check.
  */

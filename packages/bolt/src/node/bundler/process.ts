@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The confined bundler process (compute model §3, "Running a file", P24): rolldown over a tree the kernel sends, one
+// The confined bundler process ("Running a file"): rolldown over a tree the kernel sends, one
 // bundle per message. Every byte it bundles arrives over IPC and every import is answered by `resolver.ts`, so it reads
 // nothing from disk but its own code and rolldown's; the kernel confines it so it cannot (`index.ts`). In:
 // `{ id, entry, files }` (paths in the tree); out: `{ id, code, map }` or `{ id, errors }`. Its replies are untrusted.

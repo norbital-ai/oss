@@ -8,7 +8,7 @@ class WorkFailed extends Schema.TaggedError<WorkFailed>()('WorkFailed', {
 	message: Schema.String
 }) {}
 
-describe('the envelope (rule 71)', () => {
+describe('the envelope', () => {
 	it.effect('admits FIFO under the limit, request-path work ahead of automations', () =>
 		Effect.gen(function* () {
 			const admit = yield* envelope(1),
@@ -139,7 +139,7 @@ describe('the envelope (rule 71)', () => {
 		})
 	);
 	it.effect(
-		'drains within its grace: admission closes, waiters are shed, a never-settling call cannot hold it (rule 71a)',
+		'drains within its grace: admission closes, waiters are shed, a never-settling call cannot hold it',
 		() =>
 			Effect.gen(function* () {
 				const admit = yield* envelope(1);

@@ -13,7 +13,7 @@ export function open_record(
 	carried = contexts === undefined ? null : { record: `${model}/${id}`, contexts };
 	const url = new URL(location.href),
 		key = `${model}/${id}`;
-	// the record-sheet stack (rule 10): a record opened from an open sheet stacks on it; one already open becomes the top
+	// the record-sheet stack: a record opened from an open sheet stacks on it; one already open becomes the top
 	// a record just created replaces its own create sheet, never stacks on it
 	const all = url.searchParams.getAll('record');
 	const stack = id !== 'new' && all.at(-1) === `${model}/new` ? all.slice(0, -1) : all,

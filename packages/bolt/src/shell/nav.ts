@@ -1,4 +1,4 @@
-// The shell's navigation (§5.10, §3.3.1, §3.9): which apps an actor sees, the nav tree of apps and groups, the URL of a
+// The shell's navigation: which apps an actor sees, the nav tree of apps and groups, the URL of a
 // page or record, and the route a URL names. Pure: the host and the browser share it.
 import type { Authority, EngineActor } from '../engine/contracts.ts';
 import type { EngineManifest } from '../engine/manifest.ts';
@@ -73,7 +73,7 @@ export function navigation_paths(nodes: readonly NavNode[], admin: boolean): str
 
 const APP_PREFIX = '/app/';
 const KIOSK_PREFIX = '/kiosk/';
-/** The session cookie (§5.11.2), the admin's preview-as target (rule 39) and the visitor's idempotency id (§5.10). */
+/** The session cookie, the admin's preview-as target and the visitor's idempotency id. */
 export const COOKIES = {
 	session: '__Secure-bolt-session',
 	preview: '__Secure-bolt-preview',
@@ -174,7 +174,7 @@ export type ShellBoot = {
 	}[];
 	/** Each envoy's display name by key (its declared `name`), for the agent panel's conversation groups. */
 	envoys?: { readonly [envoy: string]: string };
-	/** The VAPID public key to subscribe this device to notices with (§5.7), or `null` when the host sends no push. */
+	/** The VAPID public key to subscribe this device to notices with, or `null` when the host sends no push. */
 	push: string | null;
 	/** A visitor page's app and, when it declares one, the Turnstile site key. */
 	visitor: { app: string; site_key?: string } | null;
@@ -188,9 +188,9 @@ export type ShellBoot = {
 	operation_outputs: OperationOutputs;
 	/** Authorized manifest metadata for the shared search picker. */
 	search?: readonly ManifestItem[];
-	/** The agent surface is on but the host binds no AI provider (P19): the panel says so instead of failing each turn. */
+	/** The agent surface is on but the host binds no AI provider: the panel says so instead of failing each turn. */
 	ai_unconfigured?: true;
-	/** The schema fingerprint the page boots against: the page context sends it as `Bolt-Contract` (L-BOLT-171). */
+	/** The schema fingerprint the page boots against: the page context sends it as `Bolt-Contract`. */
 	contract?: string;
 };
 /** Another workspace the member belongs to; `href` enters it. */
@@ -234,7 +234,7 @@ const holdsApp = (authority: Authority, name: string) =>
 		(app) => app === '*' || app === name || name.startsWith(`${app}/`)
 	);
 
-/** The four kinds of `audience`; `public` apps run every viewer as the visitor (§3.9). */
+/** The four kinds of `audience`; `public` apps run every viewer as the visitor. */
 export function audience_of(spec: AppSpec | undefined): 'members' | 'external' | 'all' | 'public' {
 	const a = spec?.audience ?? 'members';
 	return typeof a === 'object' ? 'public' : a;
@@ -436,7 +436,7 @@ export function nav(m: ShellManifest, auth: Authority): NavNode[] {
 }
 
 /**
- * The shell's own surfaces an actor gets (§3.9, P1): externals never see settings, automation runs, the staff inbox or Studio.
+ * The shell's own surfaces an actor gets: externals never see settings, automation runs, the staff inbox or Studio.
  * Settings and logs are an administrator's; Studio is every staff member's (their own draft; the host decides what a
  * non-administrator may do) on a host that serves it (`studio`: Colony; an untethered workspace has none). The command
  * center is every staff member's (`runs`); its tabs follow the rest. A preview environment (`preview`) drops the meta
@@ -500,7 +500,7 @@ const COMMAND_CENTER_TABS = [
 	'people'
 ] as const;
 export type CommandCenterTab = (typeof COMMAND_CENTER_TABS)[number];
-/** Studio's tabs, each a stable deep link `/studio/<tab>` (L-BOLT-528); `/studio` is the workbench. */
+/** Studio's tabs, each a stable deep link `/studio/<tab>`; `/studio` is the workbench. */
 const STUDIO_TABS = ['workbench', 'changes', 'versions'] as const;
 export type StudioTab = (typeof STUDIO_TABS)[number];
 const named = <T extends string>(tabs: readonly T[], value: string | undefined): T | undefined =>
@@ -624,7 +624,7 @@ export function route(m: ShellManifest, url: URL): Route {
 function recordOf(url: URL): { model: string; id: string } | null {
 	return records_of(url).at(-1) ?? null;
 }
-/** The record-sheet stack (rule 10): each `?record=` in order, the last on top; a malformed entry is skipped. */
+/** The record-sheet stack: each `?record=` in order, the last on top; a malformed entry is skipped. */
 export function records_of(url: URL): { model: string; id: string }[] {
 	return url.searchParams.getAll('record').flatMap((v) => {
 		const [, model, id] = /^([a-z][a-z0-9_]*)\/(.+)$/.exec(v) ?? [];

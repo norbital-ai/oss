@@ -10,7 +10,7 @@
 </script>
 
 <script lang="ts">
-	// An internal primitive (final-ui §7.4, id 736): a country select over `Combobox`, for a host's address or
+	// An internal primitive (id 736): a country select over `Combobox`, for a host's address or
 	// jurisdiction field. The value is the alpha-2 code.
 	import Combobox from '../combobox/combobox.svelte';
 	import { ui_text } from '../utils.js';

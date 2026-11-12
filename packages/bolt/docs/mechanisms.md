@@ -71,10 +71,11 @@ permission. A direct matching allow executes; absent direct permission, an appli
 flow holds a provisional write and snapshots its steps and approvers. The optional model
 `record_label` CEL identifier is resolved and searched through the target reference at read time;
 it is never copied onto the request. Target row grants and readable label dependencies apply.
-Without a label or accessible target, consumers show the target record UUID from the existing reference. Approve, reject and
-request-changes are distinct outcomes. Rejection restores the checkpoint; editing and resubmitting
+Without a label or accessible target, consumers show the target record UUID from the existing reference. Approve, reject,
+request-changes and withdraw are distinct outcomes. Rejection and withdrawal restore the checkpoint; editing and resubmitting
 reevaluates the policy. `superseded_by` names exact source team handles. Automation, integration and
-envoy identities do not approve. See the policy declarations and the public approval guides.
+envoy identities do not approve; an automation may withdraw its own request. See [Policies](./README.md#policies)
+and [Approvals](./README.md#approvals).
 
 An act's statement records the history of every row it changes, including the cascades it implies;
 the native history trigger records raw SQL changes. Historical reads expose

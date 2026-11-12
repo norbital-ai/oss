@@ -1,4 +1,4 @@
-// Phone identity (§5.11.2): a member signs in with their email or their mobile number (a texted code), an invitation
+// Phone identity: a member signs in with their email or their mobile number (a texted code), an invitation
 // names either or both, and a workspace that declares `signup` lets a newcomer join by proving their number — bound to
 // the record that is them (a guest customer becomes a registered member). An administrator closes sign-up at run time.
 import { describe, expect, layer } from '@effect/vitest';

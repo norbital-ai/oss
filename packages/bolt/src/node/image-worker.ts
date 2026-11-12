@@ -1,4 +1,4 @@
-// `ctx.files.image` (§5.8.1), run in a worker by images.ts, never on the host event loop or in the guest: decodes JPEG,
+// `ctx.files.image`, run in a worker by images.ts, never on the host event loop or in the guest: decodes JPEG,
 // PNG and HEIC (libheif), hashes PDQ, reads EXIF, and derives a JPEG. The decoders are field-operations' former guest
 // ones (jpeg-js, fast-png, libheif-js, exifr, pdq-wasm), moved host-side.
 import { Cause, Effect, Exit, Predicate, Schema } from 'effect';

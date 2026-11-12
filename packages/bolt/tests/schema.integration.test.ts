@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Schema on a real Postgres (PGlite 18): verified SQL migrations, one test per §5.2 / rule 68–69 guarantee.
+// Schema on a real Postgres (PGlite 18): verified SQL migrations, one test per guarantee.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { TenantDbShape as TenantDb } from '../src/engine/db/tenant-db.ts';

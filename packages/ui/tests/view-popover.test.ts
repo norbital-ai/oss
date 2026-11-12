@@ -10,7 +10,7 @@ import {
 } from './view-fixture.ts';
 import { Effect, Schema } from 'effect';
 import { reactive } from './kit-state.svelte.js';
-// The view popover (rule 16b, P34): typed rows that lower to a decodable `Where`, strict URL state, one combined
+// The view popover: typed rows that lower to a decodable `Where`, strict URL state, one combined
 // filter-and-sort popover on Table and Board.
 import './dom.ts';
 import assert from 'node:assert/strict';
@@ -1442,7 +1442,7 @@ it.live(
 );
 
 it.live(
-	'Table: a pending description deadline clears busy and keeps the prior filter; a described relation filter and sort are editable rows ANDed under the author where (rule 16a)',
+	'Table: a pending description deadline clears busy and keeps the prior filter; a described relation filter and sort are editable rows ANDed under the author where',
 	() =>
 		Effect.gen(function* () {
 			let reject: (error: Error) => void = () => {

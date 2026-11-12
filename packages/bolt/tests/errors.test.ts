@@ -1,5 +1,5 @@
-// The engine's failures (D3, rule 72a): construction never throws, the message rule is the old constructor's, the tags
-// are Errors named for themselves, and `CODE` alone decides what a run retries (rule 54).
+// The engine's failures (D3): construction never throws, the message rule is the old constructor's, the tags
+// are Errors named for themselves, and `CODE` alone decides what a run retries.
 import { describe, expect, it } from '@effect/vitest';
 import { Schema } from 'effect';
 import {
@@ -107,7 +107,7 @@ describe('engine errors', () => {
 		expect(Object.keys(CODE).sort()).toEqual([...CODES].sort());
 	});
 
-	it('transient table: a run retries upstream, timeout, rate_limited and conflict, nothing else (rule 54)', () => {
+	it('transient table: a run retries upstream, timeout, rate_limited and conflict, nothing else', () => {
 		expect(CODES.filter((code) => is_transient(BoltError.make(code, 'facility', code)))).toEqual([
 			'conflict',
 			'rate_limited',

@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `bolt check`'s build rules over a manifest (§3.3.9): model/label, model/instant-date, model/default, model/range,
+// `bolt check`'s build rules over a manifest: model/label, model/instant-date, model/default, model/range,
 // sync/*, kiosk/embed, app/embed, write/read-in-loop, notify/via, automation/cron. The full compile pipeline is not run
 // here: templates' `bolt check` gate runs it.
 import { Effect, Result } from 'effect';
@@ -330,7 +330,7 @@ describe('bolt check', () => {
 			"access/kiosk-grant desk: kiosk 'lobby': items: a kiosk never deletes"
 		]);
 	});
-	it.live('parses cron strings at build (rule 52)', () =>
+	it.live('parses cron strings at build', () =>
 		Effect.gen(function* () {
 			for (const ok of [
 				'0 2 * * *',
@@ -353,7 +353,7 @@ describe('bolt check', () => {
 				expect(Result.isSuccess(parse_cron(bad))).toBe(false);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
-	it('grades evaluation CPU at reference speed: a thread slowed by load is not over budget (rule 6)', () => {
+	it('grades evaluation CPU at reference speed: a thread slowed by load is not over budget', () => {
 		// unloaded: the reference ran at speed, the module's CPU stands
 		expect(evaluationCpuMs(80, 7)).toBe(80);
 		expect(evaluationCpuMs(120, 7)).toBe(120);

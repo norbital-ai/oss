@@ -7,7 +7,7 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 	import { TAB_LEVEL, tabLevel, tabVariant, type TabLevel } from './level.js';
 	import { TAB_ICON, TAB_LIST, TAB_TRACK, TAB_TRIGGER, TAB_TYPE } from './style.js';
 
-	/** One tab (§3.6 `RecordTab`): a `keep_alive` tab stays mounted while hidden, so a form inside keeps its state. */
+	/** One tab: a `keep_alive` tab stays mounted while hidden, so a form inside keeps its state. */
 	export type TabItem = {
 		name: string;
 		title: string;

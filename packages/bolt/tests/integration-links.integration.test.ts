@@ -1,4 +1,4 @@
-// engine/integrations/links.ts on PGlite (§4.5): the host half every host shares — one link per instance from the
+// engine/integrations/links.ts on PGlite: the host half every host shares — one link per instance from the
 // provider the operator paired it through, credentials sealed per instance under the opener's epoch, resume from the
 // instance rows, per-instance webhooks under the workspace's public path, durable status only on durable transitions,
 // a second opener fencing the first for good, bounded credential-write retries, concurrent request links, and

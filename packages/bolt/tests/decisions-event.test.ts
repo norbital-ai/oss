@@ -1,4 +1,4 @@
-// The `decision.made` attributes (§5.12): the state the decider received is recorded, every text leaf clipped, so the
+// The `decision.made` attributes: the state the decider received is recorded, every text leaf clipped, so the
 // panel's raw-context tab can show exactly what triage/filter/author was given without one event growing unbounded.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';

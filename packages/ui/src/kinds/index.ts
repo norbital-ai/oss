@@ -1,4 +1,4 @@
-// Field kinds (§3.3.2) in the ui: `Show` renders any value, `Editor` edits any kind, and the §3.6 inputs stand alone.
+// Field kinds in the ui: `Show` renders any value, `Editor` edits any kind, and the inputs stand alone.
 export { default as TimeInput, type TimeInputProps, type TimeValue } from './time-input.svelte';
 export { default as Editor, type EditorProps } from './editor.svelte';
 export { default as FileInput, type FileInputProps } from './file-input.svelte';

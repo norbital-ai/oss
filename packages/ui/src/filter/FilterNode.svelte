@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { UiContext } from '../client/contract.js';
-	// One filter row of the view popover (rule 16b): a condition (field ▸ operator ▸ operand ▸ value), an AND/OR/NOT
+	// One filter row of the view popover: a condition (field ▸ operator ▸ operand ▸ value), an AND/OR/NOT
 	// group, or a related-records row (relation ▸ quantifier ▸ value) with its nested conditions indented under it.
 	// Each condition is one editable sentence. Scope headers explain how their child conditions combine.
 	// The field, operator, label, value and quantifier choices all come from the engine's catalogue (`filter.options`),

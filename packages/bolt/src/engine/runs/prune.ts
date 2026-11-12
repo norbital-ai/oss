@@ -69,15 +69,15 @@ export const makePruner = Effect.fn('Runs.pruning')(function* () {
 			`${tables.map((t) => `(SELECT count(*)::int FROM sel_${t})`).join(' + ')} AS selected,
 			${tables.map((t) => `(SELECT count(*)::int FROM del_${t})`).join(' + ')} AS deleted,
 			${tables.map((t) => `(SELECT count(*) FROM sel_${t}) >= ${MAX_IDS}`).join(' OR ')} AS more`);
-		// the history horizon (rule 17, L-BOLT-182): 256 revisions per row, never an open restore point or an erased revision
-		// ponytail: uncapped by rule 25a's 10,000; cap it with a ctid select if a backlog ever makes this pass long
+		// the history horizon: 256 revisions per row, never an open restore point or an erased revision
+		// ponytail: uncapped by the 10,000-row pass cap; cap it with a ctid select if a backlog ever makes this pass long
 		const pruned = yield* prune_history(db);
 		if (selected > 0 && deleted === 0)
 			return yield* Effect.fail(
 				BoltError.make(
 					'no_progress',
 					'commit',
-					`bolt.prune: a pass selected ${selected} rows and deleted 0; it stops (rule 25a)`
+					`bolt.prune: a pass selected ${selected} rows and deleted 0; it stops`
 				)
 			);
 		if (!more)
@@ -89,7 +89,7 @@ export const makePruner = Effect.fn('Runs.pruning')(function* () {
 		yield* nativeCommit(db.write, live.publish, c, CapturedResult);
 		return { deleted: deleted + pruned, continued: now };
 	});
-	/** The first wake or written fire of a day prunes (rule 56); `undefined` once it ran today, or when it made no progress. */
+	/** The first wake or written fire of a day prunes; `undefined` once it ran today, or when it made no progress. */
 	const daily = (now: number) =>
 		Effect.suspend(
 			(): Effect.Effect<{ deleted: number; continued?: number } | undefined, EngineError> => {

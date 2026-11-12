@@ -1,6 +1,6 @@
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
-// The smart throttle (P31, P33, rule 60a; §11.2 G12 (10)) through the engine entry and the test kit: a scripted `sys_1`
+// The smart throttle through the engine entry and the test kit: a scripted `sys_1`
 // (no vendor) decides whether admitted envoy and in-app messages hold or, in an envoy's group, are filtered. It holds at
 // most 3 s and once, never filters a direct conversation, and never wedges: whatever happens to a decision, every pending
 // message stays covered by a queued run until it leaves `pending`.

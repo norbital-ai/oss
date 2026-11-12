@@ -295,7 +295,7 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 			return dues;
 		}, (effect, rows, _ledger?: Ledger) => effect.pipe(
 			Effect.onInterrupt(() =>
-				interrupted(rows, 'The run was interrupted while its generation was draining (rule 71a).')
+				interrupted(rows, 'The run was interrupted while its generation was draining.')
 			),
 			Effect.ensuring(
 				Effect.sync(() => {

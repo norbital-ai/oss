@@ -20,6 +20,9 @@ src/
 ├── app/
 ├── i18n/
 └── lib/
+seed/                                    # public/ rows ship in the release's base pack; test/ only for bolt test; +seeder.ts
+migrations/                              # generated, editable SQL plus snapshot.json, migrations.lock.json, physical.json
+tests/                                   # the workspace's bolt test suites (*.test.ts)
 ```
 
 | Declaration               | Owning file                               | Callbacks                                                                                       |

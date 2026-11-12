@@ -1,4 +1,4 @@
-// std/host-op (§7.1 "Operations"): the one signed-host-operation scheme for hosts and their operator CLIs. A MAC
+// std/host-op: the one signed-host-operation scheme for hosts and their operator CLIs. A MAC
 // (HMAC-SHA256, base64url) over the newline-joined `v1 · scope · host · op · ts · nonce · sha256(body)`, carried in the
 // `bolt-op-*` headers. A request older or newer than five minutes, one for another scope, host or operation, a bad MAC
 // and a replayed nonce are refused before the body is read as an operation. Nonces are durable: the host's `NonceStore`.

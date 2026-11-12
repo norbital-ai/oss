@@ -1,4 +1,4 @@
-// std/formula (§3.7, D21, M1): user-edited rules as CEL text, compiled against a context declared with field-kind
+// std/formula (D21, M1): user-edited rules as CEL text, compiled against a context declared with field-kind
 // literals (object roots included) and evaluated over plain values. The numeric mode belongs to the context:
 // 'decimal' (default) evaluates money and decimals exactly as `Decimal`, 'float' in doubles (hr's law, D21).
 // Registered functions keep today's `registerFunction` signatures, so hr's law seed (`.age_on(`, `.birthday(`) runs
@@ -25,7 +25,7 @@ type Scalar =
 	| 'currency'
 	| 'count'
 	| 'sum';
-/** A root's kind: the field-kind literals of §3.3.2 that a formula can read. */
+/** A root's kind: the field-kind literals that a formula can read. */
 type Kind = { readonly many?: true } & (
 	| { readonly kind: Scalar; readonly optional?: true; readonly values?: readonly string[] }
 	| { readonly kind: 'record'; readonly of: Kind; readonly optional?: true }

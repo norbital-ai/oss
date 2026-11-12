@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// An integration instance's setup renderer (§4.5, P18): every provider drawn from the setup description its host
+// An integration instance's setup renderer: every provider drawn from the setup description its host
 // publishes — the provider choice, a form whose refusal is shown verbatim, a QR and a code — and a definition drawn by
 // the workspace's own `+integration.svelte` when it has one. Connect and disconnect in a real browser:
 // integration-setup.browser.test.ts.

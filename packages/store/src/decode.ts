@@ -544,13 +544,13 @@ export const where: (
 		else if (key === 'not') of.push({ t: 'not', of: yield* sub(v, at) });
 		else if (key === '$search') {
 			if (info.search.length === 0)
-				return yield* invalid(`${at}: '${m}' declares no search.text (rule 16)`);
+				return yield* invalid(`${at}: '${m}' declares no search.text`);
 			if (typeof v !== 'string' || v.trim() === '' || v.length > SEARCH_MAX_TEXT)
 				return yield* invalid(`${at}: takes 1–${SEARCH_MAX_TEXT} characters`);
 			of.push({ t: 'search', text: v });
 		} else if (key === '$similar') {
 			if (info.semantic === undefined)
-				return yield* invalid(`${at}: '${m}' declares no search.semantic (rule 16)`);
+				return yield* invalid(`${at}: '${m}' declares no search.semantic`);
 			const o = typeof v === 'string' ? { to: v } : v;
 			const to = Predicate.isObject(o) ? o.to : undefined,
 				top = Predicate.isObject(o) ? (o.top ?? SIMILAR_TOP) : undefined;
@@ -728,7 +728,7 @@ export const page = (
 			: Effect.succeed({ _tag: 'All' });
 	const limit = p.limit;
 	if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 0 || limit > max)
-		return invalid(`a read states { limit } (0–${max}) or { all: true } (rule 9)`);
+		return invalid(`a read states { limit } (0–${max}) or { all: true }`);
 	if (p.after !== undefined && typeof p.after !== 'string') return invalid('a cursor is a string');
 	return Effect.succeed(
 		p.after === undefined ? { _tag: 'Limit', limit } : { _tag: 'Limit', limit, after: p.after }
@@ -1020,7 +1020,7 @@ export const aggregate = Effect.fn('Store.decode.aggregate')(function* (
 	if (by !== undefined && buckets.length === 0)
 		return yield* invalid('by names at least one bucket');
 	if (buckets.length > 0 && Object.keys(paged).length === 0)
-		return yield* invalid('an aggregate with `by` states { limit } or { all: true } (rule 9)');
+		return yield* invalid('an aggregate with `by` states { limit } or { all: true }');
 	const [s, a, lo, hi] = [
 		yield* names(sum),
 		yield* names(avg),
@@ -1050,7 +1050,7 @@ export const semantic = Effect.fn('Store.decode.semantic')(function* (
 ) {
 	const c = yield* exposure_of(cat, model);
 	if (c.model.semantic === undefined)
-		return yield* invalid(`'${model}' declares no search.semantic (rule 16)`);
+		return yield* invalid(`'${model}' declares no search.semantic`);
 	const { to, where: w, select: s, ...paged } = q;
 	const record = Predicate.isObject(to) && Predicate.isObject(to.record) ? to.record : undefined;
 	const id = record?.id;

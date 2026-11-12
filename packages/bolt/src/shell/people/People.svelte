@@ -136,7 +136,7 @@
 			...(d.active !== u.active
 				? [{ name: d.active ? 'reactivate' : 'deactivate', input: { id: u.id } }]
 				: []),
-			// rule 57: what a private envoy knows them by; a key left out is unchanged
+			// what a private envoy knows them by; a key left out is unchanged
 			...((d.phone ?? '') !== u.phone || d.telegram !== u.telegram
 				? [
 						{

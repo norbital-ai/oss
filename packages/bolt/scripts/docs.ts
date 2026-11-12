@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The API reference generator (§7.3), run by bolt's build after the package compiles: `node scripts/docs.ts`.
+// The API reference generator, run by bolt's build after the package compiles: `node scripts/docs.ts`.
 // It walks the `exports` of bolt and of the packages it builds on (ui, std), reads each entry's built
 // declarations with the TypeScript checker (no TypeDoc) and writes one JSON document per namespace plus `index.json`
 // to `build/docs/`, where `@norbital-ai/bolt/docs` reads them. Output is sorted and carries no time, so a build of
@@ -32,7 +32,7 @@ class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 }) {}
 
 const PACKAGES = ['bolt', 'ui', 'std'];
-/** The reference a workspace author reads (§7.3): bolt's root and `/page`, bolt-cli's test kit, ui's authoring entries and std. */
+/** The reference a workspace author reads: bolt's root and `/page`, bolt-cli's test kit, ui's authoring entries and std. */
 const REFERENCE = (ns: string) =>
 	['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout'].includes(ns) ||
 	ns.startsWith('std/');
@@ -533,7 +533,7 @@ export const generateDocs = Effect.try({
 			};
 		}
 
-		/** The entry source's leading comment: what the entry is for (`// @norbital-ai/ui (§3.6): …`). */
+		/** The entry source's leading comment: what the entry is for (`// @norbital-ai/ui: …`). */
 		function entrySummary(e: Entry): string {
 			const src = e.file.replace(`${sep}build${sep}`, `${sep}src${sep}`).replace(/\.d\.ts$/, '.ts');
 			if (!existsSync(src)) return '';

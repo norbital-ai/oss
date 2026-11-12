@@ -1,4 +1,4 @@
-// Envoys (§4.4, P22, rules 57–60; authority by P32). An envoy is a runtime `sys_envoy` row
+// Envoys (authority by P32). An envoy is a runtime `sys_envoy` row
 // deployed on a workspace conversation instance (`sys_integration.envoy`, active, no owner); every turn runs as the
 // `envoy` actor on that instance. The ingest statement queues one `envoys.admit` run per new live message there, so a
 // crash between ingest and admission loses no turn. Admission reads the instance and the envoy's spec as they are now
@@ -126,8 +126,8 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 	const warned = new Set<string>();
 	const inflight = yield* FiberSet.make<unknown, EngineError>();
 	/**
-	 * Every limit is the envoy's own (P32, §3.9): `envoys.*` per sender and per subject, and rule 72's `agent` keyed by the
-	 * envoy, so a desk's turns share one budget whoever sends (G12 (4)). A member's policies never add limits.
+	 * Every limit is the envoy's own: `envoys.*` per sender and per subject, and the default `agent` limit keyed by the
+	 * envoy, so a desk's turns share one budget whoever sends. A member's policies never add limits.
 	 */
 	const charge = Effect.fn('Envoys.charge')(function* (
 		envoy: string,
@@ -257,11 +257,11 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		const triage = cfg.triage;
 		if (a.group && groups === 'disabled') return 'ignored';
 		const trigger = a.invocation === 'mention' || a.invocation === 'reply';
-		// rule 60: a message that arrives while the turn runs is steering — queued at once, claimed at its next step,
+		// a message that arrives while the turn runs is steering — queued at once, claimed at its next step,
 		// never held. A DM steers; in a group only a message addressed to the envoy does, so chatter stays out of the turn.
 		const steering = a.status === 'running' && !a.email && (!a.group || trigger);
 		const addressed = !a.group || a.email || groups === 'all' || trigger || steering;
-		// rule 60a: every chat message the envoy may answer is held for the sender's pause (email never is); the decider
+		// every chat message the envoy may answer is held for the sender's pause (email never is); the decider
 		// is asked only under the envoy's triage scope, and an unaddressed group message is held only for it
 		const decides = !a.email && triage?.envoy(spec, a.group) === true;
 		const triaged = !a.email && !steering && triage !== undefined && (addressed || decides);
@@ -341,7 +341,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		content = jsonb_build_object('text', coalesce(text, '')), author = coalesce(sender_name, sender)`;
 	/**
 	 * Queues the row and, in the same statement, the conversation's `agent.turn` at the turn lease: the drain this process
-	 * starts takes it at once, and if the process dies first the run starts the turn (rule 48).
+	 * starts takes it at once, and if the process dies first the run starts the turn.
 	 */
 	const queue = Effect.fn('Envoys.queue')(function* (a: Arrived, as: As) {
 		const now = yield* clock,
@@ -429,7 +429,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 		admit,
 		drain,
 		settled: FiberSet.awaitEmpty(inflight),
-		/** The admission run (rule 48): `runs.platform`, retried on a transient failure (a decided row is never decided again). */
+		/** The admission run: `runs.platform`, retried on a transient failure (a decided row is never decided again). */
 		handlers: { [ADMIT]: admit },
 		retries: { [ADMIT]: { attempts: 3, backoff: '10s' } }
 	};

@@ -317,8 +317,7 @@ export function catalogText(
 	return s === `ui.${key}` ? fill(fallback, vars) : s;
 }
 /**
- * A model's or field's label: the catalog key, else the field's `declared` label, else the humanized name (final-ui
- * rule 32); a FK names its target (`project_id` → `Project`).
+ * A model's or field's label: the catalog key, else the field's `declared` label, else the humanized name; a FK names its target (`project_id` → `Project`).
  */
 export function label(
 	bolt: Pick<ViewBolt, 't'>,

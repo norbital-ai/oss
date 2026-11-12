@@ -54,7 +54,7 @@ migration checks; runtime flags do not override them.
   an instance's configuration changes.
 - Gmail and Google Calendar share the host's Google Web application (`serving.oauth`) when a workspace declares no
   app of its own; register `<public URL>/hooks/oauth/callback` as an authorized redirect URI.
-- Runtime events (§5.12) are log lines carrying each event's JSON; the last 10,000 are queryable from memory.
+- Runtime events are log lines carrying each event's JSON; the last 10,000 are queryable from memory.
 
 The public page reader (`src/web.ts`) reads HTTPS only, pins every checked DNS answer, refuses private
 and reserved networks before a socket opens and follows at most five checked redirects.

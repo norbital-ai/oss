@@ -1,4 +1,4 @@
-// What a person signs in with: an email address or a mobile number (§5.11.2). A member may hold either or both; each is
+// What a person signs in with: an email address or a mobile number. A member may hold either or both; each is
 // unique among members, and a code proves one of them.
 
 /** An email address as typed (compared case-folded), or a mobile number in international form (`+` and its digits). */

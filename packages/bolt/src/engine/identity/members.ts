@@ -1,4 +1,4 @@
-// Member administration (rules 38b, 38c): invitations, the admin flag with its `last_admin` guard, (de)activation,
+// Member administration: invitations, the admin flag with its `last_admin` guard, (de)activation,
 // member team selection and API keys. Definitions and policy grants remain source declarations.
 import type { Json } from '../../decl/values.ts';
 import { audited, auditActor } from '../audit-operation.ts';
@@ -41,7 +41,7 @@ import {
 	type IdentityHost
 } from './session.ts';
 const INVITE_MS = 7 * 24 * 3600000;
-/** Serializes every change to who is an active admin, so the count assert sees the other writer (rule 38c race). */
+/** Serializes every change to who is an active admin, so the count assert sees the other writer. */
 const ADMINS: Lock = { advisory: ['sys_user.admins'] };
 function write<A extends typeof CapturedResult.Type>(
 	h: IdentityHost,
@@ -99,7 +99,7 @@ function write<A extends typeof CapturedResult.Type>(
 }
 const unknownTeam = (m: EngineManifest, team: string | null | undefined) =>
 	team != null && !Object.hasOwn(m.teams, team);
-// ── invitations (rule 38b) ──
+// ── invitations ──
 /** An invitation names its person by email, by mobile number (international form), or both; the link goes to each. */
 type InviteInput = {
 	email?: string;
@@ -177,7 +177,7 @@ function addressesOf(input: { email?: string | null; phone?: string | null }): A
 	}
 	return parsed.length === 0 ? null : parsed;
 }
-/** Admin-only; never sets `admin`. The notice's link is built from the host's public origin (§5.11.6). */
+/** Admin-only; never sets `admin`. The notice's link is built from the host's public origin. */
 export const invite = Effect.fn('Bolt.invite')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
@@ -363,7 +363,7 @@ export const revokeInvitation = Effect.fn('Bolt.revokeInvitation')(function* (
 	return null;
 });
 /**
- * `sys_invitation.resend` (rule 38c): an invitation not yet accepted or revoked (expired included) gets a fresh 7-day
+ * `sys_invitation.resend`: an invitation not yet accepted or revoked (expired included) gets a fresh 7-day
  * expiry and its notice again.
  */
 export const resendInvitation = Effect.fn('Bolt.resendInvitation')(function* (
@@ -458,7 +458,7 @@ export const assign_team = Effect.fn('Bolt.assign_team')(function* (
 	return null;
 });
 /**
- * Sets a member's conversation handles (rule 57): the mobile number a private envoy knows them by on WhatsApp (international
+ * Sets a member's conversation handles: the mobile number a private envoy knows them by on WhatsApp (international
  * form, stored as `+` and its digits) and their Telegram handle. A key left out keeps its value; `null` or `''` clears it.
  * A number another member holds is refused.
  */
@@ -504,7 +504,7 @@ export const setHandles = Effect.fn('Bolt.setHandles')(function* (
 		)
 	);
 });
-// ── API keys (§5.11.2): `nbk_<prefix>_<secret>`, stored as SHA-256, shown once ──
+// ── API keys: `nbk_<prefix>_<secret>`, stored as SHA-256, shown once ──
 const secret = () => toBase64url(crypto.getRandomValues(new Uint8Array(32)));
 const prefixOf = () => to_hex(crypto.getRandomValues(new Uint8Array(6)));
 export const issueKey = Effect.fn('Bolt.issueKey')(function* (
@@ -577,7 +577,7 @@ export const authenticateKey = Effect.fn('Bolt.authenticateKey')(function* (
 	return r !== undefined && timingSafeEqual(fromHex(sha256(bearer)), fromHex(r.hash)) ? r.id : null;
 });
 /**
- * The `bolt.membership` platform run (§5.11.3): hands the queued `{ user, email, phone, team, state }` to the host's port. A
+ * The `bolt.membership` platform run: hands the queued `{ user, email, phone, team, state }` to the host's port. A
  * port failure fails the run with the facility's kind.
  * ponytail: platform runs take one attempt, so a failed projection waits for the member's next lifecycle change; give
  * platform runs retries when a host's directory drifts.

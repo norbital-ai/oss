@@ -80,7 +80,7 @@ export const HistorySnapshotSchema = Schema.Struct({
 	compatible: Schema.Record(Schema.String, Schema.Json),
 	incompatible: Schema.Array(Schema.String)
 });
-/** `history.preview`'s answer (rule 17): advice for one restore; `history.restore` recomputes it before writing. */
+/** `history.preview`'s answer: advice for one restore; `history.restore` recomputes it before writing. */
 export const RestorePreviewSchema: Schema.Codec<RestorePreview> = Schema.Struct({
 	model: Schema.String,
 	record: Schema.String,

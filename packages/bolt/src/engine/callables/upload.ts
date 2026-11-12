@@ -1,4 +1,4 @@
-// `/files` uploads are persisted (rules 18, 38, 38d; final-domain D17): the bytes go to the files port, then one statement
+// `/files` uploads are persisted: the bytes go to the files port, then one statement
 // inserts the `sys_file` row keyed by the client-minted upload id and adds the `upload` rate increment gated on that
 // insert, so a resent upload adds no row and no count and answers the first `FileRef`. Refused before its bytes are
 // stored (grant, `accept`, `max`) it costs no statement.

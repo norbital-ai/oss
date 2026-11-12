@@ -1,5 +1,5 @@
 // The draft of one mounted `Form`, shared with its `Field`s by context. A field reads and writes the draft; unmounting
-// a field (a lazy tab, a collapsed section) never drops its value, because the value lives here (§5.10).
+// a field (a lazy tab, a collapsed section) never drops its value, because the value lives here.
 import { Effect, Fiber, FiberSet, Option, Schema } from 'effect';
 import { flushSync, getContext, setContext } from 'svelte';
 import { encode_wire, revive_wire } from '@norbital-ai/std/wire';
@@ -109,7 +109,7 @@ export class FormState {
 	/** The draft over the row it starts from (the record, else the prefill): a money field reads its currency sibling here even when that is no input. */
 	#around = $state.raw<Row>({});
 	readonly row: Row = $derived({ ...this.#around, ...this.values });
-	/** The client-minted idempotency key of this draft's act: reused only to retry an `unknown` outcome (rule 31). */
+	/** The client-minted idempotency key of this draft's act: reused only to retry an `unknown` outcome. */
 	#key: string;
 	#revision = $state<number | undefined>(undefined);
 	#act: Act;
@@ -490,7 +490,7 @@ export class FormState {
 		for (const receive of this.#beforeOutcomes) receive(outcome);
 		for (const receive of this.#outcomes) receive(outcome);
 	}
-	/** Sends the draft; the draft stays until the outcome settles it (rule 67). Resolves `null` when nothing was sent. */
+	/** Sends the draft; the draft stays until the outcome settles it. Resolves `null` when nothing was sent. */
 	submit(): Effect.Effect<Outcome | null> {
 		return Effect.gen({ self: this }, function* () {
 			if (this.pending) return null;

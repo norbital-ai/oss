@@ -1,5 +1,5 @@
-// SQLSTATE → refusal (§5.2), through the manifest by constraint name. Any SQLSTATE outside the table is a bug and
-// comes back as a `BoltError` carrying the `DbError` (rule 72a); `conflict` is the write's to replay (rule 26).
+// SQLSTATE → refusal, through the manifest by constraint name. Any SQLSTATE outside the table is a bug and
+// comes back as a `BoltError` carrying the `DbError`; `conflict` is the write's to replay.
 import type { Refused } from '../../decl/ctx.ts';
 import { type DbError } from '../errors.ts';
 import { BoltError } from '../../protocol/errors.ts';

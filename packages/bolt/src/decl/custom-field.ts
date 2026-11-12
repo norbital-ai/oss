@@ -1,4 +1,4 @@
-// `custom_field(spec)` (§3.3.2): a stored kind of the workspace's own, used as `{ kind: 'custom', of: '<name>' }`.
+// `custom_field(spec)`: a stored kind of the workspace's own, used as `{ kind: 'custom', of: '<name>' }`.
 import type { Checked, Exact, InputKind, ValidInput, ValueOf } from './fields.ts';
 import type { Json, Msg } from './values.ts';
 

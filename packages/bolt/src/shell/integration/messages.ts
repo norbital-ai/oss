@@ -14,7 +14,7 @@ const decode = <A>(schema: Schema.Decoder<A>, rows: unknown) =>
 	);
 
 /**
- * An instance's raw messages (§5.9 built-in reads): every inbound and outbound `sys_message` on it, newest first, a page of
+ * An instance's raw messages: every inbound and outbound `sys_message` on it, newest first, a page of
  * 100 before `seq`; an administrator's, like the rest of Settings.
  */
 export const instance_messages = Effect.fn('shell.instance_messages')(function* (

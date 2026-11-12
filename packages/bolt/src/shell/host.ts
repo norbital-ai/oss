@@ -1,6 +1,6 @@
 import { uuid } from '../engine/port.ts';
 import { activeEnvoys } from '../engine/envoys/spec.ts';
-// The shell's host half (§5.10, §5.11.2, §3.9, rules 38a, 38d, 39): the session routes (`/__bolt/session/*`), the
+// The shell's host half: the session routes (`/__bolt/session/*`), the
 // caller's Authority for every data route (session cookie, API key, visitor, preview-as), the visitor gates in front
 // of `/q`, `/act`, `/files` and `/live`, the shell's boot, inbox, runs and settings reads, and the PWA manifest.
 // Native handlers answer their own routes and refusals, otherwise None; BoltHost composes them in the fixed order.
@@ -268,7 +268,7 @@ type Caller = {
 	preview: ShellBoot['preview'];
 	expiresAt?: number;
 };
-/** The preview cookie names a member id, or `team:<id>` (rule 39). */
+/** The preview cookie names a member id, or `team:<id>`. */
 const TEAM = 'team:';
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -515,7 +515,7 @@ const makeShell = Effect.gen(function* () {
 			);
 		const jar = cookies(request);
 		const app = publicApp(getHeader(request, VISITOR_APP));
-		// rule 38d: a visitor page's request runs as that app's visitor, signed in or not — unless the member signed in holds a
+		// a visitor page's request runs as that app's visitor, signed in or not — unless the member signed in holds a
 		// policy naming that app (a customer who verified their number on the portal): they run as themselves
 		if (app !== null) {
 			const s = yield* signedIn(request);
@@ -1013,7 +1013,7 @@ const makeShell = Effect.gen(function* () {
 		instance: string
 	) {
 		const at = yield* h.now;
-		// the instance's update checks judge a host verb on it (rule 35)
+		// the instance's update checks judge a host verb on it
 		const allowed = yield* mayUpdate(
 			{ manifest: m, db, guest },
 			'sys_integration',
@@ -1053,7 +1053,7 @@ const makeShell = Effect.gen(function* () {
 					? json({ value: yield* inbox(h.db, auth) })
 					: refused('forbidden', 'No inbox for this member.', 403);
 			case 'GET /runs': {
-				// rule 56: the Runs surface is staff's; a holder of an automation (external included) reads its runs through `bolt.runs`
+				// the Runs surface is staff's; a holder of an automation (external included) reads its runs through `bolt.runs`
 				const one = url.searchParams.get('automation') ?? undefined;
 				if (
 					!s.runs &&
@@ -1104,7 +1104,7 @@ const makeShell = Effect.gen(function* () {
 				return json({ value: yield* runLog(logs, id, url.searchParams.get('after') ?? undefined) });
 			}
 			case 'POST /runs/stop': {
-				// hook:runtime — rule 56: whoever reads the run in full may stop it
+				// hook:runtime — whoever reads the run in full may stop it
 				const { id } = yield* requestBody(request, RunId);
 				const run = yield* runs.stop(auth, id).pipe(Effect.map(Option.getOrNull));
 				return run === null
@@ -1321,7 +1321,7 @@ const makeShell = Effect.gen(function* () {
 				);
 			}
 			case 'POST /preview': {
-				// rule 39: only the real administrator may start or end a preview, of a member or a team; a preview
+				// only the real administrator may start or end a preview, of a member or a team; a preview
 				// environment has no preview-as (impersonation is access management, the live workspace's)
 				if (c.live !== undefined) return refused('forbidden', NOT_IN_PREVIEW, 403);
 				const b = yield* requestBody(request, Body),
@@ -1356,7 +1356,7 @@ const makeShell = Effect.gen(function* () {
 				});
 			}
 			case 'GET /explain': {
-				// `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's as a preview compiles it
+				// `access.explain`: the caller's own Authority, or (administrators) a member's or team's as a preview compiles it
 				const user = url.searchParams.get('user'),
 					team = url.searchParams.get('team');
 				let a: Authority = auth;
@@ -1376,7 +1376,7 @@ const makeShell = Effect.gen(function* () {
 		}
 		return null;
 	});
-	/** `GET /manifest.webmanifest` (§5.10, L-BOLT-295): scope and start_url from the configured public origin, never `Host`. */
+	/** `GET /manifest.webmanifest`: scope and start_url from the configured public origin, never `Host`. */
 	function webmanifest(): HttpServerResponse.HttpServerResponse {
 		const scope = under(h.public_url, '/'),
 			workspace = c.workspace();

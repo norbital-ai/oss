@@ -5,7 +5,7 @@
 	import type { ReadError } from '../client/contract.js';
 
 	/**
-	 * Edits a relation or an `id` input (§3.6): searches the target model through the caller's own read grant, so
+	 * Edits a relation or an `id` input: searches the target model through the caller's own read grant, so
 	 * it lists only rows (and fields) the viewer may read. `label` defaults to the target model's `label`; a target
 	 * without `search` is searched over its label's text and patterned `seq` fields. Each keystroke is a server search,
 	 * so `limit` is the page shown, never the rows searched; rows sort by `order_by`, else by the label.

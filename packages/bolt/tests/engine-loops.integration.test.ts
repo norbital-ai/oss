@@ -17,7 +17,7 @@ const sql = (t: Pick<Kit, 'db'>, text: string) =>
 const aged = (n: number) =>
 	`INSERT INTO bolt_rate SELECT 'act', 'k' || n, '${OLD}', 1 FROM generate_series(1, ${n}) n`;
 
-describe('rule 25a: engine loops', () => {
+describe('engine loops', () => {
 	it.live(
 		'a prune pass that deletes none of the rows it selected stops no_progress and queues nothing',
 		() =>

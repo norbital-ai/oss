@@ -14,7 +14,7 @@ import { TestWorkspace, type Kit, type WorkspaceServices } from '../../bolt-cli/
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
-		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test (rule 60a opt-out)
+		workspace: { tz: 'UTC', locale: 'en', agent: { triage: false } }, // hook:decisions — not a triage test
 		models: {
 			quotes: {
 				description: 'A quote',
@@ -207,7 +207,7 @@ const quotes = (t: Kit) =>
 	});
 
 layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
-	describe('the in-app agent over /__bolt (§5.9)', () => {
+	describe('the in-app agent over /__bolt', () => {
 		it.effect('starts a conversation and queues a confirmed automation only for its person', () =>
 			Effect.gen(function* () {
 				const { t, bolt, user, act, transcript } = yield* setup();
@@ -288,7 +288,7 @@ layer(workspace, { excludeTestServices: true })('p4 gaps', (it) => {
 		);
 	});
 
-	describe('push and the notice stream (§5.7)', () => {
+	describe('push and the notice stream', () => {
 		it.effect(
 			'stores web and apns subscriptions and pushes each notice to the devices of the members it addresses, from a run',
 			() =>

@@ -1,4 +1,4 @@
-// `search.semantic` embeddings (rule 16): a write that creates a row, or sets one of its semantic source fields, nulls
+// `search.semantic` embeddings: a write that creates a row, or sets one of its semantic source fields, nulls
 // the row's platform embedding and queues the platform run `bolt.embed` in its own statement; the run embeds every row
 // whose vector is missing through the host's `embeddings` port, after commit, never inside a write.
 import { Clock, Effect, Schema } from 'effect';
@@ -19,7 +19,7 @@ import type { Write } from '../write/commit.ts';
 export const EMBED = 'bolt.embed';
 const COLUMN = 'bolt_embedding';
 const PAGE = 100;
-/** Rule 72: the queue's 10,000 ids per run; past it the run queues one continuation (rule 25a). */
+/** Rule 72: the queue's 10,000 ids per run; past it the run queues one continuation. */
 const RUN_IDS = 10_000;
 
 /** A stored file reference, as much of it as the embedder reads. */
@@ -85,7 +85,7 @@ function assertWidth(
 /**
  * The platform run: every semantic model's rows with no vector, a page at a time, one `embed` call per page. A
  * row that changed after it was read keeps its null (its own write queued the next run). A port failure fails the
- * run with the facility's kind (`upstream`/`timeout` retry, rule 54). Rule 25a: a page whose guarded write stores 0 of
+ * run with the facility's kind (`upstream`/`timeout` retry). Rule 25a: a page whose guarded write stores 0 of
  * its rows stops the run `no_progress`; after 10,000 rows the run queues one continuation and ends. A row whose `file`
  * source holds an image embeds that image (its bytes from the files port); every other row embeds its text sources.
  * ponytail: one vector per row, so the first image wins over the text; a non-image file is not embedded.
@@ -215,7 +215,7 @@ export const embedRun = Effect.gen(function* () {
 							BoltError.make(
 								'no_progress',
 								'commit',
-								`bolt.embed: a pass on ${model} selected ${todo.length} rows and wrote 0; the run stops (rule 25a)`
+								`bolt.embed: a pass on ${model} selected ${todo.length} rows and wrote 0; the run stops`
 							)
 						);
 					embedded += result.rows.length;

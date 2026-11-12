@@ -124,7 +124,7 @@ const setup = (embed: Ai['Service']['embed'] = () => Port.unavailable('ai.embed'
 	});
 
 layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
-	describe('search.semantic embeddings (rule 16)', () => {
+	describe('search.semantic embeddings', () => {
 		it.effect(
 			'a create queues bolt.embed with its native commit; the run embeds after commit; only a source-field change makes it stale again',
 			() =>
@@ -195,7 +195,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 			Effect.map((answer) => answer.docs)
 		);
 
-	describe('semantic similarity over search.semantic (L-BOLT-123)', () => {
+	describe('semantic similarity over search.semantic', () => {
 		it.effect(
 			'query search.semantic ranks text and record probes by the embedding; /semantic fuses it with the lexical hit',
 			() =>
@@ -279,7 +279,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 		);
 	});
 
-	describe('erase and the live lane (rules 38e, 50, 66)', () => {
+	describe('erase and the live lane', () => {
 		it.effect('an erase re-answers the views that showed the row and queues no triggered run', () =>
 			Effect.gen(function* () {
 				const { context, t, act } = yield* setup();
@@ -332,7 +332,7 @@ layer(workspace, { excludeTestServices: true })('p3 gaps', (it) => {
 		);
 	});
 
-	describe('start over /__bolt/act (rules 24, 31)', () => {
+	describe('start over /__bolt/act', () => {
 		it.effect(
 			'takes a uuidv7 minted within 24 h; a v4 or a stale id is invalid_input; a resend is the same run',
 			() =>

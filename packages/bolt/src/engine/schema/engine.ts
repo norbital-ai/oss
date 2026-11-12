@@ -51,14 +51,14 @@ const REGISTRY = (): readonly Private[] => [
 		name: 'bolt_minor_units',
 		rank: 'function',
 		functions: ['bolt_minor_units(c text)'],
-		why: 'the money minor-unit CHECK helper (rule 68): SQL, not a record',
+		why: 'the money minor-unit CHECK helper: SQL, not a record',
 		sql: [MINOR_FN]
 	},
 	{
 		name: 'bolt_assert',
 		rank: 'function',
 		functions: ['bolt_assert(ok boolean, code text, detail text)'],
-		why: "the one write statement's guard (rule 20): raises BA001 inside the WITH chain",
+		why: "the one write statement's guard: raises BA001 inside the WITH chain",
 		sql: [
 			`create or replace function bolt_assert(ok boolean, code text, detail text) returns boolean language plpgsql as $$
 	begin
@@ -70,7 +70,7 @@ const REGISTRY = (): readonly Private[] => [
 	{
 		name: 'bolt_schema',
 		rank: 'table',
-		why: "the plan's own state (rule 69): the applied slice and its fingerprint, one row",
+		why: "the plan's own state: the applied slice and its fingerprint, one row",
 		sql: [
 			'create table if not exists bolt_schema (one bool primary key default true check (one), fingerprint text not null, slice jsonb not null, applied_at timestamptz not null default now())'
 		]
@@ -79,7 +79,7 @@ const REGISTRY = (): readonly Private[] => [
 		name: 'bolt_history',
 		source: true,
 		rank: 'table',
-		why: "every model's row history (rule 17), keyed by model and record: a log over all models, not one; a per-record restore is a `restored` revision naming its source in `restored_from`",
+		why: "every model's row history, keyed by model and record: a log over all models, not one; a per-record restore is a `restored` revision naming its source in `restored_from`",
 		sql: [
 			`create table if not exists bolt_history (collection text not null, record uuid not null, revision int not null, at timestamptz not null default now(), actor text, op text not null check (op in ('create', 'update', 'delete')), cause text not null check (cause in ('direct', 'cascade', 'derived', 'seed', 'erased', 'restored')), changes jsonb not null default '{}', restored_from int check ((cause = 'restored') = (restored_from is not null)), request uuid, operation text, meta jsonb not null default '{}'::jsonb)`,
 			'create index if not exists bolt_history__operation on bolt_history(operation) where operation is not null',
@@ -126,7 +126,7 @@ const REGISTRY = (): readonly Private[] => [
 		name: 'bolt_idem',
 		rank: 'table',
 		tables: ['bolt_idem', 'bolt_idem_outcome'],
-		why: "the idempotency gate (rules 20, 31, 55): request keys and each one's recorded outcome",
+		why: "the idempotency gate: request keys and each one's recorded outcome",
 		sql: [
 			'create table if not exists bolt_idem (key text primary key, digest text not null, issued_at timestamptz not null, run text)',
 			'create index if not exists bolt_idem_run on bolt_idem (run) where run is not null',
@@ -136,7 +136,7 @@ const REGISTRY = (): readonly Private[] => [
 	{
 		name: 'bolt_rate',
 		rank: 'table',
-		why: 'rate-limit windows (rule 38): a composite key, counted in the write statement',
+		why: 'rate-limit windows: a composite key, counted in the write statement',
 		sql: [
 			'create table if not exists bolt_rate (rule text not null, bucket text not null, window_start timestamptz not null, n int not null, primary key (rule, bucket, window_start))'
 		]
@@ -152,7 +152,7 @@ const REGISTRY = (): readonly Private[] => [
 	{
 		name: 'bolt_host_nonce',
 		rank: 'table',
-		why: 'host-operation replay nonces (§5.11.6): a pruned key set',
+		why: 'host-operation replay nonces: a pruned key set',
 		sql: [
 			'create table if not exists bolt_host_nonce (key text primary key, at timestamptz not null)'
 		]

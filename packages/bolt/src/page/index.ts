@@ -14,7 +14,7 @@ export type { IntegrationSetupEntry } from '../shell/integration/setup.ts';
 export type PageContext = Omit<ShellBolt, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt & UiContext;
 export type PublicPageContext = Omit<PublicClient, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt & UiContext;
 
-// ui's views are typed by the same names (§3.6): `of`, `columns`, `values`, `record` and ids per model.
+// ui's views are typed by the same names: `of`, `columns`, `values`, `record` and ids per model.
 declare module '@norbital-ai/ui' {
 	interface Workspace {
 		names: ViewNames;

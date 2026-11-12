@@ -1,4 +1,4 @@
-// The shell's browser half (§3.5, §5.10): the page context (the data client plus `href` and `agent`), the
+// The shell's browser half: the page context (the data client plus `href` and `agent`), the
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
 // needs one.
 import { Clock, Context, Effect, Layer, Option, Queue, Schema, Stream } from 'effect';
@@ -299,7 +299,7 @@ export function shell_api(
 				`${SHELL}/preview`,
 				typeof target === 'object' && target !== null ? target : { user: target }
 			),
-		/** `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's. */
+		/** `access.explain`: the caller's own Authority, or (administrators) a member's or team's. */
 		explain: (target?: { user: string } | { team: string }) =>
 			call(
 				Schema.Json,
@@ -315,7 +315,7 @@ export function shell_api(
 				}),
 			/** The models the member may pick and the one a new conversation runs, and the MCP servers its policies name (their conversations are the live `conversations` read). */
 			models: () => call(AgentModels, 'GET', `${PATHS.agent}/models`),
-			/** `mode`: the composer's `/plan` or `/compact` (§5.9). */
+			/** `mode`: the composer's `/plan` or `/compact`. */
 			post: (
 				conversation: string,
 				text: string,
@@ -373,7 +373,7 @@ export function shell_api(
 			respond_now: (conversation: string) => act('sys_conversation.respond_now', { conversation }), // hook:triage
 			confirm: (message: string, approve: boolean) =>
 				act('sys_message.confirm', { message, approve }),
-			// hook:agent-ui — §5.9's remaining generated actions
+			// hook:agent-ui — the agent's remaining generated actions
 			set_agent: (conversation: string, agent: string) =>
 				act('sys_conversation.set_agent', { conversation, agent }),
 			file: (message: string, about: { model: string; id: string } | null) =>
@@ -403,7 +403,7 @@ export function shell_api(
 }
 
 /**
- * Turnstile tokens are single-use (GAPS r5 11): a request that needs one waits for the next token, spends it and
+ * Turnstile tokens are single-use: a request that needs one waits for the next token, spends it and
  * asks the widget for another. `put` is the widget's callback; `reset` re-arms the widget.
  */
 export const challenge_queue = (reset: () => void = () => {}) =>
@@ -500,7 +500,7 @@ export function agent_panel() {
 
 type Row = { readonly [field: string]: Json };
 type RowFor<C> = C extends ModelName ? RowOf<C> : Row;
-/** X-20: what `+representation.svelte` receives, `{ view: RecordView<'<model>'> }` (ui's views pass the same shape). */
+/** what `+representation.svelte` receives, `{ view: RecordView<'<model>'> }` (ui's views pass the same shape). */
 export type RecordView<C extends string = string> =
 	| { model: C; mode: 'update'; record: RowFor<C> }
 	| { model: C; mode: 'create'; values: Partial<RowFor<C>> };
@@ -516,7 +516,7 @@ type ViewCommon<F> = {
 	address?: { value: string | null; on_change?(next: string | null): void };
 };
 /**
- * §3.2 role 5: what `+renderer.svelte` receives, `{ view: CustomFieldView<'<f>'> }`, a workspace's and a built-in's
+ * what `+renderer.svelte` receives, `{ view: CustomFieldView<'<f>'> }`, a workspace's and a built-in's
  * (`money`, `file`, `point`, `phone`) alike. `row` is the record's other field values (the form's draft in edit mode),
  * absent when a page embeds the renderer; `kind` the field's literal (a custom reference's shape); `dense` asks for one
  * compact line (a table cell, a card); `address` is a `point` field's address sibling.
@@ -530,7 +530,7 @@ export type CustomFieldView<F extends string = string> =
 			on_change(next: CustomValue<F> | null): void;
 	  });
 
-/** The page context (§3.5): the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
+/** The page context: the data client plus `href` and `agent`; a visitor page's client names its app on every request. */
 export function shell_bolt(
 	boot: ShellBoot,
 	options: {
@@ -587,7 +587,7 @@ export function shell_bolt(
 			operation_outputs: boot.operation_outputs,
 			/* hook:query (bolt.decode) */ describe:
 				boot.visitor === null && boot.ai_unconfigured !== true,
-			/* hook:decisions (rule 16a) */ ...(options.messages === undefined
+			/* hook:decisions */ ...(options.messages === undefined
 				? {}
 				: { messages: options.messages }),
 			...(f === undefined ? {} : { fetch: f }),
@@ -634,7 +634,7 @@ export function shell_bolt(
 						);
 						// one run by id is read as itself: the latest `limit` runs need not hold an earlier run (RunStatus)
 						const one = conditions['id']?.eq;
-						// the live `runs` read: a `sys_run` change re-answers it, as the caller may see it (rule 56)
+						// the live `runs` read: a `sys_run` change re-answers it, as the caller may see it
 						return client
 							.observe({
 								read: {

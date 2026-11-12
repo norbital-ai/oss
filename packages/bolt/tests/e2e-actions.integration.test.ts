@@ -1,5 +1,5 @@
 // End to end through `/__bolt/act`, the engine entry and the test kit: a generated nested create writing two models in
-// one native batch, idempotent under its key (rules 31, 33), its commit published to the live lane.
+// one native batch, idempotent under its key, its commit published to the live lane.
 import { describe, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Context, Effect, Layer, Schema } from 'effect';

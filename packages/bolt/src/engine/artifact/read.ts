@@ -1,4 +1,4 @@
-// A host's reading of the artifact (rule 69), without the build toolchain: `@norbital-ai/bolt/artifact`. `bolt build`
+// A host's reading of the artifact, without the build toolchain: `@norbital-ai/bolt/artifact`. `bolt build`
 // writes what this reads (bolt-cli's compiler/artifact/index.ts); `artifact.json` and `manifest.json` are decoded here, once (A.4).
 // Every read goes through Effect's `FileSystem` and `Path`: in a cell they are the host's artifact port, which resolves
 // symlinks and refuses a path outside the release, so containment here is a check of the path's shape.
@@ -24,12 +24,12 @@ import { packLoader, type Pack, type PackSource, type SeedAsset } from '../write
 
 export const ArtifactJson = Schema.Struct({
 	format: Schema.Literal(1),
-	/** The engine contract this artifact was built against (§2.3 decision 5); a host refuses one it does not implement. */
+	/** The engine contract this artifact was built against; a host refuses one it does not implement. */
 	contract: Schema.String,
 	/** The tenant handle (`norbital.template.json` `key`, else the directory name) and the display name. */
 	handle: Schema.String,
 	name: Schema.String,
-	/** The schema fingerprint `plan`/`apply_migrations` record (rule 69). */
+	/** The schema fingerprint `plan`/`apply_migrations` record. */
 	schema: Schema.String,
 	client: Schema.Struct({ entry: Schema.String, css: Schema.Array(Schema.String) }),
 	/** Public routes carry their own browser entry and a private, bounded server program. */
@@ -83,7 +83,7 @@ export function public_page_keys(m: EngineManifest): readonly string[] {
 		.sort();
 }
 
-// ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor (§2.3 decision 5);
+// ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor;
 // switch when those descriptors exist as files. A host implements a set of these.
 export const CONTRACT = sha256_hex(`${release.name}@${release.version}`);
 
@@ -141,9 +141,9 @@ const file = (path: string) =>
 const text = (path: string) => Effect.map(file(path), (b) => new TextDecoder().decode(b));
 
 /**
- * Activation's reading of an artifact (rule 69): refuses a contract this engine does not implement, an `artifact.json` or
+ * Activation's reading of an artifact: refuses a contract this engine does not implement, an `artifact.json` or
  * `manifest.json` that does not decode (`ManifestInvalid`), a manifest whose schema is not the one recorded, and
- * (L-BOLT-903) any file whose digest is not the recorded one — the manifest, the guest, the client tree, and through
+ * any file whose digest is not the recorded one — the manifest, the guest, the client tree, and through
  * `hash` the assets, skills and workspace source.
  * Historical snapshot metadata remains in the descriptor digest; its native blob is never read or trusted.
  */
@@ -410,7 +410,7 @@ const seedFiles = (m: EngineManifest, meta: Pack['meta']) => {
 };
 
 /**
- * `packLoader` (rule 70) with the pack's assets: each `{ asset }` value of a `file` field becomes the `FileRef` of a
+ * `packLoader` with the pack's assets: each `{ asset }` value of a `file` field becomes the `FileRef` of a
  * `sys_file` row, and each asset's bytes are put in the files store once, in bounded batches after the rows; a last step
  * records the `sys_file` rows. Nothing is stored when the database already had rows.
  */

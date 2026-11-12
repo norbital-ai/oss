@@ -1,5 +1,5 @@
 import { actor_id, actor_ref } from '../access/actor.ts';
-// Approval requests (rules 44–46, spec §8), the provisional-commit model: a routed write is committed at once and held by
+// Approval requests, the provisional-commit model: a routed write is committed at once and held by
 // its request; each move of the state machine (machine.ts) is one guarded statement with every effect it has — the log
 // entry, the readable `approval_request` face, the queued approval effect and on rejection the rollback of every held
 // record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`).
@@ -281,7 +281,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				);
 			const b = act.bindings,
 				auth = act.authority;
-			// retry-stable (L-BOLT-201): minted from the invocation and its key
+			// retry-stable: minted from the invocation and its key
 			const request_id = minter(`approval:${act.seed}:${act.model}:${act.record}`, b.now)();
 			const requestor = actor_ref(auth.actor),
 				user = auth.preview?.by ?? actor_id(auth.actor);

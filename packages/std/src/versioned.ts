@@ -1,7 +1,7 @@
-// std/versioned (§3.7, §6.3 "Versioned lineage", PH GAP-4): pure helpers over the rows of the lineage recipe
+// std/versioned: pure helpers over the rows of the lineage recipe
 // (`period`, `sealed_at`, `voided_at`, `void_reason`, sealed-only `no_overlap`). A sealed version never changes except
 // for a shortened period (its successor was sealed) or one void with a reason; a correction is a new draft built by
-// `clone_next` and sealed over the old version. The seal's write is held by the model's `update` grant (§3.8).
+// `clone_next` and sealed over the old version. The seal's write is held by the model's `update` grant.
 import { add_days, PlainDate, type DatePeriod, type Instant } from './date.ts';
 import { equal_json } from './json.ts';
 import { Schema } from 'effect';
@@ -26,7 +26,7 @@ const isPeriod = Schema.is(
 );
 
 /**
- * The one update list (X-24) that seals `draft`: the sealed version it follows ends the day before it starts, and the
+ * The one update list that seals `draft`: the sealed version it follows ends the day before it starts, and the
  * draft ends the day before the next sealed version, so the sealed-only `no_overlap` holds in the one statement.
  */
 export function seal_writes<V extends Lineage & { readonly revision: number }>(

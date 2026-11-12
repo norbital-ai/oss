@@ -3,8 +3,8 @@
 An app page's shell: the hero (icon, title, description, banner), header actions, and the page body in the shared inset.
 Every `+<page>.page.svelte` renders inside one.
 @example
-<AppShell icon="lucide:briefcase" title={bolt.t('jobs.title')} description={bolt.t('jobs.description')}>
-	<Table of="jobs" />
+<AppShell icon="lucide:briefcase" title={ctx.t('jobs.title')} description={ctx.t('jobs.description')}>
+	<Table {ctx} of="jobs" />
 </AppShell>
 -->
 <script lang="ts" module>

@@ -1,4 +1,4 @@
-// A rejected request's rollback (rules 44–46): every record it holds back to its checkpoint, as ordinary
+// A rejected request's rollback: every record it holds back to its checkpoint, as ordinary
 // writes of the decision's own statement, recorded `restored` from the checkpoint revision (0: the request created it).
 // A record it updated is restored (per-record restore, restore.ts); one it created is deleted; one it deleted is
 // re-created from its history. A field restore must skip (a link to a since-deleted target) is reported, never fatal.

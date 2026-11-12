@@ -1,6 +1,6 @@
-// The model context (rules 60, 62): the whole conversation transcript, whoever wrote each row — only superseded rows,
+// The model context: the whole conversation transcript, whoever wrote each row — only superseded rows,
 // rows behind a compaction checkpoint and rows before an executed plan's checkpoint are left out — behind a system
-// prompt that is static per conversation (P32: kernel, identity and policies, brief, envoy task, skills list; no date or
+// prompt that is static per conversation (kernel, identity and policies, brief, envoy task, skills list; no date or
 // conversation state).
 // Each user row carries its sender header, which says whom the turn serves; plan, goals and mode ride a closing note.
 import { Predicate, Result } from 'effect';
@@ -197,7 +197,7 @@ function fileLines(r: MessageRow): string[] {
 		}`;
 	});
 }
-/** Rule 57 (P32): whether an envoy's sender is linked, and to which member; what the turn may do is the closing note's (`turnFacts`). */
+/** Rule 57: whether an envoy's sender is linked, and to which member; what the turn may do is the closing note's (`turnFacts`). */
 function linkage(r: MessageRow): string[] {
 	const e = r.as !== null && 'envoy' in r.as ? r.as.envoy : null;
 	return e === null ? [] : [e.member === null ? 'not linked' : `linked member ${e.member}`];
@@ -251,7 +251,7 @@ const asSent = (content: MessageRow['content']): MessageRow['content'] => {
 		result: Object.fromEntries(Object.entries(stable['result']).filter(([key]) => key !== 'page_result' && key !== 'pageClaim'))
 	} : stable;
 };
-/** Rows as model messages. Inbound conversation rows carry their envelope, posted rows their sender header (rules 57, 60); notes travel as user text.
+/** Rows as model messages. Inbound conversation rows carry their envelope, posted rows their sender header; notes travel as user text.
  * `all` is the conversation's rows, projected or not, where a quote-reply finds the message it quotes; without `reasoning`
  * a reply goes without its reasoning (what a reviewer reads). */
 export function messages(
@@ -317,7 +317,7 @@ function identity(a: Authority, source: boolean): string {
 	return `# Who you are\nYou act as ${who}${a.admin ? ', an administrator' : ''}. Your policies: ${policies}.`;
 }
 /**
- * The system prompt, static per conversation in one release (rule 62, P32): kernel, envoy guidance, identity, brief,
+ * The system prompt, static per conversation in one release: kernel, envoy guidance, identity, brief,
  * envoy task, the workspace's skills list and how its source is laid out (the agent explores the rest on demand).
  * Byte-identical across turns and days, so providers cache it.
  */

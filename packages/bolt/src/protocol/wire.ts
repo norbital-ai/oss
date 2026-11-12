@@ -1,4 +1,4 @@
-// The one wire (§5.7, rules 32, 64–67): paths, headers, bodies and live frames shared by the host handler and the page client.
+// The one wire: paths, headers, bodies and live frames shared by the host handler and the page client.
 // Pure data and pure functions; the bodies' types are their Schemas' (`schema.ts`).
 import type { ActOutcome, EngineActor } from '../engine/contracts.ts';
 import { BoltError, CODE } from './errors.ts';
@@ -59,7 +59,7 @@ export const notice_path = (link: { readonly model: string; readonly id: string 
 	link === null
 		? '/inbox'
 		: `/inbox?record=${encodeURIComponent(link.model)}/${encodeURIComponent(link.id)}`;
-/** The service worker web push needs (§5.7), served by the shell host with `Service-Worker-Allowed: /`. */
+/** The service worker web push needs, served by the shell host with `Service-Worker-Allowed: /`. */
 export const SW = `${BOLT}/sw.js`;
 export const HEADERS = {
 	key: 'Idempotency-Key',
@@ -144,7 +144,7 @@ export function redact(o: ActOutcome, actor: EngineActor): ActOutcome {
 		: o;
 }
 
-// ── rule 24: caller-minted ids ──
+// ── caller-minted ids ──
 const DAY = 86_400_000;
 const V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** A caller-minted id is a uuidv7 whose timestamp is within 24 h of the host clock, either side. */

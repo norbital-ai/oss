@@ -1,4 +1,4 @@
-// engine/write on PGlite: one guarantee per test (rules 19–29, 34, 40–43, 45 hook, 70).
+// engine/write on PGlite: one guarantee per test (45 hook, 70).
 import type { Chain } from '../src/engine/write/sql.ts';
 import type { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from '@effect/vitest';
@@ -231,7 +231,7 @@ const order = Effect.fn('Test.order')(function* (
 	return required(o.records.find((r) => r.model === 'orders')).id;
 });
 
-describe('engine/write: one statement per act (rule 20)', () => {
+describe('engine/write: one statement per act', () => {
 	it.effect('rejects an act whose UTF-8 input exceeds the byte limit before writing', () =>
 		Effect.gen(function* () {
 			const title = '界'.repeat(Math.ceil(LIMITS.act.inputBytes / 3));
@@ -273,7 +273,7 @@ describe('engine/write: one statement per act (rule 20)', () => {
 	);
 
 	it.effect(
-		'an unmarked replay writes nothing and returns the first outcome byte for byte; a new body is keyReuse (rule 31)',
+		'an unmarked replay writes nothing and returns the first outcome byte for byte; a new body is keyReuse',
 		() =>
 			Effect.gen(function* () {
 				const first = yield* run({
@@ -306,7 +306,7 @@ describe('engine/write: one statement per act (rule 20)', () => {
 	);
 
 	it.effect(
-		'rateLimited at the commit re-check is a failed commit and is never recorded (rule 38)',
+		'rateLimited at the commit re-check is a failed commit and is never recorded',
 		() =>
 			Effect.gen(function* () {
 				const rate = [{ rule: 'act', bucket: 'a', limit: 1, windowStart: NOW }];
@@ -323,7 +323,7 @@ describe('engine/write: one statement per act (rule 20)', () => {
 	);
 });
 
-describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
+describe('engine/write: rows', () => {
 	it.effect('a native constraint failure rolls back every root and child in the batch', () =>
 		Effect.gen(function* () {
 			const result = yield* run({
@@ -395,7 +395,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 	);
 
 	it.effect(
-		'a moved revision is a conflict (rule 25); a no-op update names what held its values; upsert matches by id, creates without one, and keep writes nothing (rule 28)',
+		'a moved revision is a conflict; a no-op update names what held its values; upsert matches by id, creates without one, and keep writes nothing',
 		() =>
 			Effect.gen(function* () {
 				const id = yield* order('desk');
@@ -448,7 +448,7 @@ describe('engine/write: rows (rules 21, 22, 25, 29, 43)', () => {
 	);
 });
 
-describe('engine/write: model rules (rules 34, 40, 41)', () => {
+describe('engine/write: model rules', () => {
 	it.effect(
 		'state transitions respect grants and explicit model locks protect administrators, children and deletion',
 		() =>
@@ -493,7 +493,7 @@ describe('engine/write: model rules (rules 34, 40, 41)', () => {
 	);
 });
 
-describe('engine/write: the caller (rules 13, 19, 35)', () => {
+describe('engine/write: the caller', () => {
 	it.effect(
 		'out of read scope is notFound; a column outside `columns` is forbidden before any check; a denying check refuses',
 		() =>
@@ -635,7 +635,7 @@ function callbackEngine(
 	};
 }
 
-describe('engine/write: per-verb callbacks (rules 19, 27)', () => {
+describe('engine/write: per-verb callbacks', () => {
 	it.effect('a refusal is recorded, so a replay answers it without running guest code again', () =>
 		Effect.gen(function* () {
 			const calls: Invocation[] = [];
@@ -661,7 +661,7 @@ describe('engine/write: per-verb callbacks (rules 19, 27)', () => {
 	);
 });
 
-describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
+describe('engine/write: locks and queued pieces', () => {
 	it.effect(
 		'a callback that read takes one sorted SHARE ROW EXCLUSIVE lock over write and read tables',
 		() =>
@@ -734,7 +734,7 @@ describe('engine/write: locks and queued pieces (rules 26, 49)', () => {
 	);
 });
 
-describe('engine/write: approval hook points (rules 44–46, P3)', () => {
+describe('engine/write: approval hook points', () => {
 	it.effect(
 		'a create its check approves commits provisionally under the request the hook opens',
 		() =>
@@ -801,7 +801,7 @@ describe('engine/write: approval hook points (rules 44–46, P3)', () => {
 	);
 });
 
-describe('engine/write: seed mode (rule 70, X-13)', () => {
+describe('engine/write: seed mode (X-13)', () => {
 	it.effect(
 		'restores rows as given, derives roll-ups, refuses drift, and the next number follows the highest seeded',
 		() =>
@@ -920,7 +920,7 @@ describe('engine/write: seed mode (rule 70, X-13)', () => {
 	);
 });
 
-describe('engine/write: references read scopes; mutations answer to their own check (rules 35, 36)', () => {
+describe('engine/write: references read scopes; mutations answer to their own check', () => {
 	it.effect(
 		'loads only read scopes for a reference, while real mutations still answer to their check',
 		() =>
@@ -1065,7 +1065,7 @@ describe('engine/write: field kinds the template migration found (arcs, json sha
 });
 
 it.live(
-	'callback-read-race (rule 26): the loser replays once, re-reads the moved quota, and refuses',
+	'callback-read-race: the loser replays once, re-reads the moved quota, and refuses',
 	() =>
 		Effect.gen(function* () {
 			const { db } = yield* open(ext);

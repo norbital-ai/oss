@@ -388,7 +388,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'K3, rule 11a: grammar-generated predicates decode, round-trip, and agree in SQL and JS for the workspace and a scoped caller; a corrupted clause is invalid',
+		'grammar-generated predicates decode, round-trip, and agree in SQL and JS for the workspace and a scoped caller; a corrupted clause is invalid',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -448,7 +448,7 @@ describe('next query engine (PGlite)', () => {
 						return (typeof v === 'string' ? v : v?.id) === row.id;
 					});
 				};
-				// the grammar of §3.3.9 over the catalogue: a field, an operator its kind admits, an operand its kind admits, a
+				// the where grammar over the catalogue: a field, an operator its kind admits, an operand its kind admits, a
 				// literal from the column's own values; relations by their quantifiers; combinators; to depth 4
 				const untag = (value: unknown): Json =>
 					Predicate.isObject(value) &&
@@ -660,7 +660,7 @@ describe('next query engine (PGlite)', () => {
 					const predicate = { [f.name]: leaf(m, f, o) };
 					return rnd() < 0.2 ? { not: predicate } : predicate;
 				}
-				// rule 11a's mutation step: one operator object or relation body becomes a shape every kind refuses
+				// the mutation step: one operator object or relation body becomes a shape every kind refuses
 				const BAD = [{}, { nope: 1 }, { eq: null }, { is_null: 'yes' }, { eq: { now: '+-1d' } }];
 				function corrupt(m: string, w: object): object {
 					const spots: { obj: Record<string, unknown>; key: string; rel: boolean }[] = [];
@@ -764,7 +764,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rules 9 and 11: explicit pages walk every row once in order_by-then-id order; a cursor is bound to its query',
+		'explicit pages walk every row once in order_by-then-id order; a cursor is bound to its query',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -888,7 +888,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rules 11 and 14: a related sort key orders by the target field, pages through it by cursor, and needs the target in the read output',
+		'a related sort key orders by the target field, pages through it by cursor, and needs the target in the read output',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -991,7 +991,7 @@ describe('next query engine (PGlite)', () => {
 						)
 					)
 				).toMatchObject({ code: 'bad_cursor' });
-				// rule 14: a target field the output's layer omits and an unread target refuse; the workspace sorts by any of them
+				// a target field the output's layer omits and an unread target refuse; the workspace sorts by any of them
 				const brief = yield* catalog_for(cat, 'orders', 'brief');
 				const asClerk = (order_by: Json) =>
 					read(brief, 'orders', { order_by, limit: 5 }).pipe(
@@ -1058,7 +1058,7 @@ describe('next query engine (PGlite)', () => {
 				).toMatch(/one \{ field/);
 			})
 	);
-	it.live('rule 12: one batch is one round trip; identical reads run once', () =>
+	it.live('one batch is one round trip; identical reads run once', () =>
 		Effect.gen(function* () {
 			yield* setup();
 			const before = reads;
@@ -1077,7 +1077,7 @@ describe('next query engine (PGlite)', () => {
 		})
 	);
 	it.live(
-		"rule 12: a batch of N reads is one statement, each read answered as if alone, under the caller's policies",
+		"a batch of N reads is one statement, each read answered as if alone, under the caller's policies",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1130,7 +1130,7 @@ describe('next query engine (PGlite)', () => {
 		return { ...read, member: key, ...(cte === undefined ? {} : { cte }) };
 	};
 	it.live(
-		"rule 12: a keyed member reads an earlier member's values inside the one statement, under that member's scope",
+		"a keyed member reads an earlier member's values inside the one statement, under that member's scope",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1178,7 +1178,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		"rule 12: a member reference walks the earlier member's relation arms (a path, through a many arm)",
+		"a member reference walks the earlier member's relation arms (a path, through a many arm)",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1245,7 +1245,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rule 9: a keyed read member past its cap names itself; the rest of the batch is still one statement',
+		'a keyed read member past its cap names itself; the rest of the batch is still one statement',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1264,13 +1264,13 @@ describe('next query engine (PGlite)', () => {
 					)
 				).toMatchObject({
 					code: 'too_large',
-					message: "member 'every': the read of orders is larger than 200 bytes; page it (rule 9)"
+					message: "member 'every': the read of orders is larger than 200 bytes; page it"
 				});
 				expect(statementCount - s0).toBe(1);
 			})
 	);
 	it.live(
-		"rule 13, decision 3: each level is scoped by its root's arms for that path, never the layer model's own grants; a layer out of scope is null (a ref) or absent (a list), its root stays",
+		"each level is scoped by its root's arms for that path, never the layer model's own grants; a layer out of scope is null (a ref) or absent (a list), its root stays",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1349,7 +1349,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		"rule 14: an output is its fields: one it omits neither filters, orders, selects nor aggregates; its rows are its grant's; an ungranted output is forbidden",
+		"an output is its fields: one it omits neither filters, orders, selects nor aggregates; its rows are its grant's; an ungranted output is forbidden",
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1392,7 +1392,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rules 10 and 15, X-33: a workspace row is its stored fields; a caller default row omits json; an explicit select returns it',
+		'a workspace row is its stored fields; a caller default row omits json; an explicit select returns it',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1433,7 +1433,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rule 16: a named search ranks by the index, re-ranks limit × candidates exactly, and returns a page',
+		'a named search ranks by the index, re-ranks limit × candidates exactly, and returns a page',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1561,7 +1561,7 @@ describe('next query engine (PGlite)', () => {
 		})
 	);
 	it.live(
-		'rule 9: `all` past its cap is too_large, never clamped; a relation arm with a limit is cut to it',
+		'`all` past its cap is too_large, never clamped; a relation arm with a limit is cut to it',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1582,7 +1582,7 @@ describe('next query engine (PGlite)', () => {
 			})
 	);
 	it.live(
-		'rule 9: a page ends at one crossing of row bytes, its cursor after the last row that fits; a row past it is too_large',
+		'a page ends at one crossing of row bytes, its cursor after the last row that fits; a row past it is too_large',
 		() =>
 			Effect.gen(function* () {
 				yield* setup();
@@ -1628,7 +1628,7 @@ describe('next query engine (PGlite)', () => {
 					)
 				).toMatchObject({
 					code: 'too_large',
-					message: `a row of notes is larger than ${LIMITS.crossingBytes} bytes; select fewer fields (rule 9)`
+					message: `a row of notes is larger than ${LIMITS.crossingBytes} bytes; select fewer fields`
 				});
 			})
 	);

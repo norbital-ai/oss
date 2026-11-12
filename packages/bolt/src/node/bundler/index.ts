@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The confined bundler, kernel side (compute model §3 "Running a file", §9; P24): one rolldown process per host
+// The confined bundler, kernel side: one rolldown process per host
 // (`process.ts`), one bundle at a time, serving one tenant for its life. It is replaced when the next bundle is another
 // tenant's, on a malformed reply or an exit, and past its recycle threshold after a bundle; its whole CPU, start-up
 // included, is read from outside it and billed to that tenant. It holds a serving CPU slot while it bundles. Bundles are

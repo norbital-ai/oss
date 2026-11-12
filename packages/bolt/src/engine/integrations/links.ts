@@ -1332,7 +1332,7 @@ export const integration_links = (
 						const db = yield* TenantDb;
 						const guest = yield* Guest;
 						const bindings = bindingsAt(yield* Clock.currentTimeMillis, manifest.workspace.tz);
-						// the instance's update checks judge a host verb on it (rule 35)
+						// the instance's update checks judge a host verb on it
 						return yield* mayUpdate(
 							{ manifest, db, guest },
 							'sys_integration',

@@ -167,7 +167,7 @@ const combined_scope = (authority: ReturnType<typeof auth>, model: string, outpu
 	return predicates === undefined || predicates.length === 0 ? undefined : or(predicates);
 };
 
-describe('engine/access: Authority (rules 33–37)', () => {
+describe('engine/access: Authority', () => {
 	it('grants union per output and path; an output no held grant names is not read; outputs fix their fields', () => {
 		const rep = auth(['rep']);
 		expect(Object.keys(required(rep.models.orders).read)).toEqual(['default']);
@@ -293,7 +293,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		expect(required(admin.models.sys_user).update).toHaveLength(0); // identity is written by admin verbs only (38c)
 	});
 
-	it('moves: only listed edges; `all` and admins every declared one (rule 34)', () => {
+	it('moves: only listed edges; `all` and admins every declared one', () => {
 		expect(admitMove(auth(['rep']), 'orders', 'status', 'draft', 'submitted')).toBe(true);
 		expect(admitMove(auth(['rep']), 'orders', 'status', 'submitted', 'ordered')).toBe(false);
 		expect(admitMove(auth([], { admin: true }), 'orders', 'status', 'submitted', 'ordered')).toBe(
@@ -374,7 +374,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 	);
 
 	it.effect(
-		'the kernel directory: staff read staff (id, name); externals themselves and their party (rule 35a)',
+		'the kernel directory: staff read staff (id, name); externals themselves and their party',
 		() =>
 			Effect.gen(function* () {
 				expect(required(auth([]).models.sys_user).read).toEqual({
@@ -407,7 +407,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 	);
 
 	it.effect(
-		'limits: declared buckets replace the default of their key; visitors default per IP (rule 38, 72)',
+		'limits: declared buckets replace the default of their key; visitors default per IP',
 		() =>
 			Effect.gen(function* () {
 				const rep = auth(['rep']);
@@ -444,7 +444,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 		expect(charges_for(twice, ['act'], { actor: 'u' })).toHaveLength(1);
 	});
 
-	it.effect('compiled once per key (rule 37); a run holds exactly its policies', () =>
+	it.effect('compiled once per key; a run holds exactly its policies', () =>
 		Effect.gen(function* () {
 			const as = new Authorities(m, 'r1');
 			const h: Holder = { actor: member(), admin: false, policies: ['rep'] };
@@ -457,7 +457,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 	);
 });
 
-describe('engine/access: rate windows (rule 38)', () => {
+describe('engine/access: rate windows', () => {
 	it('the second request over a 1/min limit is refused, refusals count, and the window rolls', () => {
 		const w = new RateWindows();
 		const c = [{ rule: 'act', bucket: 'u1', ...parse_rate('1/min') }];

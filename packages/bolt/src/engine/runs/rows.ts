@@ -155,7 +155,7 @@ export function listedRun(authority: Authority, row: RunViewRow, brief = false):
 }
 /**
  * The runs list (the `runs` read: the command center's Automations, `bolt.runs`): an administrator sees every run; a
- * member (staff or external) the runs of automations they hold and the runs they caused, each as rule 56 lets them read
+ * member (staff or external) the runs of automations they hold and the runs they caused, each as their run grants let them read
  * it (status, progress and the error code only for a run they merely caused). `automation` narrows the list to one
  * automation; `id` to one run.
  */

@@ -1,4 +1,4 @@
-// Editors (§3.6): code in CodeMirror, Markdown as text with the `/` and `@` command menu, and Markdown for reading.
+// Editors: code in CodeMirror, Markdown as text with the `/` and `@` command menu, and Markdown for reading.
 export {
 	default as CodeEditor,
 	type CodeEditorLanguage,

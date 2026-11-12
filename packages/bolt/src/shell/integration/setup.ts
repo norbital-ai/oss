@@ -1,6 +1,6 @@
-// An integration instance's setup UI (§4.5). Its holder reads the host, holds the stream and sends the verbs; every
+// An integration instance's setup UI. Its holder reads the host, holds the stream and sends the verbs; every
 // provider is drawn from the data the host publishes: the provider's `SetupDescription` while it is being set up, its
-// `about` facts once it is connected. Bolt names no provider (P18), so there is no provider's component here; a
+// `about` facts once it is connected. Bolt names no provider, so there is no provider's component here; a
 // definition's own `integration/<name>/+integration.svelte` draws in its place when the workspace has one.
 import { Effect, Schema } from 'effect';
 import { ActRefused } from '../../decl/errors.ts';

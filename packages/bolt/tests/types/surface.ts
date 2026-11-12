@@ -1,4 +1,4 @@
-// Type corpus for the declarations the P1 review added (§3.3.1 `team` and `messages`, §3.3.10 signature helpers).
+// Type corpus for the declarations `team` and `messages`.
 // Each `@ts-expect-error` line is a planted mistake; a clean tsc proves both the passes and the rejections.
 import { messages, team } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';

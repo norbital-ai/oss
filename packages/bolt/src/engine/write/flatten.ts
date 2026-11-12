@@ -1,6 +1,6 @@
-// Decode and flatten (rules 21–23a): an act's input (or a callback's payload) becomes a flat list of `Change`s, one per
+// Decode and flatten: an act's input (or a callback's payload) becomes a flat list of `Change`s, one per
 // row, relation actions made explicit. Decode checks the model's input allowlist at every nesting level and reports
-// every offender at once; nothing is ever deleted by omission (rule 22).
+// every offender at once; nothing is ever deleted by omission.
 import { Array as EffectArray, Predicate, Result, Schema } from 'effect';
 import { input_schema } from '@norbital-ai/std/kind';
 import { encode_wire } from '@norbital-ai/std/wire';
@@ -78,9 +78,9 @@ export const layerPath = (root: string, path: InputPath): string =>
 /** One flattened row change plus what the pipeline judges it by. */
 export type Item = {
 	change: Change;
-	/** Fields the input supplied (rule 35: only these are admitted field by field; relation names included). */
+	/** Fields the input supplied (only these are admitted field by field; relation names included). */
 	supplied: string[];
-	/** Refs the input supplied (rule 36), `field → target`. */
+	/** Refs the input supplied, `field → target`. */
 	refs: { field: string; to: string; id: string }[];
 	/** Set on a relation action: the parent row and the relation it came through. */
 	parent?: { model: string; id: string; rel: string; fk: string };
@@ -268,7 +268,7 @@ export class Flattener {
 		const d = this.columns(model, sel, value, path);
 		if (d === null) return;
 		if (named !== undefined && upsert !== undefined) d.values['id'] = named; // an upsert by id: resolution reads it, and it is never written
-		// the parent key a relation action implies is not a caller-supplied ref (rule 36)
+		// the parent key a relation action implies is not a caller-supplied ref
 		const refs = this.refsOf(model, d.info, d.values, path);
 		if (parent !== undefined) d.values[parent.fk] = parent.id;
 		const minted = this.mint();
@@ -347,7 +347,7 @@ export class Flattener {
 	}
 
 	/**
-	 * A relation-action upsert (rule 28): the child row names its record by `id`: a row with an id updates that child (or,
+	 * A relation-action upsert: the child row names its record by `id`: a row with an id updates that child (or,
 	 * `{ values, onConflictDoUpdate: false }`, leaves it), a row without one is created. A bare values object (the
 	 * callback payload's shape) updates.
 	 */
@@ -383,7 +383,7 @@ export class Flattener {
 		);
 	}
 
-	/** Explicit relation actions (rule 22): each names its rows; an empty array or an omitted key does nothing. */
+	/** Explicit relation actions: each names its rows; an empty array or an omitted key does nothing. */
 	private relations(
 		model: string,
 		sel: Sel,
@@ -441,7 +441,7 @@ export class Flattener {
 					else if (action === 'delete') this.delete(rel.child, v, null, p, parent);
 					else if (spec?.owned) this.bad(p, `an owned ${rel.child} never changes its parent`);
 					else if (typeof v !== 'string' && (!Predicate.isObject(v) || typeof v['id'] !== 'string')) this.bad(p, 'expected a row');
-					// link and unlink are FK updates of the child (rule 22); `unlink` of a required ref fails NOT NULL (`required`)
+					// link and unlink are FK updates of the child; `unlink` of a required ref fails NOT NULL (`required`)
 					else {
 						const id = typeof v === 'string' ? v : String(v['id']);
 						const revision = Predicate.isObject(v) && typeof v['revision'] === 'number' ? v['revision'] : null;
@@ -468,7 +468,7 @@ export class Flattener {
 
 /**
  * A model's import key: the unique constraint marked `import_key: true`, none otherwise. An import matches rows and
- * names refs by it (rule 30); an upsert never does (rule 28: an upsert names its record by `id`).
+ * names refs by it; an upsert never does (an upsert names its record by `id`).
  */
 export const modelKey = (m: EngineManifest, model: string): readonly string[] => m.models[model]?.key ?? [];
 
@@ -559,14 +559,14 @@ export function decodeValue(
 			if (z === undefined) return `expected a period { ${lo}, ${hi} }`;
 			return (date ? a <= z : Date.parse(a) < Date.parse(z)) ? null : `'${lo}' is after '${hi}'`;
 		}
-		// rule 16: an authored vector is exactly `dim` finite numbers, refused here rather than by pgvector at commit
+		// an authored vector is exactly `dim` finite numbers, refused here rather than by pgvector at commit
 		case 'vector':
 			return EffectArray.isArray<typeof v>(v) &&
 				v.length === (f.dim ?? v.length) &&
 				v.every((x) => typeof x === 'number' && Number.isFinite(x))
 				? null
 				: `expected ${f.dim ?? 'a list of'} finite numbers`;
-		// a declared `shape` is the value's input kind (§3.3.2), decoded as a typed input is, excess keys refused
+		// a declared `shape` is the value's input kind, decoded as a typed input is, excess keys refused
 		case 'object': {
 			if (spec?.many !== true && spec?.kind !== 'object')
 				return 'expected the declared field shape';
@@ -609,7 +609,7 @@ export function stateStamps(
 }
 
 /**
- * Defaults (rule 23a) and the required check, on a create's payload as the engine will write it. A state lands in its
+ * Defaults and the required check, on a create's payload as the engine will write it. A state lands in its
  * initial value; `{ var: 'now' }`/`{ var: 'today + days(7)' }` resolve against the invocation clock; requestor defaults
  * (`{ var: 'requestor.id' }`) apply only when the requestor has that value (the system identity, an automation run, has
  * none: its code sets the field). Returns the first missing required field, or a native failure for absent model metadata.

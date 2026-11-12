@@ -1,6 +1,6 @@
-// `$search` and `$similar` as predicates (rule 16): a row's search document holds every word of the text (prefixes and
+// `$search` and `$similar` as predicates: a row's search document holds every word of the text (prefixes and
 // slipped spellings), or it is among the `top` nearest in meaning. Both nest under a relation like any condition, and
-// a caller matches only the values its read output holds (rule 14).
+// a caller matches only the values its read output holds.
 import { expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema, Stream } from 'effect';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
@@ -153,7 +153,7 @@ const seeded = Layer.effectDiscard(
 	)
 ).pipe(Layer.provideMerge(TestWorkspace.layer({ manifest, ports })));
 
-layer(seeded, { excludeTestServices: true })('$search and $similar (rule 16)', (it) => {
+layer(seeded, { excludeTestServices: true })('$search and $similar', (it) => {
 	it.effect(
 		'$search: every word, each a prefix or a slipped spelling, over every searched field',
 		() =>

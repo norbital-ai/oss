@@ -1,5 +1,5 @@
 // engine/conversations and engine/envoys, the pure half: the inbound decode at the trust boundary, the runtime `SendInput`
-// check, the delivery status order and the sender handle rule (rule 57, P24). The provider codecs are `@norbital-ai/providers`' tests.
+// check, the delivery status order and the sender handle rule. The provider codecs are `@norbital-ai/providers`' tests.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
 import type { Json } from '../src/decl/values.ts';
@@ -200,7 +200,7 @@ describe('the inbound decode and the outbound check', () => {
 	);
 });
 
-describe('delivery status order (§5.9; status.ts)', () => {
+describe('delivery status order (status.ts)', () => {
 	it('advances by rank, terminal failures win, auto_replied and a lower rank change nothing', () => {
 		expect(status_after('queued', 'sent')).toBe('sent');
 		expect(status_after('sent', 'deferred')).toBe('deferred');
@@ -226,7 +226,7 @@ describe('delivery status order (§5.9; status.ts)', () => {
 	});
 });
 
-describe('sender handles (rule 57; senders.ts)', () => {
+describe('sender handles (senders.ts)', () => {
 	it('a WhatsApp JID drops its device suffix before the digits of a phone handle are taken', () => {
 		expect(canonicalHandle('phone', '6589548277:14@s.whatsapp.net')).toBe('6589548277');
 		expect(canonicalHandle('phone', '+65 8954 8277')).toBe('6589548277');

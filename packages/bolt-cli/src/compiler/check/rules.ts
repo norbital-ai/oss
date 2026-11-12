@@ -1,4 +1,4 @@
-// The build checks tsc cannot carry (§3.3.9 "Where each literal is checked", rules 6, 14, 33a, 38, 38d, 50, 52): numeric
+// The build checks tsc cannot carry: numeric
 // ranges, `seq` patterns, labels naming an id, calendar days declared as instants, state names and reachability, search
 // index widths, cron strings, event inputs, rates, IP limits, visitor grants and refs, layer maps and outputs
 // (a model's read and write layers, a policy's grant layers), syncs (their connection, parsers, cadence and instance), embedding
@@ -79,7 +79,7 @@ type RuleContext = {
 };
 
 function workspaceRules({ m, bodies, at }: RuleContext): void {
-	// self sign-up (§5.11.2): the policies a newcomer holds exist, and the record that is them is matched on text fields
+	// self sign-up: the policies a newcomer holds exist, and the record that is them is matched on text fields
 	const signup = m.workspace.signup;
 	for (const p of signup?.policies ?? [])
 		if (m.policies[p] === undefined)
@@ -211,7 +211,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 				for (const [state, rule] of Object.entries(states))
 					if (rule.stamp !== undefined && (spec.fields[rule.stamp]?.kind !== 'instant' || spec.fields[rule.stamp]?.many === true))
 						at('model/state', 'model', model, `${f}.${state}: stamp '${rule.stamp}' must name one stored instant field`);
-				// rule 41, §5.5: every state is reachable from `initial` along `to` edges (an unreachable state's edges are dead)
+				// every state is reachable from `initial` along `to` edges (an unreachable state's edges are dead)
 				const seen = new Set([String(k.initial)]);
 				for (const s of seen) for (const to of states[s]?.to ?? []) seen.add(to);
 				for (const s of Object.keys(states))
@@ -358,7 +358,7 @@ function modelRules({ m, bodies, at }: RuleContext): void {
 }
 
 /**
- * Layer maps (decision 1): each model's read and write paths resolve segment by segment (`layer_models`); a layer names
+ * Layer maps: each model's read and write paths resolve segment by segment (`layer_models`); a layer names
  * fields its model has, a write layer only writable columns and never the FK that ties its rows to the layer above
  * (the engine sets it); `filled` stays within `create.columns`. A policy grants
  * outputs its model declares and filters only their paths, and it grants a write verb only beside the model's own.
@@ -559,7 +559,7 @@ function policyRules({ m, bodies, at }: RuleContext): void {
 				at('access/sync', 'policy', p, `'${key}' is not a remote read sync (model.sync_name)`);
 		}
 		for (const [key, v] of Object.entries(spec.limits ?? {})) {
-			// rule 38: a rate admits at least one request per window
+			// a rate admits at least one request per window
 			for (const x of list(v)) {
 				const rate = String(Predicate.isObject(x) ? x.rate : x);
 				if (!validRate(rate))
@@ -601,7 +601,7 @@ function visitorRules({ m, at }: RuleContext): void {
 			forbidden: 'visitor policy',
 			creates: 'a public policy of the app',
 			missing: (c, col, to) =>
-				`${c}.${col}: no public policy of app '${app}' reads ${to}, so every submission would be refused (rule 36)`
+				`${c}.${col}: no public policy of app '${app}' reads ${to}, so every submission would be refused`
 		});
 	}
 }
@@ -665,7 +665,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 				forbidden: 'public kiosk policy',
 				creates: 'a policy of the kiosk',
 				missing: (c, col, to) =>
-					`${c}.${col}: no policy of kiosk '${kiosk}' reads ${to}, so every submission would be refused (rule 36)`
+					`${c}.${col}: no policy of kiosk '${kiosk}' reads ${to}, so every submission would be refused`
 			});
 		}
 	}

@@ -1,5 +1,5 @@
 <!--
-	Sign-in (§5.11.2, rule 38a): a six-digit code, emailed or texted (a page runs the same two steps on-page through `bolt.session`). The card's content
+	Sign-in: a six-digit code, emailed or texted (a page runs the same two steps on-page through `bolt.session`). The card's content
 	 which workspace, then the address step, then the code step. Where the workspace
 	lets newcomers sign up, the same two steps join them.
 -->

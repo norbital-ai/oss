@@ -1,4 +1,4 @@
-// A model declaration (§1, §2): one entity in `src/data/model/<name>/+model.ts`: what it stores (fields, `ref` fields,
+// A model declaration: one entity in `src/data/model/<name>/+model.ts`: what it stores (fields, `ref` fields,
 // keys, checks, computed fields, search), what callers see and send (`outputs`, `create`, `update`, `delete`), and its code
 // (write transforms/effects, search indexes, syncs), every callback inside the literal. The data part is
 // checked against the literal itself; each body is typed from the generated names by the model's `name`, never from the
@@ -536,7 +536,7 @@ interface RefFor<R, T = TargetsOf<R>> {
 	default?: {
 		var: [T] extends ['sys_user'] ? 'requestor.id' | 'requestor.party' : 'requestor.party';
 	};
-	// `owned` implies cascade; `set_null` needs an optional ref (rule 4)
+	// `owned` implies cascade; `set_null` needs an optional ref
 	on_delete?: R extends { owned: true }
 		? 'cascade'
 		: R extends { optional: true }
@@ -563,7 +563,7 @@ export type RefField = {
 	/** The many-relation on the target that lists this model's rows (`customer.orders`). */
 	inverse?: string;
 	optional?: true;
-	/** Composition: the child is written through its parent's write layers and deleted with it; its key never changes (rule 41). */
+	/** Composition: the child is written through its parent's write layers and deleted with it; its key never changes. */
 	owned?: true;
 	/** What deleting the target does: refuse (`restrict`, default), delete this row (`cascade`), or clear the ref (`set_null`). */
 	on_delete?: 'restrict' | 'cascade' | 'set_null';

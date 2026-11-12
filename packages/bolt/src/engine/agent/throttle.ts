@@ -1,5 +1,5 @@
 import { runPiece } from '../runs/rows.ts';
-// The smart throttle (P31, P40, P41, rule 60a): one service for envoys and the in-app agent decides whether admitted messages
+// The smart throttle: one service for envoys and the in-app agent decides whether admitted messages
 // start a turn now, never under whose authority. It controls two things:
 //   hold    the pending text reads partial: wait for the rest, at most 3 s, the decider's choice, once per burst.
 //   filter  a message in an envoy's group chat is not for the assistant: it stays in the history and starts nothing.
@@ -46,7 +46,7 @@ import { personMessage } from './queue.ts';
 import { envoySpec, type EnvoySpec } from '../envoys/spec.ts';
 /** The durable run's name: queued runs and the logs carry it across releases. */
 const THROTTLE_RUN = 'agent.triage';
-/** Engine constants (rule 72's budget row), never authoring options. */
+/** Engine constants (the agent budget), never authoring options. */
 export const HOLD_MAX_MS = 3000;
 /** A burst nothing decided by then is taken over by the host's queue: the process died, or the decision failed. */
 export const TAKEOVER_MS = 15_000;
@@ -601,7 +601,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			author: string;
 			mode: 'agent' | 'plan';
 			files?: readonly Json[];
-			/** The person's IANA zone (their clock, rule 57), kept on the row as an unthrottled post keeps it. */ tz?: string;
+			/** The person's IANA zone (their clock), kept on the row as an unthrottled post keeps it. */ tz?: string;
 		}) {
 			const chain = new Chain();
 			// a person's follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled

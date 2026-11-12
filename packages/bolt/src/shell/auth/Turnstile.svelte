@@ -1,5 +1,5 @@
 <!--
-	The Turnstile widget of a visitor page (§5.10, GAPS r5 11). Each token is single-use: the queue hands one to the next
+	The Turnstile widget of a visitor page. Each token is single-use: the queue hands one to the next
 	upload or final act and re-arms the widget. The dev site key never calls Cloudflare: it issues `dev-pass`.
 -->
 <script lang="ts">

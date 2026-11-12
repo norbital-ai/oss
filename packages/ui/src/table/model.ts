@@ -6,7 +6,7 @@ import type { ViewBolt } from '../client/contract.js';
 import { fill, humanize, msg } from '../text/messages.js';
 import { valueAt } from '../cell/value.js';
 export type TableState = { after: string | null; q: string };
-/** Cursor and search from the URL (`?<key>.after=…`, final-ui rule 8). */
+/** Cursor and search from the URL (`?<key>.after=…`). */
 export const readTableState = (params: URLSearchParams, key: string): TableState => ({
 	after: params.get(`${key}.after`),
 	q: params.get(`${key}.q`) ?? ''
@@ -58,7 +58,7 @@ export function searchIndexes(
 }
 /** A `/` the box holds with no index chosen yet: the picker's text, never a search term. */
 export const SLASH = /^\/\S*$/;
-/** A local array's search over its columns (PH GAP-15: client-side). */
+/** A local array's search over its columns (client-side). */
 export const searchRows = <R extends Values>(
 	rows: readonly R[],
 	q: string,
@@ -69,7 +69,7 @@ export const searchRows = <R extends Values>(
 		? rows
 		: rows.filter((r) => fields.some((f) => show(valueAt(r, f)).toLowerCase().includes(t)));
 };
-/** "rows 26–50 of 312" (final-ui rule 7); the count may still be loading. */
+/** "rows 26–50 of 312"; the count may still be loading. */
 export function rangeText(
 	bolt: Pick<ViewBolt, 't'>,
 	offset: number,
@@ -79,7 +79,7 @@ export function rangeText(
 	const from = shown === 0 ? 0 : offset + 1,
 		to = offset + shown;
 	if (shown === 0 && offset === 0) return msg(bolt, 'table.none');
-	// the count is re-read at most every 30 s (rule 7): a live page ahead of it shows the rows it has, not a stale total
+	// the count is re-read at most every 30 s: a live page ahead of it shows the rows it has, not a stale total
 	return count === null || count < to
 		? msg(bolt, 'table.range', { from, to })
 		: msg(bolt, 'table.rangeOf', { from, to, count });

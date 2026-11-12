@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `bolt check`'s declaration evaluation (rule 2) on a worker thread: its own V8 isolate, stripped to the ECMAScript
+// `bolt check`'s declaration evaluation on a worker thread: its own V8 isolate, stripped to the ECMAScript
 // globals a guest starts from, then the guest prelude, the frozen clock and the module. It answers the serialized
 // declarations and the evaluation's CPU. Compile-time only: guests at run time take the host's `guests` facility.
 import { parentPort, workerData } from 'node:worker_threads';

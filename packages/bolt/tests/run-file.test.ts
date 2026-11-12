@@ -1,4 +1,4 @@
-// File runs' host half (compute model §3, "Running a file", P24): Node's resolution over a tree and the confined
+// File runs' host half ("Running a file"): Node's resolution over a tree and the confined
 // bundler process — one tenant per process, a cache hit bundles nothing, every error at the author's file and line.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';

@@ -1,4 +1,4 @@
-// The wire's Schemas (§5.7, A.4): every body and live frame of `/__bolt/*`, the callables that are not a model's,
+// The wire's Schemas (A.4): every body and live frame of `/__bolt/*`, the callables that are not a model's,
 // an integration instance's status, the session and host-operation bodies, and `norbital.template.json`. A body is
 // decoded once where it enters (the host's request, the client's answer); every wire type is its Schema's own.
 import { Effect, Option, Schema, SchemaTransformation } from 'effect';
@@ -8,7 +8,7 @@ import { PAPER_SIZES } from '../decl/runtime/facilities.ts';
 import { MessageValues } from '../decl/errors/refusal.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
 
-/** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
+/** An authoring phase: diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
 export const STUDIO_PHASES = ['diagnose', 'copy', 'preview', 'merge'] as const;
 /**
  * What a host tool is to the shell's Studio surfaces, declared so Bolt never keys behaviour on a host's tool names:
@@ -166,7 +166,7 @@ const listOf = <A>(item: Schema.Codec<A, unknown>): Schema.Codec<ReadonlyArray<A
 		)
 	);
 
-// ── reads, acts, live (rules 31, 32, 64–67) ──
+// ── reads, acts, live ──
 const READ_METHODS = [
 	'aggregate',
 	'history',
@@ -181,7 +181,7 @@ const READ_METHODS = [
  * `ctx.query({ … })` → `{ m: 'query', a: [request] }`); `lower_read` decodes `a`.
  * `transcript` (`a: [conversation]`) and `conversations` (`a: []`, the member's own) are the agent panel's, live only:
  * `/live` checks the caller may read them, `/q` refuses them. `runs` (`a: [{ automation?, id?, limit?, brief? }]`) is the runs
- * the caller may see (rule 56), live through `sys_run` changes.
+ * the caller may see, live through `sys_run` changes.
  */
 export const WireRead = Schema.Struct({
 	m: Schema.Literals(READ_METHODS),
@@ -193,7 +193,7 @@ export type QBody = typeof QBody.Type;
 export const QReply = Schema.Struct({ answers: Schema.Array(Schema.Json) });
 export type QReply = typeof QReply.Type;
 /**
- * `/act`: every write, action, `start` and approval decision; the key rides `Idempotency-Key` (rule 31). A model's
+ * `/act`: every write, action, `start` and approval decision; the key rides `Idempotency-Key`. A model's
  * callable is `<model>.<name>`; the others are `OwnCall`'s.
  */
 export const WriteMapBody = Schema.Struct({
@@ -220,7 +220,7 @@ export const SyncControlBody = Schema.Struct({
 });
 export type SyncControlBody = typeof SyncControlBody.Type;
 
-/** A refusal's code (rule 32): an authored `refused` or one of the platform's (`PlatformRefusal`). */
+/** A refusal's code: an authored `refused` or one of the platform's (`PlatformRefusal`). */
 export const REFUSAL_CODES = [
 	'refused',
 	'locked',
@@ -255,7 +255,7 @@ export const REFUSAL_CODES = [
 export const Written = Schema.Array(
 	Schema.Struct({ model: Schema.String, id: Schema.String, revision: Schema.Number })
 );
-/** A write's outcome (rule 32), told apart by `kind`: what the engine stores and replays for an idempotency key. */
+/** A write's outcome, told apart by `kind`: what the engine stores and replays for an idempotency key. */
 export const WriteOutcome = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('committed'),
@@ -298,7 +298,7 @@ export const Outcome = Schema.Union([
 ]);
 export type Outcome = typeof Outcome.Type;
 export type WriteOutcome = typeof WriteOutcome.Type;
-/** `v`: the lane sequence of the act's last commit (rule 66). */
+/** `v`: the lane sequence of the act's last commit. */
 export const ActReply = Schema.Struct({ outcome: Outcome, v: Schema.Number });
 export type ActReply = typeof ActReply.Type;
 /** A transport failure (a refusal is an outcome, never one of these). */
@@ -329,7 +329,7 @@ export const LiveReply = Schema.Struct({
 });
 export type LiveReply = typeof LiveReply.Type;
 /**
- * A change to a view's rows (rule 65): `upsert` drops the row with that id, if any, then inserts `row` at `index` of what
+ * A change to a view's rows: `upsert` drops the row with that id, if any, then inserts `row` at `index` of what
  * remains; `remove` drops it. On a `get` view the value is the row or `null`. A page's `next` is never patched.
  */
 export const PatchOp = Schema.Union([
@@ -401,7 +401,7 @@ export const PushBody = Schema.Union([
 ]);
 export type PushBody = typeof PushBody.Type;
 
-// ── the in-app agent (§5.9) ──
+// ── the in-app agent ──
 /** Every model call of a turn summed: the cost disclosure's data; on a reply, the context it filled and the model that wrote it. */
 export const Usage = Schema.Struct({
 	input: Schema.Number,
@@ -418,7 +418,7 @@ export const Usage = Schema.Struct({
 	model: Schema.optionalKey(Schema.String)
 });
 export type Usage = typeof Usage.Type;
-/** One transcript row as the agent panel shows it (`pending` awaits a triage decision, rule 60a); a held call (`state: 'confirm'`) carries the call it would make. */
+/** One transcript row as the agent panel shows it (`pending` awaits a triage decision); a held call (`state: 'confirm'`) carries the call it would make. */
 export const AgentRow = Schema.Struct({
 	id: Schema.String,
 	seq: Schema.Number,
@@ -534,7 +534,7 @@ export const AgentRow = Schema.Struct({
 	)
 });
 export type AgentRow = typeof AgentRow.Type;
-/** The live `conversations` read's row: a member's own in-app conversation or an envoy's thread on an instance (rule 61), most recently active first (`at`). */
+/** The live `conversations` read's row: a member's own in-app conversation or an envoy's thread on an instance, most recently active first (`at`). */
 export const AgentConversation = Schema.Struct({
 	id: Schema.String,
 	title: Schema.NullOr(Schema.String),
@@ -574,7 +574,7 @@ export const AgentConversation = Schema.Struct({
 });
 export type AgentConversation = typeof AgentConversation.Type;
 
-// ── the callables that are not a model's: run starts (rule 51), approval decisions (rule 46), filters (rule 16a), the agent panel (§5.9) ──
+// ── the callables that are not a model's: run starts, approval decisions, filters, the agent panel ──
 const LocalFilterField = Schema.Struct({
 	name: Schema.String,
 	label: Schema.String,
@@ -629,11 +629,11 @@ const PostFields = Schema.Struct({
 	attachments: Schema.optionalKey(Schema.Array(Schema.Json)),
 	/** `compact` is `/compact`; `plan` plans; anything else is the agent. */
 	mode: tolerant(Schema.Literals(['agent', 'plan', 'compact'])),
-	/** Skip triage (rule 60a). */
+	/** Skip triage. */
 	now: tolerant(Schema.Boolean),
 	/** Hold it: an ISO instant, or `finish` for when the running turn finishes. */
 	schedule: Schema.optionalKey(Schema.String),
-	/** The person's clock (rule 57). */
+	/** The person's clock. */
 	tz: tolerant(Schema.String)
 });
 /** A post carries text or an attachment. */
@@ -771,7 +771,7 @@ export const ownRefusal = (callable: RefusableCall, input: unknown): string => {
 		checks[0])[1];
 };
 
-// ── an integration instance's status (§4.5): what a link reports and the shell draws ──
+// ── an integration instance's status: what a link reports and the shell draws ──
 /**
  * Where an instance's link is. `pairing` is the provider asking for something; `reconnecting` is a retry after a drop
  * and is progress, not failure; `error` is the only terminal one and names its own recovery in `error`.
@@ -813,7 +813,7 @@ export const SetupStep = Schema.Struct({
 });
 export type SetupStep = typeof SetupStep.Type;
 /**
- * How a provider is set up, as data the shell renders with no provider-named component (P18). `kind` is what `pair`
+ * How a provider is set up, as data the shell renders with no provider-named component. `kind` is what `pair`
  * takes: `form` sends `fields`; `qr`/`code` sends the optional `fields` and then shows what `pairing` publishes; `oauth`
  * sends nothing and publishes a sign-in; `none` needs nothing. A `qr`, `code` or `oauth` setup starts on Connect.
  * `webhook`: the operator pastes `about.webhook_url` into the provider.
@@ -1005,7 +1005,7 @@ export const SessionResponse = Schema.Union([
 	WireError
 ]);
 export type SessionResponse = typeof SessionResponse.Type;
-/** A host channel operation (§7.1: a host's private socket, or bolt-server's MAC-signed `POST /__bolt/ops`): `host.ping`, `session.mint`, `founder.bootstrap`, … */
+/** A host channel operation (a host's private socket, or bolt-server's MAC-signed `POST /__bolt/ops`): `host.ping`, `session.mint`, `founder.bootstrap`, … */
 export const HostOperation = Schema.Struct({
 	op: Schema.String,
 	input: Schema.Record(Schema.String, Schema.Json),

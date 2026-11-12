@@ -1,4 +1,4 @@
-// Pure parts of the callables area: typed-input decode (rules 5, 23, 36) and the rule 52a due time.
+// Pure parts of the callables area: typed-input decode and the due time.
 import { describe, expect, it } from '@effect/vitest';
 import { due_at as roundedDueAt, materialize } from '../src/engine/runs/time.ts';
 const due_at = (now: string, at?: string | { var: string }) => {
@@ -131,7 +131,7 @@ describe('decodeInput', () => {
 	});
 });
 
-describe('due_at (rule 52a)', () => {
+describe('due_at', () => {
 	const now = '2026-09-25T10:01:30.000Z';
 	it('is exact under 5 minutes ahead and rounds up to a 5-minute bucket from 5 minutes on', () => {
 		expect(due_at(now)).toBe(now);

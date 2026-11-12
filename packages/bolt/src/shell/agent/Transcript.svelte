@@ -84,7 +84,7 @@
 	}
 	const lastPending = $derived(rows.findLast((r) => r.state === 'pending')?.id);
 	const lastReply = $derived(rows.findLastIndex((r) => r.role === 'assistant'));
-	/** A triaged row's state (rule 60a), derived from the engine's markers and the turn's status; no label once it settles. */
+	/** A triaged row's state, derived from the engine's markers and the turn's status; no label once it settles. */
 	function triageLabel(row: AgentRow, i: number): string | null {
 		if (row.state === 'pending') return t('reading…');
 		return status === 'running' && row.state === 'consumed' && i > lastReply
@@ -128,7 +128,7 @@
 	);
 
 	watch(() => conversation, () => { log = []; expanded.clear(); });
-	// the context view (L-BOLT-546): what the model no longer reads stays in the transcript, folded and dimmed
+	// the context view: what the model no longer reads stays in the transcript, folded and dimmed
 	const view = $derived(contextView(rows, plan));
 	const outside = (r: AgentRow) => view.outside.has(r.id);
 	const ORIGIN = {
@@ -147,9 +147,9 @@
 		}
 		return cards;
 	});
-	/** A cut reply the turn did not continue (stopped, or its process died) is interrupted (L-BOLT-548). */
+	/** A cut reply the turn did not continue (stopped, or its process died) is interrupted. */
 	const interrupted = (r: AgentRow) => r.tag === 'cut' && status !== 'running';
-	// a running turn with no text yet counts its seconds (L-BOLT-548)
+	// a running turn with no text yet counts its seconds
 	let since = $state<number | null>(null),
 		now = $state(Date.now());
 	watch(
@@ -210,7 +210,7 @@
 	// The work between chat messages folds into one group: tool calls, received sub-agent messages and reasoning
 	// (a reply's own reasoning ahead of its text). A person's message, a reply's text or a card ends the group.
 	// Spawning a sub-agent is a step; its detached work lives in the session rail. Rows behind the context boundary
-	// stay dimmed (L-BOLT-546).
+	// stay dimmed.
 	// For an administrator, each triaged batch closes with its decision: the newest `decision.made` naming a message decides
 	// it, and the mark follows the batch's last message; `awaiting` is a decided reply not written yet.
 	

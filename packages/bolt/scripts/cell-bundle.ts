@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// `build/cell.js` (compute model §14): the cell's engine as one minified classic script, bundled from the compiled
+// `build/cell.js`: the cell's engine as one minified classic script, bundled from the compiled
 // `build/protocol/cell.js` after svelte-package (`node scripts/cell-bundle.ts`). A cell runs only the runtime: the
 // build fails on any module a cell must never load, naming the chain that imports it, and on a bundle past P15's
 // 2 MiB budget.

@@ -640,7 +640,7 @@
 											{x.error}
 										</p>{/if}
 									{#if x.delivery.length > 0}
-										<!-- every report the provider (or bolt) made, oldest first (§5.9) -->
+										<!-- every report the provider (or bolt) made, oldest first -->
 										<details class="text-xs" data-delivery-timeline>
 											<summary class="cursor-pointer text-muted-foreground">{t('Delivery')}</summary
 											>

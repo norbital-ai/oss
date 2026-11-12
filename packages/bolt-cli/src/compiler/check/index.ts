@@ -1,10 +1,10 @@
 /// <reference types="node" />
-// `bolt check` (rule 7): discover → bundle → evaluate → manifest → names → seed decode → schema → build checks, every
+// `bolt check`: discover → bundle → evaluate → manifest → names → seed decode → schema → build checks, every
 // error of every stage in one run (a stage whose input failed is skipped, the others still run). Its first stages are
 // `bolt sync`: the names index is printed from the evaluated declarations, and an evaluation that fails keeps the last
 // good one. Workspace diagnostics use the TypeScript language service; deeper audits run on request. Declarations are
-// evaluated on a worker thread stripped to a guest's globals (rule 2), with a frozen clock and seeded `Math.random`, twice,
-// and both manifest hashes must match; the guest program obeys rule 6's walls.
+// evaluated on a worker thread stripped to a guest's globals, with a frozen clock and seeded `Math.random`, twice,
+// and both manifest hashes must match; the guest program obeys the guest walls.
 import { sha256_hex } from '@norbital-ai/store';
 import { builtinModules } from 'node:module';
 import { readFile } from 'node:fs/promises';
@@ -48,7 +48,7 @@ export type CheckResult = {
 
 const GUEST_BYTES = 8 * 1024 * 1024,
 	EVAL_CPU_MS = 100,
-	// the worker's reference workload's CPU on an unloaded fast core: the speed rule 6's budget is graded at
+	// the worker's reference workload's CPU on an unloaded fast core: the speed the evaluation budget is graded at
 	REFERENCE_MS = 7,
 	FROZEN = Date.UTC(2000, 0, 1);
 /** Bolt's root module, src or the published build (`bolt.ts`). */
@@ -321,7 +321,7 @@ function runtimeEntry(
 	].join('\n');
 }
 
-/** Native ES modules for full declaration evaluation or the runner's callback projection, with rule 6's import walls. */
+/** Native ES modules for full declaration evaluation or the runner's callback projection, with the guest import walls. */
 const bundle = Effect.fn('bolt.bundle')(function* (
 	root: string,
 	code: readonly Discovered[],
@@ -361,7 +361,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 						// repository-health:allow EFF3 -- Vite resolves through its Promise plugin ABI.
 						async resolveId(id, importer) {
 							if (id === ENTRY) return `\0${ENTRY}`;
-							// §5.8: `import bytes from './x.wasm?bytes'` is the file's bytes, a server-only asset of the artifact
+							// `import bytes from './x.wasm?bytes'` is the file's bytes, a server-only asset of the artifact
 							if (id.endsWith(BYTES)) {
 								// repository-health:allow EFF3 -- Vite's resolver returns a Promise.
 								const file = await this.resolve(id.slice(0, -BYTES.length), importer, {
@@ -375,7 +375,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 							errors.push({
 								code: 'guest/node-import',
 								path: from,
-								message: `${from}: imports '${id}'; guest code runs in the isolate, which has no node modules (rule 6)`
+								message: `${from}: imports '${id}'; guest code runs in the isolate, which has no node modules`
 							});
 							return { id, external: true };
 						},
@@ -458,7 +458,7 @@ const bundle = Effect.fn('bolt.bundle')(function* (
 		errors.push({
 			code: 'guest/size',
 			path: 'guest.mjs',
-			message: `guest.mjs is over 8 MiB (rule 6)`
+			message: `guest.mjs is over 8 MiB`
 		});
 	return {
 		source,
@@ -608,7 +608,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 					? {
 							code: 'guest/eval-cpu',
 							path: 'guest.mjs',
-							message: `module evaluation took over ${EVAL_CPU_MS} ms of CPU (rule 6)`
+							message: `module evaluation took over ${EVAL_CPU_MS} ms of CPU`
 						}
 					: {
 							code: 'load/failed',
@@ -627,7 +627,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 		errors.push({
 			code: 'load/nondeterministic',
 			path: 'src',
-			message: 'two evaluations of the declarations gave different manifests (rule 2)'
+			message: 'two evaluations of the declarations gave different manifests'
 		});
 	// the cheaper of the two runs at reference speed: a busy machine only ever adds CPU time, never removes it
 	if (
@@ -638,7 +638,7 @@ const evaluateTwice = Effect.fn('bolt.evaluateTwice')(function* (
 		errors.push({
 			code: 'guest/eval-cpu',
 			path: 'guest.mjs',
-			message: `module evaluation took over ${EVAL_CPU_MS} ms of CPU (rule 6)`
+			message: `module evaluation took over ${EVAL_CPU_MS} ms of CPU`
 		});
 	return a.json;
 });

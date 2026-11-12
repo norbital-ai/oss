@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The public network guard every host-side outbound request shares (§3.3.8, L-BOLT-366): HTTPS only, DNS resolved
+// The public network guard every host-side outbound request shares: HTTPS only, DNS resolved
 // once and the checked address pinned (no private, loopback or reserved network), redirects re-checked hop by hop,
 // bounded bodies. `http_port` serves it to the engine (`HttpPort`); `public_fetch` puts it behind a `fetch` shape for the
 // http driver; a host's page reader uses the parts.
@@ -165,7 +165,7 @@ const isLoopbackAddress = (address: string): boolean =>
 
 /**
  * The addresses `url` may be reached on: HTTPS on 443 without credentials, every resolved address public. `allowLoopback`
- * (a development host only, L-BOLT-366) also admits this machine's own names (`localhost`, `*.localhost`, `127.0.0.1`,
+ * (a development host only) also admits this machine's own names (`localhost`, `*.localhost`, `127.0.0.1`,
  * `::1`) over HTTP or HTTPS on any port, when every address they resolve to is loopback; nothing else private, ever.
  */
 export const public_addresses = (

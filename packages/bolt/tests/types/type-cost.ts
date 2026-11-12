@@ -1,4 +1,4 @@
-// The strictness the type-cost work keeps (F28, compute model §5 "Cheaper types, strictness kept"): a cheaper Bolt type
+// The strictness the type-cost work keeps: a cheaper Bolt type
 // must answer the same types and refuse the same mistakes. Each `@ts-expect-error` line is a planted mistake.
 import type { Cursor, Id, PlainDate, ReadAnswer, ReadRequest, ReadRequestBase, Where, WorkspaceQuery } from '../../src/index.ts';
 import type { ReadableName } from '../../src/decl/names.ts';

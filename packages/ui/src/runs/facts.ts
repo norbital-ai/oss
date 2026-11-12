@@ -15,7 +15,7 @@ export function progressOf(run: Pick<RunRow, 'progress'>): number | null {
 		return p['done'] / p['total'];
 	return null;
 }
-/** The files a run returned (final-ui rule 27): its output's `FileRef`s, at the top or one level in. */
+/** The files a run returned: its output's `FileRef`s, at the top or one level in. */
 export const runFiles = (run: Pick<RunRow, 'result'>): readonly FileRef[] =>
 	[
 		run.result ?? null,

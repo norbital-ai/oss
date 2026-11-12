@@ -9,7 +9,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import type { JsonSchema } from './json-schema.js';
 	import type { Where } from '@norbital-ai/std/kind';
 
-	/** The editor of one value by its kind (every §3.3.2 kind; derived kinds render read-only). */
+	/** The editor of one value by its kind (every kind; derived kinds render read-only). */
 	export type EditorProps = {
 		/** The page context (`ctx`), passed whole. */
 		ctx: UiContext;

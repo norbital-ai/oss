@@ -1,4 +1,4 @@
-// The membrane codec (compute model §14): two sides wired as a kernel and its cell are — the cell's sends answer at
+// The membrane codec: two sides wired as a kernel and its cell are — the cell's sends answer at
 // once, the kernel's arrive later as entries — with every message structured-cloned as it crosses an isolate.
 import { describe, expect, it } from '@effect/vitest';
 import { runInNewContext } from 'node:vm';

@@ -2,11 +2,10 @@
 
 Workspace Studio is the same path as [asking Norbius](./norbius-changes.md), by hand: edit the source, commit it, rebase it
 when live moved, run the diagnosis and the tests, merge it, and roll live back if needed. Every step that changes what the workspace's users get asks for an
-explicit approval that says what it changes. Studio needs a host that serves it (Colony); an untethered workspace has
-none. Its UI is the host's too, and is no part of a workspace's build: the shell holds an empty slot, and the host's bundle
-mounts there and talks to the workspace over the `/__bolt/shell/studio*` routes. What happens across the workspace — bundle analysis, resource telemetry, runtime logs, the audit
-trail, automation runs, inference calls and people — is the **Command center** (`/command-center/<tab>`), in tethered
-and untethered workspaces alike; commits, previews, merges and rollbacks stay in Studio.
+explicit approval that says what it changes. Studio is provided by the host, not by a workspace's build; a host that
+does not provide it has no Studio. What happens across the workspace — bundle analysis, resource telemetry, runtime logs,
+the audit trail, automation runs, inference calls and people — is the **Command center** (`/command-center/<tab>`), in
+every workspace; commits, previews, merges and rollbacks stay in Studio.
 
 ## 1. Edit and commit
 
@@ -128,14 +127,3 @@ a rollback restores business data while retaining current identity state.
 During the few seconds of a switch-over, other people's pages wait instead of failing; a small "Updating to a new
 version…" notice shows at the bottom. Afterwards their pages reconnect; a version with new pages reloads them, or
 offers **Reload** when they have unsaved work.
-
-## Screenshots to capture
-
-| File                | Must show                                                                                          |
-| ------------------- | -------------------------------------------------------------------------------------------------- |
-| `studio-flow-1.jpg` | The Source tab with a file open and an uncommitted edit (the Commit button enabled).               |
-| `studio-flow-2.jpg` | The Preview tab: the frame header, the Phone/Tablet/Desktop sizes and the page.                    |
-| `studio-flow-3.jpg` | The merge dialog: "Merge into live?", the merge's message and changed-file count, and the summary. |
-| `studio-flow-4.jpg` | The header reading "Switching over…" with a spinner, and the Studio buttons disabled.              |
-| `studio-flow-5.jpg` | The rollback confirmation for a checkpoint whose schema differs: time, description, data warning.  |
-| `studio-flow-6.jpg` | Another member's page during the switch-over: content still on screen and the "Updating" notice.   |

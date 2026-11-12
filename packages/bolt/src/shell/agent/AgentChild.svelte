@@ -1,5 +1,5 @@
 <!--
-	A delegated sub-agent (§5.9 `subagent`), read-only: `compact`, one line in the session panel's list
+	A delegated sub-agent, read-only: `compact`, one line in the session panel's list
 	(its mark, task and state) that opens it; otherwise its whole view in the session panel — its task,
 	checklist, steps as they land (the panel's own `Steps`), what it changed and made, its exchange with the delegating agent
 	(a question it stopped on, the answer it got) and its answer. Sub-agents run detached and several at once; one spawns

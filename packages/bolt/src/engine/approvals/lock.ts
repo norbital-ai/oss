@@ -1,9 +1,9 @@
 import { actor_ref } from '../access/actor.ts';
-// The approval lock (rule 46a): while a request is Pending or ChangesRequested, the records it holds — root, the inline
+// The approval lock: while a request is Pending or ChangesRequested, the records it holds — root, the inline
 // children its provisional change touched, and any owned child created under a held record — change only through the
 // request: the current step's approvers (its teams' members and its users) in Pending, the requester in ChangesRequested
 // (whose save resubmits, approvals.ts `resubmit`). Every write path ends in one
-// commit statement (rule 20), so the lock is pieces of that statement; an approval decision's own rollback is exempt.
+// commit statement, so the lock is pieces of that statement; an approval decision's own rollback is exempt.
 import { Effect, Option, Schema } from 'effect';
 import type { EngineActor } from '../contracts.ts';
 import { relations, teams, type EngineManifest, type GrantData } from '../manifest.ts';

@@ -1,4 +1,4 @@
-// Type corpus for the page context (§3.5) and ui's view props (§3.6) over the fixture's names: a page's reads, acts and `t`,
+// Type corpus for the page context and ui's view props over the fixture's names: a page's reads, acts and `t`,
 // and a view's `of`, `columns`, `values` and `record`, checked like `ctx`. Each `@ts-expect-error` is a planted mistake.
 import { Effect } from 'effect';
 import { Form, Table, type UiContext } from '@norbital-ai/ui';

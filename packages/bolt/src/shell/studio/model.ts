@@ -1,4 +1,4 @@
-// Workspace Studio's port (§5.10, §7.1): the host that owns source, builds and releases answers it and serves Studio's UI
+// Workspace Studio's port: the host that owns source, builds and releases answers it and serves Studio's UI
 // (`slot.ts`). Bolt names no host: one that passes no port serves no Studio; a platform maps these calls onto its own.
 // The agent's authoring tools over it are the host's, never Bolt's; Bolt's own agent only reads (`workspace_search`).
 import { Schema, SchemaTransformation } from 'effect';
@@ -27,10 +27,10 @@ export type StudioFileChange = {
 export type StudioFile =
 	{ text: string; truncated?: { limit: number; bytes: number } } | { binary: true; bytes: number };
 export type StudioLogLine = { at: string; level: 'info' | 'warn' | 'error'; message: string };
-/** One diagnostic of the last build (`bolt build --json`'s `errors`); `severity` defaults to `error` (L-BOLT-528, 530). */
+/** One diagnostic of the last build (`bolt build --json`'s `errors`); `severity` defaults to `error` (530). */
 export type StudioDiagnostic = CheckDiagnostic & { severity?: 'error' | 'warn' };
 /**
- * A Version (§7): every merge or rollback live ran, newest first, restorable. `rollback` deploys one again as a new
+ * A Version: every merge or rollback live ran, newest first, restorable. `rollback` deploys one again as a new
  * Version, source and data together. `checkpoint`: the instant whose data rolling back to it keeps (`null`: none to roll
  * back to). `rollback`: the commit this Version rolled back to. `undo`: the state live was in just before a rollback,
  * so rolling back to it undoes that rollback. `discards`: its schema differs from live's, so rolling back to it
@@ -62,7 +62,7 @@ export type StudioBuild = {
 /** A tenant environment the host routes (`live`, a change's preview, …): `release` is the artifact it serves, `''` when unrouted. */
 type StudioEnvironment = { name: string; release: string; url: string | null };
 /**
- * A change's preview (§7): its own copy-on-write fork of live's data, taken when the change was opened, serving the
+ * A change's preview: its own copy-on-write fork of live's data, taken when the change was opened, serving the
  * build of `commit` (`stale` once the head moved past it, while the newer head builds). `url` is `null` while it is
  * `shelved`: idle for two hours, its fork was deleted; opening the change again re-forks live and reuses the build.
  * `destructive`: the schema steps merging that build applies (a merge must accept them); `impact`: what applying its
@@ -78,7 +78,7 @@ export type StudioPreview = {
 	impact?: MigrationImpact;
 };
 /**
- * A Change (§7): a named set of edits on `branch`, from live, with its own preview. `base` is where it left live (the
+ * A Change: a named set of edits on `branch`, from live, with its own preview. `base` is where it left live (the
  * diff's other side) and `behind` how many live commits it lacks (a merge takes them in). `merge` is a merge running in
  * the background, or the reason the last one failed; a clean merge moves live and records a Version.
  */
@@ -313,7 +313,7 @@ export type StudioApproval = {
 	head?: string;
 	destructive?: readonly string[];
 };
-/** An authoring phase (L-BOLT-530): diagnose (the build's checks) → copy (the preview's data) → preview → merge. */
+/** An authoring phase: diagnose (the build's checks) → copy (the preview's data) → preview → merge. */
 export const PHASES = STUDIO_PHASES;
 export type StudioPhase = (typeof PHASES)[number];
 export type PhaseState = 'running' | 'done' | 'failed';
@@ -364,7 +364,7 @@ export type StudioPort = {
 };
 export const SECTIONS = ['models', 'apps', 'kiosks', 'policies', 'automations', 'secrets'] as const;
 export type Section = (typeof SECTIONS)[number];
-/** A declaration: its path-derived name, the source file it comes from (rule 1), and where it opens (an app). */
+/** A declaration: its path-derived name, the source file it comes from, and where it opens (an app). */
 type StudioEntry = { name: string; path: string; href?: string };
 /**
  * What the browser gets: the state with the manifest cut to each Manifest chip's entries. `sections` is `null` before a

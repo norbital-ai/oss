@@ -1,5 +1,5 @@
-// In-app Norbius attachments (§5.9, rule 58): a panel upload to `sys_conversation.inputs` rides `sys_message.post` as a
-// stored FileRef on the row; the agent reads it with `read_file`; triage's state carries it (P37); only the
+// In-app Norbius attachments: a panel upload to `sys_conversation.inputs` rides `sys_message.post` as a
+// stored FileRef on the row; the agent reads it with `read_file`; triage's state carries it; only the
 // member's own uploads attach, 8 files / 20 MiB, the envoy's media types.
 import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
@@ -200,7 +200,7 @@ const setup = Effect.gen(function* () {
 			authority,
 			now: t.clock.now()
 		}).pipe(Effect.provide(context));
-	/** A post is held for the sender's pause (P40), then decided and answered. */
+	/** A post is held for the sender's pause, then decided and answered. */
 	const post = (as: string, input: Json) =>
 		Effect.gen(function* () {
 			const outcome = yield* act(t, as, 'sys_message.post', input);

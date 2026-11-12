@@ -1,4 +1,4 @@
-// The API reference (§7.3): `scripts/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
+// The API reference: `scripts/docs.ts` writes it into `build/docs/` at the end of bolt's build, so this reads
 // the corpus the last build produced (`pnpm --dir oss build` first). Every symbol a workspace imports has a summary;
 // declaration functions carry their option shapes; `workspace_lang` reads the same source JSDoc through the compiler.
 import { expect, it } from '@effect/vitest';

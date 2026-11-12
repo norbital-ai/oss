@@ -1,4 +1,4 @@
-// The sync inbox (spec §3.1 "Webhooks need no code"): what reaches a remote sync's next `read` as `deliveries` — a
+// The sync inbox: what reaches a remote sync's next `read` as `deliveries` — a
 // verified webhook delivery, an inbound message of a conversation instance, or a provider's report on a message a sync's
 // `write` sent — is stored as `sys_inbox` rows, one per read sync over the instance's definition, deduplicated by the
 // delivery id (a delivery sent twice is stored once), and is a hint: the statement that stores it queues one read of each

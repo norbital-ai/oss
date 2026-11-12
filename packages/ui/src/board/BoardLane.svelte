@@ -30,7 +30,7 @@
 	const bolt = $derived(bolt_of(ctx));
 	let pages = $state<(string | null)[]>([null]);
 	let nexts = $state<(string | null)[]>([]);
-	// a new filter or sort starts the lane over (cursors are bound to the query, rule 11)
+	// a new filter or sort starts the lane over (cursors are bound to the query)
 	const query = $derived(JSON.stringify({ of, where, order_by, search }));
 	watch(
 		() => query,

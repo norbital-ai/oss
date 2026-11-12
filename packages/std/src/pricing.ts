@@ -1,4 +1,4 @@
-// std/pricing (§3.7, M2): catalogue lines → bands → formula → bucket → line. A catalogue line carries ordered bands of
+// std/pricing (M2): catalogue lines → bands → formula → bucket → line. A catalogue line carries ordered bands of
 // formula text; a band that holds (`when`) takes a slice of the quantity (`take`, default all that is left) and prices
 // it (`price`, reading the slice as the root `quantity`); each priced slice is one line in the catalogue line's bucket.
 // Payroll overtime bands, allowance families, CRM price breaks and commissions are all this shape.

@@ -51,9 +51,9 @@
 		lock?: string;
 		/** One sentence behind the pill. */
 		hint?: string;
-		/** Placed in the record header (serial-pcn's "Approve as FAE"). */
+		/** Placed in the record header (e.g. an "Approve" action). */
 		actions?: Snippet;
-		/** Beside the label in the chrome (color-matching's timeline trigger). */
+		/** Beside the label in the chrome (e.g. a timeline trigger). */
 		trailing?: Snippet;
 		/** Beside Edit / Save in the footer (lifecycle actions: promote, transfer, terminate). */
 		footer_actions?: Snippet;
@@ -84,9 +84,9 @@
 	import { Effect } from 'effect';
 	import { fork, observe_once } from '../effect/index.js';
 	import { contentMotion } from '../form/content-motion.js';
-	// The record frame (§3.6, X-20): label, state pill, actions, the UI tab, authored tabs and Runs. One tab row: a nested
+	// The record frame (X-20): label, state pill, actions, the UI tab, authored tabs and Runs. One tab row: a nested
 	// shell shows its body only, and a tab a page's own strip already shows is not repeated. The record's header carries
-	// the record/approval toggle for native proposals and the history scrubber (rule 17): a past revision shows
+	// the record/approval toggle for native proposals and the history scrubber: a past revision shows
 	// read-only in the body. Without a body it renders the model's `+representation.svelte` or the generated view.
 	import Icon from '@iconify/svelte';
 	import { getContext, onDestroy, setContext, untrack } from 'svelte';
@@ -295,7 +295,7 @@
 	const loaded = $derived(queryState(record));
 	const live = $derived(loaded.kind === 'ready' ? loaded.value : null);
 	const complete = $derived(live === null ? null : bolt.project_record(readOf, live));
-	// ── the scrubber (owner only): the revision the body shows, read as of that revision (L-BOLT-181); null is live ──
+	// ── the scrubber (owner only): the revision the body shows, read as of that revision; null is live ──
 	let viewing = $state<number | null>(null);
 	let past = $state<StoredRecord | null>(null);
 	let historical = $state<HistorySnapshot | null>(null);
@@ -341,7 +341,7 @@
 			}
 		);
 	}
-	// ── per-record restore (rule 17): the viewed revision's own fields as a new latest revision, never a rollback ──
+	// ── per-record restore: the viewed revision's own fields as a new latest revision, never a rollback ──
 	// the preview is read when the person asks for it, not on every scrub step (each one is an act)
 	const canRestore = $derived(
 		owner && viewing !== null && historical !== null && historical.incompatible.length === 0 && id !== undefined && bolt.restore !== undefined
@@ -1231,7 +1231,7 @@
 	{:else if (mode === 'create' || live !== null) && controller === null && exposure !== undefined}
 		{@render skeleton()}
 	{:else if Representation && view}
-		<!-- a representation chunk that fails to load says which model's view and why (final-ui §7.2, L-BOLT-515) -->
+		<!-- a representation chunk that fails to load says which model's view and why -->
 		{#await Representation}{@render skeleton()}{:then R}{#key shownPast}<R
 					{view}
 					{ctx}

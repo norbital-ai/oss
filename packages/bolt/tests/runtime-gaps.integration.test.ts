@@ -1,4 +1,4 @@
-// Runtime gaps the template migration found (§5.8, §5.8.1, §3.3.5, rules 55, 56): `ctx.progress` in automations, stopping
+// Runtime gaps the template migration found: `ctx.progress` in automations, stopping
 // a queued or running run (the engine and the shell route), and the files facility over the host's files port.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, layer } from '@effect/vitest';
@@ -166,7 +166,7 @@ const setup = (web: WebRead['Service']['read'] = unused) =>
 	});
 
 layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
-	describe('ctx.progress (L-BOLT-336)', () => {
+	describe('ctx.progress', () => {
 		it.effect('an automation reports progress onto its run', () =>
 			Effect.gen(function* () {
 				const { t, runs, start } = yield* setup();
@@ -316,7 +316,7 @@ layer(workspace, { excludeTestServices: true })('runtime gaps', (it) => {
 		);
 	});
 
-	describe('the files facility in automations (§5.8.1)', () => {
+	describe('the files facility in automations', () => {
 		it.effect(
 			'puts bytes as a FileRef on the run and reads them back, with meta, a URL and the max bound',
 			() =>

@@ -23,7 +23,7 @@ import { engineObjects } from './engine.ts';
 import { audit_triggers } from './audit.ts';
 import { history_schema_objects } from './history.ts';
 
-/** What the database depends on: the fingerprint is over exactly this (rule 69). */
+/** What the database depends on: the fingerprint is over exactly this. */
 export const SchemaSliceSchema = Schema.Struct({
 	tables: Schema.Record(Schema.String, TableSpec),
 	tz: Schema.String,
@@ -43,7 +43,7 @@ export function schema_slice(m: EngineManifest): SchemaSlice {
 		tz: m.workspace.tz
 	};
 }
-/** The schema hash activation compares (rule 69): SHA-256 of the canonical schema slice. */
+/** The schema hash activation compares: SHA-256 of the canonical schema slice. */
 export const fingerprint = (s: SchemaSlice): string => sha256_hex(canonical(s));
 
 /** Private tables/functions and schema-derived history/audit objects; runtime account rows are untouched. */

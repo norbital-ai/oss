@@ -1,4 +1,4 @@
-// What server code may cause beyond its own write (§3.3.9 effects, §5.8): runs, notices, and the automation-only I/O
+// What server code may cause beyond its own write: runs, notices, and the automation-only I/O
 // facilities. Each answers an Effect (D8); a facility fails with `FacilityFailure` or `Unavailable` (`../errors.ts`).
 import { Schema, type Effect } from 'effect';
 import type { Actor } from '../access/actor.ts';
@@ -43,14 +43,14 @@ import type {
 	IsUnion
 } from './names.ts';
 
-// ── runs (rules 48–56) ──
+// ── runs ──
 /** A started run: its id and the automation it runs. */
 export type RunHandle<A = AutomationName> = { readonly id: Id<'sys_run'>; readonly automation: A };
 /** Where a run stands. */
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
 /**
  * Why a run started; `effect`: a model's `effect` after a committed write; `handoff`: an act that outlived the
- * person-wait, held by its run (compute model §3).
+ * person-wait, held by its run.
  */
 export type RunCause = 'cron' | 'effect' | 'schedule' | 'start' | 'retry' | 'handoff';
 /**
@@ -138,7 +138,7 @@ export interface Run {
 type JobName = { [A in AutomationName]: AutomationSpecOf<A> extends { mode: 'call' } ? never : A }[AutomationName];
 /** `ctx.schedule`: queues a job automation after the current write commits. */
 export interface Schedule {
-	/** Due at once without `at`; with `key`, a queued run under the same key is replaced (rule 51). */
+	/** Due at once without `at`; with `key`, a queued run under the same key is replaced. */
 	<const A extends string>(
 		automation: Is<A, JobName>,
 		input: StartInput<A>,
@@ -146,7 +146,7 @@ export interface Schedule {
 	): Eff<RunHandle<A>>;
 }
 
-// ── notices (§3.3.9, spec §2.2): one shape for `ctx.notify`, approval effects included ──
+// ── notices: one shape for `ctx.notify`, approval effects included ──
 /**
  * Whom a notice goes to: a team's members, one member, a policy's holders, or, in an approval effect
  * event, the request's `'requester'` or the current step's `'approvers'` (teams and users); elsewhere those two resolve
@@ -169,14 +169,16 @@ type NoticeAttachment =
  * to each recipient's handle there. `link` defaults to the record the event is about; `once`
  * delivers at most one notice per key.
  * @example
- * { title: 'New colour matching job', description: `${name} is waiting on the board.`, to: [{ team: 'colour_matchers' }],
+ * { title: 'New review job', description: `${name} is waiting on the board.`, to: [{ team: 'reviewers' }],
  *   via: [hotline.id], attachments: [{ document: { html }, to: 'pdf', name: 'Brief.pdf' }] }
  */
 type ConversationDefinition = {
 	[D in IntegrationName]: [ConversationOf<D>] extends [never] ? never : D;
 }[IntegrationName];
 export type Notice = {
+	/** Plain text, stored and shown as written; not a message key. */
 	title: Msg;
+	/** Plain text, as `title`. */
 	description?: Msg;
 	to: readonly Recipient[];
 	via?: readonly InstanceId<ConversationDefinition>[];
@@ -229,7 +231,7 @@ type SendPayload<N> =
 			: SendInput<IntegrationOf<N>>;
 /**
  * Queues a message through one conversation instance (the outbox delivers it after the run's write commits); a
- * union-typed target is a type error (§3.3.9), and a member's personal instance refuses at run time. The returned id is
+ * union-typed target is a type error, and a member's personal instance refuses at run time. The returned id is
  * queue admission, not provider acceptance. An unpaired account keeps it queued; read sys_message status/sent_at with
  * an explicit output grant before recording delivery or a sent timestamp in a business model.
  */
@@ -271,7 +273,7 @@ export type WebPage = {
 /** Refuses private, loopback and link-local addresses. */
 export type Web = { read: Call<[url: string, options?: { raw?: boolean }], WebPage> };
 
-// ── files (§5.8.1): handles by default, bytes only on request ──
+// ── files: handles by default, bytes only on request ──
 /** A file reference with its size in bytes and SHA-256. */
 type FileMeta = FileRef & { readonly bytes: number; readonly sha256: string };
 /**
@@ -491,7 +493,7 @@ interface Infer<Tools> {
 		request: InferRequest<O, Tools>
 	): Eff<ValueOf<O>, Failure>;
 }
-/** `Tools`: host tools exist only in an automation, which holds its policies (rule 58); an effect has none. */
+/** `Tools`: host tools exist only in an automation, which holds its policies; an effect has none. */
 /**
  * A `sys_1` state: JSON evidence and resolved inline JPEG/PNG image parts. A stored `FileRef` is invalid;
  * resolve its authorized bytes or extracted text before deciding. Voice recordings use their transcript.
@@ -511,7 +513,7 @@ export type DecisionEntry =
 	| ({ readonly [key: string]: DecisionValue } & { readonly [brand]?: never });
 /** Shared JSON or inline image evidence; never an unresolved stored file. */
 export type DecisionState = Exclude<DecisionEntry, null>;
-/** One typed question in the provider's shape (P37): a noul's criteria say what true and false mean; score levels run lowest first. */
+/** One typed question in the provider's shape: a noul's criteria say what true and false mean; score levels run lowest first. */
 export type DecisionQuestion =
 	| {
 			readonly type: 'noul';
@@ -529,7 +531,7 @@ export type DecisionQuestion =
 			readonly criteria: readonly DecisionEntry[];
 	  };
 /**
- * `ctx.ai.sys_1.decide`'s answers, each typed from its question literal (P36, P37): a choice's option key; a score's
+ * `ctx.ai.sys_1.decide`'s answers, each typed from its question literal: a choice's option key; a score's
  * continuous `score`, its most probable `level` (the level itself), and `probabilities`/`legend` keyed by level index.
  */
 type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
@@ -576,7 +578,7 @@ export type Ai<Tools> = {
 };
 /** A geocoding result: the point, a short label and the full address. */
 export type GeoHit = { readonly point: Point; readonly label: string; readonly address: string };
-/** Geocoding is optional (P19): an absent provider fails the call with `Unavailable`. */
+/** Geocoding is optional: an absent provider fails the call with `Unavailable`. */
 export type Geo = {
 	search(query: string): Eff<readonly GeoHit[], Failure>;
 	reverse(point: Point): Eff<GeoHit, Failure>;

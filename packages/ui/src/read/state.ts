@@ -17,7 +17,7 @@ export function readState<T>(
 			: { kind: 'error', code: error.code, message: error.message };
 	return value === undefined ? { kind: loading ? 'loading' : 'empty' } : { kind: 'ready', value };
 }
-/** A one-shot read's rejection as a state (reads reject with `{ code }`, §3.5). */
+/** A one-shot read's rejection as a state (reads reject with `{ code }`). */
 export const failed = (e: unknown): ReadState<never> => {
 	// a rejection is untyped: only its `code` member is read
 	const code = Predicate.hasProperty(e, 'code') ? String(e.code) : 'error';

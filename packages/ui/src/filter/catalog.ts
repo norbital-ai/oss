@@ -29,7 +29,7 @@ export const INDEX: { readonly [key: string]: { op: 'search' | 'similar'; label:
 	$similar: { op: 'similar', label: 'Topic' }
 };
 
-// ── the engine's condition catalogue (rule 16b): the builder renders exactly these, never a second operator table ──
+// ── the engine's condition catalogue: the builder renders exactly these, never a second operator table ──
 /** One step of an offered condition's nesting from the model root (bolt's `FilterStep`, structurally). */
 export type FilterStep =
 	| { k: 'field'; name: string }
@@ -162,7 +162,7 @@ export type Resolved =
 
 const RESERVED = new Set(['and', 'or', 'not']);
 
-/** Fields a viewer may filter on: readable in its output, not hidden (rule 16a narrowing). */
+/** Fields a viewer may filter on: readable in its output, not hidden. */
 export const filterable = (x: ModelExposure, f: string) =>
 	!RESERVED.has(f) && x.fields[f] !== undefined && !x.fields[f]?.hidden;
 

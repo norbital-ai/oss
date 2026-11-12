@@ -1,6 +1,6 @@
-// The one queue (rules 48–52a): a run is a row with a `due_at`. `key` is rule 51's "one queued, unstarted run per
+// The one queue: a run is a row with a `due_at`. `key` is the "one queued, unstarted run per
 // key" (an `on conflict` arbiter); a claim moves a workspace run's key to `run_key`. No grant: read through ctx.runs,
-// RunStatus, RunsFor and /runs (rule 56).
+// RunStatus, RunsFor and /runs.
 import { bind_system_model } from '../../../../decl/model.ts';
 
 export default bind_system_model('sys_run')({

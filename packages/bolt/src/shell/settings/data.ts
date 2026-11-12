@@ -91,7 +91,7 @@ export type Settings = {
 		delivery: Delivery;
 	}[];
 	mcp: { name: string; url: Json; secrets?: readonly string[] }[];
-	/** Identity changes (`bolt_history` of the identity tables), newest first (L-BOLT-518). */
+	/** Identity changes (`bolt_history` of the identity tables), newest first. */
 	audit: readonly AuditRow[];
 	/**
 	 * The definitions an instance is created of, the workspace's and bolt's conversation ones: whether it carries a
@@ -113,7 +113,7 @@ export type Settings = {
 };
 
 /**
- * An instance's outbound deliveries over the last day (L-BOLT-521): automatic retries are progress (`retrying`, with the
+ * An instance's outbound deliveries over the last day: automatic retries are progress (`retrying`, with the
  * next attempt), only a settled failure is terminal; `lastError` is the newest failure's text. A `skipped` message (its rule's
  * `build` answered `null`: nothing to send for that record) is its own neutral count, never a failure.
  */
@@ -128,7 +128,7 @@ export type Delivery = {
 };
 const AUDIT_LIMIT = 200;
 
-/** The settings pages' rows (§5.11.1): one row per member with sessions collapsed to a last-seen time; admins only. */
+/** The settings pages' rows: one row per member with sessions collapsed to a last-seen time; admins only. */
 export const settings = Effect.fn('shell.settings')(function* (
 	h: IdentityHost,
 	m: EngineManifest,
@@ -139,7 +139,7 @@ export const settings = Effect.fn('shell.settings')(function* (
 	yield* requireAdmin(auth);
 	const [users, invitations, keys, audit, deliveries, signup, instances, envoys] = yield* h.db.read(
 		[
-			// administrators first, then staff, then external members; by name, else address (L-BOLT-516). Anonymous visitors are no members.
+			// administrators first, then staff, then external members; by name, else address. Anonymous visitors are no members.
 			sql(`SELECT u.id, u.email, u.phone, u.telegram, u.name, u.kind, u.active, u.admin, u.team, u.last_seen::text AS last_seen
 			FROM sys_user u WHERE u.kind <> 'anonymous' ORDER BY u.admin DESC, u.kind = 'external', lower(coalesce(nullif(u.name, ''), u.email, u.phone, '')), u.id`),
 			sql(

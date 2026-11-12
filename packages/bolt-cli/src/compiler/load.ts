@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// Loading (§3.2, rule 2): import each role's default export and gather the manifest, keyed by role then path-derived name.
+// Loading: import each role's default export and gather the manifest, keyed by role then path-derived name.
 import { Array, Effect, FileSystem, Path, Predicate, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
 import { type Diagnostic, type Discovered, sourcePath } from './discover.ts';
@@ -12,7 +12,7 @@ import { SKILL_BYTES, SKILL_FILE } from '@norbital-ai/bolt/engine';
 export type { LoadedManifest as Manifest } from '@norbital-ai/bolt/tooling';
 
 // Plain `import()` in the build process, for the compiler tests and the non-code roles; `bolt check` evaluates code roles in
-// the isolate instead (rule 2: frozen clock, seeded random, twice, hash compare; check/index.ts).
+// the isolate instead (frozen clock, seeded random, twice, hash compare; check/index.ts).
 class LoadError extends Schema.TaggedError<LoadError>()('LoadError', {
 	path: Schema.String,
 	cause: Schema.Defect()
@@ -211,7 +211,7 @@ export function manifestErrors(
 		}
 	}
 	// hook:write — every row carries the system columns; a model field of the same name would shadow one (`revision` is the
-	// row version every update checks, rule 25), so it is refused here rather than as a duplicate column at migration
+	// row version every update checks), so it is refused here rather than as a duplicate column at migration
 	if (layer === 'workspace') {
 		for (const [name, d] of Object.entries(manifest.model)) {
 			const literal = spec(d);
@@ -254,7 +254,7 @@ export function manifestErrors(
 				`group '${name}' must name a direct default_child`
 			);
 	}
-	// `app/page-unlisted` (§3.3.1): every page file has an entry in its app's `pages`, whose key order is nav order.
+	// `app/page-unlisted`: every page file has an entry in its app's `pages`, whose key order is nav order.
 	for (const page of Object.keys(manifest.page ?? {})) {
 		const at = page.lastIndexOf('/');
 		const app = manifest.app[page.slice(0, at)];

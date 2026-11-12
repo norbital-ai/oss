@@ -63,7 +63,7 @@ export { client_address } from './access/rate.ts';
 export { logged_phone } from './identity/session.ts';
 /** Host control-plane identity reads use the system table contract without loading a tenant artifact or guest. */
 export { member_directory } from './identity/maintenance.ts';
-export { plan, read_applied } from './schema/plan.ts'; // hook:hosting — Appendix D values (rule 69 activation)
+export { plan, read_applied } from './schema/plan.ts'; // hook:hosting — Appendix D values
 export {
 	apply_migrations,
 	MigrationBundleSchema,
@@ -76,10 +76,10 @@ export {
 export { DeadlineTimer } from './runs/deadlines.ts';
 export { DOWNLOAD } from './files/media.ts';
 // ── exports: links ──
-export { OAUTH_CALLBACK } from './integrations/links.ts'; // hook:hosting — every host's instance links (§4.5)
+export { OAUTH_CALLBACK } from './integrations/links.ts'; // hook:hosting — every host's instance links
 export type { DriverOpen, Link, Provider } from './integrations/driver.ts'; // the one contract every provider implements
 export { document_converter, document_ingester } from './convert.ts'; // the open-source ConvertPort (Norbital Convert, oss/services/convert)
-export { http_oauth, http_request } from './integrations/http.ts'; // hook:hosting — every host's http driver (§2.6)
+export { http_oauth, http_request } from './integrations/http.ts'; // hook:hosting — every host's http driver
 export {
 	DatabaseRequest,
 	DatabaseResult,

@@ -166,7 +166,7 @@ export function matches(
 	}
 }
 
-/** Nulls last ascending and first descending (rule 11). */
+/** Nulls last ascending and first descending. */
 export function sortRows<R extends { readonly [f: string]: Value }>(
 	rows: readonly R[],
 	keys: readonly SortKey[]

@@ -1,4 +1,4 @@
-// std/calendar (§3.7, §5.4): pay and billing cycles (a cycle is named by the day it OPENS), working days and
+// std/calendar: pay and billing cycles (a cycle is named by the day it OPENS), working days and
 // business-hour deadlines (SLAs) over a work week and holiday rows.
 import { add_days, add_months, Instant, PlainDate, type DatePeriod } from './date.ts';
 import { Decimal } from './decimal.ts';

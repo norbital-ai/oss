@@ -29,7 +29,7 @@ export function filePart(f: { mime: string; bytes: Uint8Array }, name: string): 
 		return { type: 'text', text: `${name} (${f.mime}):\n${new TextDecoder().decode(f.bytes)}` };
 	return { type: 'text', text: `${name} (${f.mime}): read_file reads it` };
 }
-/** What a file with no parser answers (plan 12 rule 7): the agent builds one, never guesses. */
+/** What a file with no parser answers: the agent builds one, never guesses. */
 export const unparsed = (name: string, mime: string) =>
 	`${name} (${mime || 'unknown type'}): no parser. A call-mode automation can use a workspace package in its isolated VM; run_js with files: [{ id }] reads its bytes. Never guess what it contains.`;
 

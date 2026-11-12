@@ -56,4 +56,4 @@ and `bolt dev` run bolt-cli's `node_guests`, Colony its isolated-vm runner).
 | Member | Interface | Supply | What it is |
 | --- | --- | --- | --- |
 | `sandbox` | `Sandbox` | or `off` | Agents' bash: one command over a working tree, confined by the host. |
-| `keys` | `KeysPort` | required | The tenant's secrets key, held by the host (F21): AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to `aad` (`bolt\0<owner>\0<name>`), so a copied envelope never opens under another owner or name. `open` answers `null` for an envelope that does not open under this key and `aad`. A host without a key provides no port. |
+| `keys` | `KeysPort` | required | The tenant's secrets key, held by the host: AES-256-GCM envelopes (`iv ‖ tag ‖ ciphertext`) bound to `aad` (`bolt\0<owner>\0<name>`), so a copied envelope never opens under another owner or name. `open` answers `null` for an envelope that does not open under this key and `aad`. A host without a key provides no port. |

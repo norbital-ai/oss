@@ -52,7 +52,7 @@ const GrantData = Schema.Struct({
 	delete: Schema.optionalKey(DeleteGrantData)
 });
 export type GrantData = typeof GrantData.Type;
-/** One `limits` entry (rule 38): a bare rate counts per actor (an envoy key: per sender); a list applies every rule. */
+/** One `limits` entry: a bare rate counts per actor (an envoy key: per sender); a list applies every rule. */
 const LimitData = Schema.Union([
 	Schema.String,
 	Schema.Struct({ rate: Schema.String, per: Schema.Literals(['actor', 'ip', 'sender', 'subject']) })
@@ -165,7 +165,7 @@ const Teams = Schema.Record(
 	})
 );
 /**
- * A skill (compute model §3, "Running a file"): a folder of `SKILL.md`, its scripts and the pure-JavaScript packages it
+ * A skill ("Running a file"): a folder of `SKILL.md`, its scripts and the pure-JavaScript packages it
  * vendors, at most `SKILL_BYTES`. Its `SKILL.md` text, the digest of its tree (sha256 hex of the sorted
  * `<path>\0<sha256 hex>` lines, `\n`-joined) and its file paths, sorted; the bytes are the artifact's `skills/<name>/`.
  */

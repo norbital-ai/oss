@@ -1,7 +1,7 @@
-// A member (§5.11.1): the session principal. `party_id` is what the kernel directory grant compares for externals
-// (rule 35a); only a staff member can be an admin (rule 38c). A member signs in with their email or their mobile number:
+// A member: the session principal. `party_id` is what the kernel directory grant compares for externals
+//; only a staff member can be an admin. A member signs in with their email or their mobile number:
 // each is unique among members (`phone_key` is the number's digits, as a WhatsApp handle compares it). Read as its
-// `directory` output through the kernel directory (rule 35a) or a read grant; written by the admin verbs. An `anonymous` user is a visitor's identity on
+// `directory` output through the kernel directory or a read grant; written by the admin verbs. An `anonymous` user is a visitor's identity on
 // a public app or a no-sign-in kiosk: no address, no member; signing in links it (session.ts `verify_code`), and the daily
 // prune removes it 30 days after its last visit unless a record still references it.
 import { bind_system_model } from '../../../../decl/model.ts';

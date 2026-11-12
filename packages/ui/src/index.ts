@@ -1,6 +1,6 @@
-// `@norbital-ai/ui` (§3.6, Appendix D.2): the views, the field kinds and inputs, `Form`/`Field`, and the primitives.
+// `@norbital-ai/ui` (Appendix D.2): the views, the field kinds and inputs, `Form`/`Field`, and the primitives.
 // Layout is `./layout`.
-// The views of §3.6 take the page's `ctx` as a prop; the shell provides the representation registry once per page.
+// The views take the page's `ctx` as a prop; the shell provides the representation registry once per page.
 // A model-backed view is exported typed by what its naked prop names (`Workspace` in `./model/types.ts`): the component
 // is Svelte's generic-component shape over its own name-erased implementation.
 /** Live model rows grouped into state, enum or relation lanes; dragging a card updates its lane field under the viewer's grants. */

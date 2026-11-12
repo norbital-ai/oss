@@ -678,7 +678,7 @@ const lower = Effect.fn('protocol.lower_read')(function* (
 		const automation =
 			typeof options['automation'] === 'string' ? options['automation'] : undefined;
 		const id = typeof options['id'] === 'string' ? options['id'] : undefined;
-		// rule 56: every run is staff's; a holder of an automation (external included) reads its runs; one run by id is
+		// every run is staff's; a holder of an automation (external included) reads its runs; one run by id is
 		// answered as `run_view` lets the caller read it
 		if (
 			authority.actor.kind !== 'member' ||
@@ -777,7 +777,7 @@ export const BoltRoutes = {
 			authority: Authority
 		) {
 			const key = header(request, HEADERS.key);
-			if (!key) return yield* Effect.fail(invalid(`${HEADERS.key} is required (rule 31)`));
+			if (!key) return yield* Effect.fail(invalid(`${HEADERS.key} is required`));
 			const body = yield* requestBody(request, ActBody),
 				live = yield* Live;
 			const changed = yield* releaseChanged(request);

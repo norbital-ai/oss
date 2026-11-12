@@ -48,7 +48,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		invalid = false
 	}: FileInputProps = $props();
 	const host = $derived(ctx.ui.kinds);
-	// the upload target is `<model>.<field>` (§5.7); a submit of the enclosing form waits for it
+	// the upload target is `<model>.<field>`; a submit of the enclosing form waits for it
 	const form = use_form();
 	const target = $derived(
 		form?.spec.target.of === 'model' ? `${form.spec.target.model}.${name}` : name

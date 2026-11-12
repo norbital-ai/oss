@@ -16,7 +16,7 @@ from `@norbital-ai/ui/effect`. Returned values retain their declared ids, decima
 | `web`, `files`, `geo`          | upload / file_url   | none                      | none                      | yes                  | selected file facilities      | yes                    |
 | `browser`                     | none                | none                      | none                      | run-scoped tab       | none                          | run-scoped tab         |
 | `history`                     | yes                 | none                      | none                      | its policies         | none                          | writer                 |
-| `approvals`, restore          | yes                 | none                      | none                      | none                 | none                          | none                   |
+| `approvals`, restore          | yes                 | none                      | none                      | `approvals.withdraw` | none                          | `approvals.withdraw`   |
 | `device`                      | yes                 | none                      | none                      | none                 | none                          | none                   |
 
 Each guest invocation has 3 s cumulative CPU and 256 MiB heap. Ordinary bodies allow 40 facility
@@ -108,10 +108,22 @@ to `create` and may be `skip`. A dry run runs the callbacks and writes nothing. 
 conflict policy; acts have none.
 
 Pages, bodies and the test kit use this map contract. The agent's `act` tool accepts one
-`{ callable, input }`, then uses that same native map decoder and commit path. A successful write
-is `committed` or `pending_approval`; the latter carries `request_id` for the provisional write.
-Handle `ActRefused`, `ActConflict` and `ActUnknown` through the typed failure channel. `key` supplies
+`{ callable, input }`, then uses that same native map decoder and commit path. `key` supplies
 explicit idempotency; a run retry may repeat earlier writes.
+
+### Act outcomes
+
+Every write ends in one of these `kind`s (`Outcome` in `@norbital-ai/bolt`):
+
+| `kind`             | Channel                  | Meaning                                                                                   |
+| ------------------ | ------------------------ | ----------------------------------------------------------------------------------------- |
+| `committed`        | success                  | the write committed; `output` is keyed by callable name                                   |
+| `pending_approval` | success                  | a policy held the write for review; `request_id` names the provisional write             |
+| `running`          | success, pages only      | the write outlived the 60 s a person waits and continues as run `run`; follow it with `RunStatus` |
+| `refused`          | failure (`ActRefused`)   | a policy, callback or lock refused it                                                     |
+| `conflict`         | failure (`ActConflict`)  | another write changed the observed records first                                          |
+| `unknown`          | failure (`ActUnknown`)   | the outcome could not be confirmed; `invocation` looks it up                              |
+
 
 Business operations live in named automations with explicit typed inputs.
 
@@ -135,7 +147,8 @@ only (a person or the agent), with a quota of 30 starts per automation and start
 schedules needs no start grant. Automations cannot approve, reject or request changes on a request.
 `ctx.approvals.withdraw(request_id, reason?)` takes back an open request the same automation asked for
 (any of its runs; in a model effect, its writer's own), restoring the held records as a rejection does;
-it fails `ActRefused` for anyone else's request or a decided one. The Command center's
+it fails `ActRefused` for anyone else's request or a decided one. A page withdraws through
+`ctx.approvals.decide(id, { decision: 'withdraw' })`, beside the decisions a member may hold. The Command center's
 Automations list and run detail show each run's trigger.
 
 A model's `create.effect`, `update.effect` or `delete.effect` is the work that follows a committed write: a
@@ -179,9 +192,9 @@ Noul criteria and question instructions may be omitted. Structured entries prese
 nested JSON values. Stored FileRefs must be resolved before calling System 1. Inline PNG/JPEG
 evidence uses `{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,...' } }`
 in state; remote URLs are rejected. The adapter sends actual image parts/assets, never base64 as text.
-The smart throttle prepares bounded images, voice transcripts, and extracted document/text content
-before its one decision call, reusing the ingestion cache. Unreadable or truncated attachments cannot
-be discarded as noise. Native audio is not a Jev input. Decision images are omitted from retained logs.
+Before an inbound message's decision call, the host prepares bounded images, voice transcripts and
+extracted document text, reusing the ingestion cache. Unreadable or truncated attachments are never
+discarded as noise. Native audio is not a decision input. Decision images are omitted from retained logs.
 
 ```ts
 function* choose_filter(ctx: AutomationCtx) {
@@ -206,7 +219,7 @@ Choice returns the supplied option key and probabilities. Score returns its nume
 expected score, probabilities, and the selected structured level; Noul returns the
 probability of true. Code composes the selected entries and validates the resulting
 read filter. Structured criteria do not request arbitrary JSON Schema generation.
-The `decisions_system_1` adapter uses Jev/OpenRouter's Decisions wire format;
+The `decisions_system_1` adapter uses a Decisions wire format;
 `structured_system_1` implements the same contract over structured-output chat completions.
 For OpenAI's native `/v1/decisions`, set `decisions_system_1`'s `format: 'openai'`
 (or the Bolt server's System 1 provider to `openai-decisions`, with its full endpoint URL).

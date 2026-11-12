@@ -353,7 +353,7 @@ export const exposure = Effect.fn('bolt.exposure')(function* (
 			const layer = read[`${c}.${field}`];
 			return layer !== undefined && (layer.fields === 'all' || layer.fields.includes(leaf));
 		};
-		// the columns this caller's own create/update arms admit (rule 14): a column no held arm names is filled by the host
+		// the columns this caller's own create/update arms admit: a column no held arm names is filled by the host
 		const remote = syncFields(m, c);
 		const owned = (manifestRelations(m).from.get(c) ?? [])
 			.filter((relation) => relation.spec.owned)

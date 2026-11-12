@@ -249,7 +249,7 @@ const rootsOf = (read: WireRead): readonly string[] => {
 	const request = read.m === 'query' ? read.a[0] : undefined;
 	return isRow(request) ? Object.keys(request).filter((path) => !path.includes('.')) : [];
 };
-/** The paint of one generated write over each live read request's page of its model (rule 67). */
+/** The paint of one generated write over each live read request's page of its model. */
 function paintOf(model: string, verb: string, input: Json, key: string): Paint {
 	const rows = (v: Json, each: (rows: readonly Row[]) => readonly Row[]): Json => {
 		const values = isRow(v) ? v['rows'] : undefined;
@@ -1020,7 +1020,7 @@ export const create_bolt = (config: BoltConfig) =>
 						return yield* new ActRefused({ code, message: refusal.value.error.message });
 					return yield* new TransportFailed({ status: response.status });
 				}),
-			// a per-record restore (rule 17), never point-in-time recovery or a source rollback
+			// a per-record restore, never point-in-time recovery or a source rollback
 			restore: {
 				preview: (model: string, record: string, revision: number) =>
 					command('history.preview', { model, record, revision }).pipe(

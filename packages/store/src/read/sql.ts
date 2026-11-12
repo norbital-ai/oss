@@ -449,7 +449,7 @@ const labelReferences = Effect.fnUntraced(function* (
 	}
 	return out;
 });
-/** A reader may search only fields its read exposure names (rule 14). */
+/** A reader may search only fields its read exposure names. */
 const exposedAll = (
 	c: ExposureInfo,
 	fields: readonly string[],
@@ -460,7 +460,7 @@ const exposedAll = (
 	return hidden === undefined
 		? Effect.void
 		: forbidden(
-				`${what} on '${c.name}' covers '${hidden}', which this caller does not read (rule 14)`
+				`${what} on '${c.name}' covers '${hidden}', which this caller does not read`
 			);
 };
 /**
@@ -828,7 +828,7 @@ const arm = Effect.fnUntraced(function* (
 	}
 	const p = r.page;
 	if (p === undefined)
-		return yield* invalid('a many-relation arm states { limit } or { all: true } (rule 9)');
+		return yield* invalid('a many-relation arm states { limit } or { all: true }');
 	if (p._tag === 'Limit' && p.after !== undefined)
 		return yield* invalid(`relation arm '${rel}' takes no cursor`);
 	const limit = p._tag === 'All' ? STORE_LIMITS.page.relationArm + 1 : p.limit;
@@ -945,7 +945,7 @@ const decodeCursor = (cursor: string, h: string, n: number): Fx<readonly (string
 	return Result.isSuccess(decoded) && decoded.success.h === h && decoded.success.k.length === n
 		? Effect.succeed(decoded.success.k)
 		: Effect.fail(
-				StoreError.of('bad_cursor', 'decode', 'the cursor does not belong to this query (rule 11)')
+				StoreError.of('bad_cursor', 'decode', 'the cursor does not belong to this query')
 			);
 };
 /** Rows after the cursor position: ASC puts nulls last, DESC first, as Postgres orders by default. */
@@ -998,7 +998,7 @@ const start = Effect.fnUntraced(function* (
 	const lv: Level = { scoped, exposed: scoped };
 	if (options.scope?.rows(model, output)?.length === 0)
 		return yield* forbidden(
-			`no held policy grants reading '${model}'${output === DEFAULT_OUTPUT ? '' : ` as its '${output}' output`} (rule 33)`
+			`no held policy grants reading '${model}'${output === DEFAULT_OUTPUT ? '' : ` as its '${output}' output`}`
 		);
 	return { c, b: new Build(cat, options, { root: model, output }), lv };
 });
@@ -1053,7 +1053,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 	if (ir.kind === 'similar' && probe?.field === SEMANTIC) {
 		// `search.semantic`'s platform embedding, cosine, probed by an embedded text or by a readable record's own vector
 		if (c.model.semantic === undefined)
-			return yield* invalid(`'${c.name}' declares no search.semantic (rule 16)`);
+			return yield* invalid(`'${c.name}' declares no search.semantic`);
 		b.touch(c.model.name, EMBEDDING_COLUMN);
 		const x = `${a}.${q(EMBEDDING_COLUMN)}`,
 			s = b.alias();
@@ -1105,7 +1105,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 	let first: Key[] = [];
 	if (ir.search !== undefined) {
 		if (c.model.search.length === 0)
-			return yield* invalid(`'${c.name}' declares no searchable fields (rule 16)`);
+			return yield* invalid(`'${c.name}' declares no searchable fields`);
 		// the term is folded and tokenized by the document's own functions (native words and CJK runs as prefixes,
 		// romanized spellings, pinyin joins, Latin skeletons); a row meeting any lexeme is found, and one holding every
 		// native word ranks first, then by how much of the query landed. A term of noise is no tsquery: no rows.
@@ -1122,7 +1122,7 @@ export const compile = Effect.fn('Store.compile')(function* (
 			// `/semantic`: the lexical and the embedding rankings fused by reciprocal rank (k = 60), so an exact hit always
 			// outranks a row only the vector found; one page, no cursor (a window rank cannot be sought)
 			if (c.model.semantic === undefined)
-				return yield* invalid(`'${c.name}' declares no search.semantic (rule 16)`);
+				return yield* invalid(`'${c.name}' declares no search.semantic`);
 			if (ir.page._tag === 'Limit' && ir.page.after !== undefined)
 				return yield* invalid('a /semantic search reads one page');
 			b.touch(c.model.name, EMBEDDING_COLUMN);

@@ -1,7 +1,7 @@
-// Policies → Authority (rules 33–37, 35a): held grants union into arms per read output and path, write arms carry the
+// Policies → Authority: held grants union into arms per read output and path, write arms carry the
 // columns they admit per write path and whether a `check` judges them, and an administrator (or a platform run) bypasses
 // authored policy. A grant names outputs and filters their rows; it never changes an output's fields. Plus what a write
-// and a read consult of it: `moves` (rule 34) and the read scope (rule 13); the write judge itself is `write/act.ts`'s.
+// and a read consult of it: `moves` and the read scope; the write judge itself is `write/act.ts`'s.
 import { Effect } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import type { Arm, Authority, DeleteArm, EngineActor, LimitRule, WriteArm } from '../contracts.ts';
@@ -25,18 +25,18 @@ export type Holder = {
 	policies: readonly string[];
 	/** Rule 35: bypasses grants, `moves` and approval flows; preserves checks, edges, `edit` and write callbacks. */
 	admin: boolean;
-	/** A platform run: the workspace's own work, unscoped like an admin but never an administrator (rule 38c). */
+	/** A platform run: the workspace's own work, unscoped like an admin but never an administrator. */
 	platform?: boolean;
 	teamTree?: readonly string[];
 	scopes?: { readonly [policy: string]: readonly string[] };
 };
 
 const WRITES = ['create', 'update'] as const;
-/** Identity models: read by grant or the kernel directory, written only by their admin verbs (rule 38c). */
+/** Identity models: read by grant or the kernel directory, written only by their admin verbs. */
 const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
 const isIdentity = (c: string) => IDENTITY.some((i) => i === c);
 const KERNEL = '$directory';
-/** The `sys_user` output the kernel directory grants (rule 35a): id and name. */
+/** The `sys_user` output the kernel directory grants: id and name. */
 export const DIRECTORY_OUTPUT = 'directory';
 
 type Mutable = {
@@ -106,7 +106,7 @@ function writeArm(
 	};
 }
 
-/** The fields output `output` of `root` exposes at `path` (rule 10), its FKs included. */
+/** The fields output `output` of `root` exposes at `path`, its FKs included. */
 export function exposed(
 	m: EngineManifest,
 	root: string,
@@ -131,7 +131,7 @@ export function exposed(
 }
 
 /**
- * The kernel directory grant (rule 35a): staff read staff, externals read themselves and their party, each as
+ * The kernel directory grant: staff read staff, externals read themselves and their party, each as
  * `sys_user`'s `directory` output (id, name). Teams are source.
  */
 function directory(actor: EngineActor): Arm | undefined {
@@ -158,7 +158,7 @@ function directory(actor: EngineActor): Arm | undefined {
 	};
 }
 
-// ── limits (rule 38, rule 72 defaults) ──
+// ── limits ──
 const DEFAULTS: readonly LimitRule[] = [
 	{ key: 'act', rate: '600/min', per: 'actor' },
 	{ key: 'read', rate: '3000/min', per: 'actor' },
@@ -183,7 +183,7 @@ function limitRules(key: string, v: LimitData | readonly LimitData[]): LimitRule
 	return typeof v === 'string' || 'rate' in v ? [one(v)] : v.map(one);
 }
 
-/** Compiles once per `key` (rule 37); the caller caches by that key. */
+/** Compiles once per `key`; the caller caches by that key. */
 export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 	m: EngineManifest,
 	holder: Holder,
@@ -202,7 +202,7 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 		for (const [path, arm] of Object.entries(arms)) (at[path] ??= []).push(arm);
 	};
 	if (bypass) {
-		// an admin manages the integration instances too (FINAL §3); identity is the admin verbs'
+		// an admin manages the integration instances too; identity is the admin verbs'
 		const all = layered(m).exposures;
 		for (const c of [
 			...Object.keys(m.exposures),
@@ -388,7 +388,7 @@ export const operand_value = (operand: Var, authority: Authority): Json => {
 };
 
 /**
- * A model a read-only remote sync owns (spec §3: a sync with `read` and no `write`): its rows come from that sync, so
+ * A model a read-only remote sync owns (a sync with `read` and no `write`): its rows come from that sync, so
  * every other writer, administrators included, changes only its local fields (its `update.columns`) and never creates
  * or deletes one. A read+write sync leaves the fields editable (each edit reaches the outbox).
  */

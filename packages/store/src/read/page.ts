@@ -49,7 +49,7 @@ const arms_fit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, StoreE
 	return rel === undefined
 		? Effect.void
 		: too_large(
-				`relation '${rel}' holds more than ${STORE_LIMITS.page.relationArm} rows; state a limit (rule 9)`
+				`relation '${rel}' holds more than ${STORE_LIMITS.page.relationArm} rows; state a limit`
 			);
 };
 
@@ -84,17 +84,17 @@ export const answer = Effect.fnUntraced(function* (
 	if (c.limit === 'all' || c.limit === null) {
 		if (js.length > STORE_LIMITS.page.all)
 			return yield* too_large(
-				`the read${of} matches more than ${STORE_LIMITS.page.all} rows; page it (rule 9)`
+				`the read${of} matches more than ${STORE_LIMITS.page.all} rows; page it`
 			);
 		if (over)
-			return yield* too_large(`the read${of} is larger than ${allBytes} bytes; page it (rule 9)`);
+			return yield* too_large(`the read${of} is larger than ${allBytes} bytes; page it`);
 		const all: Json = { rows: [...js], next: null, ...total };
 		return all;
 	}
 	// a page ends early at its byte budget, its cursor after the last row that fits
 	if (over && js.length === 0)
 		return yield* too_large(
-			`a row${of} is larger than ${STORE_LIMITS.pageBytes} bytes; select fewer fields (rule 9)`
+			`a row${of} is larger than ${STORE_LIMITS.pageBytes} bytes; select fewer fields`
 		);
 	const more = over || js.length > c.limit;
 	const page = js.slice(0, c.limit);

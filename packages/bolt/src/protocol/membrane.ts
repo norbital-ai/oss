@@ -1,4 +1,4 @@
-// The membrane (compute model §14): HOST_API's Promise boundary carried across an isolate instead of a module graph.
+// The membrane: HOST_API's Promise boundary carried across an isolate instead of a module graph.
 // Both sides run this codec over their own globals. Each side keeps a table of what it handed over — functions,
 // signals, streams — and mirrors what the other side handed it; a mirror the garbage collector takes is released on
 // the other side. Values cross as structured clones (JSON, `Uint8Array`, `Map`, `undefined`) plus these wire forms:

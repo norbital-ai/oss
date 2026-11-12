@@ -1,4 +1,4 @@
-// std/json (§3.7, L-BOLT-956).
+// std/json.
 import { Predicate, Result } from 'effect';
 import { Decimal } from './decimal.ts';
 

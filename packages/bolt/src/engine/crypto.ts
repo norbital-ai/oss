@@ -1,4 +1,4 @@
-// Hashing and encodings in the engine's own JavaScript (compute model §14): the cell has no `node:crypto`, and what the
+// Hashing and encodings in the engine's own JavaScript: the cell has no `node:crypto`, and what the
 // engine hashes is its own work, metered with it. Random bytes and UUIDs come from `globalThis.crypto`; keys the engine
 // must not hold are the host's (`Keys`). SHA-256 is the store's.
 import { sha256 } from '@norbital-ai/store';

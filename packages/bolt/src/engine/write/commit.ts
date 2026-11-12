@@ -312,7 +312,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 		`(SELECT jsonb_build_object('model', ${literal(group.table)}, 'ids', jsonb_agg(e.j->>'id'))::text FROM input e
 	WHERE e.g = ${group.g} AND e.j->>'id' NOT IN (SELECT id FROM ${piece}))`;
 
-	// rule 41: an owned child's direct write holds its parent in an admitting state. The child piece reads the assert, so
+	// an owned child's direct write holds its parent in an admitting state. The child piece reads the assert, so
 	// the parent's `FOR SHARE` is taken before any piece of this statement changes that parent (a row the statement
 	// already changed would be skipped by `FOR SHARE`, not re-tested)
 	const held = new Map<string, string>();
@@ -422,7 +422,7 @@ export const compileCommit = Effect.fn('Bolt.compileCommit')(function* (
 				group
 			);
 		}
-		// rows the act did not write whose roll-ups moved: one derived write each (rule 43), never twice in one statement
+		// rows the act did not write whose roll-ups moved: one derived write each, never twice in one statement
 		if (folds.length > 0)
 			add(
 				table,
@@ -655,7 +655,7 @@ export function affectedTables(
 }
 
 /**
- * The outcome record (rule 20): a refusal or conflict decided after guest code or inside Postgres, recorded with the
+ * The outcome record: a refusal or conflict decided after guest code or inside Postgres, recorded with the
  * rate increment so a replay answers it without re-running guest code, and so refused attempts count.
  */
 export function compile_outcome_record(

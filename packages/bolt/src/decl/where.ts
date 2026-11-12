@@ -1,4 +1,4 @@
-// The one predicate language (K3, §3.3.9): reads, grants, `check`, ref `where`, triggers and live routing. A read compares
+// The one predicate language (K3): reads, grants, `check`, ref `where`, triggers and live routing. A read compares
 // against values it is given: the time variables (`{ var: 'today' | 'now' }`) are edge spellings materialized before a
 // read (a page passes `bolt.clock(unit)`'s values, server code `ctx.today`).
 import type { Literal } from './fields.ts';
@@ -202,7 +202,7 @@ type WhereOver<M, X, O = 'default'> = {
 // `C extends ReadableName` that is every model's predicate at once, 0.3 s a call (F28); `D` still distributes over
 // a union of names. The applicability check that follows types the literal against the instantiated `Where<'orders'>`.
 // (A mapped index of every model's predicate was slower still.)
-/** A predicate over model `C` read as output `O`: only that output's fields and layers exist (rule 10). */
+/** A predicate over model `C` read as output `O`: only that output's fields and layers exist. */
 export type Where<C, O = 'default'> = [C] extends [infer D]
 	? D extends ModelName
 		? WhereOver<D, D, O>
@@ -232,7 +232,7 @@ export type StaticWhere<M, Fk = true> = {
 
 type Unsortable =
 	{ kind: 'json' | 'file' | 'custom' | 'vector' | 'point' | 'period' } | { many: true };
-/** Fields a read may order by: exposed, ordered kinds, and `created_at`/`updated_at` (§3.3.9); FKs order by id. */
+/** Fields a read may order by: exposed, ordered kinds, and `created_at`/`updated_at`; FKs order by id. */
 export type Sortable<C, O = 'default'> = C extends ModelName
 	? | {
 				[P in ReadField<C, O> & keyof Columns<C> & string]: Columns<C>[P] extends Unsortable
@@ -288,5 +288,5 @@ type OneKey<L> = {
 /** A sort key: a field (ascending), `{ field: dir }`, or a related field through at most two one-relations
  * (`{ account: { name: 'asc' } }`); the target field must be `Sortable` on its model. */
 export type SortKey<C, O = 'default'> = Sortable<C, O> | OneKey<SortLevel<C, 2, O>>;
-/** Up to `ORDER_MAX_KEYS` keys, each once, then `id` (rule 11); nulls last ascending, first descending. */
+/** Up to `ORDER_MAX_KEYS` keys, each once, then `id`; nulls last ascending, first descending. */
 export type OrderBy<C, O = 'default'> = SortKey<C, O> | readonly SortKey<C, O>[];

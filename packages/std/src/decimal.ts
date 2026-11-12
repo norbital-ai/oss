@@ -1,4 +1,4 @@
-// std/decimal (§3.7, rule 68): exact decimals. A value is a bigint coefficient and a scale, so no amount ever passes
+// std/decimal: exact decimals. A value is a bigint coefficient and a scale, so no amount ever passes
 // through a float; `Decimal.from_number` is the one explicit door from a double. `valueOf` throws, so `a + b` on two
 // decimals fails loudly instead of concatenating strings (`>` on Decimal is doctor DR-1).
 

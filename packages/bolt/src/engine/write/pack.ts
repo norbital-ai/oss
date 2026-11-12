@@ -1,4 +1,4 @@
-// Seed packs as hosts read them (rule 70, §7.2): `pack.json` plus `rows/<model>.jsonl`, written by `bolt build`
+// Seed packs as hosts read them: `pack.json` plus `rows/<model>.jsonl`, written by `bolt build`
 // (bolt-cli's compiler/artifact/seed.ts). Loading one is a restore into a database with no workspace rows. Here, not in the
 // compiler, so any host (tethered or untethered) loads packs through `@norbital-ai/bolt/engine` without the build toolchain.
 import { EMBED } from '../integrations/embed.ts';
@@ -198,7 +198,7 @@ export const read_pack = Effect.fn('Bolt.read_pack')(function* (dir: string) {
 /** A pack load's step: `more` while steps remain; `loaded`, or `hadRows` when the database had rows and nothing changed. */
 export type PackStep = 'more' | 'loaded' | 'hadRows';
 /**
- * Rule 70: loads a pack only into a database with no workspace rows, in bounded steps (compute model §3: one unit of
+ * Rule 70: loads a pack only into a database with no workspace rows, in bounded steps (one unit of
  * work each): identity first, then the restore of every model in relationship order (`restorer`'s steps).
  */
 export const packLoader = Effect.fn('Bolt.packLoader')(function* (

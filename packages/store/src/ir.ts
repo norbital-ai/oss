@@ -129,7 +129,7 @@ export type Pred =
 	  };
 
 // ── pages, order, projection ──
-/** Rule 9: a limit or everything, never a default. `after` is bound to the query's AST hash (rule 11). */
+/** Rule 9: a limit or everything, never a default. `after` is bound to the query's AST hash. */
 export type Limit = {
 	readonly _tag: 'Limit';
 	readonly limit: number;

@@ -1,8 +1,8 @@
-// The production read-policy matrix (L-BOLT-229, ported from `access-structured-policy-matrix.integration.test.ts`) as
+// The production read-policy matrix (ported from `access-structured-policy-matrix.integration.test.ts`) as
 // a table on the new engine: each row's grant `Where` compiles through the query area (`toPred` → `where_sql`, the SQL
-// every caller read conjoins, rule 13) and runs against allow/deny rows on PGlite. The rows over agent tables
+// every caller read conjoins) and runs against allow/deny rows on PGlite. The rows over agent tables
 // (conversation, plan, message, turn, usage, notification) are not here: those system models are the agents
-// area's. `jsonPath` has no counterpart (rule 16: no `Where` reads json); the correction flag is a stored enum.
+// area's. `jsonPath` has no counterpart (no `Where` reads json); the correction flag is a stored enum.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 import { catalog_of, toPred } from '../src/engine/access/pred.ts';
@@ -376,7 +376,7 @@ const PolicyFixtureLive = Layer.effect(PolicyFixture, fixture).pipe(
 	Layer.provide(TestDb.layer(manifest))
 );
 
-describe('the production read-policy matrix on the new engine (L-BOLT-229)', () => {
+describe('the production read-policy matrix on the new engine', () => {
 	it.effect(
 		'every row compiles to SQL carrying its expected operators and admits exactly its allow rows',
 		() =>

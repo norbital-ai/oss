@@ -1,4 +1,4 @@
-// The live engine (rules 64–66, §5.7): one lane per cell. A commit's RETURNING set is routed host-side: each view is
+// The live engine: one lane per cell. A commit's RETURNING set is routed host-side: each view is
 // judged in memory against the pre- and post-images, and a hit is sent as a patch built from the post-image (projected
 // through the view's select and output, placed by its order), with no read. A delta that cannot be exact
 // falls back as narrowly as it can — a PK `get` of the one row, else a re-read of the view — and is counted
@@ -31,7 +31,7 @@ import { ViewCompiler, same, sourceKeys, type ViewPlan } from '../query/view.ts'
 import * as patch from './patch.ts';
 
 const MiB = 1024 * 1024;
-/** §4.9's live row: per subscription / per connection / retained per cell. */
+/** The live row: per subscription / per connection / retained per cell. */
 export const LIVE = {
 	subscriptionBytes: 2 * MiB,
 	perConnection: 500,

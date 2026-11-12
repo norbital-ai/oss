@@ -1,4 +1,4 @@
-// The view popover's state for a `Table` or `Board` (rule 16b): filter rows and sort keys, read strictly from the URL
+// The view popover's state for a `Table` or `Board`: filter rows and sort keys, read strictly from the URL
 // (or `initial_filter`) once, kept in the URL, and lowered to the `where`/`order_by` a read sends. A relative condition
 // ("this month") stays relative in the rows and the URL; the read gets its literal at the page's day clock, so it rolls
 // over at midnight in the workspace zone. The condition catalogue (`filter.options`) is the same one a description is
@@ -17,7 +17,7 @@ import type { Where } from '@norbital-ai/std/kind';
 import { msg } from '../text/messages.js';
 import { currentSearchParams, replaceSearchParams } from '../utilities/url.js';
 
-// ── URL state (`?<key>.where=`, `?<key>.order=`, rule 16b) ──
+// ── URL state (`?<key>.where=`, `?<key>.order=`) ──
 type ViewUrl = { where: Json | undefined; order: string | undefined; badJson: boolean };
 
 export function readViewUrl(params: URLSearchParams, key: string): ViewUrl {
@@ -173,7 +173,7 @@ export function viewState(
 	}
 
 	// what the read sends: the viewer's rows at the page's clock, each re-checked by `bolt.decode` when the client has it
-	// (rule 11a)
+	//
 	const lowered = $derived.by(() => {
 		if (o.enabled?.() === false) return { where: undefined, dropped: 0 };
 		const c = o.model(),

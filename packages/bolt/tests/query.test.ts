@@ -65,7 +65,7 @@ describe('next query: decode', () => {
 		})
 	);
 
-	it.effect('rule 9: a read states a limit (0–10,000) or all; never a default', () =>
+	it.effect('a read states a limit (0–10,000) or all; never a default', () =>
 		Effect.gen(function* () {
 			expect(yield* code(read(cat, 'orders', {}))).toBe('invalid');
 			expect(yield* code(read(cat, 'orders', { limit: 10_001 }))).toBe('invalid');
@@ -96,7 +96,7 @@ describe('next query: decode', () => {
 		})
 	);
 
-	it.effect('normalizes relations: is, some/none/every, count, arc arms (K3)', () =>
+	it.effect('normalizes relations: is, some/none/every, count, arc arms', () =>
 		Effect.gen(function* () {
 			expect(
 				yield* where(cat, 'accounts', {
@@ -141,7 +141,7 @@ describe('next query: decode', () => {
 	);
 
 	it.effect(
-		'rule 13: a caller without a read grant is forbidden; a field outside exposure does not exist (rule 10)',
+		'a caller without a read grant is forbidden; a field outside exposure does not exist',
 		() =>
 			Effect.gen(function* () {
 				const none = { ...rep, models: {} };
@@ -184,7 +184,7 @@ describe('next query: decode', () => {
 	);
 
 	it.effect(
-		'rule 46b: a workspace read of a held model carries `$approval` as a caller read does; no other model does',
+		'a workspace read of a held model carries `$approval` as a caller read does; no other model does',
 		() =>
 			Effect.gen(function* () {
 				const ir = yield* read(cat, 'orders', { limit: 1 });

@@ -334,7 +334,7 @@ export const AutomationsLive = Layer.effect(Automations, Effect.gen(function* ()
 							typeof host_tools === 'function'
 								? yield* Port.attempt('host_tools', () => host_tools(authority, run.id))
 								: (host_tools ?? []);
-						// `read`: workspace records as the run's policies, through the agent's own read tool (rule 58)
+						// `read`: workspace records as the run's policies, through the agent's own read tool
 						const reader =
 							names.includes('read') && m.automations[run.automation] !== undefined
 								? readInferTool({

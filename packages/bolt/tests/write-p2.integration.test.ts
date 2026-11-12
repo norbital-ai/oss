@@ -1,6 +1,6 @@
 // engine/write and engine/query on PGlite, the P2 review gaps: erase (38e), history (17), import and export
 // (30), relation-action upsert (28), cascades and frozen parents (41), the delete guard (27),
-// telemetry (§5.12), pipeline order (19), guest failures (42, 72a) and `expired` (31).
+// telemetry, pipeline order (19), guest failures (42, 72a) and `expired` (31).
 import type { Chain } from '../src/engine/write/sql.ts';
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Schema } from 'effect';
@@ -261,7 +261,7 @@ describe('engine-owned callback identities', () => {
 	);
 });
 
-describe('engine/write: erase (rule 38e, §5.13)', () => {
+describe('engine/write: erase', () => {
 	it.effect(
 		'remove deletes as a delete would, keeps one erased revision, and drops the rest of its history and its notices',
 		() =>
@@ -363,7 +363,7 @@ describe('engine/write: erase (rule 38e, §5.13)', () => {
 	);
 });
 
-describe('engine/query: history (rule 17)', () => {
+describe('engine/query: history', () => {
 	// a narrower `brief` output of orders, without `note`
 	const orders = required(manifest.exposures['orders'], 'orders exposure');
 	const viewed: EngineManifest = {
@@ -419,7 +419,7 @@ describe('engine/query: history (rule 17)', () => {
 		total: Schema.Struct({ $dec: Schema.String }),
 		big_lines: Schema.Number
 	});
-	/** get(…, { revision }): the revisions folded into the full record as of that revision (L-BOLT-181). */
+	/** get(…, { revision }): the revisions folded into the full record as of that revision. */
 	const folded = Effect.fnUntraced(function* (
 		id: string,
 		revision: number,
@@ -521,7 +521,7 @@ describe('engine/query: history (rule 17)', () => {
 	);
 });
 
-describe('engine/write: per-record restore (rule 17)', () => {
+describe('engine/write: per-record restore', () => {
 	let n = 0;
 	const at = (record: string, revision: number, model = 'orders'): RestoreTarget => ({
 		model,
@@ -673,7 +673,7 @@ describe('engine/write: per-record restore (rule 17)', () => {
 	);
 });
 
-describe('engine/write: import (rule 30)', () => {
+describe('engine/write: import', () => {
 	const imp = (input: Json, over: Partial<ActRequest> = {}) =>
 		run({ model: 'people', verb: 'import', input, ...over });
 	const report = (o: Outcome) => {
@@ -863,7 +863,7 @@ describe('engine/write: import (rule 30)', () => {
 	);
 });
 
-describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
+describe('engine/write: relation actions and cascades', () => {
 	it.effect('explicit model locks guard member and administrator deletions', () =>
   Effect.gen(function* () {
    const tags = manifest.models.tags;
@@ -880,7 +880,7 @@ describe('engine/write: relation actions and cascades (rules 28, 41)', () => {
  );
 });
 
-describe('engine/write: telemetry (§5.12)', () => {
+describe('engine/write: telemetry', () => {
 	it.effect(
 		"an act writes each outcome's event to the host's log, its commit only when it writes",
 		() =>
@@ -932,7 +932,7 @@ describe('engine/write: telemetry (§5.12)', () => {
 	);
 });
 
-describe('engine/write: pipeline order (rule 19)', () => {
+describe('engine/write: pipeline order', () => {
 	type Row = {
 		name: string;
 		expect: string;
@@ -1089,7 +1089,7 @@ describe('engine/write: pipeline order (rule 19)', () => {
 	);
 });
 
-describe('engine/write: guest failures (rules 42, 72a)', () => {
+describe('engine/write: guest failures', () => {
 	it.effect(
 		'a throw is internal, a budget keeps its code, a platform fault throws with its cause',
 		() =>

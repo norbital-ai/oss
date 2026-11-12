@@ -1,11 +1,11 @@
 <!--
-	The in-app agent panel (§5.9, rules 58, 59): one conversation per tab, the transcript with each reply's receipts,
+	The in-app agent panel: one conversation per tab, the transcript with each reply's receipts,
 	a confirmation card for a held call, and the running turn's text as it streams. Posting answers at once; the turn
 	runs after it, and everything it writes (the reply growing flush by flush, each tool call running then finished) is
 	rows of the conversation's live transcript, patched in over the page's one live stream; the conversation list, each
 	one's status, plan and goals are a live read too. Nothing polls and there is no second stream. Enter sends (under a coarse
 	pointer it is a new line and the Send button sends), Shift+Enter is a new line, Cmd/Ctrl+Enter sends now; the timer beside send schedules the message for a time or for when the agent finishes,
-	and what is scheduled lists above the composer (edit, remove). With triage (rule 60a, P41) each triaged row carries its state: "reading…"
+	and what is scheduled lists above the composer (edit, remove). With triage each triaged row carries its state: "reading…"
 	while pending (with respond-now), "responding" once admitted and its turn runs; every message that came in is
 	shown, and consecutive ones not for the agent fold into one quiet block, collapsed to its count and last message; on a
 	channel thread each reply names the messages it answers ("Replying to"). Files are attached with the paperclip, by paste
@@ -27,7 +27,7 @@
 	how long) open to tabs: the code it carried, highlighted, its input and its output (`Steps`); a failed row's icon is the alert, so the call that failed reads at a glance. Code blocks copy. The open conversation is the shell's `?agent=` (`on_conversation` reports a switch). The
 	envoy tab heads its direct messages and each group chat by its name. For an administrator, a scale mark closes each triaged batch of messages; it opens to the
 	decider's matrix (each message, its answer and verdict, the wait) and says when a decided reply is still to come. An
-	envoy's channel conversation or an automation's transcript is read-only here (rule 61): its transcript, a "Read-only —"
+	envoy's channel conversation or an automation's transcript is read-only here: its transcript, a "Read-only —"
 	notice where the composer was, and no controls at all.
 -->
 <script lang="ts">
@@ -130,7 +130,7 @@
 		OLDER = 50;
 	let live = $state<AgentRow[]>([]),
 		older = $state<AgentRow[]>([]);
-	/** The open conversation is an envoy's integration thread: read-only (rule 61). */
+	/** The open conversation is an envoy's integration thread: read-only. */
 	let thread = $state(false);
 	/** The open conversation is an automation's inference transcript: read-only, like a thread. */
 	let automation = $state(false);
@@ -146,7 +146,7 @@
 	const before = $derived(
 		from === null ? null : edge === null ? from : edge.more ? edge.first : null
 	);
-	/** L-BOLT-436: the message this panel just posted (working while it waits in the queue), and a send this panel saw fail. */
+	/** the message this panel just posted (working while it waits in the queue), and a send this panel saw fail. */
 	let sent = $state<string | null>(null),
 		sendFailed = $state(false);
 	// svelte-ignore state_referenced_locally

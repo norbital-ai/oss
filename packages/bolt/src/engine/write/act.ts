@@ -1,6 +1,6 @@
-// The act pipeline (rule 19), in rule order: rate admission → decode → marked-retry lookup → the records named and the
+// The act pipeline, in rule order: rate admission → decode → marked-retry lookup → the records named and the
 // columns admitted per write path → observed-revision checks → the policies' checks on the submitted trees → batched
-// per-verb callbacks → defaults and model rules → the approval route → one write statement (rule 20), or the outcome record.
+// per-verb callbacks → defaults and model rules → the approval route → one write statement, or the outcome record.
 import type { Json } from '../../decl/values.ts';
 import { MessageValues, message_text } from '../../decl/errors/refusal.ts';
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
@@ -112,7 +112,7 @@ import { importPlan, importRefs, type ImportPlan } from './import.ts';
 import { embedQueued, embedWrites } from '../integrations/embed.ts'; // hook:integrations
 import { instanceTransform } from '../integrations/instances.ts';
 import { SYSTEM } from '../../system/index.ts';
-/** The generated verbs (X-24): `import` (rule 30) and `erase` (rule 38e) included. */
+/** The generated verbs: `import` and `erase` included. */
 export type Verb = 'create' | 'update' | 'delete' | 'upsert' | 'import' | 'erase';
 /** The snapshot that opens or resumes a request. */
 export type StepsSnapshot = Extract<ApprovalSnapshot, { kind: 'steps' }>;
@@ -155,8 +155,8 @@ export type WriteEngine = {
 	db: TenantDb;
 	guest?: GuestPort;
 	/**
-	 * The transform's reads as the workspace (rule 15); `tables()` names what it read, for rule 26's lock, and
-	 * `fingerprints()` digests them, for rule 26's assert.
+	 * The transform's reads as the workspace; `tables()` names what it read, for the transform lock, and
+	 * `fingerprints()` digests them, for the transform assert.
 	 */
 	bridge?: (
 		invocation: Invocation,
@@ -224,7 +224,7 @@ export type Taker = (
 	}
 ) => Effect.Effect<void>;
 /**
- * Runs one act (a generated verb) to its outcome. §5.12: the statement that writes (the commit or the outcome record)
+ * Runs one act (a generated verb) to its outcome. The statement that writes (the commit or the outcome record)
  * takes the event buffer as a piece; a refusal decided before guest code writes no row, so its event is stdout only.
  */
 export const act = Effect.fn('Bolt.act')(function* (e: WriteEngine, r: ActRequest) {
@@ -304,12 +304,12 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	const { sync, sink, pending } = modeContext(r.mode);
 	const auth = sync ? { ...r.authority, admin: true } : r.authority; // A sync page is workspace work, outside caller grants.
 	const none = (outcome: Outcome): ActResult => ({ outcome, captured: [], v: 0 });
-	// 1. rate admission (host memory, rule 38): never recorded
+	// 1. rate admission (host memory): never recorded
 	const limited = e.admit?.(r);
 	if (limited) return none(refused('rate_limited', RATE_LIMITED));
 	const late = expired(r);
 	if (late !== null) return none(late);
-	// 2. decode against the model's input allowlist, every offender at once (rule 23)
+	// 2. decode against the model's input allowlist, every offender at once
 	const spec = m.exposures[r.model];
 	if (spec === undefined)
 		return yield* Effect.fail(
@@ -333,7 +333,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		(r.verb === 'import' && key0.length === 0)
 	)
 		return none(refused('forbidden', `${r.model} does not accept ${r.verb}.`));
-	// rule 30: an import's options and its refs by key values, resolved before decode (one read per target)
+	// an import's options and its refs by key values, resolved before decode (one read per target)
 	let imp: ImportPlan | undefined;
 	if (r.verb === 'import') {
 		const planned = yield* importPlan(m, r.model, r.input, key0);
@@ -375,7 +375,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 		);
 		if (badId >= 0) return none(refused('invalid_input', 'Expected an id.', [badId, 'id']));
 	}
-	// rule 28: an upsert row whose `id` is on file is an update of it (`keep`: left as it is), resolved here, before the
+	// an upsert row whose `id` is on file is an update of it (`keep`: left as it is), resolved here, before the
 	// transform, so the transform sees the stored row; a row without an id is a create; an id on no row is refused
 	const upserted: (string | null)[] = [];
 	const onFile = byId
@@ -459,7 +459,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	if (owned !== null) return none(owned);
 	if (f.items.length > LIMITS.changesPerAct)
 		return none(refused('overflow', `An act writes at most ${LIMITS.changesPerAct} rows.`));
-	// 3. the idempotency record (rule 31): looked up before guest code only on a marked retry
+	// 3. the idempotency record: looked up before guest code only on a marked retry
 	const { key, digest, stored } = yield* idempotency(e, r, auth);
 	if (r.retry) {
 		const o = yield* stored();
@@ -468,7 +468,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 	// the act's own reads: those issued together cross as one round trip and one statement, and a read repeated
 	// before the commit (an import's key resolution, after its transform) is answered from the first
 	const own = yield* memo_reads(yield* coalescing(e.db));
-	// rule 30: `prune` deletes the caller-readable rows inside its `Where` whose key the import does not name; an
+	// `prune` deletes the caller-readable rows inside its `Where` whose key the import does not name; an
 	// import's rows matched by key are resolved in the same round trip
 	const matching = f.items.some((item) => item.change.op === 'upsert')
 		? resolveUpserts(
@@ -568,7 +568,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 			if (!auth.admin && (auth.models[r.model]?.update.length ?? 0) === 0)
 				return none(refused('forbidden', 'You may not make this change.'));
 		}
-	// 4. the records the batch names exist, belong where it names them and are readable (rules 13, 36)
+	// 4. the records the batch names exist, belong where it names them and are readable
 	for (const it of f.items) {
 		const c = it.change;
 		const row = pre.get(k(c.model, named(c)));
@@ -605,7 +605,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				refused('forbidden', `You may not move ${state} to '${next}'.`, [...c.path, state])
 			);
 	}
-	// 5. the caller's write arms admit every column the batch writes, per path, before any guest code (rule 35)
+	// 5. the caller's write arms admit every column the batch writes, per path, before any guest code
 	const admitted = auth.admin ? undefined : admit(cat, auth, r.model, f.items, pre);
 	if (admitted !== undefined && 'kind' in admitted) return none(admitted);
 	// Observed revisions are checked before transformations run.
@@ -628,7 +628,7 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				records: [{ model: c.model, id: c.id }]
 			});
 	}
-	// 6–9, replayed once on a serialization failure with the same clock and minted ids (rule 26)
+	// 6–9, replayed once on a serialization failure with the same clock and minted ids
 	const common = {
 		key,
 		digest,
@@ -1263,7 +1263,7 @@ const judgeSubmitted = Effect.fn('Bolt.judgeSubmitted')(function* (
 	const auth = r.authority, b = r.bindings;
 	const { readTables, fingerprints } = reads;
 	let guest = false, flow: StepsSnapshot | undefined;
-	// 6. each admitting arm's verdict judges its verb's batch as submitted, before any transform (rule 35); a requester's
+	// 6. each admitting arm's verdict judges its verb's batch as submitted, before any transform; a requester's
 	// save of their own request in ChangesRequested is judged against its checkpoint when it resubmits (step 8) instead
 	if (admitted !== undefined) {
 		const checked = Object.values(admitted).some((arms) => arms?.some((arm) => arm.check) === true);
@@ -1622,7 +1622,7 @@ const materializeChanges = Effect.fn('Bolt.materializeChanges')(function* (
 	const m = e.manifest, auth = r.authority, b = r.bindings, cat = env.cat;
 	const { imp } = context, { items } = prepared, { sync } = modeContext(r.mode);
 	const stop = (outcome: Outcome): StoppedPlan => ({ guest: prepared.guest, outcome });
-	// 7. upsert resolution read, defaults (rule 23a), model rules (rules 34, 40, 41), no-op updates (rule 29)
+	// 7. upsert resolution read, defaults, model rules, no-op updates
 	const writes: DraftWrite[] = [];
 	const report: ImportRow[] = [];
 	const deletedIds = new Set(
@@ -1708,7 +1708,7 @@ const materializeChanges = Effect.fn('Bolt.materializeChanges')(function* (
 			else unchanged.push({ model: c.model, id: c.id });
 		}
 	}
-	// §3.3.2: every custom field value the act writes passes its kind's `validate`
+	// every custom field value the act writes passes its kind's `validate`
 	const invalid = yield* validateCustom(e, r, writes);
 	if (invalid !== null) return stop(invalid);
 	return { writes, unchanged, report };
@@ -2132,7 +2132,7 @@ const plan = Effect.fn('Bolt.plan')(function* (
 	const embed = embedWrites(
 		m,
 		writes.map((w) => w.write)
-	); // hook:integrations — rule 16: stale embeddings null, `bolt.embed` queued
+	); // hook:integrations — stale embeddings null, `bolt.embed` queued
 	const plain = embed.writes;
 	const queued = embed.stale
 		? [embedQueued(minter(`${r.invocationId}:embed`, b.now)(), b.now)]
@@ -2825,7 +2825,7 @@ export const pureVectors = Effect.fn('Bolt.pureVectors')(function* (
 
 /**
  * Rules 42, 72: what a failed guest invocation answers. A throw from tenant code is `internal` (its message reaches
- * members only, rule 32); a budget keeps its own code; anything else is a platform fault, thrown with its cause (72a).
+ * members only); a budget keeps its own code; anything else is a platform fault, thrown with its cause (72a).
  */
 export function guestFailure(error: BoltError): Effect.Effect<Outcome, BoltError> {
 	switch (error.code) {
@@ -2865,7 +2865,7 @@ const dry_run = Effect.fn('Bolt.dry_run')(function* (
 		);
 });
 
-/** Workspace reads shared by direct writes and verbs recorded in an atomic batch (rules 15, 26). */
+/** Workspace reads shared by direct writes and verbs recorded in an atomic batch. */
 export function transformBridge(
 	manifest: EngineManifest,
 	db: TenantDb,

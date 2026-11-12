@@ -1,8 +1,8 @@
 import { item_kind } from '@norbital-ai/std/kind';
 import { Array as Arr } from 'effect';
-// Field kinds as the ui sees them (§3.3.2): the literal a model or an input declares, structurally, so ui needs no bolt
+// Field kinds as the ui sees them: the literal a model or an input declares, structurally, so ui needs no bolt
 // dependency. Pure functions only: display text, text parsing, advisory checks and empty values. The host decides; these
-// only keep a form from sending what decode would refuse (rule 23), with the same messages.
+// only keep a form from sending what decode would refuse, with the same messages.
 import { Predicate } from 'effect';
 
 import { Decimal } from '@norbital-ai/std/decimal';
@@ -89,7 +89,7 @@ export function formatDuration(seconds: number): string {
 	return (seconds < 0 ? '-' : '') + parts.join(' ');
 }
 
-// ── points: "lat, lng" typed, or picked; never needs a provider (P19) ──
+// ── points: "lat, lng" typed, or picked; never needs a provider ──
 export function parsePoint(text: string): Point | null {
 	const m = /^\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
 	if (m === null) return null;
@@ -400,7 +400,7 @@ export function parse(kind: Kind, text: string): Parsed {
 			return { value: t };
 	}
 }
-/** A money amount's minor-unit check, or its declared scale's (the column's CHECK, rule 68). */
+/** A money amount's minor-unit check, or its declared scale's (the column's CHECK). */
 export function moneyProblem(
 	amount: string,
 	currency: string | undefined,
@@ -479,7 +479,7 @@ export function problem(kind: Kind, value: Value | undefined): string | null {
 			if (!value_object(v)) return 'expected a period';
 			const [a, b] = kind.of === 'date' ? [v['from'], v['to']] : [v['start'], v['end']];
 			if (a === null || a === undefined) return 'needs a start';
-			// empty or inverted periods are refused (rule 68): a date period is inclusive, an instant one closed-open
+			// empty or inverted periods are refused: a date period is inclusive, an instant one closed-open
 			if (
 				b !== null &&
 				b !== undefined &&
@@ -624,7 +624,7 @@ export function likeWhere(
 		: { or: searchable.map((f) => ({ [f]: { like: likePattern(text) } })) };
 }
 /**
- * A picker's read request root layer (`query({ [of]: picker_read(…) })`, §3.6): the target's `search.text` when it declares one, else `like` over the label's text and
+ * A picker's read request root layer (`query({ [of]: picker_read(…) })`): the target's `search.text` when it declares one, else `like` over the label's text and
  * patterned `seq` fields; sorted by `order_by`, else by the first sortable label field (a typed search ranks instead).
  */
 export function picker_read(

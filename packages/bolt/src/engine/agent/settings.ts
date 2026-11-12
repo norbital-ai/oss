@@ -1,4 +1,4 @@
-// The assistant's runtime settings (§5.9): an administrator's monthly spending limits (the workspace's, each member's by
+// The assistant's runtime settings: an administrator's monthly spending limits (the workspace's, each member's by
 // default, and each member's by a policy they hold) and the models members may pick,
 // kept in `sys_config` under `agent` so they change without a source release. A turn refuses once a limit is reached;
 // the model list narrows the picker (one model hides it) and the model a turn runs.

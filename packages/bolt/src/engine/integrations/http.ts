@@ -1,4 +1,4 @@
-// The http driver's request (§2.1, §2.6): what a host's http provider runs for an instance's `ctx.request`. The path
+// The http driver's request: what a host's http provider runs for an instance's `ctx.request`. The path
 // resolves under the definition's base URL (a literal, or a text configuration field) and never leaves it; auth comes
 // from the instance's sealed `credential` fields (bearer, header, basic) or, for a definition declaring `oauth`, its
 // OAuth `token` (refreshed before expiry with that client and written back through the instance's credentials; only a

@@ -1,4 +1,4 @@
-// Erasure (rule 38e, §5.13). What identity owns: the build's erasable-field set and the admission of a model erase
+// Erasure. What identity owns: the build's erasable-field set and the admission of a model erase
 // (admin-only, never routed to approval, `locked` rules).
 // The remove/anonymise statement of a tenant model is the write compiler's generated delete/update without a
 // transform (38e(d)); it consults `judgeErase` first.

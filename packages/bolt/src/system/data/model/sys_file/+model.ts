@@ -1,4 +1,4 @@
-// A stored file (rules 18, 38d): the bytes are the files port's; the row is keyed by the client-minted upload id.
+// A stored file: the bytes are the files port's; the row is keyed by the client-minted upload id.
 // Grantable; a /files upload inserts the row. The storage key stays the engine's.
 import { bind_system_model } from '../../../../decl/model.ts';
 

@@ -1,4 +1,4 @@
-// The http driver's request (§2.6) and an instance's `ctx.request` answer: the path confined under the definition's base
+// The http driver's request and an instance's `ctx.request` answer: the path confined under the definition's base
 // URL before any credential is read, auth from the instance's sealed credential or its OAuth token (refreshed and written
 // back), the public network guard by default, and a 429 / non-2xx / wrong body answered as their facility errors. One
 // guarantee per test.
@@ -97,7 +97,7 @@ const request = (
 			})
 		)
 	);
-describe('the http driver stays inside its base URL (L-BOLT-334)', () => {
+describe('the http driver stays inside its base URL', () => {
 	const api = def({ base_url: 'https://api.example.test/v3', auth: { bearer: 'key' } });
 	let reads = 0;
 	class CountingCredentials extends Map<string, Json> {
@@ -412,7 +412,7 @@ describe('a token endpoint that fails, or a refresh that loses a race', () => {
 			})
 	);
 });
-describe("an instance's ctx.request answer (§2.6)", () => {
+describe("an instance's ctx.request answer", () => {
 	const m: EngineManifest = {
 		...manifest,
 		integrations: {
@@ -572,7 +572,7 @@ describe("an instance's ctx.request answer (§2.6)", () => {
 			})
 	);
 });
-describe('public_fetch: the hardened connector (L-BOLT-366)', () => {
+describe('public_fetch: the hardened connector', () => {
 	const pub: Address[] = [{ address: '93.184.216.34', family: 4 }];
 	const resolve = async (host: string): Promise<readonly Address[]> =>
 		host === 'internal.test' ? [{ address: '10.0.0.5', family: 4 }] : pub;
@@ -728,7 +728,7 @@ describe('public_fetch: the hardened connector (L-BOLT-366)', () => {
 			})
 	);
 	it.effect(
-		"allowLoopback (a dev host) admits this machine's own names over HTTP, never a private network (L-BOLT-366)",
+		"allowLoopback (a dev host) admits this machine's own names over HTTP, never a private network",
 		() =>
 			Effect.gen(function* () {
 				yield* TestClock.setTime(Date.parse('2026-09-25T00:00:00Z'));

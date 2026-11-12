@@ -182,7 +182,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 		}).pipe(Effect.scoped)
 	);
 
-	// engine: authority end to end (rules 13, 14, 35)
+	// engine: authority end to end
 	it.effect(
 		"scopes rows per output, an output fixes its fields, and rep's checks keep its writes in the north",
 		() =>
@@ -283,7 +283,7 @@ layer(workspace, { excludeTestServices: true })('engine', (it) => {
 	);
 
 	it.effect(
-		"lines are their own access point: read through their order's owner, written under rep's lines check (rule 35)",
+		"lines are their own access point: read through their order's owner, written under rep's lines check",
 		() =>
 			Effect.gen(function* () {
 				const t = yield* TestWorkspace;

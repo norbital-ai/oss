@@ -1,4 +1,4 @@
-// engine/live, protocol/wire and the $bolt client without a database: one guarantee per test (rules 32, 64–67).
+// engine/live, protocol/wire and the $bolt client without a database: one guarantee per test.
 import { describe, expect, it } from '@effect/vitest';
 import {
 	Context,
@@ -233,7 +233,7 @@ describe('engine/live connection recovery', () => {
 	);
 });
 
-describe('engine/live: routing on pre- and post-images (rule 65)', () => {
+describe('engine/live: routing on pre- and post-images', () => {
 	it.effect(
 		'coalesces sync metadata refreshes for visible records and retains caller authority',
 		() =>
@@ -463,7 +463,7 @@ describe('engine/live: routing on pre- and post-images (rule 65)', () => {
 	);
 });
 
-describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
+describe('engine/live: deltas from the RETURNING image', () => {
 	const O = (n: number) => `0199a000-0000-7000-8000-00000000000${n}`;
 	const row = (n: number, over: { [k: string]: Json } = {}) =>
 		order({ id: O(n), title: `t${n}`, ...over });
@@ -761,7 +761,7 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 	);
 });
 
-describe('engine/live: a view sorted by a related field (rule 65)', () => {
+describe('engine/live: a view sorted by a related field', () => {
 	const O = (n: number) => `0199a000-0000-7000-8000-00000000000${n}`;
 	const row = (n: number, over: { [k: string]: Json } = {}) =>
 		order({ id: O(n), title: `t${n}`, customer: 'c1', ...over });
@@ -845,7 +845,7 @@ describe('engine/live: a view sorted by a related field (rule 65)', () => {
 	);
 });
 
-describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
+describe('engine/live: registration and budgets', () => {
 	it.effect(
 		'literal time and read requests need no live options; cursor pages remain refused',
 		() =>
@@ -907,7 +907,7 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 	);
 
 	it.effect(
-		'an authority change re-answers; a generation change closes with { release } (rule 66)',
+		'an authority change re-answers; a generation change closes with { release }',
 		() =>
 			Effect.gen(function* () {
 				const { hub, frames, connect, ended } = yield* setup();
@@ -927,7 +927,7 @@ describe('engine/live: registration (rule 64) and budgets (rule 65)', () => {
 	);
 });
 
-describe('protocol/wire (rule 32)', () => {
+describe('protocol/wire', () => {
 	it('maps outcomes to HTTP and gives public and API-key actors codes only', () => {
 		const refused = {
 			kind: 'refused',
@@ -1322,7 +1322,7 @@ describe('$bolt client without a server', () => {
 			})
 	);
 	it.effect(
-		'a refused write paints while in flight and un-paints; a network failure is unknown with the key (rules 32, 67)',
+		'a refused write paints while in flight and un-paints; a network failure is unknown with the key',
 		() =>
 			Effect.gen(function* () {
 				let during = -1,
@@ -1383,7 +1383,7 @@ describe('$bolt client without a server', () => {
 			})
 	);
 	it.effect(
-		'applies patches in lane order, ignores a stale one and re-registers a view a patch does not fit (rule 65)',
+		'applies patches in lane order, ignores a stale one and re-registers a view a patch does not fit',
 		() =>
 			Effect.gen(function* () {
 				const c = yield* client();

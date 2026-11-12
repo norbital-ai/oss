@@ -1,4 +1,4 @@
-// A form's draft as data (§5.10 behaviour, rule 67): what the form is, what it sends, and how an outcome settles it.
+// A form's draft as data: what the form is, what it sends, and how an outcome settles it.
 // Pure, so the Svelte state around it stays a thin shell and every rule here has a test.
 import type { AutomationExposure, ModelExposure } from '../kinds/context.js';
 import type { ChildInput } from '../kinds/context.js';
@@ -146,7 +146,7 @@ export function startValues(
 }
 
 const same = (a: Value | undefined, b: Value | undefined) => equal_json(a ?? null, b ?? null);
-/** Only changed fields are sent (§5.10): a field no one touched never overwrites a concurrent change. */
+/** Only changed fields are sent: a field no one touched never overwrites a concurrent change. */
 export const changed = (base: Row, draft: Row): Record<string, Value> =>
 	Object.fromEntries(Object.entries(draft).filter(([k, v]) => !same(base[k], v)));
 
@@ -198,7 +198,7 @@ type Settled = {
 	errors: Map<string, string>;
 	/** Form-level text: a refusal no field owns, a conflict, an unknown outcome, a held write, or the `run` still writing. */
 	notice: Notice | null;
-	/** Whether the next submit mints a new idempotency key: `unknown` and `running` retry the same invocation (rule 31). */
+	/** Whether the next submit mints a new idempotency key: `unknown` and `running` retry the same invocation. */
 	newKey: boolean;
 };
 export type Notice = { tone: 'info' | 'danger' | 'warning'; text: string; run?: string };

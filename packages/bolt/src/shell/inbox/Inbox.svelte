@@ -1,5 +1,5 @@
 <!--
-	The inbox (§3.8 "where it shows", rule 46): open requests the viewer may decide (a superseder's Approve supersedes),
+	The inbox: open requests the viewer may decide (a superseder's Approve supersedes),
 	and their own requests that ask for changes, in ui's `Table`. Decisions are `bolt.approvals.decide`; the host decides
 	eligibility. Opening a request shows its committed record or native create proposal; saving that record resubmits a
 	request that asks for changes. Notices are the bell's (`Bell.svelte`), not listed here a second time.

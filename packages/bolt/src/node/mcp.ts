@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// The MCP client for same-graph hosts (`McpPort`, rule 63b): the SDK's streamable HTTP client on the current protocol
+// The MCP client for same-graph hosts (`McpPort`): the SDK's streamable HTTP client on the current protocol
 // revision, one per session. The engine resolves each server's URL and credentials from the workspace's secrets; the
 // sessions close with the scope that made the port.
 import { randomUUID } from 'node:crypto';

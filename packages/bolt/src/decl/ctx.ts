@@ -1,4 +1,4 @@
-// What server bodies see (§3.4) and the write shapes they call with (X-24): rows, the one read API `query`, `act`,
+// What server bodies see and the write shapes they call with (X-24): rows, the one read API `query`, `act`,
 // outcomes, and each body's ctx. Every ctx member answers an Effect with typed failures (D8): bodies are generators that
 // `yield*` them. Pages read through the same `query` (`page/page-bolt.ts`).
 import type { Effect } from 'effect';
@@ -81,12 +81,12 @@ export type Paged =
 export type Page<T> = { readonly rows: readonly T[]; readonly next: Cursor | null };
 /** The relations a view nests: the root's declared one-level read layers (`'<C>.<rel>'`). */
 type SelectRel<C> = SubLayer<ReadPath<C>, C & string>;
-/** A model's import key as values; exists only where the model declares `key` (§3.3.9). */
+/** A model's import key as values; exists only where the model declares `key`. */
 export type KeyValues<C> =
 	NamesPart<'models'> extends { [P in C & string]: { key: readonly (infer K)[] } }
 		? { readonly [P in K & string]: ColumnValue<C, P> }
 		: never;
-/** Historical evidence retains its schema version and archived wire values (rule 17). */
+/** Historical evidence retains its schema version and archived wire values. */
 export type Revision = typeof import('../protocol/record-contracts.ts').HistoryRevisionSchema.Type;
 /** A view's list row: the caller row less its heavy fields. */
 export type ListRow<C> = Omit<Row<C>, HeavyField<C>>;
@@ -348,7 +348,7 @@ export interface CallerQuery {
 	): Eff<readonly Revision[], ReadFailed>;
 }
 /**
- * The one read API as the workspace (policy/model callbacks and sync bodies, rule 15): the same shapes as `CallerQuery`,
+ * The one read API as the workspace (policy/model callbacks and sync bodies): the same shapes as `CallerQuery`,
  * answered with every stored row under no grant.
  */
 export type WorkspaceQuery = Pick<CallerQuery, 'query'>;
@@ -453,7 +453,7 @@ export type Keyed<C> =
 	}
 		? true
 		: false;
-// An import matches records by the declared import key (rule 30).
+// An import matches records by the declared import key.
 type Verbs<C, S = ExposureSpecOf<C>> =
 	| (S extends { create: unknown }
 			? | 'create'
@@ -490,7 +490,7 @@ export type ActInput<N> = N extends `${infer C}.${infer V}`
 					? readonly { target: WriteTarget<C> }[]
 					: never
 	: never;
-/** An import's rows and how it meets the stored rows its key matches (rule 30). */
+/** An import's rows and how it meets the stored rows its key matches. */
 export type ImportInput<C> = {
 	readonly rows: readonly CreateInput<C>[];
 	/** `refuse` refuses a row already on file. */
@@ -537,14 +537,14 @@ export type ActMapInput<A extends ActMap> = A & {
 export type ActMapOutput<A extends ActMap> = {
 	readonly [N in keyof A]: ActOutput<N>;
 };
-// ── outcomes (rule 32, §3.3.9) ──
+// ── outcomes ──
 type Stored = AuthoredModelName | SystemModelName;
 /** Nested and erased rows retain their actual stored model, whose discriminator determines the id's brand. */
 type Written = readonly {
 	[C in Stored]: { readonly model: C; readonly id: Id<C>; readonly revision: number };
 }[Stored][];
 /**
- * The engine's own refusal codes (rule 32), beside an authored `refused`: grants, constraints, budgets, rate limits and stale requests.
+ * The engine's own refusal codes, beside an authored `refused`: grants, constraints, budgets, rate limits and stale requests.
  */
 export type PlatformRefusal = Exclude<(typeof REFUSAL_CODES)[number], 'refused'>;
 /**
@@ -552,7 +552,7 @@ export type PlatformRefusal = Exclude<(typeof REFUSAL_CODES)[number], 'refused'>
  * nested rows and erasures included, cascades and derived rollups not) with its new revision.
  */
 export type Committed<O> = { kind: 'committed'; output: O; records: Written };
-/** The write is held for approval (§3.8): `request_id` names the approval request, `records` the held rows. */
+/** The write is held for approval: `request_id` names the approval request, `records` the held rows. */
 export type PendingApproval = {
 	kind: 'pending_approval';
 	request_id: RequestId;
@@ -572,7 +572,7 @@ export type Refused = {
 	field?: string;
 	row?: number;
 	rows?: readonly number[];
-	/** A.2 L-BOLT-043: the write callback that refused (`'<model>.create'`, `'<model>.update'`, `'<model>.delete'`). */
+	/** The write callback that refused (`'<model>.create'`, `'<model>.update'`, `'<model>.delete'`). */
 	rule?: string;
 	data?: { readonly request_id: RequestId };
 };
@@ -584,13 +584,12 @@ export type Conflict = {
 /** The outcome could not be confirmed (a lost connection); `invocation` is the id to look the write up by. */
 export type Unknown = { kind: 'unknown'; invocation: string };
 /**
- * The act outlived the 60 s a person waits (compute model §3): the write continues in the background as run `run`; its
- * row reports the outcome. A page follows it with `bolt.runs('<callable>', { where: { id: { eq: run } }, limit: 1 })`
- * or `<RunStatus automation="<callable>" {run} />`.
+ * The act outlived the 60 s a person waits: the write continues in the background as run `run`; its
+ * row reports the outcome. A page follows it with ui's `<RunStatus {ctx} automation="<callable>" {run} />`.
  */
 export type Running = { kind: 'running'; run: Id<'sys_run'> };
 /**
- * Every result of a write (rule 32): `committed`, `pending_approval`, `refused`, `conflict`, `unknown` or `running`, told
+ * Every result of a write: `committed`, `pending_approval`, `refused`, `conflict`, `unknown` or `running`, told
  * apart by `kind`.
  */
 export type Outcome<O> =
@@ -631,7 +630,7 @@ export interface PolicyCtx<
 	/** The write executes directly. */
 	allow(): Verdict;
 	/**
-	 * The whole batch is refused (rule 32) with a catalogue key; `at` names the row and a root column of it, and the
+	 * The whole batch is refused with a catalogue key; `at` names the row and a root column of it, and the
 	 * message's `{placeholder}` `values`.
 	 */
 	refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, DenyAt<M, V>>): Eff<never, Refusal>;
@@ -677,7 +676,7 @@ export type CreatedRow<M> = Omit<CreateSet<M>, SubLayer<WritePath<M, 'create'>, 
 } & ProposedChildren<M, 'create', M & string>;
 /**
  * One `set` `update.transform` receives and returns: its update tree (the root columns the writer changed and the child
- * layers' changes) and any other writable field it derives, all optional (never an owned child's parent key, rule 41).
+ * layers' changes) and any other writable field it derives, all optional (never an owned child's parent key).
  */
 export type UpdateSet<M> = UpdateInput<M> &
 	Unlisted<M, LayerColumn<M, 'update', M>, OwnedFk<M>> &
@@ -755,7 +754,7 @@ export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
 	 */
 	readonly approving: boolean;
 	/**
-	 * Refuses the whole write (rule 32), `return yield* ctx.refuse(…)`, with a catalogue key: `field` names the field,
+	 * Refuses the whole write, `return yield* ctx.refuse(…)`, with a catalogue key: `field` names the field,
 	 * `row` the index of the offending row in the batch the callback received, `values` the message's placeholders.
 	 */
 	refuse<K extends MessageKey>(

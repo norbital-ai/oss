@@ -1,8 +1,8 @@
-// The MCP servers (rule 63b, P23): declared at `src/agent/mcp/+<n>.mcp.ts`, reached through the host's `Mcp` port,
+// The MCP servers: declared at `src/agent/mcp/+<n>.mcp.ts`, reached through the host's `Mcp` port,
 // authorized by a bearer token or OAuth client credentials the engine resolves from the workspace's secrets (the host
 // holds the client). One session per server per turn; every call is a facility call under the 20 s tool wall. Discovery
 // omits missing or unreachable servers with their typed failure logged; secret-provider failures still fail discovery
-// (rule 69).
+//.
 import { Cache, Config, Effect, Option, Predicate, Redacted, Ref, Result, Scope } from 'effect';
 import { Unavailable } from '../../decl/errors.ts';
 import { Port, type PortFailure } from '../port.ts';

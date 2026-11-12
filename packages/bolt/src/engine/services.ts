@@ -91,7 +91,7 @@ export class Activation extends Context.Service<Activation, ActivationShape>()('
 
 // ── reads (E3) ──
 export type ReadsShape = {
-	/** One batch = one crossing and one pipelined round trip; answers in order (rule 12). */
+	/** One batch = one crossing and one pipelined round trip; answers in order. */
 	readonly run: (
 		batch: readonly ReadIR[],
 		reader: Reader,
@@ -109,7 +109,7 @@ export type PlannedCommit = {
 	readonly lock?:
 		{ readonly tables: readonly string[]; readonly mode: 'SHARE ROW EXCLUSIVE' } | undefined;
 };
-/** How an act is judged and where its commit goes, decided once (H7, F20); no hook-only request fields. */
+/** How an act is judged and where its commit goes, decided once (H7); no hook-only request fields. */
 export type ActMode =
 	/** A caller's act: a page or Form, the agent, an automation's `ctx.act`, a per-record restore. */
 	| { readonly _tag: 'Direct' }
@@ -132,7 +132,7 @@ export type ActMode =
 			/** Pieces after `allp`: the cursor compare-and-set, `sys_sync_row` id map and `$version` stamps, inbox marks. */
 			readonly pieces: (chain: Chain) => void;
 	  }
-	/** A generated verb planned into a batch's `sink`; `pending` rows are readable as refs (rule 36). */
+	/** A generated verb planned into a batch's `sink`; `pending` rows are readable as refs. */
 	| {
 			readonly _tag: 'Record';
 			readonly sink: (planned: PlannedCommit) => void;
@@ -163,7 +163,7 @@ export type ActRequest = {
 	/** Native automation read intent; never supplied by authored callable input. */
 	readonly readGuards?: ReadGuards | undefined;
 };
-/** `v`: the live lane sequence the act replies with (rule 66). */
+/** `v`: the live lane sequence the act replies with. */
 export type ActResult = {
 	/** Only a fresh commit whose native read guards actually ran may consume its capture generation. */
 	readonly readGuardsConsumed?: true;
@@ -232,7 +232,7 @@ export type AutomationRequest = {
 	readonly agent?: { readonly conversation: string };
 };
 /** A re-planned proposal (`guest`: its plan ran guest code), or the outcome that refuses it. */
-/** `error`: the cause behind an `unknown` outcome (a guest throw or budget, rule 72a). */
+/** `error`: the cause behind an `unknown` outcome (a guest throw or budget). */
 export type CallResult = {
 	readonly readGuardsConsumed?: true;
 	readonly outcome: Outcome;
@@ -311,7 +311,7 @@ export class Approvals extends Context.Service<Approvals, ApprovalsShape>()('bol
 // ── decisions (E6) ──
 export type DecisionUse = 'triage' | 'filter' | 'author';
 export type DecisionsShape = {
-	/** One `sys_1` call: one `decision.made` event (§5.12). */
+	/** One `sys_1` call: one `decision.made` event. */
 	readonly decide: (
 		use: DecisionUse,
 		request: DecisionRequest
@@ -409,7 +409,7 @@ export class RunHandlers extends Context.Service<RunHandlers, RunHandlersShape>(
 
 export type RunsShape = {
 	/**
-	 * A generation's recovery (rule 52a), run as it activates: the runs the previous one left `running` rerun (up to 3
+	 * A generation's recovery, run as it activates: the runs the previous one left `running` rerun (up to 3
 	 * leases), or fail `cpu_budget` with `overran` when it stopped past a unit's CPU budget; then `settle`.
 	 */
 	readonly boot: (overran?: string) => Effect.Effect<readonly string[], EngineError>;
@@ -423,7 +423,7 @@ export type RunsShape = {
 		authority: Authority,
 		id: string
 	) => Effect.Effect<Option.Option<RunView>, EngineError>;
-	/** Stops a queued or running run for a viewer who reads it in full (rule 56). */
+	/** Stops a queued or running run for a viewer who reads it in full. */
 	readonly stop: (
 		authority: Authority,
 		id: string
@@ -435,7 +435,7 @@ export type RunsShape = {
 };
 export class Runs extends Context.Service<Runs, RunsShape>()('bolt/Runs') {}
 
-/** This activation's deadline scope (rule 52a): one next-due instant held by the host. */
+/** This activation's deadline scope: one next-due instant held by the host. */
 export type DeadlinesShape = {
 	readonly announce: (notLaterThan: string) => Effect.Effect<void>;
 	readonly settle: (nextDue: string | null) => Effect.Effect<void>;
@@ -455,7 +455,7 @@ export class RunEnds extends Context.Service<RunEnds, PubSub.PubSub<readonly str
 
 // ── conversations, envoys, turns (E11) ──
 export type ConversationsShape = {
-	/** Inbound messages and delivery reports an instance's link hands over (§4.5). */
+	/** Inbound messages and delivery reports an instance's link hands over. */
 	readonly receive: (
 		instance: string,
 		event: Exclude<DriverEvent, { kind: 'invalidate' }>,
@@ -486,7 +486,7 @@ export class Conversations extends Context.Service<Conversations, ConversationsS
 ) {}
 
 export type EnvoysShape = {
-	/** The admission run of one inbound message (FINAL §4.3). */
+	/** The admission run of one inbound message. */
 	readonly admit: (input: Json) => Effect.Effect<Json, EngineError>;
 	readonly drain: (
 		conversation: string
@@ -506,7 +506,7 @@ export type TurnsShape = {
 		conversation: string,
 		via: TurnVia
 	) => Effect.Effect<{ readonly ran: boolean }, EngineError>;
-	/** Releases a conversation held by triage (rule 60a). */
+	/** Releases a conversation held by triage. */
 	readonly release: (conversation: string) => Effect.Effect<void, EngineError>;
 };
 export class Turns extends Context.Service<Turns, TurnsShape>()('bolt/Turns') {}
@@ -629,7 +629,7 @@ export type LinksShape = {
 		to: string,
 		on: boolean
 	) => Effect.Effect<void, FacilityFailure | Unavailable>;
-	/** A link's durable status onto the instance row, when it changed (§3). */
+	/** A link's durable status onto the instance row, when it changed. */
 	readonly status: (
 		instance: string,
 		patch: { readonly [key: string]: Json }
@@ -663,19 +663,19 @@ export type OutboundShape = {
 		provider_id: string,
 		report: DeliveryReport
 	) => Effect.Effect<void, EngineError>;
-	/** Records the environment's epoch (rule 61). */
+	/** Records the environment's epoch. */
 	readonly activate: Effect.Effect<void, EngineError>;
 	readonly handlers: { readonly [name: string]: RunHandler };
 };
 export class Outbound extends Context.Service<Outbound, OutboundShape>()('bolt/Outbound') {}
 
 // ── guest crossings (E4) ──
-/** Bytes of a crossing ride `bins`, referenced from `args` as `{ "$bin": n }` (§5.8.1). */
+/** Bytes of a crossing ride `bins`, referenced from `args` as `{ "$bin": n }`. */
 type Bins = { readonly bins?: readonly Uint8Array[] | undefined };
 /** One facility member's call; E4's `lower()` decodes `args` per member. */
 type FacilityArm<T extends string> = { readonly _tag: T; readonly args: readonly Json[] } & Bins;
 export type FacilityCall = { [K in FacilityMember]: FacilityArm<K> }[FacilityMember];
-/** A guest request to the host, decoded once at the crossing (M2); calls issued before the microtask queue drains cross together (rule 12). */
+/** A guest request to the host, decoded once at the crossing (M2); calls issued before the microtask queue drains cross together. */
 export type CrossCall =
 	| { readonly _tag: 'run'; readonly automation: string; readonly input: Json }
 	| {
@@ -735,7 +735,7 @@ export type InvocationEvents = {
 	) => Effect.Effect<void>;
 };
 export type TelemetryShape = {
-	/** One invocation's events (§5.12), each written to the host's runtime log as it happens. */
+	/** One invocation's events, each written to the host's runtime log as it happens. */
 	readonly open: (ids: EventIds) => Effect.Effect<InvocationEvents, never, Scope.Scope>;
 };
 export class Telemetry extends Context.Service<Telemetry, TelemetryShape>()('bolt/Telemetry') {}

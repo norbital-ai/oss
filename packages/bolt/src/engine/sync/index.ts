@@ -1,5 +1,5 @@
 import { uuid } from '../port.ts';
-// Syncs (spec §3): a model's rows exchanged with another system through an integration instance. A remote sync's
+// Syncs: a model's rows exchanged with another system through an integration instance. A remote sync's
 // author writes at most two guest bodies — `read` (their rows → the model's) and `write` (one committed change → a call
 // to them) — and the engine owns the rest in the tenant's own Postgres: the read run (`read.ts`: one act per page with
 // its cursor, id map and `$version` guard in the same statement), the webhook inbox (`hint.ts`: verified deliveries

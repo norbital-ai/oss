@@ -1,6 +1,6 @@
 <!--
-	The command center's Automations (rule 48): every run, newest first, with who or what triggered it, in ui's `Table` (search, filter and sort, CSV), the live
-	`runs` read (a `sys_run` change re-answers it; only an open running run's log polls). A queued or running run has Stop (rule 56); a failed or stopped one has Retry, a new run
+	The command center's Automations: every run, newest first, with who or what triggered it, in ui's `Table` (search, filter and sort, CSV), the live
+	`runs` read (a `sys_run` change re-answers it; only an open running run's log polls). A queued or running run has Stop; a failed or stopped one has Retry, a new run
 	of its automation with the same input. Run now starts any automation the member may start that needs no input. Opening a row shows the run as `runs.view` redacts it (`?run=<id>`), read once again whenever that run's live row
 	changes.
 -->

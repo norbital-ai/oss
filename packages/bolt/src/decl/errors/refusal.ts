@@ -18,7 +18,7 @@ export const message_text = (
 	);
 
 /**
- * What `ctx.refuse` fails with (rule 32): `message` is a catalogue key, `values` its placeholders, `field` names a
+ * What `ctx.refuse` fails with: `message` is a catalogue key, `values` its placeholders, `field` names a
  * field, and `row` the index of the offending row in the batch or list the body received. Bodies refuse through
  * `ctx.refuse`, never by constructing it. The engine renders the key with the workspace catalogue.
  */

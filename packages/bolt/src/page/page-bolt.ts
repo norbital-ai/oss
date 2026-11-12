@@ -1,7 +1,7 @@
 // The typed operations on a page context use the same names, rows and inputs as server code. A read is `query` (and
 // `aggregate`, `history`), the same name and arguments as server code's `ctx.query`, answering a `Query<T>`: live where a
 // component reads it, one read where it is awaited outside one, and an Effect to `yield*`. Acts, starts, uploads, record
-// capabilities, conversions, approval decisions and the session are Effects failing with the D3 tags; `clock`, `file_url`,
+// capabilities, conversions, approval decisions and the session are Effects failing with typed tags; `clock`, `file_url`,
 // `t` and `actor` stay plain. Pages run Effects on the ui edge (`run`, `fork`, `attach` from `@norbital-ai/ui/effect`).
 import type { Effect } from 'effect';
 import type { FileUrlOptions } from '@norbital-ai/std/kind';
@@ -49,7 +49,7 @@ import type { RecordCapabilities, RecordParentContext } from '../protocol/record
 import type { WireRead } from '../protocol/wire.ts';
 
 /**
- * A page's read (`bolt.query`, `bolt.aggregate`, `bolt.history`). Read in a component (`.current`, `.loading`, `.error`,
+ * A page's read (`ctx.query`, `ctx.aggregate`, `ctx.history`). Read in a component (`.current`, `.loading`, `.error`,
  * or `await` inside `$derived` or markup), it is live: it subscribes on the first reactive read and unsubscribes 30 s after
  * its last reader is destroyed, and identical calls share one subscription. Awaited outside a reactive context (a click
  * handler), it reads once. It is also an Effect, so it `yield*`s in a page's Effect code. `read` is its wire form.
@@ -66,7 +66,7 @@ export interface Query<out T>
 }
 /**
  * A caller-authorized write: committed output, a held approval proposal, or `running` (the write outlived the person-wait
- * and continues as a run, followed through `bolt.runs`) succeeds; refusal, conflict and uncertain settlement are typed
+ * and continues as a run, followed with ui's `RunStatus`) succeeds; refusal, conflict and uncertain settlement are typed
  * failures.
  */
 type PageAct<O> = Effect.Effect<
@@ -104,7 +104,7 @@ type ApprovalFilter = {
 	all?: boolean;
 };
 
-/** The typed members of a page context (§3.5); a page reads and acts as its viewer, so rows are caller rows. */
+/** The typed members of a page context; a page reads and acts as its viewer, so rows are caller rows. */
 export interface PageBolt {
 	/** Re-reads mounted queries, surfaces read failures, and waits for their subscribers to receive the answers. */
 	refresh(): Effect.Effect<void, ReadFailed | TransportFailed>;
@@ -116,7 +116,7 @@ export interface PageBolt {
 	 * @returns A Query whose current value is initially undefined; each root contains its own page or aggregate.
 	 * @see Query
 	 * @example
-	 * const orders = bolt.query({
+	 * const orders = ctx.query({
 	 * 	orders: { where: { status: { eq: 'issued' } }, fields: ['number', 'total'], order_by: 'due_on', limit: 100,
 	 * 		party: { fields: ['name'] }, lines: { fields: ['quantity', 'net'] } }
 	 * });
@@ -127,7 +127,7 @@ export interface PageBolt {
 		model: Is<C, ReadableName>,
 		args: Measures<C> & { by?: never }
 	): Query<AggRow<C>>;
-	/** With `by`, a page of buckets (rule 9), each keyed by its bucket values. */
+	/** With `by`, a page of buckets, each keyed by its bucket values. */
 	aggregate<C extends string, const B extends Bucket<C> | readonly Bucket<C>[]>(
 		model: Is<C, ReadableName>,
 		args: Measures<C> & { by: B } & Paged
@@ -204,9 +204,9 @@ export interface PageBolt {
 	/** A message of `+messages.ts` in the page's locale, `{name}` placeholders filled from `vars`. */
 	t(key: MessageKey, vars?: { readonly [name: string]: string | number }): string;
 	/**
-	 * On-page sign-in (§5.11.2): `send_code` texts or emails a six-digit code, `verify` proves it, signs the viewer in — a
+	 * On-page sign-in: `send_code` texts or emails a six-digit code, `verify` proves it, signs the viewer in — a
 	 * newcomer joins where the workspace declares `signup` — and reloads the page as them. A refusal is a `Refusal`. ui's
-	 * `<PhoneVerify session={bolt.session} />` is the whole control.
+	 * `<PhoneVerify {ctx} session={ctx.session} />` is the whole control.
 	 */
 	session: {
 		send_code(address: string): PageCall<void, Refusal>;

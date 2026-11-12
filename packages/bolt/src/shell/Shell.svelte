@@ -1,5 +1,5 @@
 <!--
-	The workspace shell (§5.10): boots the caller, routes the URL, and renders a page inside the sidebar shell, or
+	The workspace shell: boots the caller, routes the URL, and renders a page inside the sidebar shell, or
 	a visitor page with no chrome, or the sign-in and invitation pages. The shell creates the page context from the boot
 	before any page chunk loads.
 -->
@@ -322,7 +322,7 @@
 	const commandTabs = $derived(
 		boot === null ? [] : command_center_tabs(boot.surfaces, boot.admin, previewEnv)
 	);
-	// the record-sheet stack (rule 10): every `?record=`, the last on top
+	// the record-sheet stack: every `?record=`, the last on top
 	const records = $derived(records_of(url));
 	// a `portal: true` page or any kiosk page renders alone: no sidebar, banner, tabs, finder or agent; the way out is the URL bar
 	// the device access the open app declares (`requires`); its pages wait behind the wall until it is granted
@@ -642,7 +642,7 @@
 		if (agentRequest === null) agent.open();
 		else agent.close();
 	}
-	// L-BOLT-499: the live link's state; `closed` means a release closed it: it comes back, and another client reloads
+	// the live link's state; `closed` means a release closed it: it comes back, and another client reloads
 	let sync = $state<SyncStatus>('idle');
 	// a release cutover holds the host closed for seconds: requests wait it out, and one notice says why
 	let waitingOutUpdate = $state(false);
@@ -821,7 +821,7 @@
 		{:else if unloadable.has(pageKey)}
 			{@const cause = unloadable.get(pageKey)}
 			<span hidden {@attach initialPageMounted}></span>
-			<!-- a page chunk that fails to load says which page and why (final-ui §7.2, L-BOLT-515) -->
+			<!-- a page chunk that fails to load says which page and why -->
 			<Center
 				><p role="alert">
 					{t('The page {page} could not be loaded:').replace('{page}', pageKey)}

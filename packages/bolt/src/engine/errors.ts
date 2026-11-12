@@ -1,5 +1,5 @@
-// Engine failures (D3, rule 72a). `BoltError` carries a literal `code`; a separate tag exists only where code branches
-// on it. `CODE` is the one table of each code's wire status and retry class (rule 54); `is_transient` reads it.
+// Engine failures (D3). `BoltError` carries a literal `code`; a separate tag exists only where code branches
+// on it. `CODE` is the one table of each code's wire status and retry class; `is_transient` reads it.
 import { Match, Option, Schema } from 'effect';
 import { FACILITY_KINDS } from '../decl/errors/facility.ts';
 import type { AgentRefusal } from './agent/schema.ts';
@@ -18,7 +18,7 @@ type DbErrorProps = Schema.Struct.MakeIn<typeof DbErrorFields>;
 type DbErrorArgs =
 	| [sqlstate: string, message: string, constraint?: string, column?: string]
 	| [props: DbErrorProps, options?: Schema.MakeOptions];
-/** What a Postgres adapter fails with: the SQLSTATE and constraint the write compiler maps to a refusal (rule 20). */
+/** What a Postgres adapter fails with: the SQLSTATE and constraint the write compiler maps to a refusal. */
 export class DbError extends Schema.TaggedError<DbError>()('DbError', DbErrorFields) {
 	static override make(
 		...args: [sqlstate: string, message: string, constraint?: string, column?: string]
@@ -35,7 +35,7 @@ const isDbProps = (
 	args: DbErrorArgs
 ): args is [props: DbErrorProps, options?: Schema.MakeOptions] => typeof args[0] !== 'string';
 
-/** The write lost a race: another write changed the named fields of these records since they were read (rule 25). */
+/** The write lost a race: another write changed the named fields of these records since they were read. */
 export class Conflict extends Schema.TaggedError<Conflict>()('Conflict', {
 	records: Schema.Array(
 		Schema.Struct({
@@ -50,9 +50,9 @@ export class Fenced extends Schema.TaggedError<Fenced>()('Fenced', {
 	instance: Schema.String,
 	message: Schema.String
 }) {}
-/** The work's generation is draining (rule 71a). */
+/** The work's generation is draining. */
 export class Interrupted extends Schema.TaggedError<Interrupted>()('Interrupted', {}) {}
-/** The database refused a serializable commit; the admitted attempt is replanned once (rule 26). */
+/** The database refused a serializable commit; the admitted attempt is replanned once. */
 export class SerializationReplay extends Schema.TaggedError<SerializationReplay>()(
 	'SerializationReplay',
 	{}
@@ -71,7 +71,7 @@ export const IDENTITY_REFUSALS = [
 	'upstream',
 	'timeout'
 ] as const;
-/** A sign-in, session or member operation refused (§5.11): the shell answers `code`, `message` and `retry-after`. */
+/** A sign-in, session or member operation refused: the shell answers `code`, `message` and `retry-after`. */
 export class IdentityRefusal extends Schema.TaggedError<IdentityRefusal>()('IdentityRefusal', {
 	code: Schema.Literals(IDENTITY_REFUSALS),
 	message: Schema.String,

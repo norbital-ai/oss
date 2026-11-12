@@ -53,7 +53,7 @@ const manifest = Result.getOrThrow(
 				record_label: 'record.text',
 				fields: { text: { kind: 'text' } }
 			},
-			// rule 38d: the careers recipe (§6.3)
+			// the careers recipe
 			openings: {
 				description: 'Roles',
 				record_label: 'record.title',
@@ -610,7 +610,7 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 				})
 		);
 
-		// rule 38d on the same workspace: a public visitor of the careers app
+		// on the same workspace: a public visitor of the careers app
 		it.effect(
 			'lists open roles through its narrow output only, applies to an open role, and nothing else',
 			() =>
@@ -715,7 +715,7 @@ layer(Layer.effect(Fx, fixture({ db: interceptedDb })), { excludeTestServices: t
 	}
 );
 
-describe('refusal messages by actor (rule 32)', () => {
+describe('refusal messages by actor', () => {
 	it('public and API-key actors receive codes only', () => {
 		const no: Outcome = {
 			kind: 'refused',

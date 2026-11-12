@@ -1,4 +1,4 @@
-// The product's feature colours (brand, final-ui §7.4 id 746): one hue per platform feature, for its icon tile, its
+// The product's feature colours (brand): one hue per platform feature, for its icon tile, its
 // icon and its accent chip. Class strings are literal so Tailwind's scan of this package generates them.
 import { ENTITY_ICONS } from '../primitives/icon/entity-icons.js';
 

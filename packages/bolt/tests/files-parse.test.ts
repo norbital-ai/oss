@@ -1,4 +1,4 @@
-// engine/files/parse.ts, pure: a file sync's built-in parsers (spec §3.3) and which parser an upload is read with.
+// engine/files/parse.ts, pure: a file sync's built-in parsers and which parser an upload is read with.
 import { describe, expect, it } from '@effect/vitest';
 import { csv_of } from '@norbital-ai/std/csv';
 import type { Fields } from '@norbital-ai/std/kind';

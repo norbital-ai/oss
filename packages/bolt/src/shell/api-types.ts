@@ -1,6 +1,6 @@
 // The shell routes' client (`shell_api`, B.2) as Effects (D9): each member answers its value or fails with `ShellError`,
 // today's `Answer<T>` refusal (the wire error, its HTTP status, and on a signed-out boot the workspace the access pages
-// show). Agent acts answer their `Outcome`: a refusal there is a business answer the panel renders (rule 32). Pinned for
+// show). Agent acts answer their `Outcome`: a refusal there is a business answer the panel renders. Pinned for
 // R6a (the implementation in `runtime.ts`) and R6b (the Svelte components that run it on the ui edge).
 import { Schema, type Effect } from 'effect';
 import type { FileRef } from '@norbital-ai/std/kind';
@@ -109,7 +109,7 @@ export const InstanceMessage = Schema.Struct({
 	files: Schema.Number,
 	status: Schema.NullOr(Schema.String),
 	error: Schema.NullOr(Schema.String),
-	/** Outbound: the delivery timeline (§5.9), oldest first; `[]` inbound. */
+	/** Outbound: the delivery timeline, oldest first; `[]` inbound. */
 	delivery: Schema.Array(
 		Schema.Struct({
 			kind: Schema.Literals([
@@ -697,13 +697,13 @@ export type ShellApi = {
 	studio_inspect(input: StudioInspectInput): Call<StudioInspection>;
 	/** Rule 39: a member id, `{ team }`, or `null` to end the preview. */
 	preview(target: string | { team: string } | null): Call<void>;
-	/** `access.explain` (L-BOLT-234): the caller's own Authority, or (administrators) a member's or team's. */
+	/** `access.explain`: the caller's own Authority, or (administrators) a member's or team's. */
 	explain(target?: { user: string } | { team: string }): Call<Json>;
 	push(body: PushBody): Call<void>;
 	agent: {
 		start(title?: string, model?: string): AgentAct;
 		models(): Call<typeof AgentModels.Type>;
-		/** `mode`: the composer's `/plan` or `/compact` (§5.9). */
+		/** `mode`: the composer's `/plan` or `/compact`. */
 		post(
 			conversation: string,
 			text: string,

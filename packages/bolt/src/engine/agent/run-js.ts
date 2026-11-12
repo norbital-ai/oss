@@ -1,4 +1,4 @@
-// `run_js` (compute model §3, "Agents' scripts" and "Running a file"): an agent's JavaScript, run in a fresh guest
+// `run_js` ("Agents' scripts" and "Running a file"): an agent's JavaScript, run in a fresh guest
 // isolate through `GuestIsolates`, never in the cell. Inline code is the body of one async function whose only
 // crossing is `http`. A file is a skill's or a repository reference's script run as written (a reference's never has
 // `fetch`): the host's confined bundler makes its tree one module
@@ -472,7 +472,7 @@ export const runJs = Effect.fn('Agents.runJs')(function* (run: RunJs) {
 });
 
 /**
- * A repository reference (compute model §3, "Agents' files"): the host's `reference` tool keeps this index as the
+ * A repository reference ("Agents' files"): the host's `reference` tool keeps this index as the
  * person's output file, named `<repository>@<commit>`, and a file run reads its tree from it. Each text file is a blob
  * by its content address. A run reads the whole tree, so a reference over `treeBytes` runs no file.
  */

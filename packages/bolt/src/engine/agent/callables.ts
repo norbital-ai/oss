@@ -167,7 +167,7 @@ export const agentCallables = Effect.gen(function* () {
 						return committed({ id: row.id });
 					}
 				}
-				// rule 60: a message that arrives while the turn runs steers: queued at once, claimed at its next step, never held
+				// a message that arrives while the turn runs steers: queued at once, claimed at its next step, never held
 				if (
 					input.mode !== 'compact' &&
 					input.question === undefined &&

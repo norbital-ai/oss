@@ -1,6 +1,6 @@
 import { with_envoys } from './support/envoys.ts';
 import { with_accounts } from './support/accounts.ts';
-// The agent UI's engine half (§5.9): a conversation uses durable agent settings; a failed turn's log
+// The agent UI's engine half: a conversation uses durable agent settings; a failed turn's log
 // line and staff row name the real reason; `set_agent`, `file` and `mark_read` over `/__bolt/act`; staff
 // list the envoy conversations with an unread mark; `read_file` reads an xlsx into std/sheet's cells.
 import { deflateRawSync } from 'node:zlib';
