@@ -173,7 +173,7 @@ it.effect('keeps implementation guidance and parameter documentation on the core
 		.symbol('bolt/page', 'PageBolt')
 		?.members?.find((member) => member.name === 'query');
 	expect(query?.docs).toContain('@returns');
-	expect(query?.examples?.[0]).toContain('bolt.query');
+	expect(query?.examples?.[0]).toContain('ctx.query');
 }));
 
 it.effect('svelte components list their props with the props docs', () => Effect.gen(function* () {
