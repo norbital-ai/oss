@@ -9,6 +9,7 @@ import { is_transient } from '../src/engine/errors.ts';
 import { BoltError, type Code } from '../src/protocol/errors.ts';
 import { due_at } from '../src/engine/runs/time.ts';
 import { in_process_deadlines } from '../src/engine/runs/deadlines.ts';
+import { retriable } from '../src/engine/runs/executor.ts';
 import { verifySignature, type WebhookRequest } from '../src/engine/integrations/webhook.ts';
 import type { WebhookScheme } from '../src/decl/runtime/integration.ts';
 
@@ -292,6 +293,13 @@ describe('attempts (rule 54)', () => {
 	const failed = (code: Code, message = '') => ({
 		kind: 'failed' as const,
 		error: BoltError.make(code, 'guest', message)
+	});
+	it('a write that lost a race retries though the guest settles it as a refusal; any other refusal is final', () => {
+		expect(retriable({ kind: 'refused', code: 'conflict', message: 'raced' })).toBe(true);
+		expect(retriable({ kind: 'refused', code: 'unique', message: 'taken' })).toBe(false);
+		expect(retriable({ kind: 'refused', message: 'no' })).toBe(false);
+		expect(retriable(failed('upstream', '502'))).toBe(true);
+		expect(retriable({ kind: 'ok', output: null })).toBe(false);
 	});
 	it('only Transient retries: facility upstream, timeout, rateLimited and an act conflict, thrown or coded', () => {
 		expect(is_transient(failed('upstream', '502').error)).toBe(true);

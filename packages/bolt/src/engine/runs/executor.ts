@@ -30,6 +30,15 @@ import { effectOf } from './queue.ts';
 import { runPiece, type Row } from './rows.ts';
 import { duration, due_at, iso } from './time.ts';
 
+/**
+ * Rule 54: a run retries a transient failure and a write that lost a race. The guest settles an act conflict as a
+ * refusal with code `conflict`, so that one is read off the refusal.
+ */
+export const retriable = (outcome: GuestOutcome): boolean =>
+	outcome.kind === 'failed'
+		? is_transient(outcome.error)
+		: outcome.kind === 'refused' && outcome.code === 'conflict';
+
 /** A model effect's run: the writer's authority (`sys_run.starter`), retried 3 times; it holds no policy of its own. */
 const EFFECT: Pick<AutomationSpec, 'description' | 'retry' | 'input' | 'output'> = {
 	description: 'A model effect.',
@@ -102,10 +111,7 @@ export const makeRunExecutor = Effect.fn('Runs.executor')(function* (
 	) {
 		const platformRetry = yield* registry.retry(head.automation),
 			policy = spec?.retry ?? Option.getOrUndefined(platformRetry);
-		const retry =
-			outcome.kind === 'failed' &&
-			is_transient(outcome.error) &&
-			head.attempts < (policy?.attempts ?? 1);
+		const retry = retriable(outcome) && head.attempts < (policy?.attempts ?? 1);
 		const at = yield* Clock.currentTimeMillis,
 			jitter = 0.5 + (yield* Random.next);
 		const wait = retryDelay(head.attempts, duration(policy?.backoff ?? '10s'), 3_600_000, jitter),
