@@ -354,6 +354,30 @@ bind_model('data_case')({
 	// @ts-expect-error M19 a check comparing an int to a date field
 	constraints: { c: { check: { a: { lte: { field: 'd' } } } } }
 });
+// a constraint's message is a catalogue key without placeholders
+bind_model('data_case')({
+	description: 'x',
+	record_label: 'record.a',
+	fields: { a: { kind: 'int' } },
+	constraints: {
+		c: { check: { a: { gte: 0 } }, message: 'errors.refused' },
+		u: { unique: ['a'], message: 'errors.refused' }
+	}
+});
+bind_model('data_case')({
+	description: 'x',
+	record_label: 'record.a',
+	fields: { a: { kind: 'int' } },
+	// @ts-expect-error M27 a constraint message that is no catalogue key
+	constraints: { c: { check: { a: { gte: 0 } }, message: 'Must be positive.' } }
+});
+bind_model('data_case')({
+	description: 'x',
+	record_label: 'record.a',
+	fields: { a: { kind: 'int' } },
+	// @ts-expect-error M28 a constraint message with placeholders it cannot fill
+	constraints: { c: { check: { a: { gte: 0 } }, message: 'errors.short' } }
+});
 bind_model('data_case')({
 	description: 'x',
 	record_label: 'record.a',
@@ -544,6 +568,24 @@ bind_model('orders')({
 		yield* ctx.notify({ title: 't', to: [{ user: 'customer' }] });
 	} }
 });
+bind_model('orders')({
+	...m.orders.spec,
+	delete: {
+		// @ts-expect-error C19 a delete transform returns no sets
+		transform: function* (changes) {
+			return { sets: changes.map(({ before }) => before) };
+		}
+	}
+});
+bind_model('orders')({
+	...m.orders.spec,
+	delete: {
+		// @ts-expect-error C20 a delete transform returns no replacement rows
+		transform: function* (changes) {
+			return changes.map(({ before }) => before);
+		}
+	}
+});
 // @ts-expect-error C18 an unknown model option
 bind_model('orders')({ ...m.orders.spec, hooks: {} });
 
@@ -560,10 +602,19 @@ bind_model('orders')({
 			);
 		}
 	},
-	delete: { effect: function* (changes, ctx) {
-		if (changes.some(({ before }) => before.status === 'ordered'))
-			yield* ctx.notify({ title: 'Ordered order removed', to: [{ team: 'finance' }] });
-	} },
+	delete: {
+		// a delete carries what it posts into its own commit; it never returns rows
+		transform: function* (changes, ctx) {
+			if (changes.some(({ before }) => before.status === 'ordered'))
+				return yield* ctx.refuse('errors.refused', { row: 0 });
+			if (changes.length === 0) return;
+			return { with: { customers: { create: changes.map(({ before }) => ({ name: before.id })) } } };
+		},
+		effect: function* (changes, ctx) {
+			if (changes.some(({ before }) => before.status === 'ordered'))
+				yield* ctx.notify({ title: 'Ordered order removed', to: [{ team: 'finance' }] });
+		}
+	},
 	indexes: {
 		...m.orders.spec.indexes,
 		by_colour: {

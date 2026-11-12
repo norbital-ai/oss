@@ -18,7 +18,7 @@ import { RATE_LIMITED } from '../../protocol/wire.ts';
 import { copiedSql, db_error, inline } from '../db/wire.ts';
 import { composable } from '../query/reader.ts';
 import { BoltError } from '../../protocol/errors.ts';
-import { refusalOf } from '../schema/refusal.ts';
+import { refusalOf, type RuleMeta } from '../schema/refusal.ts';
 import { noticePiece } from '../notifications/queue.ts';
 
 /** The idempotency gate's condition (rule 20): every data-modifying piece reads its rows through it. */
@@ -188,7 +188,7 @@ export function rate(
 
 // ── SQLSTATE → outcome (rule 20 "Postgres-decided outcomes"): the schema area's map, plus `bolt_assert`'s codes ──
 type Decided = { outcome: Outcome; record: boolean; replay: boolean };
-export function decided(e: unknown, constraints: ReadonlyMap<string, ConstraintMeta>): Decided {
+export function decided(e: unknown, constraints: ReadonlyMap<string, RuleMeta>): Decided {
 	if (!(e instanceof DbError)) throw e;
 	if (e.sqlstate === 'BA001') {
 		// `bolt_assert` raises `<code> <detail>`: the DbError contract carries the message, not Postgres's DETAIL
@@ -252,7 +252,7 @@ export function decided(e: unknown, constraints: ReadonlyMap<string, ConstraintM
 		: { outcome: r, record: true, replay: false };
 }
 /** The native Effect boundary for SQL decisions, retaining typed Bolt failures and the original bug context. */
-export const decideError = (error: unknown, constraints: ReadonlyMap<string, ConstraintMeta>) =>
+export const decideError = (error: unknown, constraints: ReadonlyMap<string, RuleMeta>) =>
 	Effect.try({
 		try: () => decided(error, constraints),
 		catch: (cause) => cause instanceof BoltError ? cause : BoltError.make('bug', 'commit', String(cause), cause)

@@ -175,6 +175,7 @@ export function bodyPath(kind: InvocationKind, target: string): string[] {
 	switch (kind) {
 		case 'create':
 		case 'update':
+		case 'delete':
 			return ['model', target, 'bodies', kind];
 		case 'vector':
 		case 'probe':
@@ -334,7 +335,7 @@ const run = (
 								// A write transform returns the expanded change set, including owned rows. Its
 								// existing change-set bound applies; ordinary results and call arguments stay bounded.
 								const resultBytes =
-									invocation.kind === 'create' || invocation.kind === 'update'
+									invocation.kind === 'create' || invocation.kind === 'update' || invocation.kind === 'delete'
 										? limits.change_set_bytes
 										: limits.args_bytes;
 								if (byteLength(final[1]) > resultBytes)

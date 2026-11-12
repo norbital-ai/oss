@@ -243,6 +243,7 @@ export type Authority = {
 export type InvocationKind =
 	| 'create'
 	| 'update'
+	| 'delete'
 	| 'vector'
 	| 'probe'
 	| 'rerank'
@@ -257,7 +258,7 @@ export type InvocationKind =
 	| 'validation'
 	| 'tool';
 /**
- * One fresh-isolate run of one body. `target` names it: `'<model>'` (create/update transforms),
+ * One fresh-isolate run of one body. `target` names it: `'<model>'` (create/update/delete transforms),
  * `'<model>.<index>'` (`vector`, `probe`, `rerank`), `'<model>.<sync>'` (`syncRead`, `syncWrite`),
  * `'<model>.<sync>.<media type>'` (`parse`), `'<policy>.<model>.<op>'` (`policy`: a write grant's verdict, answering a
  * `VerdictData`), `'<a>'` (automation), `'<model>.effect.<verb>'` (effect), or `'<app>/<page>'` (page).

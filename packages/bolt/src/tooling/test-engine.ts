@@ -324,7 +324,7 @@ type TestPorts =
 type TestEngineOptions<P extends TestPorts> = {
 	manifest: EngineManifest;
 	guest?: GuestProgram | undefined;
-	/** The write callbacks the guest carries per verb: `'<model>.create'`, `'<model>.update'`. */
+	/** The write callbacks the guest carries per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`. */
 	transforms?: Iterable<string> | undefined;
 	/** A release verified by read_artifact; public HTTP requests execute its isolated server programs. */
 	artifact?: Artifact | undefined;
@@ -715,27 +715,16 @@ function markedTransforms(manifest: EngineManifest, names: ReadonlySet<string>):
 			model = name.slice(0, dot),
 			verb = name.slice(dot + 1),
 			spec = exposures[model];
-		if (dot < 1 || (verb !== 'create' && verb !== 'update'))
+		if (dot < 1 || (verb !== 'create' && verb !== 'update' && verb !== 'delete'))
 			throw new KitInvalid({
-				message: `TestWorkspace transform '${name}' must name '<model>.create' or '<model>.update'.`
+				message: `TestWorkspace transform '${name}' must name '<model>.create', '<model>.update' or '<model>.delete'.`
 			});
-		if (spec === undefined)
+		const declared = spec?.[verb];
+		if (spec === undefined || declared === undefined)
 			throw new KitInvalid({
 				message: `TestWorkspace transform '${name}' has no declared write verb.`
 			});
-		if (verb === 'create') {
-			if (spec.create === undefined)
-				throw new KitInvalid({
-					message: `TestWorkspace transform '${name}' has no declared write verb.`
-				});
-			exposures[model] = { ...spec, create: { ...spec.create, transform: true } };
-		} else {
-			if (spec.update === undefined)
-				throw new KitInvalid({
-					message: `TestWorkspace transform '${name}' has no declared write verb.`
-				});
-			exposures[model] = { ...spec, update: { ...spec.update, transform: true } };
-		}
+		exposures[model] = { ...spec, [verb]: { ...declared, transform: true } };
 	}
 	return { ...manifest, exposures };
 }

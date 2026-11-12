@@ -711,6 +711,11 @@ export type CarriedWrites = {
 export type Carried = { readonly with?: CarriedWrites; readonly on_approved?: CarriedWrites };
 /** What create/update transforms return: their sets in order, optionally with carried writes. */
 export type TransformAnswer<R> = readonly R[] | ({ readonly sets: readonly R[] } & Carried);
+/** What a delete transform returns: nothing, or what the delete carries. It never returns rows. */
+// `length?: never`: an array's own `with` method would otherwise pass for a carried map
+export type DeleteAnswer =
+	| void
+	| (Carried & { readonly length?: never } & ({ readonly with: CarriedWrites } | { readonly on_approved: CarriedWrites }));
 /** The workspace reads of a write callback, and the act's own rows (`after`). */
 interface ProspectiveQuery {
 	/** Stored rows matching `where` overlaid with this act's rows: what the model will hold once the act commits. */

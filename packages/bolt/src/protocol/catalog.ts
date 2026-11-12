@@ -27,6 +27,7 @@ export function table_of(model: ModelSpec): TableSpec {
 		record_label: _rl,
 		table,
 		key: _key,
+		messages: _messages,
 		...storage
 	} = model;
 	// Enum transitions remain application metadata. State transitions, stamps and lock predicates generate native rules.

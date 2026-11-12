@@ -174,6 +174,7 @@ const lift = (call: Call, raw: unknown): unknown => {
 	switch (kind) {
 		case 'create':
 		case 'update':
+		case 'delete':
 			return {
 				...clock,
 				...actor,
@@ -335,7 +336,7 @@ const prepare_args = (args: readonly unknown[], at: number): readonly unknown[] 
 	};
 	const ctx = args[at];
 	const kind = Predicate.isObject(ctx) ? ctx[CTX] : undefined;
-	const changes = ['create', 'update', 'effect', 'policy'].includes(String(kind))
+	const changes = ['create', 'update', 'delete', 'effect', 'policy'].includes(String(kind))
 		? changesOf(args[0])
 		: undefined;
 	return args.map((arg, i) => i === at

@@ -56,7 +56,7 @@ A body that takes `ctx` is a generator, `function* (…)`: a policy `verdict`, a
 - Effectful bodies are `function*` and `yield*` their `ctx` Effects.
 - Decimals in policy and model code use `dec` values from the decimal module, never plain numbers.
 - Named constraints take arrays for `unique` and `per`. Mark one unique constraint `import_key: true` for matching imports. Computed expressions live on fields; physical and search indexes live under `indexes`.
-- Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Return sets or `{ sets, with, on_approved }` from transforms. Delete has no transform. Effects receive approval lifecycle details in `ctx.event`.
+- Each create/update transform and per-verb effect receives `{ before, set, after, changed }` changes. Return sets or `{ sets, with, on_approved }` from create/update transforms; a delete transform returns nothing or `{ with, on_approved }`. Effects receive approval lifecycle details in `ctx.event`.
 - Commit related writes through one `ctx.act({ '<model>.<verb>': inputs })` map. Update/delete targets carry selected rows and their revisions. There are no `many`, `checked`, upsert or transaction alternatives.
 - `seed/test/assets.json` and `seed/public/assets.json` are the reserved asset list: never name seed rows that, even for a model called assets.
 - Migrations are generated. Edit one only to move data: the schema must arrive at what the models declare. Never edit `.norbital/`.

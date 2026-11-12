@@ -18,8 +18,11 @@ import type {
 	CreateSet,
 	Change,
 	TransformAnswer,
+	DeleteAnswer,
 	UpdateSet,
-	WriteCtx
+	WriteCtx,
+	MessageKey,
+	MessageValues
 } from './ctx.ts';
 import type {
 	Checked,
@@ -622,16 +625,22 @@ type ConstraintFor<Rule, F, All> = Rule extends { unique: infer Columns }
 			unique: ColRefs<F, Columns>;
 			where?: Rule extends { import_key: true } ? never : OwnWhere<All>;
 			import_key?: true;
+			message?: ConstraintMessage;
 		}
 	: Rule extends { check: unknown }
-		? { check: OwnWhere<All> }
+		? { check: OwnWhere<All>; message?: ConstraintMessage }
 		: Rule extends { no_overlap: string; per: infer Columns }
 			? {
 					no_overlap: OfKind<F, { kind: 'period' }>;
 					per: ColRefs<F, Columns>;
 					where?: OwnWhere<All>;
+					message?: ConstraintMessage;
 				}
-			: { locked: OwnWhere<All>; except?: readonly string[] };
+			: { locked: OwnWhere<All>; except?: readonly string[]; message?: ConstraintMessage };
+/** A violated constraint refuses with this catalogue message; it has no placeholders to fill. */
+type ConstraintMessage = {
+	[K in MessageKey]: [MessageValues<K>] extends [Readonly<Record<string, never>>] ? K : never;
+}[MessageKey];
 
 // ── search indexes ──
 type InputPart<X> = X extends { input: unknown } ? ValidInputs<X['input']> : never;
@@ -737,7 +746,7 @@ interface ModelFor<
 	outputs?: OutputsFor<Part<S, 'outputs'>, F, C>;
 	create?: Exposed<S, CreateFor<S, F>>;
 	update?: Exposed<S, UpdateFor<S, F>>;
-	delete?: Exposed<S, { effect?: unknown }>;
+	delete?: Exposed<S, { transform?: unknown; effect?: unknown }>;
 	syncs?: Exposed<S, { [N in keyof Part<S, 'syncs'>]: SyncFor<Part<S, 'syncs'>[N]> }>;
 }
 
@@ -783,6 +792,16 @@ interface BodiesFor<K> {
 		effect?: (changes: readonly Change<Row<K>, Partial<Row<K>>, Row<K>>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	delete?: {
+		/**
+		 * Runs for every row deleted in this model, by every path, before it is written: a page, the agent and `ctx.act`.
+		 * One call per batch: each change carries the stored row (`before`). It returns nothing, or `{ with, on_approved }`:
+		 * rows of other models committed in the delete's own statement (`Carried`), held and rolled back with it. It never
+		 * returns rows; it may refuse.
+		 */
+		transform?: (
+			changes: readonly Change<StoredRow<K>, Readonly<Record<string, never>>, null>[],
+			ctx: WriteCtx<K>
+		) => BodyReturn<DeleteAnswer>;
 		effect?: (changes: readonly Change<Row<K>, Readonly<Record<string, never>>, null>[], ctx: EffectCtx<K>) => BodyReturn<void>;
 	};
 	indexes?: { [I in IndexName<K>]?: IndexBodies<K, InputOf<IndexInput<K, I>>> };
@@ -833,8 +852,8 @@ export type ModelLiteral = ModelMetadata & {
 	create?: { columns: ColumnTree; filled?: ColumnTree; transform?: GeneratorBody; effect?: GeneratorBody };
 	/** The generated `update`: per layer the columns a writer changes, and its `transform`. */
 	update?: { columns: ColumnTree; transform?: GeneratorBody; effect?: GeneratorBody };
-	/** The generated delete and its optional post-commit effect. */
-	delete?: { effect?: GeneratorBody };
+	/** The generated delete, its `transform` and its optional post-commit effect. */
+	delete?: { transform?: GeneratorBody; effect?: GeneratorBody };
 	/** How rows are exchanged with a file or another system: `read` brings rows in, `write` sends changes out. */
 	syncs?: {
 		readonly [sync: string]: {
@@ -874,7 +893,7 @@ export type ExposureSpec = CatalogExposure & {
 		effect?: true;
 	};
 	update?: { columns: LayerColumns; transform?: true; effect?: true };
-	delete?: { effect?: true };
+	delete?: { transform?: true; effect?: true };
 	syncs?: { readonly [sync: string]: SyncEntry };
 };
 
@@ -882,6 +901,7 @@ export type ExposureSpec = CatalogExposure & {
 type ModelBodies = {
 	readonly create?: Body;
 	readonly update?: Body;
+	readonly delete?: Body;
 	readonly effect: { readonly create?: Body; readonly update?: Body; readonly delete?: Body };
 	readonly indexes: {
 		readonly [index: string]: {
@@ -918,10 +938,12 @@ const mapValues = <V, R>(
 export const EFFECT_VERBS = ['create', 'update', 'delete'] as const;
 function bodiesOf(m: ModelLiteral): ModelBodies {
 	const create = guest(m.create?.transform),
-		update = guest(m.update?.transform);
+		update = guest(m.update?.transform),
+		del = guest(m.delete?.transform);
 	return {
 		...(create === undefined ? {} : { create }),
 		...(update === undefined ? {} : { update }),
+		...(del === undefined ? {} : { delete: del }),
 		effect: Object.fromEntries(
 			EFFECT_VERBS.flatMap((verb) => {
 				const body = guest(m[verb]?.effect);

@@ -24,7 +24,7 @@ src/
 
 | Declaration               | Owning file                               | Callbacks                                                                                       |
 | ------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `model(spec)`       | `data/model/**/<name>/+model.ts`          | `create.transform`, `update.transform`, per-verb `effect`, `indexes.*`, `syncs.*` |
+| `model(spec)`       | `data/model/**/<name>/+model.ts`          | `create.transform`, `update.transform`, `delete.transform`, per-verb `effect`, `indexes.*`, `syncs.*` |
 | `custom_field(spec)` | `data/custom_field/<name>/+definition.ts` | `validate`                                                                                      |
 | `policy(spec)`            | `access_control/policy/+<name>.policy.ts` | `verdict` on each `create`, `update` and `delete` grant                                           |
 | `team(spec)`              | `access_control/team/+team.ts`            | none                                                                                            |

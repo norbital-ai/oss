@@ -4,7 +4,7 @@ import { actor_id, actor_ref } from '../access/actor.ts';
 // entry, the readable `approval_request` face, the queued approval effect and on rejection the rollback of every held
 // record to its checkpoint. The requester's save in ChangesRequested resubmits inside that write (`resubmit`).
 import { constraintIndex } from '../schema/plan.ts';
-import { Clock, Effect, Layer, Option, Result, Schema } from 'effect';
+import { Clock, Effect, Layer, Option, Predicate, Result, Schema } from 'effect';
 import { audited, auditActor } from '../audit-operation.ts';
 import { Audit } from '../audit.ts';
 import { encode_wire } from '@norbital-ai/std/wire';
@@ -22,7 +22,8 @@ import {
 } from '../services.ts';
 import { TenantDb, type TenantDbShape } from '../db/tenant-db.ts';
 import { capturePiece } from '../db/captured.ts';
-import { storedCaptures, storedRowSql } from '../db/stored.ts';
+import { storedCaptures, storedRow, storedRowSql } from '../db/stored.ts';
+import { read_history } from '../query/history.ts';
 import { teams, type EngineManifest } from '../manifest.ts';
 import {
 	LIMITS,
@@ -773,18 +774,33 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 			a.records.filter((record) => record.model === a.model),
 			(record) => record.op
 		)
-	].flatMap(([verb, records]) => verb === 'delete' || !hasCallback(m, a.model, verb)
-		? [] : [{ verb, records }]);
+	].flatMap(([verb, records]) => hasCallback(m, a.model, verb) ? [{ verb, records }] : []);
+	// a held delete's rows are gone: the decision asks again with each as it stood at the checkpoint, in one coalesced read
+	const deleted = Effect.fn('Approvals.deletedRows')(function* (records: readonly Checkpoint[]) {
+		const shared = yield* coalescing(db, records.length);
+		return yield* Effect.forEach(
+			records,
+			(record) =>
+				read_history(
+					shared,
+					m,
+					{ kind: 'history', model: a.model, id: record.id, at: { _tag: 'Revision', revision: record.before ?? 0 }, full: true },
+					{ as: 'workspace' },
+					b
+				).pipe(Effect.ensuring(shared.done)),
+			{ concurrency: 'unbounded' }
+		);
+	});
 	const ask = Effect.fn('Approvals.askAgain')(function* (
-		verb: 'create' | 'update',
-		ids: readonly string[]
+		verb: 'create' | 'update' | 'delete',
+		records: readonly Checkpoint[]
 	): Effect.fn.Return<readonly CarriedWrite[] | Refusal, EngineError> {
-		const rows = yield* storedTrees(db, m, cat, a.model, ids, b, Object.keys(m.exposures[a.model]?.[verb]?.columns ?? {}));
-		const input = rows.flatMap((row) => row === null ? [] : [{
-			before: verb === 'create' ? null : row,
-			set: verb === 'create' ? row : {},
-			after: row
-		}]);
+		const ids = records.map((record) => record.id);
+		const input = verb === 'delete'
+			? (yield* deleted(records)).flatMap((row) =>
+					Predicate.isObject(row) && !Array.isArray(row) ? [{ before: storedRow(cat, a.model, row), set: {}, after: null }] : [])
+			: (yield* storedTrees(db, m, cat, a.model, ids, b, Object.keys(m.exposures[a.model]?.[verb]?.columns ?? {}))).flatMap((row) =>
+					row === null ? [] : [{ before: verb === 'create' ? null : row, set: verb === 'create' ? row : {}, after: row }]);
 		if (input.length === 0) return [];
 		const seed = `approval:${a.id}:${a.log.length}:${verb}`;
 		const invocation: Invocation = {
@@ -825,11 +841,7 @@ const approvedWrites = Effect.fn('Approvals.approvedWrites')(function* (
 	});
 	const asked = yield* Effect.forEach(
 		held,
-		({ verb, records }) =>
-			ask(
-				verb,
-				records.map((record) => record.id)
-			),
+		({ verb, records }) => ask(verb, records),
 		{ concurrency: 'unbounded' }
 	);
 	const carried: CarriedWrite[] = [];
