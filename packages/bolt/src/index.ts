@@ -57,7 +57,7 @@ export type {
 } from './decl/values.ts';
 export type { LayerWhere, Where } from './decl/where.ts'; // hook:query (OrderBy)
 export type { AutomationCtx, EffectCtx } from './decl/runtime/automation.ts';
-export type { StartInput } from './decl/runtime/facilities.ts';
+export type { ImageFacts, StartInput } from './decl/runtime/facilities.ts';
 export type { Attachment, CalendarEvent } from './decl/runtime/integration.ts';
 export type { Finding, Health, RemoteSync, SyncCtx, FileSyncCtx, SyncRow } from './decl/runtime/sync.ts';
 export type { CustomFieldView, RecordView } from './shell/runtime.ts'; // hook:packaging-ui — X-20 and role 5's view props

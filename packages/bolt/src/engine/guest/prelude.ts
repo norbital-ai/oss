@@ -358,7 +358,7 @@ const settle = (c, answer) => answer.ok ? c.resolve(answer.value) : c.reject(ans
 
 // an error's 'kind' (a facility failure's) rides the tuple for the host's transient judgement
 const failure = (e) => {
-	if (isObject(e) && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
+	if (isObject(e) && e.kind === 'refused') return ['refused', String(e.message), e.field === undefined ? null : String(e.field), typeof e.row === 'number' ? e.row : null, JSON.stringify({ code: typeof e.code === 'string' ? e.code : 'refused', key: e.key, values: e.values, rows: e.rows, rule: e.rule, data: e.data, records: e.records, invocation: e.invocation })];
 	const kind = isObject(e) && typeof e.kind === 'string' ? [e.kind] : [];
 	if (e instanceof Error) return ['error', e.name, e.message, String(e.stack || ''), ...kind];
 	return ['error', 'Error', show(e), '', ...kind];

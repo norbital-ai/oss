@@ -247,10 +247,13 @@ stored revision is a conflict). An automation that acts on records takes them as
 run's policies, so `ctx.act({ 'orders.update': orders.map((order) => ({ target: order, set })) })`
 needs no read of its own.
 
-A body says no with `return yield* ctx.refuse('<message key>', { row?, field? })`. The message is a
-key of the workspace catalogue (`src/i18n/+messages.ts`); `row` is the offending row's index in the
-batch or list the body received, and `field` one of its root columns. The failure is a `Refusal`;
-bodies never construct one.
+A body says no with `return yield* ctx.refuse('<message key>', { row?, field?, values? })`. The message
+is a key of the workspace catalogue (`src/i18n/+messages.ts`); `row` is the offending row's index in the
+batch or list the body received, and `field` one of its root columns. A message with `{placeholders}`
+(`'errors.short': 'Only {have} of {need} left.'`) takes exactly those `values`, typed from its base text
+(`values: { have, need }`); one without takes none. The failure is a `Refusal`; bodies never construct
+one. The engine renders the key with the workspace catalogue, the path `ctx.t` takes: a refused act's
+`message`, a run's error and the agent read the text, with `key` and `values` beside it.
 
 A transform may instead return `{ sets, with, on_approved }`,
 each carried map `{ [model]: { create?: [row], update?: [{ target, set }] } }`: rows of other models the

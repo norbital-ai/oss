@@ -26,8 +26,8 @@ const named = (failure: unknown): Error => {
 };
 
 /**
- * What a failed body settles as (B.3): a refusal or a refused write is `refused` with its message and field; a write
- * that conflicted or is unknown retains its native family and metadata in the failed run; any other failure
+ * What a failed body settles as (B.3): a refusal or a refused write is `refused` with its message, catalogue key, values
+ * and field; a write that conflicted or is unknown retains its native family and metadata in the failed run; any other failure
  * is an `Error` named by its tag (a tagged error is one; its `kind` rides the prelude tuple); a defect is itself; an
  * interruption is `Error('interrupted')`. Canonical class identity, rather than tags, selects the refusal cases.
  */
@@ -36,11 +36,13 @@ export const finalOf = (cause: Cause.Cause<BodyError>): unknown => {
 	if (Option.isSome(failure)) {
 		const e = failure.value;
 		return e instanceof Refusal
-			? refused(e.message, e.field, e.row)
+			? { ...refused(e.message, e.field, e.row), key: e.message, values: e.values }
 			: e instanceof ActRefused
 				? {
 						...refused(e.message, e.field, e.row),
 						code: e.code,
+						key: e.key,
+						values: e.values,
 						rows: e.rows,
 						rule: e.rule,
 						data: e.data

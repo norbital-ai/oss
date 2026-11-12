@@ -7,6 +7,7 @@ import { page_reads, readValue } from '../../page/read-value.ts';
 import { view_client } from '../../page/view-client.ts';
 import { read_wire } from '../../protocol/read-answer.ts';
 import { ReadFailed } from '../../decl/errors.ts';
+import { message_text } from '../../decl/errors/refusal.ts';
 import { public_read_key, type PublicBoot } from '../../protocol/public-page.ts';
 import type { WireRead } from '../../protocol/wire.ts';
 import type { Json } from '../../decl/values.ts';
@@ -85,10 +86,7 @@ const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup) => {
 		session: { send_code: unavailable, verify: unavailable },
 		actor: boot.actor,
 		locale: boot.workspace.locale,
-		t: (key, vars = {}) =>
-			(boot.messages[key] ?? key).replace(/\{([^{}]+)\}/g, (whole, name: string) =>
-				String(vars[name] ?? whole)
-			)
+		t: (key, vars) => message_text(boot.messages, key, vars)
 	};
 	const views = view_client({ ...page, native_query: <A>(read: WireRead, schema: Schema.Decoder<A>) => {
 		if (read.m !== 'query' && read.m !== 'aggregate' && read.m !== 'history')

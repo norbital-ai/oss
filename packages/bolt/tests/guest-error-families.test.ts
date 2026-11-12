@@ -157,6 +157,7 @@ describe('canonical guest error families', () => {
 			kind: 'refused',
 			code: 'refused',
 			message: 'no',
+			key: 'no',
 			field: 'title',
 			row: undefined
 		});
@@ -234,6 +235,7 @@ describe('canonical guest error families', () => {
 					kind: 'refused',
 					code: 'refused',
 					message: 'no',
+					key: 'no',
 					field: 'title',
 					row: undefined
 				});

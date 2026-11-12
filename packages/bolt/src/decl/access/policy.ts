@@ -90,6 +90,7 @@ export type VerdictData =
 	| {
 			readonly kind: 'deny';
 			readonly message: string;
+			readonly values?: { readonly [name: string]: string | number };
 			readonly at?: { readonly row?: number; readonly field?: string };
 	  }
 	| { readonly kind: 'approve'; readonly flow: ApprovalSnapshot };

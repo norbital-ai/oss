@@ -5,6 +5,7 @@ import { Effect, Option, Schema, SchemaTransformation } from 'effect';
 import { isArray } from 'effect/Array';
 import { DRIVERS, type DriverName } from '../decl/runtime/integration.ts';
 import { PAPER_SIZES } from '../decl/runtime/facilities.ts';
+import { MessageValues } from '../decl/errors/refusal.ts';
 import { Instant, Zone } from '@norbital-ai/std/date';
 
 /** An authoring phase (L-BOLT-530): diagnose (`bolt build`'s checks) → copy (the preview's data) → preview → merge. */
@@ -273,7 +274,10 @@ export const WriteOutcome = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('refused'),
 		code: Schema.Literals(REFUSAL_CODES),
+		/** The text a person reads; an authored refusal's catalogue `key` and `values` rendered it. */
 		message: Schema.String,
+		key: Schema.optionalKey(Schema.String),
+		values: Schema.optionalKey(MessageValues),
 		field: Schema.optionalKey(Schema.String),
 		row: Schema.optionalKey(Schema.Number),
 		rows: Schema.optionalKey(Schema.Array(Schema.Number)),

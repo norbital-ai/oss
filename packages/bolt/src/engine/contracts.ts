@@ -14,6 +14,7 @@ import type { AiPortResponseSchema } from './ai-schema.ts';
 import type { DeliveryReport, OutboundReference, SendReceipt } from './conversations/status.ts';
 import type { BoltError } from '../protocol/errors.ts';
 import type { FacilityFailure, Unavailable } from '../decl/errors.ts';
+import type { MessageValues } from '../decl/errors/refusal.ts';
 import type {
 	ConvertSource,
 	ConvertTarget,
@@ -299,7 +300,7 @@ export type CrossAnswer =
 			ok: false;
 			error:
 				| FacilityError
-				| { kind: 'refused'; code: string; message: string; field?: string; row?: number; rows?: readonly number[]; rule?: string }
+				| { kind: 'refused'; code: string; message: string; key?: string; values?: MessageValues; field?: string; row?: number; rows?: readonly number[]; rule?: string }
 				| { kind: 'bolt'; code: string; message: string };
 	  };
 /** A Bolt failure crossing back to a guest; facility and authored refusal envelopes remain distinct. */
@@ -309,10 +310,15 @@ export const cross_failure = (code: string, message: string): CrossAnswer => ({
 });
 export type GuestOutcome =
 	| { kind: 'ok'; output: Json }
-	/** `ctx.refuse(message_key, { row, field })`; `row` indexes the batch a write callback received. */
+	/**
+	 * `ctx.refuse(message_key, { row, field, values })`: `message` is the rendered catalogue text, `key` and `values`
+	 * what rendered it; `row` indexes the batch a write callback received.
+	 */
 	| {
 			kind: 'refused';
 			message: string;
+			key?: string;
+			values?: MessageValues;
 			code?: string;
 			field?: string;
 			row?: number;

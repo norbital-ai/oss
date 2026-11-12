@@ -117,9 +117,13 @@ const lifted = (call: Call, member: string, family: Family) => {
 };
 const refuse = (
 	message: unknown,
-	at?: { readonly field?: string | undefined; readonly row?: number | undefined }
+	at?: {
+		readonly field?: string | undefined;
+		readonly row?: number | undefined;
+		readonly values?: Refusal['values'];
+	}
 ): Effect.Effect<never, Refusal> =>
-	Effect.fail(new Refusal({ message: String(message), field: at?.field, row: at?.row }));
+	Effect.fail(new Refusal({ message: String(message), values: at?.values, field: at?.field, row: at?.row }));
 const RowChange = Schema.Struct({
 	before: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
 	set: Schema.Record(Schema.String, Schema.Unknown),
@@ -367,10 +371,11 @@ const wrap_verdict = <A extends readonly unknown[]>(
 				Effect.map(Verdict.dataOf),
 				Effect.catchIf(
 					(error): error is Refusal => error instanceof Refusal,
-					({ message, field, row }) =>
+					({ message, values, field, row }) =>
 						Effect.succeed({
 							kind: 'deny' as const,
 							message,
+							...(values === undefined ? {} : { values }),
 							at: { ...(field === undefined ? {} : { field }), ...(row === undefined ? {} : { row }) }
 						})
 				)

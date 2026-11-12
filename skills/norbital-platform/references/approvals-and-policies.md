@@ -27,7 +27,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 1. `columns` trees with `fields` at each node are checked before guest code; outside them is `forbidden`.
 2. Each admitting policy's `verdict` judges changes with `before`, `set`, `after` and `changed(...)`; create has null `before`, delete has null `after`. It uses workspace `ctx.query`, prefetches before mapping and does no writes or I/O.
-3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Refuse through `yield* ctx.refuse('<message key>', { row?, field? })`: a catalogue key, the batch row's index and a root column.
+3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Refuse through `yield* ctx.refuse('<message key>', { row?, field?, values? })`: a catalogue key, the batch row's index, a root column and the message's `{placeholder}` values.
 
 A provisional commit is an ordinary write: validation, ownership, locks, revisions and atomicity apply. Its `with` rows are held with it; its `on_approved` rows commit in the approving decision, or the decision is refused and the request stays pending.
 

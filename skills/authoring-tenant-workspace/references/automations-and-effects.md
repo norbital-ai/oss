@@ -17,7 +17,7 @@ Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').automation>[0]`, `i
 - A rule about the starter is an explicit check of the trigger in the body. Refs the run writes are set explicitly.
 - `capabilities.automations` grants manual starts only; code needs none.
 - Records the body acts on are `input: { <name>: { kind: 'rows', of: '<model>' } }`. A caller sends ids; the body receives complete rows read under the run's policies, and an unreadable id refuses the start. Pass each row as the write `target` (it carries its revision): never query the ids again or hand-build `{ id, revision }`.
-- Say no with `return yield* ctx.refuse('<message key>', { row?, field? })`. The message is a catalogue key; `row` indexes the input list. `ctx.refuse` is the only refusal: never construct a `Refusal`.
+- Say no with `return yield* ctx.refuse('<message key>', { row?, field?, values? })`. The message is a catalogue key; `row` indexes the input list; a message with `{placeholders}` takes exactly those `values` (typed, required). `ctx.refuse` is the only refusal: never construct a `Refusal` or build text.
 - A row write runs its model's `effect`, never an automation.
 - Each automation admits 30 manual starts per minute per starter. Beyond it answers `429 rate_limited`. Cron and effect runs and acts in a body are never rate limited. A start over HTTP also counts against the policy `act` limit.
 - A safety-net cron depending only on workspace data declares `rest`: when a run writes nothing, no slot fires until the workspace is used or the rest passes. Never on a cron that finds work by time or reads what a connected link writes.

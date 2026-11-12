@@ -50,6 +50,7 @@ import type {
 	AiResponse,
 	AiRequest,
 	Authority,
+	DriverEvent,
 	DriverPage,
 	EngineActor,
 	FilesPort,
@@ -112,7 +113,12 @@ import {
 	type OutboundFile,
 	type ShapeOf
 } from '../engine/services.ts';
-import { syncs_of } from '../engine/sync/index.ts';
+import { Syncs, syncs_of } from '../engine/sync/index.ts';
+import { integration_links } from '../engine/integrations/links.ts';
+import { credentials } from '../engine/integrations/credentials.ts';
+import type { Provider } from '../engine/integrations/driver.ts';
+import { Secrets } from '../engine/secrets.ts';
+import type { SendRefused } from '../engine/conversations/status.ts';
 import { SYNC_DELIVER } from '../engine/sync/outbox.ts';
 import { IDENTITY, drain, load_pack, source_of, type Pack } from '../engine/write/pack.ts';
 import { restore_source, seed as restore, type SeedPack } from '../engine/write/seed.ts';
@@ -334,6 +340,8 @@ type TestEngineOptions<P extends TestPorts> = {
 	ports?: Layer.Layer<P, KitFailure>;
 	fakes?: { ai?: CassetteOptions };
 	links?: null;
+	/** The integration providers `integrations.pair` pairs an instance with (a test's fake provider). */
+	providers?: readonly Provider[];
 	host?: Partial<ShellHostConfig> & {
 		envoys?: ShapeOf<typeof EnvoyConfig>;
 		agent?: ShapeOf<typeof AgentHost>;
@@ -350,13 +358,32 @@ type Kit = {
 	/** An automation's native batch writer, under this caller's authority. */
 	body_acts(who: Holder | Authority): Effect.Effect<KitAct, BoltError>;
 	readonly fakes: Fakes;
-	/** Runs a remote sync read or drains committed writes through the workspace's real sync engine. */
+	/**
+	 * The workspace's real sync engine: `read` runs a remote sync's read, `deliver` drains committed writes, `write`
+	 * commits one page of rows as `read` answers them (`$id`, `$version`, `$deleted` and fields) exactly as a read run
+	 * commits a page, without the read body (`instance` defaults to the sync's one instance; a refused page fails with
+	 * the act's failure), and `test` runs an instance's integration `test` body.
+	 */
 	readonly syncs: {
 		read(
 			name: string,
 			options?: { readonly instance?: string; readonly partition?: string }
 		): Effect.Effect<{ readonly pages: number }, EngineError | KitInvalid>;
 		deliver(): Effect.Effect<{ readonly delivered: number }, EngineError | KitInvalid>;
+		write(
+			name: string,
+			rows: readonly Json[],
+			options?: { readonly instance?: string }
+		): Effect.Effect<void, ActFailure | EngineError | KitInvalid>;
+		test(instance: string): Effect.Effect<void, EngineError>;
+	};
+	/**
+	 * The host's integration links over `providers`: `pair` pairs an instance as the settings page does (its provider
+	 * writes the credential and status), `may` answers whether `who` may manage it (`null`: no such instance).
+	 */
+	readonly integrations: {
+		pair(instance: string, input: Json): Effect.Effect<void, EngineError | PortFailure | SendRefused>;
+		may(who: Holder | Authority, instance: string): Effect.Effect<boolean | null, EngineError | PortFailure | SendRefused>;
 	};
 	readonly count: { readonly reads: number; readonly writes: number; reset(): void };
 	readonly clock: { now(): string; set(instant: string): void; advance(value: string): void };
@@ -377,10 +404,16 @@ type Kit = {
 	crash(runId: string): Effect.Effect<void, KitFailure>;
 	/** Waits for background work to go quiet. It runs nothing queued: `run_due` runs model effects and started automations. */
 	settled(): Effect.Effect<void>;
+	/** Inbound conversation messages through the instance's link; a message the engine cannot decode fails the call. */
 	receive(
 		instance: string,
 		messages: Json | readonly Json[],
 		options?: { readonly history?: true; readonly bins?: readonly Uint8Array[] }
+	): Effect.Effect<void, EngineError | KitInvalid>;
+	/** Any other event a driver hands the engine: a delivery report, a cleared chat, presence, an outbound reference. */
+	event(
+		instance: string,
+		event: Exclude<DriverEvent, { kind: 'messages' | 'invalidate' }>
 	): Effect.Effect<void, EngineError>;
 	/** Real native HTTP routes, including isolated public SSR when acquired from an artifact. */
 	handle(request: Request, options?: { readonly address?: string }): Effect.Effect<Response>;
@@ -1228,7 +1261,8 @@ export const test_engine = <P extends TestPorts = never>(
 				runHandlers = Context.get(engineContext, RunHandlers),
 				envoys = Context.get(engineContext, Envoys),
 				throttle = Context.get(engineContext, SmartThrottle),
-				integration = Context.get(engineContext, Conversations);
+				integration = Context.get(engineContext, Conversations),
+				syncs = Context.get(engineContext, Syncs);
 
 			const shellBase = Layer.mergeAll(
 				RateLimits.layer.pipe(Layer.provide(Layer.succeed(TenantDb, db))),
@@ -1266,6 +1300,17 @@ export const test_engine = <P extends TestPorts = never>(
 				)
 			);
 			const host = Context.get(hostContext, BoltHost);
+			const manager = yield* integration_links({
+				providers: options.providers ?? [],
+				enter: (work) => work.pipe(Effect.provide(hostContext)),
+				admit: (work) => work.pipe(Effect.provide(hostContext)),
+				credentials: yield* credentials(db, Context.get(engineContext, Secrets)).pipe(
+					Effect.provide(NodeCrypto.layer)
+				),
+				public_url,
+				tcp: loopback_tcp_port,
+				log: () => {}
+			}).pipe(Effect.provide(NodeCrypto.layer));
 			const renderer =
 				artifact === undefined
 					? Option.none()
@@ -1577,7 +1622,34 @@ export const test_engine = <P extends TestPorts = never>(
 						syncs_of(m).get(name)?.read === true
 							? syncRun(name, options, Schema.Struct({ pages: Schema.Int }))
 							: Effect.fail(new KitInvalid({ message: `No remote read sync '${name}'.` })),
-					deliver: () => syncRun(SYNC_DELIVER, {}, Schema.Struct({ delivered: Schema.Int }))
+					deliver: () => syncRun(SYNC_DELIVER, {}, Schema.Struct({ delivered: Schema.Int })),
+					write: (name, rows, options = {}) =>
+						Effect.gen(function* () {
+							const sync = syncs_of(m).get(name);
+							if (sync?.read !== true)
+								return yield* new KitInvalid({ message: `No remote read sync '${name}'.` });
+							const [result] = yield* db.read([
+								{ text: 'SELECT id FROM sys_integration WHERE integration = $1 ORDER BY id', params: [sync.definition] }
+							]);
+							const ids = (result?.rows ?? []).flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : []));
+							const instance = options.instance ?? (ids.length === 1 ? ids[0] : undefined);
+							if (instance === undefined)
+								return yield* new KitInvalid({
+									message: `syncs.write: '${name}' has ${ids.length} instances; name one with { instance }`
+								});
+							yield* syncs.page(name, instance, rows).pipe(
+								Effect.catch((error): Effect.Effect<never, ActFailure | EngineError> => {
+									const failure = act_failure(error instanceof BoltError ? error.cause : undefined);
+									return Option.isSome(failure) ? Effect.fail(failure.value) : Effect.fail(error);
+								})
+							);
+						}).pipe(Effect.provide(hostContext)),
+					test: (instance) => syncs.test(instance).pipe(Effect.provide(hostContext))
+				},
+				integrations: {
+					pair: (instance, input) => manager.pair(instance, input),
+					may: (who, instance) =>
+						Effect.flatMap(authorityOf(who), (authority) => manager.may(authority, instance))
 				},
 				count,
 				member,
@@ -1694,11 +1766,29 @@ export const test_engine = <P extends TestPorts = never>(
 					).pipe(Effect.provide(hostContext)),
 				receive: (instance, messages, opts = {}) =>
 					Effect.gen(function* () {
+						const logged = fakes.logs.length;
 						yield* integration.receive(instance, {
 							kind: 'messages',
 							messages: Array.isArray(messages) ? messages : [messages],
 							...opts
 						});
+						// the engine logs and acknowledges what does not decode (a link's bug); a test's input never is one
+						const malformed = fakes.logs
+							.slice(logged)
+							.filter((row) => row.event === 'conversation.malformed');
+						if (malformed.length > 0)
+							return yield* new KitInvalid({
+								message: `receive: ${malformed.length} message(s) did not decode as inbound messages (${malformed
+									.map((row) => JSON.stringify(row.attributes))
+									.join('; ')}); a delivery report or other driver event goes through event()`
+							});
+						yield* runs.tick;
+						yield* envoys.settled;
+						yield* throttle.decided;
+					}).pipe(Effect.provide(hostContext)),
+				event: (instance, event) =>
+					Effect.gen(function* () {
+						yield* integration.receive(instance, event);
 						yield* runs.tick;
 						yield* envoys.settled;
 						yield* throttle.decided;

@@ -36,8 +36,11 @@ Add no browser launcher or `.svelte` mounts to templates. Never give a suite its
 ## Syncs and envoys
 
 - Create runtime accounts as `sys_integration` rows or seed unpaired rows. No source connection slot names an account.
-- Inbound conversation: `t.receive('<instance id>', message)` ingests and waits for queued work.
+- Inbound conversation: `t.receive('<instance id>', message)` ingests and waits for queued work; a message that does not decode fails it.
+- Other driver events: `t.event('<instance id>', { kind: 'delivery', provider_id, report })` (also `clear`, `presence`, `outbound_ref`).
+- Pairing: `TestWorkspace.layer({ providers: [fake] })`, then `t.integrations.pair(instance, input)` runs the fake provider's `pair` (it writes the credential and `status`); `t.integrations.may(holder, instance)` answers who may manage the instance. `t.syncs.test(instance)` runs the definition's `test` body.
 - Remote reads: `t.syncs.read('<model>.sync.<sync>', { instance })`; set `t.fakes.links.answer` or `.page`. `answer(instance, op)` answers `{ status, body }`, `body` the decoded value `ctx.request` yields; `op` is the request as made. Assert rows, cursor and a repeated read.
+- Sync pages without the read body: `t.syncs.write('<model>.sync.<sync>', rows, { instance? })` commits rows as `read` answers them (`$id`, `$version`, `$deleted`, fields) exactly as a read page: the model's callbacks judge them, its sync alone may write it. A refused page fails with `ActRefused`.
 - Queued writes: `t.syncs.deliver()` drains the outbox; sends appear in `t.fakes.links.sent`. Read the row's `$sync['<sync>']` status.
 - File syncs: `(yield* t.as(member)).sync_control('<model>', '<sync>', input)` after `upload('<model>.$import.<sync>', file)`; `t.run_due()` executes. Decode the `sys_run` output; resolve that run's exact file through `sys_file` and `t.fakes.files.blobs`. Manual remote refresh uses the same native control with `{}`, a read grant and `capabilities.syncs: ['model.sync_name']`; `ctx.run` and `ctx.schedule` accept only automations.
 - Read a run through `t.db.rows`; `Sql` is a plain `{ text, params }` value.

@@ -20,6 +20,7 @@ import {
 } from 'effect';
 import type { Json } from '../../decl/values.ts';
 import { FACILITY_MEMBERS } from '../../decl/runtime/facility-members.ts';
+import { MessageValues, message_text } from '../../decl/errors/refusal.ts';
 import type {
 	CrossAnswer,
 	GuestCall,
@@ -152,6 +153,8 @@ const lower = (
 const RefusalDetails = Schema.fromJsonString(
 	Schema.Struct({
 		code: Schema.String,
+		key: Schema.optionalKey(Schema.String),
+		values: Schema.optionalKey(MessageValues),
 		rows: Schema.optionalKey(Schema.Array(Schema.Number)),
 		rule: Schema.optionalKey(Schema.String),
 		data: Schema.optionalKey(Schema.Struct({ request_id: Schema.String })),
@@ -346,23 +349,29 @@ const run = (
 										)
 									)
 								} satisfies GuestOutcome;
-							case 'refused':
+							case 'refused': {
+								const details = yield* Schema.decodeUnknownEffect(RefusalDetails)(final[4]).pipe(
+									Effect.mapError((error) =>
+										BoltError.make(
+											'internal',
+											'guest',
+											'The guest refusal metadata did not decode.',
+											error
+										)
+									)
+								);
+								// an authored refusal leaves the guest as its key: the workspace catalogue renders it once, here
 								return {
 									kind: 'refused',
-									message: final[1],
-									...(yield* Schema.decodeUnknownEffect(RefusalDetails)(final[4]).pipe(
-										Effect.mapError((error) =>
-											BoltError.make(
-												'internal',
-												'guest',
-												'The guest refusal metadata did not decode.',
-												error
-											)
-										)
-									)),
+									message:
+										details.key === undefined
+											? final[1]
+											: message_text(manifest.messages, details.key, details.values),
+									...details,
 									...(final[2] === null ? {} : { field: final[2] }),
 									...(final[3] === null ? {} : { row: final[3] })
 								} satisfies GuestOutcome;
+							}
 							case 'missing':
 								return failed(
 									'missing_body',

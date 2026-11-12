@@ -1062,6 +1062,7 @@ declare module '../../src/index.ts' {
 		};
 		messages: {
 			'errors.refused': 'This change is not allowed.';
+			'errors.short': 'Only {have} of {need} {item} are in stock.';
 		};
 		skills: {
 			quoting: true;

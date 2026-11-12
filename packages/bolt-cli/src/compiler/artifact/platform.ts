@@ -24,7 +24,6 @@ const ENTRIES = [
 	'shell/mount',
 	'index',
 	'page/index',
-	'page/integration',
 	'decl/errors',
 	'protocol/index'
 ];

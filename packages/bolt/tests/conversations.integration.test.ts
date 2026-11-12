@@ -716,7 +716,8 @@ describe('inbound (§4.3)', () => {
 					]);
 					expect(f.blobs.size).toBe(1);
 					expect(new Set(rows.map((r) => r['conversation'])).size).toBe(1);
-					yield* t.receive('desk_wa', { id: 'bad' });
+					// the engine logs a link's malformed message and moves on (the kit's `receive` refuses one outright)
+					yield* f.conversations.receive('desk_wa', { kind: 'messages', messages: [{ id: 'bad' }] });
 					expect(
 						t.fakes.logs
 							.filter((r) => r.event === 'conversation.malformed')

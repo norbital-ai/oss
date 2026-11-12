@@ -29,7 +29,7 @@ import {
 } from '../decl/errors.ts';
 import { DescribeTimeout, TransportFailed } from '../decl/errors/browser.ts';
 import { ActUnknown } from '../decl/errors/act.ts';
-import { Refusal } from '../decl/errors/refusal.ts';
+import { Refusal, message_text } from '../decl/errors/refusal.ts';
 import type { ActOutcome, EngineActor } from '../engine/contracts.ts';
 import {
 	RecordCapabilitiesSchema,
@@ -1075,10 +1075,8 @@ export const create_bolt = (config: BoltConfig) =>
 			},
 			actor,
 			locale: config.locale,
-			t: (key: string, vars: Readonly<Record<string, string | number>> = {}) =>
-				(config.messages?.[key] ?? key).replace(/\{(\w+)\}/g, (match, name: string) =>
-					vars[name] === undefined ? match : String(vars[name])
-				),
+			t: (key: string, vars?: Readonly<Record<string, string | number>>) =>
+				message_text(config.messages, key, vars),
 			get closed() {
 				return closed;
 			},

@@ -297,7 +297,8 @@ export function makeRead(e: SyncEngine) {
 				BoltError.make(
 					o.kind === 'refused' ? o.code : o.kind,
 					'commit',
-					`${s.name}: the page for ${x.inst.id} was not committed${o.kind === 'refused' ? `: ${o.message}` : ''}`
+					`${s.name}: the page for ${x.inst.id} was not committed${o.kind === 'refused' ? `: ${o.message}` : ''}`,
+					o
 				)
 			);
 		return { ...next, version: state.version + 1 };
@@ -855,9 +856,49 @@ export function makeRead(e: SyncEngine) {
 		if (slot && pushes(s)) known.set(s.name, dayAfter(yield* Clock.currentTimeMillis));
 		return { pages };
 	});
+	/**
+	 * One page of `rows` (as `read` answers them: `$id`, `$version`, `$deleted` and fields) committed for `instance`
+	 * exactly as a read run commits a page, its cursor kept: the test kit's sync page without the read body.
+	 */
+	const page = Effect.fn('Syncs.page')(function* (name: string, instance: string, rows: readonly Json[]) {
+		const s = syncs_of(m).get(name);
+		const [inst] = yield* instancesOf(m, db, { ids: [instance] });
+		if (s === undefined || !s.read || inst === undefined || inst.integration !== s.definition)
+			return yield* Effect.fail(
+				BoltError.make('invalid_input', 'decode', `'${instance}' has no remote read sync '${name}'`)
+			);
+		const decoded = yield* Schema.decodeUnknownEffect(ResultSchema)({ rows }).pipe(
+			Effect.mapError((error) => BoltError.make('bad_answer', 'decode', `${name}: ${error.message}`, error))
+		);
+		const runId = yield* uuid(e.crypto);
+		const x = session(
+			s,
+			inst,
+			runId,
+			yield* e.authority(
+				{ actor: syncActor(s, inst.id, runId), policies: [], admin: true },
+				`sync:${s.name}:${inst.id}`
+			)
+		);
+		const partition = partitionsOf(s, inst)[0] ?? '';
+		const [stored] = yield* db.rows(StoredState, {
+			text: `SELECT ${STORED_STATE} FROM sys_sync WHERE sync = $1 AND instance = $2 AND partition = $3`,
+			params: [s.name, inst.id, partition]
+		});
+		const state: State = stored ?? {
+			cursor: null,
+			cycle: 0,
+			phase: 'read',
+			version: 0,
+			health: null,
+			digest: sha256_hex(canonical({ with: s.definition, partitions: s.partitions ?? null }))
+		};
+		yield* commit(x, partition, state, { rows: decoded.rows, cursor: state.cursor, more: false }, []);
+	});
 	return {
 		run,
 		rests,
+		page,
 		/** This generation's last read of `instance`, newer than `last_read_at` when it found nothing. */
 		lastReadOf: (instance: string) =>
 			Math.max(

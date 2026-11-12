@@ -76,7 +76,7 @@ type Pack = Effect.Success<ReturnType<NonNullable<EngineOptions<never>['pack']>>
  */
 export type TestOptions<P extends TestPorts = never> = Pick<
 	EngineOptions<P>,
-	'seed' | 'now' | 'secrets_key' | 'ports' | 'fakes' | 'links' | 'host'
+	'seed' | 'now' | 'secrets_key' | 'ports' | 'fakes' | 'links' | 'providers' | 'host'
 > & {
 	pack?: Pack;
 	/** The workspace guest CPU budget; the kit default is the host's 3000 ms. */

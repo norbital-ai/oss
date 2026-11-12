@@ -7,6 +7,7 @@ import type { Actor, CurrencyCode, FileRef, Id, InstanceId, Instant, Row } from 
 import type { RunInput, RunOutput } from '../../src/decl/runtime/automation.ts';
 import type { SkillFrontmatter } from '../../src/decl/runtime/agent.ts';
 import type { StartInput } from '../../src/decl/runtime/facilities.ts';
+import type { MessageValues } from '../../src/decl/ctx.ts';
 import type { SyncCtx } from '../../src/decl/runtime/sync.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
@@ -21,6 +22,7 @@ declare const mail_account: InstanceId<'support_mail'>;
 declare const either: InstanceId<'whatsapp'> | InstanceId<'support_mail'>;
 declare const billing_account: InstanceId<'billing'>;
 
+is<Eq<MessageValues<'errors.short'>, { readonly have: string | number; readonly need: string | number; readonly item: string | number }>>();
 // ── run inputs and outputs, from the literal ──
 is<Eq<RunInput<typeof rt.follow_up.spec>, { readonly ids: readonly Id<'orders'>[] }>>(); // declared input
 is<Eq<RunInput<typeof rt.render.spec>, { readonly order: Id<'orders'> }>>(); // declared input
@@ -335,6 +337,16 @@ automation({
 		yield* ctx.convert.document({ text: '' }, { to: 'pdf', name: 'x.pdf', for: 'render' });
 		// @ts-expect-error B10 refusal row indices are numeric
 		ctx.refuse('no', { row: 'first' });
+		// a message's placeholders are its refusal's values, exactly
+		ctx.refuse('errors.short', { row: 0, values: { have: 1, need: 2, item: 'bolts' } });
+		// @ts-expect-error B10a a placeholder without its value
+		ctx.refuse('errors.short', { values: { have: 1, need: 2 } });
+		// @ts-expect-error B10b a value the message does not name
+		ctx.refuse('errors.short', { values: { have: 1, need: 2, item: 'bolts', site: 'x' } });
+		// @ts-expect-error B10c a message with placeholders needs its values
+		ctx.refuse('errors.short');
+		// @ts-expect-error B10d a message without placeholders takes no values
+		ctx.refuse('errors.refused', { values: { item: 'bolts' } });
 		// @ts-expect-error B11 an http output of an unknown kind
 		yield* ctx.request(erp_account, { method: 'POST', path: 'x', output: { kind: 'txt' } });
 		// @ts-expect-error B12 a notice with a non-string team ID

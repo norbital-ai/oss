@@ -2,6 +2,7 @@
 // columns admitted per write path → observed-revision checks → the policies' checks on the submitted trees → batched
 // per-verb callbacks → defaults and model rules → the approval route → one write statement (rule 20), or the outcome record.
 import type { Json } from '../../decl/values.ts';
+import { MessageValues, message_text } from '../../decl/errors/refusal.ts';
 const jsonArray = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 import { encode_wire } from '@norbital-ai/std/wire';
 import { audited, auditActor } from '../audit-operation.ts';
@@ -840,6 +841,7 @@ const VerdictSchema = Schema.Union([
 	Schema.Struct({
 		kind: Schema.Literal('deny'),
 		message: Schema.String,
+		values: Schema.optionalKey(MessageValues),
 		at: Schema.optionalKey(
 			Schema.Struct({
 				row: Schema.optionalKey(Schema.Number),
@@ -899,7 +901,14 @@ export const judge = Effect.fn('Bolt.judge')(function* (
 				guest: true,
 				verdict: {
 					kind: 'deny',
-					outcome: { kind: 'refused', code: 'refused', message: g.message, rule: target }
+					outcome: {
+						kind: 'refused',
+						code: 'refused',
+						message: g.message,
+						...(g.key === undefined ? {} : { key: g.key }),
+						...(g.values === undefined ? {} : { values: g.values }),
+						rule: target
+					}
 				}
 			};
 		const data = yield* Schema.decodeUnknownEffect(VerdictSchema)(g.output).pipe(
@@ -915,7 +924,9 @@ export const judge = Effect.fn('Bolt.judge')(function* (
 				outcome: {
 					kind: 'refused',
 					code: 'refused',
-					message: data.message,
+					message: message_text(e.manifest.messages, data.message, data.values),
+					key: data.message,
+					...(data.values === undefined ? {} : { values: data.values }),
 					rule: target,
 					...data.at
 				}
@@ -1488,6 +1499,8 @@ const prepareChanges = Effect.fn('Bolt.prepareChanges')(function* (
 							kind: 'refused',
 							code: 'refused',
 							message: g.message,
+							...(g.key === undefined ? {} : { key: g.key }),
+							...(g.values === undefined ? {} : { values: g.values }),
 							rule: `${model}.${verb}`,
 							...(g.field === undefined ? {} : { field: g.field }),
 							...(typeof row === 'number' ? { row } : {})

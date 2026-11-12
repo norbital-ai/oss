@@ -3,7 +3,7 @@
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
-import type { BodyReturn, Clock, Eff, Loose, MessageKey, WorkspaceQuery } from '../ctx.ts';
+import type { BodyReturn, Clock, Eff, Loose, MessageKey, RefuseAt, WorkspaceQuery } from '../ctx.ts';
 import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
 import type { InputFields, InputOf } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
@@ -87,8 +87,8 @@ type SendOn<D> = [ConversationOf<D>] extends [never]
 			send(message: SendInput<D>): Eff<Id<'sys_message'>, Failure>;
 		};
 interface SyncRefusal {
-	/** Stops the body with a catalogue key, and the `row` and `field` it names. */
-	refuse(message: MessageKey, at?: { field?: string; row?: number }): Eff<never, Refusal>;
+	/** Stops the body with a catalogue key, the `row` and `field` it names, and the message's placeholder `values`. */
+	refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, { field?: string; row?: number }>): Eff<never, Refusal>;
 }
 
 /**

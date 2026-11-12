@@ -159,6 +159,11 @@ export type SyncsShape = {
 	) => Effect.Effect<{ readonly retired: number }, EngineError>;
 	/** The definition's `test` body for a paired instance: fails with the body's failure; no body passes. */
 	readonly test: (instance: string) => Effect.Effect<void, EngineError>;
+	/**
+	 * One page of read rows (`$id`, `$version`, `$deleted` and fields) committed for `instance` as a read run commits
+	 * one, without the read body; a refused page fails with the act's outcome as its cause.
+	 */
+	readonly page: (sync: string, instance: string, rows: readonly Json[]) => Effect.Effect<void, EngineError>;
 };
 export class Syncs extends Context.Service<Syncs, SyncsShape>()('bolt/Syncs') {}
 
@@ -331,6 +336,7 @@ export const SyncsLive = Layer.effect(
 				return { replayed: answer.replayed };
 			}),
 			invalidate: reading.invalidate,
+			page: reading.page,
 			hint: hinting.hint,
 			test: Effect.fn('Syncs.test')(function* (instance: string) {
 				const [inst] = yield* instancesOf(manifest, db, { ids: [instance] });

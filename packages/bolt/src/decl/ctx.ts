@@ -564,7 +564,11 @@ export type PendingApproval = {
 export type Refused = {
 	kind: 'refused';
 	code: 'refused' | PlatformRefusal;
+	/** The text a person reads: an authored refusal's catalogue message with its values filled. */
 	message: string;
+	/** An authored refusal's catalogue key and placeholder values. */
+	key?: string;
+	values?: { readonly [name: string]: string | number };
 	field?: string;
 	row?: number;
 	rows?: readonly number[];
@@ -626,8 +630,11 @@ export interface PolicyCtx<
 	readonly query: WorkspaceQuery['query'];
 	/** The write executes directly. */
 	allow(): Verdict;
-	/** The whole batch is refused (rule 32) with a catalogue key; `at` names the row and a root column of it. */
-	refuse(message: MessageKey, at?: DenyAt<M, V>): Eff<never, Refusal>;
+	/**
+	 * The whole batch is refused (rule 32) with a catalogue key; `at` names the row and a root column of it, and the
+	 * message's `{placeholder}` `values`.
+	 */
+	refuse<K extends MessageKey>(message: K, ...at: RefuseAt<K, DenyAt<M, V>>): Eff<never, Refusal>;
 	/** The batch is held for the declared approval steps and optional superseding teams. */
 	approve(flow: ApprovalFlow): Verdict;
 }
@@ -744,15 +751,30 @@ export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
 	readonly approving: boolean;
 	/**
 	 * Refuses the whole write (rule 32), `return yield* ctx.refuse(…)`, with a catalogue key: `field` names the field,
-	 * `row` the index of the offending row in the batch the callback received.
+	 * `row` the index of the offending row in the batch the callback received, `values` the message's placeholders.
 	 */
-	refuse(message: MessageKey, at?: { field?: WritableField<M>; row?: number }): Eff<never, Refusal>;
+	refuse<K extends MessageKey>(
+		message: K,
+		...at: RefuseAt<K, { field?: WritableField<M>; row?: number }>
+	): Eff<never, Refusal>;
 	query: WorkspaceQuery['query'] & ProspectiveQuery;
 }
 
 // ── the names the page client (`page/page-bolt.ts`) shares with the `ctx` above ──
 /** A key of `src/i18n/+messages.ts`. */
 export type MessageKey = keyof NamesPart<'messages'> & string;
+type Placeholders<S> = S extends `${string}{${infer P}}${infer R}` ? P | Placeholders<R> : never;
+/** The `{placeholder}` values of a catalogue message, named by its base (`+messages.ts`) text. */
+export type MessageValues<K extends MessageKey> = {
+	readonly [P in Placeholders<NamesPart<'messages'>[K]>]: string | number;
+};
+/**
+ * `ctx.refuse`'s second argument: where (`At`) and, when the message has placeholders, exactly their `values`
+ * (then required); a message without placeholders takes none.
+ */
+export type RefuseAt<K extends MessageKey, At> = [Placeholders<NamesPart<'messages'>[K]>] extends [never]
+	? [at?: At]
+	: [at: At & { readonly values: MessageValues<K> }];
 /** The names ui's views are typed by (`@norbital-ai/ui`'s `Workspace`); none until the workspace exposes a model. */
 export type ViewNames = [keyof NamesPart<'exposures'>] extends [never]
 	? never

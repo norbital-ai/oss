@@ -368,8 +368,8 @@ every declared column. Columns are always this tree, as outputs are: `fields`, t
 relation. An update grant also lists allowed state edges in `moves`. A delete grant is
 `{ verdict? }`. Columns are checked before the verdict judges the batch, including nested rows.
 Return `ctx.allow()`, `ctx.approve({ steps, superseded_by })` or
-`yield* ctx.refuse(message_key, { row?, field? })`, where `message_key` is a catalogue key and
-`field` a root column. Among the holder's policies any allow
+`yield* ctx.refuse(message_key, { row?, field?, values? })`, where `message_key` is a catalogue key,
+`values` its `{placeholders}` and `field` a root column. Among the holder's policies any allow
 executes. Otherwise the first approval in team-policy order holds the batch for review, or the
 first refusal supplies the failure
 (`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row` and `field`). A grant
