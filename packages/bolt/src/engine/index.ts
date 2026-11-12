@@ -104,5 +104,13 @@ export {
 export { wire_error } from '../protocol/wire.ts';
 // ── exports: shell ──
 export { StudioInspectInput } from '../shell/studio/inspection.ts';
-export { studio_view, type StudioPort, type StudioState } from '../shell/studio/model.ts';
+export {
+	MERGE_SUMMARY,
+	StudioOp,
+	studio_view,
+	suggest_message,
+	type StudioPort,
+	type StudioState
+} from '../shell/studio/model.ts';
+export { impact_lines } from '../protocol/migration-impact.ts';
 

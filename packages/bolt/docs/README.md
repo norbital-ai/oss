@@ -10,7 +10,8 @@ graph. The manifest defines the schema; committed `migrations/` files describe h
 history against a fresh database and compares it with the declaration. Commit the SQL, `snapshot.json`,
 `migrations.lock.json` and the generated `physical.json` proof together. `bolt check` verifies an existing history
 and its physical definitions at every prefix. Regenerate the proof through the normal build. A destructive step requires its explicit
-acceptance line; a table or field's `was` hint preserves its data by renaming it. Hosts apply the artifact's verified
+acceptance line; a build that generates an unaccepted one writes nothing, and `BOLT_ACCEPT_DESTRUCTIVE=1 bolt build`
+generates it accepted; a table or field's `was` hint preserves its data by renaming it. Hosts apply the artifact's verified
 files with checksums and one transaction per file before activating the release. Applied files never change.
 
 Replay compares the physical columns, constraints, indexes and functions with an independent build of the declared
