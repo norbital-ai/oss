@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { Effect, Predicate, Schema } from 'effect';
 import { realpathSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, loadavg } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -15,8 +15,15 @@ import { AuthorErrors, ToolFailure } from './build.ts';
 
 /** This copy of the kit (src or build). */
 const own = (path: string) => join(dirname(fileURLToPath(import.meta.url)), '..', `${path}${EXT}`);
-/** One worker per core but one: the realm runner passes its share with `--maxWorkers`. */
+/** The machine's workers, one per core but one: `bolt templates test` shares them with `--maxWorkers`. */
 export const workers = Math.max(1, availableParallelism() - 1);
+/**
+ * One suite's default workers at the machine's load: the cores left free, at least 4. A worker's cold start (module
+ * graph, PGlite and its checkpoint, the guest compile: ~4 s of CPU) outweighs most files' own work, so on a busy machine
+ * more workers only add cold starts to the load that starves every test past the hang guard.
+ */
+export const suiteWorkers = (load: number) =>
+	Math.min(workers, Math.max(4, Math.floor(workers - load)));
 
 type Runner = Pick<typeof import('vitest/node'), 'parseCLI' | 'startVitest'>;
 const Runner = Schema.declare<Runner>(
@@ -88,7 +95,7 @@ const plugins = (svelte: Svelte): Plugin[] => {
 			setup.fsModuleCachePath ??= join(process.cwd(), 'node_modules', '.vitest-cache');
 			// a template with no mechanisms of its own (blank) has nothing to prove
 			setup.passWithNoTests = true;
-			setup.maxWorkers ??= workers;
+			setup.maxWorkers ??= suiteWorkers(loadavg()[0] ?? 0);
 			setup.pool = 'forks';
 			setup.isolate = false;
 			setup.setupFiles = [...new Set([own('test/dom'), ...[setup.setupFiles ?? []].flat()])];
