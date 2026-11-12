@@ -121,7 +121,7 @@ const SchemaName = Schema.Struct({ name: Schema.String });
 const OTHER_SCHEMAS = `select nspname as name from pg_namespace
 	where nspname not like 'pg\\_%' and nspname not in ('information_schema', current_schema())`;
 
-/** Generation leaves editable SQL on a failed proof, but never replaces a verified lock with an unproved history. */
+/** Generation writes its SQL, snapshot, proof and lock together, only once the whole history is proved and accepted. */
 export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function* (
 	root: string,
 	manifest: EngineManifest | SchemaSlice,
@@ -148,6 +148,8 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 		: undefined;
 	const { files, squashes } = yield* read_migration_sources(directory, oldLock);
 	const snapshotFile = path.join(directory, 'snapshot.json');
+	// generated files: written with the proof and lock, never before them
+	const generatedFiles: Array<readonly [string, string]> = [];
 	let snapshotText = (yield* fs.exists(snapshotFile))
 		? yield* fs.readFileString(snapshotFile)
 		: undefined;
@@ -185,7 +187,6 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 			},
 			migration_objects
 		).pipe(Effect.catchTag('StoreError', (e) => Effect.fail(from_store(e))));
-		yield* fs.makeDirectory(directory, { recursive: true });
 		const prologue: string[] = [];
 		if (previous !== null) {
 			// Backfills must use the new runtime bodies: a function a Bolt release changed is re-created first.
@@ -221,8 +222,7 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 				'admission',
 				`${generated.file.name} already exists; existing migrations are never overwritten`
 			);
-		yield* fs.writeFileString(file, accepted);
-		yield* fs.writeFileString(snapshotFile, generated.snapshot);
+		generatedFiles.push([file, accepted], [snapshotFile, generated.snapshot]);
 		files.push({ ...upgraded, sql: accepted });
 		snapshotText = generated.snapshot;
 	}
@@ -371,7 +371,7 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 					sql: `-- ${name}: runtime function bodies this Bolt release changed.\n\n${bodies.map((text) => `${text.trim().replace(/;$/, '')};`).join('\n\n')}\n`
 				};
 				yield* check_file(file).pipe(Effect.mapError(from_store));
-				yield* fs.writeFileString(path.join(directory, name), file.sql);
+				generatedFiles.push([path.join(directory, name), file.sql]);
 				files.push(file);
 				const { db } = yield* replay;
 				yield* db.write({ text: file.sql, params: [] });
@@ -506,6 +506,8 @@ export const prepare_migrations = Effect.fn('Bolt.prepare_migrations')(function*
 				} else yield* fs.writeFileString(destination, file.sql);
 			}
 		}
+		yield* fs.makeDirectory(directory, { recursive: true });
+		for (const [file, text] of generatedFiles) yield* fs.writeFileString(file, text);
 		yield* fs.writeFileString(physicalFile, physical_definitions_of(proof.definitions));
 		yield* fs.writeFileString(lockFile, proof.lock);
 		// Only remove redundant source copies once immutable archived bytes and their verified receipt are durable.

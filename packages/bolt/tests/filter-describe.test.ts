@@ -1109,6 +1109,31 @@ describe('described selection must fit the exposed grammar', () => {
 		})
 	);
 
+	it.effect('a chosen sort explains an ordering request even when System 1 reads it as a selection', () =>
+		Effect.gen(function* () {
+			for (const text of ['sort last created', 'newest first', 'latest created first', 'order by created desc']) {
+				const port = system1(
+					byField({}, { 'selection.unsupported': true, sort: 'Created, latest first' })
+				);
+				expect(
+					yield* describer(port).describe({ model: 'jobs', text, authority: caller(), bindings })
+				).toEqual({ ok: true, order_by: { created_at: 'desc' } });
+			}
+		})
+	);
+	it.effect('a sort does not admit a limited selection', () =>
+		Effect.gen(function* () {
+			for (const text of ['top 5 newest', 'only the latest job per assignee']) {
+				const port = system1(
+					byField({}, { 'selection.unsupported': true, sort: 'Created, latest first' })
+				);
+				expect(
+					yield* describer(port).describe({ model: 'jobs', text, authority: caller(), bindings })
+				).toMatchObject({ ok: false, code: 'invalid' });
+			}
+		})
+	);
+
 	it.effect('allows ordinary newest-first sorting because ordering does not exclude versions', () =>
 		Effect.gen(function* () {
 			const port = system1(

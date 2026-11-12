@@ -1600,7 +1600,17 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 							: /^\s*(?:之后|之後|以后|以後)/u.test(suffix)
 								? 'gt'
 								: undefined;
-		if (noulOf(r, 'selection.unsupported') > 0.5 || noulOf(r, 'selection.filteredAggregate') > 0.5)
+		// a chosen sort fully explains an ordering request ("sort last created"): ranking refuses only when the text limits
+		// or selects records
+		const ordered = orders.some((x) => x.label === choiceOf(r, 'sort'));
+		const selects =
+			/(?<![\p{L}\p{N}])(?:(?:only|just|top|limit(?:ed)?|single|per|each|one|sahaja|saja|teratas|setiap|solo|sólo|únicamente|cada|seulement|uniquement|chaque)(?![\p{L}\p{N}])|(?:first|last|latest|newest|oldest|earliest)\s+\d)|[只仅僅每]|前\s*\d/iu.test(
+				o.text
+			);
+		if (
+			(noulOf(r, 'selection.unsupported') > 0.5 && (!ordered || selects)) ||
+			noulOf(r, 'selection.filteredAggregate') > 0.5
+		)
 			return {
 				ok: false,
 				code: 'invalid',

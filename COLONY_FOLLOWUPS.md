@@ -124,14 +124,14 @@ Bolt's entries now export each symbol once; the types a host hands over or gets 
   `type_service.{PROBE, root_of, refresh, filesystem, holder, offset_in, view, check_workspace}`; `Held`
   `ReturnType<typeof type_service.holder>`, `LangPosition` `Parameters<typeof type_service.offset_in>[1]`,
   `LangDiagnostic` `Awaited<ReturnType<ReturnType<typeof type_service.view>['diagnostics']>>[number]`.
-- Studio, host side (`/engine` keeps `studio_view`, `StudioPort`, `StudioState`, `StudioInspectInput`): `StudioOp`,
-  `MERGE_SUMMARY`, `suggest_message` and `impact_lines` come from `/page/studio`, `MigrationImpact` from `/host-api`
+- Studio, host side (`/engine` keeps `studio_view`, `StudioPort`, `StudioState`, `StudioInspectInput`): `MigrationImpact` from `/host-api`
   (`src/lib/hosting/{host,ops,recovery-studio,studio-ports,studio-tools,studio,studio-check}.ts`, `src/lib/services.ts`
   and the Studio tests). Derive `StudioFile` `NonNullable<Awaited<ReturnType<StudioPort['file']>>>`, `StudioChangeSet`
   `NonNullable<StudioState['change_sets']>[number]`, `StudioTestRun` `NonNullable<StudioState['tests']>`, `StudioBuild`
   `NonNullable<StudioState['builds']>[number]`, `StudioApproval` `NonNullable<StudioState['approvals']>[number]`,
   `StudioInspection` `Awaited<ReturnType<StudioPort['inspect']>>` (`src/lib/command-center/tenant.ts`).
   `StudioInspectInput` stays a Schema for the command-center filters.
+- 0.0.29: import `StudioOp`, `MERGE_SUMMARY`, `suggest_message` and `impact_lines` from `@norbital-ai/bolt/engine` (server-safe; no longer in `/page/studio`) and drop the vite.config workaround that compiled `/page/studio` into the server bundle.
 - Studio, browser side (`src/lib/studio/*`, `src/routes/__host/recovery/+page.svelte`, Studio browser tests):
   `StudioPhase` `(typeof PHASES)[number]`; `PhaseState`
   `Extract<Stream.Success<ReturnType<typeof studio_events>>, { kind: 'phase' }>['state']`; `StudioLogLine`

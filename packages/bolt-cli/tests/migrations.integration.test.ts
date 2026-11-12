@@ -489,6 +489,31 @@ select id from entry where given is null or given = '' or family is null or fami
 		).pipe(Effect.provide(NodeServices.layer))
 	);
 
+	it.live('an unaccepted destructive step writes nothing; accepting it then generates', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const fs = yield* FileSystem.FileSystem;
+				const directory = yield* root;
+				const source = join(directory, 'migrations');
+				yield* prepare_migrations(directory, initial, 'generate');
+				yield* prepare_migrations(directory, extended, 'generate');
+				const before = yield* Effect.forEach(yield* fs.readDirectory(source), (name) =>
+					Effect.map(fs.readFileString(join(source, name)), (text) => [name, text] as const)
+				);
+				// dropping `note` is destructive
+				expect(
+					(yield* Effect.flip(prepare_migrations(directory, initial, 'generate'))).message
+				).toContain('accept');
+				const after = yield* Effect.forEach(yield* fs.readDirectory(source), (name) =>
+					Effect.map(fs.readFileString(join(source, name)), (text) => [name, text] as const)
+				);
+				expect(after.sort()).toEqual(before.sort());
+				yield* prepare_migrations(directory, initial, 'generate', { accept: true });
+				expect((yield* read_migrations(source)).files).toHaveLength(3);
+			})
+		).pipe(Effect.provide(NodeServices.layer))
+	);
+
 	// data is the edit's to change; the schema is the model's, so a hand edit may not leave the two apart
 	const DRIFT = [
 		`alter table entry add column extra text`,
