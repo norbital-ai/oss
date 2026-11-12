@@ -5,7 +5,12 @@
 	import { INSET_X_CLASS } from '../../layout/layout.shared.js';
 	import { cn } from '../utils.js';
 
-	let { value, label, children }: { value: string; label: string; children: Snippet } = $props();
+	let {
+		value,
+		label,
+		children,
+		class: className
+	}: { value: string; label: string; children: Snippet; class?: string } = $props();
 	const inset = provisional_inset();
 </script>
 

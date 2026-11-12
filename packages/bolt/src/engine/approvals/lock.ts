@@ -86,7 +86,7 @@ export function lockPieces(
 	// a request an automation raised is decided as it stands: nobody changes its records, and the answer says so
 	c.assertWith(
 		"NOT EXISTS (SELECT 1 FROM ap_hit WHERE route ? '__boltReadGuards')",
-		'underApproval',
+		'under_approval',
 		"(SELECT h.id::text || ' Under approval: the system raised this request. Approve or reject it; its record cannot be changed.' FROM ap_hit h WHERE h.route ? '__boltReadGuards' LIMIT 1)"
 	);
 	const names = literal(

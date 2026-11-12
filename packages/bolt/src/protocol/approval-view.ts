@@ -5,7 +5,8 @@ export const ApprovalStateSchema = Schema.Literals([
 	'ChangesRequested',
 	'Approved',
 	'Rejected',
-	'Superseded'
+	'Superseded',
+	'Withdrawn'
 ]);
 
 export const ApprovalLogFields = {
@@ -15,7 +16,8 @@ export const ApprovalLogFields = {
 		'reject',
 		'request_changes',
 		'resubmit',
-		'supersede'
+		'supersede',
+		'withdraw'
 	]),
 	at: Schema.String,
 	from: Schema.NullOr(ApprovalStateSchema),
@@ -72,7 +74,7 @@ export const ApprovalViewSchema = Schema.Struct({
 	records: Schema.Array(Schema.Struct({ model: Schema.String, id: Schema.String, op: Operation })),
 	moves: Schema.Array(
 		Schema.Struct({
-			decision: Schema.Literals(['approve', 'reject', 'request_changes']),
+			decision: Schema.Literals(['approve', 'reject', 'request_changes', 'withdraw']),
 			reason: Schema.Literals(['required', 'optional'])
 		})
 	),

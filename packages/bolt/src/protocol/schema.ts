@@ -594,7 +594,7 @@ const Run = Schema.Union([
 ]);
 export const Decide = Schema.Struct({
 	request_id: Schema.String,
-	decision: Schema.Literals(['approve', 'reject', 'request_changes']),
+	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'withdraw']),
 	reason: tolerant(Schema.String)
 });
 const ConvertSource = Schema.Union([

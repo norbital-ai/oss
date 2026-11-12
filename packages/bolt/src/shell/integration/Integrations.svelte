@@ -15,6 +15,7 @@
 		Form,
 		format,
 		format_handle,
+		open_record,
 		StateBadge,
 		Table,
 		Tabs,
@@ -195,6 +196,43 @@
 			: api.instance_sync_health(instance.id);
 	});
 	let replaying = $state<string | null>(null);
+	const dead_letters = observe_once(() =>
+		current && definition(current.integration)?.syncs === true
+			? api.instance_sync_dead_letters(current.id)
+			: null
+	);
+	let retiring = $state<string | null>(null);
+	function retireWrite(id: string): void {
+		const instance = current?.id;
+		if (instance === undefined || retiring !== null) return;
+		fork(
+			confirm_action({
+				title: t('Retire rejected write?'),
+				body: t(
+					'This stops retrying this saved write and releases later changes for the record. Confirm that its remote state is understood.'
+				),
+				confirm_label: t('Retire write'),
+				cancel_label: t('Cancel')
+			}).pipe(
+				Effect.flatMap((confirmed) => {
+					if (!confirmed) return Effect.void;
+					retiring = id;
+					return api.retire_instance_sync(instance, id).pipe(
+						Effect.andThen(dead_letters.refetch()),
+						Effect.andThen(syncHealth.refetch()),
+						Effect.ensuring(
+							Effect.sync(() => {
+								retiring = null;
+							})
+						)
+					);
+				})
+			),
+			(cause) => {
+				error = cause.message;
+			}
+		);
+	}
 	function replaySync(): void {
 		const instance = current?.id;
 		if (instance === undefined || replaying === instance) return;
@@ -202,6 +240,7 @@
 		error = null;
 		fork(
 			api.replay_instance_sync(instance).pipe(
+				Effect.andThen(dead_letters.refetch()),
 				Effect.andThen(syncHealth.refetch()),
 				Effect.ensuring(
 					Effect.sync(() => {
@@ -445,12 +484,12 @@
 								<Button variant="outline" disabled={replaying === i.id} onclick={replaySync}
 									>{t(replaying === i.id ? 'Replaying…' : health.initialization === null ? 'Replay dead letters' : 'Retry sync')}</Button
 								>
-								{#each deadLetters.current ?? [] as letter (letter.id)}
+								{#each dead_letters.current ?? [] as letter (letter.id)}
 									<div class="w-full rounded-sm border p-2 text-sm">
 										<div class="flex flex-wrap items-center justify-between gap-2">
 											<Button
 												variant="link"
-												onclick={() => openRecord(letter.model, letter.record)}
+												onclick={() => open_record(letter.model, letter.record)}
 											>
 												{letter.model} · {t('Revision')}
 												{letter.revision}
@@ -466,8 +505,8 @@
 										<p class="text-meta">{when(letter.at)} · {letter.message ?? t('Not set')}</p>
 									</div>
 								{/each}
-								{#if deadLetters.error}<p role="alert" class="text-destructive">
-										{deadLetters.error.message}
+								{#if dead_letters.error !== undefined}<p role="alert" class="text-destructive">
+										{dead_letters.error.message}
 									</p>{/if}
 							</div>{/if}
 					{:else if syncHealth.loading}<p class="text-meta">{t('Loading…')}</p>{/if}

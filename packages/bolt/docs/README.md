@@ -402,17 +402,20 @@ steps restart at the first step. A new release does not rewrite an open request'
 A routed write commits provisionally with history and a checkpoint of every held record.
 The shared approval panel shows the request and each named step as a timeline; its request
 selector preserves all earlier requests. `ctx.approvals.decide(id, { decision, reason? })`
-accepts `approve`, `reject` or `request_changes`. Reject and request-changes require a reason;
-approval may include one. A superseder uses Approve with a reason. Comments exist only as
-decision reasons. A requester cannot withdraw a request.
+accepts `approve`, `reject`, `request_changes` or `withdraw`. Reject and request-changes require a
+reason; approval and withdrawal may include one. A superseder uses Approve with a reason. Comments
+exist only as decision reasons. Only the requester withdraws, while the request is open: the member
+who asked, or any run of the automation that did (`ctx.approvals.withdraw(request_id, reason?)`).
+An approver who is not the requester rejects instead.
 
-| State             | Decision                                   | Result                                       |
-| ----------------- | ------------------------------------------ | -------------------------------------------- |
-| Pending           | approve                                    | next step, or approved after the last        |
-| Pending           | reject                                     | rejected; restore the pre-request checkpoint |
-| Pending           | request_changes                             | keep data; requester may edit                |
-| Changes requested | requester saves                            | resubmit the same request and log            |
-| Open              | authorized superseder approves with reason | superseded; keep data                        |
+| State             | Decision                                   | Result                                        |
+| ----------------- | ------------------------------------------ | --------------------------------------------- |
+| Pending           | approve                                    | next step, or approved after the last         |
+| Pending           | reject                                     | rejected; restore the pre-request checkpoint  |
+| Pending           | request_changes                            | keep data; requester may edit                 |
+| Changes requested | requester saves                            | resubmit the same request and log             |
+| Open              | requester withdraws                        | withdrawn; restore the pre-request checkpoint |
+| Open              | authorized superseder approves with reason | superseded; keep data                         |
 
 Rejected, approved, superseded and withdrawn requests are terminal. Saving requested changes resubmits;
 the record's Save button reads Resubmit. There is no separate resubmit operation in page code.

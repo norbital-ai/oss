@@ -172,7 +172,7 @@ const REGISTRY = (): readonly Private[] => [
 		rank: 'table',
 		why: 'the approval state machine, held-record checkpoints and frozen pending effects; approval_request is its readable face',
 		sql: [
-			`create table if not exists bolt_approvals (id uuid primary key, state text not null check (state in ('Pending', 'ChangesRequested', 'Approved', 'Rejected', 'Superseded')), step int not null, collection text not null, record text not null, action text not null, requestor text not null, requestor_user text, route jsonb not null, records jsonb not null, log jsonb not null default '[]', at timestamptz not null, closed_at timestamptz, seq bigint generated always as identity)`,
+			`create table if not exists bolt_approvals (id uuid primary key, state text not null check (state in ('Pending', 'ChangesRequested', 'Approved', 'Rejected', 'Superseded', 'Withdrawn')), step int not null, collection text not null, record text not null, action text not null, requestor text not null, requestor_user text, route jsonb not null, records jsonb not null, log jsonb not null default '[]', at timestamptz not null, closed_at timestamptz, seq bigint generated always as identity)`,
 			`create index if not exists bolt_approvals__open on bolt_approvals (state) where state in ('Pending', 'ChangesRequested')`,
 			`create table if not exists bolt_approval_effect (
 			request uuid not null references bolt_approvals(id) on delete cascade,

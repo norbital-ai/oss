@@ -58,7 +58,8 @@ A routed write commits at once, held by its request; `pending_approval` carries 
 | Open | authorized superseder approves with a reason | Superseded: data stays |
 | Open | `withdraw` by the requester | Withdrawn: restore the checkpoint |
 
-- `ctx.approvals.decide(id, { decision, reason? })`; reject and request_changes need a reason. Comments exist only as decision reasons. A requester cannot withdraw. Render the view's `moves`; never infer eligibility.
+- `ctx.approvals.decide(id, { decision, reason? })`; reject and request_changes need a reason. Comments exist only as decision reasons. Render the view's `moves`; never infer eligibility.
+- Only the requester withdraws an open request: the member who asked, or any run of the automation that asked through `ctx.approvals.withdraw(request_id, reason?)`. An approver rejects instead. Automations take no other decision.
 - Rollback restores updates, deletes creates, re-creates deletes, as `restored` history. Missing fields are reported and skipped. Roll-ups follow their rows.
 - Finished requests stay. `ctx.approvals.list({ model, records, all: true })` gives a record's history.
 - The submitter cannot review their own request, even if named, on a reviewing team, an administrator, a linked envoy sender, or previewing. Others on the same team can.
@@ -69,7 +70,7 @@ A routed write commits at once, held by its request; `pending_approval` carries 
 - While open, held records and owned children change only through the request: current approvers while Pending, the requester in ChangesRequested. Every other writer is refused `locked`, including administrators, automations, syncs, the agent, cascades and restore. Outbound sync writes wait for approval.
 - A pending request keeps its snapshot and lock through releases.
 - Each held read row carries `$approval: { request_id, state, step, steps, requested_by }`. Use the shared approval panel and `RecordShell`. Display `team_names`; eligibility uses handles.
-- The verb's effect gets `ctx.event.kind === 'approval'` with move `request`, `approve`, `reject`, `request_changes`, `resubmit` or `supersede` and no committed changes. Use `ctx.notify` for custom notices; recipients may be `requester`, `approvers`, teams, users or policies. Built-in inbox notices and counters already exist.
+- The verb's effect gets `ctx.event.kind === 'approval'` with move `request`, `approve`, `reject`, `request_changes`, `resubmit`, `supersede` or `withdraw` and no committed changes. Use `ctx.notify` for custom notices; recipients may be `requester`, `approvers`, teams, users or policies. Built-in inbox notices and counters already exist.
 
 ## Preview and evidence
 

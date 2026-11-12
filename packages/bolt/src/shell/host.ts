@@ -1135,7 +1135,7 @@ const makeShell = Effect.gen(function* () {
 			case 'GET /instance-sync-dead-letters': {
 				const instance = url.searchParams.get('instance') ?? '';
 				yield* manageInstance(auth, instance);
-				return json({ value: yield* syncs.deadLetters(instance) });
+				return json({ value: yield* syncs.dead_letters(instance) });
 			}
 			case 'POST /instance-sync-retire': {
 				const { instance, id } = yield* requestBody(request, SyncRetire);

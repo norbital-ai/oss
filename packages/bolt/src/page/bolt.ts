@@ -1033,7 +1033,10 @@ export const create_bolt = (config: BoltConfig) =>
 			approvals: {
 				decide: (
 					request_id: string,
-					decision: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
+					decision: {
+						decision: 'approve' | 'reject' | 'request_changes' | 'withdraw';
+						reason?: string;
+					}
 				) => command('approvals.decide', { request_id, ...decision }),
 				get: (request_id: string) =>
 					getValue(

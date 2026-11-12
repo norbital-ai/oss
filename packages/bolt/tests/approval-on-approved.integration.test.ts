@@ -146,7 +146,12 @@ const fixture = Effect.gen(function* () {
 			})
 			.pipe(Effect.map((result) => result.outcome));
 	};
-	const decide = (request_id: string, decision: 'approve' | 'reject', reason?: string) =>
+	const decide = (
+		request_id: string,
+		decision: 'approve' | 'reject' | 'withdraw',
+		reason?: string,
+		authority = manager
+	) =>
 		approvals.decide({
 			request_id,
 			decision,

@@ -5,7 +5,7 @@
 import { Schema, type Effect } from 'effect';
 import type { FileRef } from '@norbital-ai/std/kind';
 import type { Attachment } from '../decl/runtime/integration.ts';
-import { SyncHealth } from '../engine/sync/health-schema.ts';
+import { SyncDeadLetter, SyncHealth } from '../engine/sync/health-schema.ts';
 import type { Json } from '../decl/values.ts';
 import type { ActOutcome, AiModel } from '../engine/contracts.ts';
 import { AgentSettings } from '../engine/agent/settings.ts';
@@ -142,7 +142,7 @@ export type InstanceMessage = typeof InstanceMessage.Type;
 export const InstanceSyncHealth = SyncHealth;
 export type InstanceSyncHealth = typeof InstanceSyncHealth.Type;
 export const SyncReplayAnswer = Schema.Struct({ replayed: Schema.Number });
-export { SyncDeadLetter } from '../engine/sync/health-schema.ts';
+export { SyncDeadLetter };
 export const SyncRetireAnswer = Schema.Struct({ retired: Schema.Number });
 
 // ── the routes' answers, decoded once by `shell_api` ──
@@ -684,6 +684,8 @@ export type ShellApi = {
 	/** Sync health and dead-letter replay require update permission on this instance. */
 	instance_sync_health(instance: string): Call<InstanceSyncHealth>;
 	replay_instance_sync(instance: string, ids?: readonly string[]): Call<typeof SyncReplayAnswer.Type>;
+	instance_sync_dead_letters(instance: string): Call<readonly SyncDeadLetter[]>;
+	retire_instance_sync(instance: string, id: string): Call<typeof SyncRetireAnswer.Type>;
 	logs(query: LogQuery): Call<readonly LogRow[]>;
 	/** Administrator-only server filtering over the host's separate audit store. */
 	audit(query: AuditQuery): Call<AuditPage>;

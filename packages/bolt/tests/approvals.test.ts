@@ -53,7 +53,7 @@ describe('approval flows', () => {
 		expect(checkpoint).toEqual({ model: 'orders', id: 'order', op: 'update', before: 3 });
 		expect(Schema.encodeSync(Checkpoint)(checkpoint)).toEqual(stored);
 	});
-	it('shows requesters their pending status without giving them a decision or exposing it to strangers', () => {
+	it('shows requesters their pending status with only withdraw, without exposing it to strangers', () => {
 		const row = {
 			id: 'request',
 			state: 'Pending',

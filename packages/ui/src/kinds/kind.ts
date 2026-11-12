@@ -23,7 +23,7 @@ export function field_name(kind: Kind): string | undefined {
 		: undefined;
 }
 /** A file's icon by its MIME type. */
-export const fileIcon = (mime: string) =>
+export const file_icon = (mime: string) =>
 	mime.startsWith('image/')
 		? 'lucide:image'
 		: mime === 'application/pdf'

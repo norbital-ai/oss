@@ -132,7 +132,7 @@ const lower = (
 				const reason = yield* decode(Schema.UndefinedOr(Schema.String), args[1] ?? undefined);
 				return {
 					_tag: 'withdraw',
-					requestId: yield* decode(Schema.String, args[0]),
+					request_id: yield* decode(Schema.String, args[0]),
 					...(reason === undefined ? {} : { reason })
 				};
 			}
@@ -415,7 +415,7 @@ const run = (
 							}).pipe(
 								Effect.catch((error) =>
 									Effect.succeed(
-										member === 'act'
+										member === 'act' || member === 'approvals.withdraw'
 											? ({
 													ok: false,
 													error: { kind: 'refused', code: error.code, message: error.message }

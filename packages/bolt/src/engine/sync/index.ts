@@ -45,6 +45,8 @@ import { makeDeliver } from './write.ts';
 import { SYNC_DELIVER } from './outbox.ts';
 import { Chain } from '../write/sql.ts';
 import { enqueueDrain } from '../runs/queue.ts';
+import { deliverRun } from '../integrations/outbound.ts';
+import { msg as messagePiece } from '../conversations/store.ts';
 import { makeHint } from './hint.ts';
 import { failedBackfills, makeBackfill, replayBackfills, SYNC_BACKFILL } from './backfill.ts';
 
@@ -149,7 +151,7 @@ export type SyncsShape = {
 		instance: string,
 		ids?: readonly string[]
 	) => Effect.Effect<{ readonly replayed: number }, EngineError>;
-	readonly deadLetters: (instance: string) => Effect.Effect<readonly SyncDeadLetter[], EngineError>;
+	readonly dead_letters: (instance: string) => Effect.Effect<readonly SyncDeadLetter[], EngineError>;
 	readonly retire: (
 		instance: string,
 		id: string,
@@ -274,7 +276,7 @@ export const SyncsLive = Layer.effect(
 					? { ...health, last_read_at: iso(read), lag_seconds: (ms - read) / 1000 }
 					: health;
 			}),
-			deadLetters: (instance: string) =>
+			dead_letters: (instance: string) =>
 				db.rows(SyncDeadLetter, {
 					text: `SELECT id::text, model, record, record_revision AS revision, op, at::text,
 						error ->> 'message' AS message FROM sys_outbox
@@ -284,38 +286,26 @@ export const SyncsLive = Layer.effect(
 			retire: Effect.fn('Syncs.retire')(function* (instance: string, id: string, actor: string) {
 				const now = iso(yield* Clock.currentTimeMillis),
 					c = new Chain();
-				c.cte(
+				capturePiece(c,
 					'retired',
+					'sys_outbox',
 					`UPDATE sys_outbox SET status = 'skipped',
 					error = coalesce(error, '{}'::jsonb) || jsonb_build_object('retired', jsonb_build_object(
 						'at', ${c.p(now)}::text, 'by', ${c.p(actor)}::text))
-					WHERE instance = ${c.p(instance)} AND id::text = ${c.p(id)} AND status = 'dead'
-					RETURNING id, model, record, key`
+					WHERE instance = ${c.p(instance)} AND id::text = ${c.p(id)} AND status = 'dead'`,
+					{ returning: 'sys_outbox.id, sys_outbox.key' }
 				);
-				c.cte(
-					'sends_skipped',
-					`UPDATE sys_message SET status = 'skipped', error = 'The source write was retired.'
-					WHERE meta ->> 'sync_write' IN (SELECT key FROM retired) AND status = 'queued' RETURNING id`
-				);
+				c.cte('sends_skipped', `SELECT * FROM ${messagePiece(c, `UPDATE sys_message SET status = 'skipped', error = 'The source write was retired.'
+					WHERE meta ->> 'sync_write' IN (SELECT key FROM retired) AND status = 'queued'`, 'sys_message.id')}`);
 				deliverRun(c, 'sends_skipped', now);
-				enqueue(
-					c,
-					[{ automation: SYNC_DELIVER, input: {}, dueAt: now, cause: 'schedule', depth: 0 }],
-					{ when: 'EXISTS (SELECT 1 FROM retired)' }
+				// a later change of the record was waiting behind the retired write
+				enqueueDrain(c, SYNC_DELIVER, c.p(now), 'EXISTS (SELECT 1 FROM retired)');
+				const answer = yield* nativeCommit(db.write, live.publish, c,
+					Schema.Struct({ ...CapturedResult.fields, retired: Schema.Number }),
+					'(SELECT count(*)::int FROM retired) AS retired'
 				);
-				const [row] = yield* db.returning(
-					Schema.Struct({
-						model: Schema.NullOr(Schema.String),
-						record: Schema.NullOr(Schema.String)
-					}),
-					c.sql('(SELECT model FROM retired) AS model, (SELECT record FROM retired) AS record')
-				);
-				if (row?.model && row.record) {
-					live.syncChanged('sys_integration', [instance]);
-					live.syncChanged(row.model, [row.record]);
-					yield* wake.at(now);
-				}
-				return { retired: row?.model ? 1 : 0 };
+				if (answer.retired > 0) yield* wake.at(now);
+				return { retired: answer.retired };
 			}),
 			replay: Effect.fn('Syncs.replay')(function* (instance: string, ids?: readonly string[]) {
 				const now = iso(yield* Clock.currentTimeMillis),

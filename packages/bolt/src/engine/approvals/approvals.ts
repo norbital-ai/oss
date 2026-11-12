@@ -89,7 +89,12 @@ const STATUS = {
 	Superseded: 'SUPERSEDED',
 	Withdrawn: 'WITHDRAWN'
 } as const satisfies { [S in ApprovalState]: string };
-const LogEntry = Schema.Struct({ ...ApprovalLogFields, by: Schema.String });
+const LogEntry = Schema.Struct({
+	...ApprovalLogFields,
+	by: Schema.String,
+	/** The automation whose run asked (`by` names only that run): any of its runs may withdraw the request. */
+	automation: Schema.optionalKey(Schema.String)
+});
 type LogEntry = typeof LogEntry.Type;
 const StoredRow = Schema.Struct({
 	id: Schema.String,
@@ -473,7 +478,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 			reason = x.reason?.trim() ?? '';
 		// a rerun's withdraw of what its earlier attempt withdrew
 		if (move === 'withdraw' && a.state === 'Withdrawn' && roles.has('requester'))
-			return { kind: 'decided', requestId: a.id, status: a.state };
+			return { kind: 'decided', request_id: a.id, status: a.state };
 		const t = transition(a, a.route.steps.length, move, roles, reason);
 		if ('refused' in t)
 			return t.refused === 'forbidden'
@@ -721,7 +726,7 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				[...new Set(a.route.steps.flatMap((s) => s.users))].map((id) => [id, name.get(id) ?? id])
 			),
 			requestor: who(a.requestor),
-			log: a.log.map(({ by, ...entry }) => ({ ...entry, by: who(by) })),
+			log: a.log.map(({ by, automation: _automation, ...entry }) => ({ ...entry, by: who(by) })),
 			records: a.records.map(({ model, id, op }) => ({ model, id, op })),
 			moves: decisionsFor(a.state, rolesOf(a, auth)),
 			mine: a.requestor === me,

@@ -4,7 +4,7 @@ import { duration_seconds } from '@norbital-ai/std/date';
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
 import type { Act, BodyReturn, CallerQuery, Clock, Eff } from '../ctx.ts';
-import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
+import type { ActConflict, ActRefused, ActUnknown, FacilityFailure, Refusal, Unavailable } from '../errors.ts';
 import type {
 	Checked,
 	Exact,
@@ -140,6 +140,19 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 		cause: RunCause;
 		progress(update: { ratio?: number | null; text?: string | null }): Eff<void>;
 		act: Act;
+		/**
+		 * Takes back an open approval request this identity asked for (an automation: any of its runs; an effect: its
+		 * writer), restoring the held records as a rejection does. Anyone else's request fails `ActRefused`.
+		 */
+		approvals: {
+			withdraw(
+				request_id: RequestId,
+				reason?: string
+			): Eff<
+				{ readonly request_id: RequestId; readonly status: 'Withdrawn' },
+				ActRefused | ActConflict | ActUnknown
+			>;
+		};
 		run: Run;
 		/** Stops the current body with an authored refusal. */
 		refuse(message: string, at?: { at?: object; field?: string; row?: number }): Eff<never, Refusal>;

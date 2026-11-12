@@ -1,8 +1,7 @@
 <!--
 @component
-Files as compact chips: an icon (an image's own thumbnail) and the truncated name. A chip is a button opening a popover
-with the file's preview, metadata and Download; `on_remove` adds Remove there. `pending` chips show uploads in flight or
-failed (retry, dismiss); `dense` shows the first chip and how many more; `children` ends the row (the field's "+").
+Files already uploaded share one preview control. Pending uploads have their own retry and dismiss chips.
+The add control sits at the end.
 -->
 <script lang="ts" module>
 	import type { FileRef } from './kind.js';
@@ -15,10 +14,8 @@ failed (retry, dismiss); `dense` shows the first chip and how many more; `childr
 	import Icon from '@iconify/svelte';
 	import type { Snippet } from 'svelte';
 	import Spinner from '../primitives/spinner/spinner.svelte';
-	import Image from '../primitives/image/image.svelte';
 	import { cn, ui_text } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
-	import FilePreview from './file-preview.svelte';
+	import FileCollection from './file-collection.svelte';
 
 	let {
 		refs,
@@ -39,10 +36,7 @@ failed (retry, dismiss); `dense` shows the first chip and how many more; `childr
 		class?: string;
 		children?: Snippet;
 	} = $props();
-	const host = useKinds();
 	const t = ui_text();
-	const shown = $derived(dense ? refs.slice(0, 1) : refs);
-	let open = $state<string | null>(null);
 	const CHIP =
 		'inline-flex h-7 max-w-48 min-w-0 items-center gap-1.5 rounded-sm border border-border bg-muted/50 px-2 text-xs font-medium';
 	const ICON_BUTTON =
@@ -79,57 +73,6 @@ failed (retry, dismiss); `dense` shows the first chip and how many more; `childr
 			{/if}
 		</span>
 	{/each}
-	{#each shown as ref (ref.id)}
-		{@const url = host.file_url?.(ref, { preview: 64 })}
-		<Popover.Root open={open === ref.id} on_open_change={(o) => (open = o ? ref.id : null)}>
-			<Popover.Trigger>
-				{#snippet child({ props })}
-					<button
-						{...props}
-						type="button"
-						class={cn(
-							CHIP,
-							'hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
-						)}
-						title={ref.name}
-						data-file-chip
-					>
-						{#if ref.mime.startsWith('image/') && url !== undefined}
-							<Image
-								src={url}
-								alt=""
-								width={16}
-								height={16}
-								class="size-4 shrink-0 rounded-xs"
-								image_class="size-full object-cover"
-							/>
-						{:else}
-							<Icon icon={fileIcon(ref.mime)} class="size-3.5 shrink-0 text-muted-foreground" />
-						{/if}
-						<span class="truncate">{ref.name}</span>
-					</button>
-				{/snippet}
-			</Popover.Trigger>
-			<Popover.Content
-				class="w-80 max-w-[calc(100vw-2rem)] p-3"
-				align="start"
-				aria-label={`${t('preview')} ${ref.name}`}
-				on_close_auto_focus={() => {}}
-			>
-				<FilePreview
-					file={ref}
-					on_remove={on_remove && !disabled
-						? () => {
-								open = null;
-								on_remove(ref);
-							}
-						: undefined}
-				/>
-			</Popover.Content>
-		</Popover.Root>
-	{/each}
-	{#if refs.length > shown.length}<span class="shrink-0 text-xs text-muted-foreground"
-			>+{refs.length - shown.length}</span
-		>{/if}
+	{#if refs.length}<FileCollection {refs} on_remove={disabled ? undefined : on_remove} />{/if}
 	{@render children?.()}
 </span>

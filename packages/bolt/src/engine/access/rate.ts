@@ -270,7 +270,8 @@ export function charges_for(
 		if (!kinds.includes(rule.key)) continue;
 		const bucket = who[rule.per];
 		if (bucket === undefined) continue;
-		out.push({ rule: `${rule.key}:${rule.rate}:${rule.per}`, bucket, ...parse_rate(rule.rate) });
+		const name = `${rule.key}:${rule.rate}:${rule.per}`;
+		out.set(`${name}\u0000${bucket}`, { rule: name, bucket, ...parse_rate(rule.rate) });
 	}
 	return [...out.values()];
 }

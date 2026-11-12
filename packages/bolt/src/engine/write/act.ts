@@ -1822,7 +1822,8 @@ const reviewChange = Effect.fn('Bolt.reviewChange')(function* (
 			const value = after[field];
 			if (value !== undefined && (create || Object.hasOwn(storedChanges(cat, model, before ?? {}, { [field]: value }), field))) {
 				values[field] = value;
-				needs.push({ path, field });
+				// a create's stored row carries every column; one still empty was never the requester's to be granted
+				if (!create || value !== null) needs.push({ path, field });
 			}
 		}
 		for (const [rel, edge] of cat.models.get(model)?.many ?? []) {
@@ -1876,7 +1877,7 @@ const routeChanges = Effect.fn('Bolt.routeChanges')(function* (
 ): Effect.fn.Return<RoutedPlan | StoppedPlan, EngineError> {
 	const { e, r, env, pre, own } = context;
 	const m = e.manifest, auth = r.authority, b = r.bindings, cat = env.cat;
-	const { submitted } = context, { flow, readTables, fingerprints } = prepared, { writes } = draft;
+	const { submitted } = context, { flow, readTables, fingerprints } = prepared, { writes, unchanged } = draft;
 	let guest = prepared.guest;
 	const stop = (outcome: Outcome): StoppedPlan => ({ guest, outcome });
 	// 8. An `approve` verdict routes the act to its flow; a requester's save of requested changes is judged again.
@@ -1936,8 +1937,14 @@ const routeChanges = Effect.fn('Bolt.routeChanges')(function* (
 		]),
 		auth.actor
 	);
+	// an update that changes nothing is no write, yet its transform may carry `on_approved`: a held record's waits too
+	const idle = yield* holders(
+		own,
+		unchanged.map(({ model, id }) => [model, id] as const),
+		auth.actor
+	);
 	// a change to a held record joins its request: what it carries `on_approved` waits for the approving decision too
-	if (held.length > 0)
+	if (held.length > 0 || idle.length > 0)
 		writes.splice(
 			0,
 			writes.length,

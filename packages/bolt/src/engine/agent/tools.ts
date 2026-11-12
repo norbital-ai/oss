@@ -667,7 +667,7 @@ const json_list = (value: Json | undefined): value is readonly Json[] => Array.i
 const APPROVE = 'approvals.decide';
 const Decide = Schema.Struct({
 	request_id: Schema.String,
-	decision: Schema.Literals(['approve', 'reject', 'request_changes']),
+	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'withdraw']),
 	reason: Schema.optionalKey(Schema.String)
 });
 /** `act { callable: 'automation.<name>' }` starts a declared automation now. */
@@ -918,7 +918,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		const d = Option.getOrUndefined(Schema.decodeUnknownOption(Decide)(input));
 		if (d === undefined)
 			return {
-				error: `${APPROVE} takes { request_id, decision: approve | reject | request_changes, reason? }`
+				error: `${APPROVE} takes { request_id, decision: approve | reject | request_changes | withdraw, reason? }`
 			};
 		return encode_wire(
 			yield* x.engine.approvals.decide({

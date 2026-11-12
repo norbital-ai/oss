@@ -270,7 +270,7 @@ is<
 is<
 	Eq<
 		Exclude<CrossCall['_tag'], FacilityCall['_tag']>,
-		'read' | 'act' | 'run' | 'schedule' | 'notify' | 'send' | 'request' | 'progress'
+		'read' | 'act' | 'run' | 'schedule' | 'notify' | 'send' | 'request' | 'progress' | 'withdraw'
 	>
 >();
 is<

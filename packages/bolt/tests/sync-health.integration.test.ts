@@ -108,7 +108,7 @@ const setup = Effect.gen(function* () {
 					body: JSON.stringify(body)
 				})
 			),
-		deadLetters: (instance: string) =>
+		dead_letters: (instance: string) =>
 			t.handle(
 				new Request(`${ORIGIN}/__bolt/shell/instance-sync-dead-letters?instance=${instance}`, {
 					headers: { cookie }
@@ -133,7 +133,7 @@ describe('shell integration sync health and replay', () => {
 			Effect.gen(function* () {
 				const f = yield* setup;
 				const before = yield* f.outbox();
-				expect((yield* f.deadLetters(OTHER)).status).toBe(403);
+				expect((yield* f.dead_letters(OTHER)).status).toBe(403);
 				expect((yield* f.retire({ instance: OTHER, id: OTHER_DEAD })).status).toBe(403);
 				expect(yield* json(yield* f.retire({ instance: OWN, id: OTHER_DEAD }))).toEqual({
 					value: { retired: 0 }
@@ -171,7 +171,7 @@ describe('shell integration sync health and replay', () => {
 				expect(yield* json(yield* f.replay({ instance: OWN, ids: [DEAD] }))).toEqual({
 					value: { replayed: 0 }
 				});
-				const listed = yield* json(yield* f.deadLetters(OWN));
+				const listed = yield* json(yield* f.dead_letters(OWN));
 				expect(listed).toMatchObject({ value: [{ id: SECOND_DEAD }] });
 			})
 		)

@@ -435,6 +435,15 @@ describe('engine/access: Authority (rules 33–37)', () => {
 			})
 	);
 
+	it('a limit two of a holder’s policies both declare is one bucket, charged once', () => {
+		const rep = auth(['rep']);
+		const twice = { ...rep, limits: [...rep.limits, ...rep.limits] };
+		expect(charges_for(twice, ['act'], { actor: 'u' })).toEqual(
+			charges_for(rep, ['act'], { actor: 'u' })
+		);
+		expect(charges_for(twice, ['act'], { actor: 'u' })).toHaveLength(1);
+	});
+
 	it.effect('compiled once per key (rule 37); a run holds exactly its policies', () =>
 		Effect.gen(function* () {
 			const as = new Authorities(m, 'r1');

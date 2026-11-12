@@ -295,7 +295,7 @@ it.live(
 			assert.equal(confirm.disabled, false);
 			confirm.click();
 			yield* browser(() => settle());
-			assert.deepEqual(sent, [{ requestId: 'r1', decision: 'withdraw' }]);
+			assert.deepEqual(sent, [{ request_id: 'r1', decision: 'withdraw' }]);
 
 			const closed = yield* panel([
 				{

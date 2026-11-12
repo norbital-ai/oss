@@ -17,7 +17,7 @@ when the host reads), Download, and Remove when `on_remove` is given.
 	import Image from '../primitives/image/image.svelte';
 	import { format_file_size, ui_text } from '../primitives/utils.js';
 	import { useKinds } from './context.js';
-	import { fileIcon, type FileRef, type Value } from './kind.js';
+	import { file_icon, type FileRef, type Value } from './kind.js';
 
 	let { file, on_remove }: { file: FileRef; on_remove?(): void } = $props();
 	const host = useKinds();
@@ -110,13 +110,13 @@ when the host reads), Download, and Remove when `on_remove` is given.
 			></iframe>
 		{:else if url !== undefined && text}
 			{#if content.loading || content.error !== undefined}<Icon
-					icon={fileIcon(file.mime)}
+					icon={file_icon(file.mime)}
 					class="size-8 text-muted-foreground"
 				/>
 			{:else}<pre class="max-h-60 w-full overflow-auto p-2 text-xs leading-snug">{content.current ??
 						''}</pre>{/if}
 		{:else}
-			<Icon icon={fileIcon(file.mime)} class="size-8 text-muted-foreground" />
+			<Icon icon={file_icon(file.mime)} class="size-8 text-muted-foreground" />
 		{/if}
 	</div>
 	<p class="truncate text-sm font-medium" title={file.name}>{file.name}</p>

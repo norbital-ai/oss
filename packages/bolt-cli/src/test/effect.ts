@@ -286,7 +286,7 @@ export interface Caller {
 	readonly approvals: {
 		decide(
 			request_id: string,
-			input: { decision: 'approve' | 'reject' | 'request_changes'; reason?: string }
+			input: { decision: 'approve' | 'reject' | 'request_changes' | 'withdraw'; reason?: string }
 		): Effect.Effect<void, ActFailure>;
 	};
 }

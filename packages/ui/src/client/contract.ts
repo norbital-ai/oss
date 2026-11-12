@@ -131,7 +131,7 @@ export type RunRow = {
 };
 
 /** A decision on a request's current step (`approvals.decide`); a superseder's `approve` supersedes. */
-export type ApprovalDecision = 'approve' | 'reject' | 'request_changes';
+export type ApprovalDecision = 'approve' | 'reject' | 'request_changes' | 'withdraw';
 /** One step of a request's flow as it was snapshotted when the request opened (or was resubmitted): decided by any of its teams or users. */
 export type ApprovalStep = {
 	readonly name: string;
@@ -158,7 +158,8 @@ export type ApprovalView = {
 	requestor: ApprovalWho;
 	/** Every move, oldest first, each on the step it was taken at, with what a rollback did. */
 	log: readonly {
-		move: 'request' | 'approve' | 'reject' | 'request_changes' | 'resubmit' | 'supersede';
+		move:
+			'request' | 'approve' | 'reject' | 'request_changes' | 'resubmit' | 'supersede' | 'withdraw';
 		by: ApprovalWho;
 		at: string;
 		from: string | null;
@@ -276,7 +277,7 @@ export type ViewBolt = {
 		}[]
 	): Effect.Effect<{ fields: readonly Offer[] }, Error>;
 	approvals: {
-		/** Decides the request's current step; `reason` is required for `reject` and `request_changes` (and a superseder's approve). */
+		/** Decides the request's current step; `reason` is required for `reject` and `request_changes` (and a superseder's approve); the requester may `withdraw`. */
 		decide(
 			request_id: string,
 			decision: { decision: ApprovalDecision; reason?: string }

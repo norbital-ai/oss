@@ -247,13 +247,13 @@ export function shell_api(
 				instance,
 				...(ids === undefined ? {} : { ids: [...ids] })
 			}),
-		instanceDeadLetters: (instance: string) =>
+		instance_sync_dead_letters: (instance: string) =>
 			call(
 				Schema.Array(SyncDeadLetter),
 				'GET',
 				`${SHELL}/instance-sync-dead-letters?${new URLSearchParams({ instance })}`
 			),
-		retireInstanceSync: (instance: string, id: string) =>
+		retire_instance_sync: (instance: string, id: string) =>
 			call(SyncRetireAnswer, 'POST', `${SHELL}/instance-sync-retire`, { instance, id }),
 		logs: (x: import('../engine/contracts.ts').LogQuery) =>
 			call(

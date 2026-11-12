@@ -23,8 +23,8 @@ create: {
 For `ctx.event.kind === 'write'`, the effect receives changes with `before`, `set`, `after` and
 `changed(...fields)`. A held write freezes its changes and writer until final approval; rejection
 discards them. Approval events have an empty change list and carry `{ kind: 'approval', move, step, steps, done, request,
-records, requester, approvers }`; moves include request, approve, reject, request_changes, resubmit
-and supersede. Ordinary code decides wording, grouping, plurals and which events should notify.
+records, requester, approvers }`; moves include request, approve, reject, request_changes, resubmit,
+supersede and withdraw. Ordinary code decides wording, grouping, plurals and which events should notify.
 
 Built-in approval inbox notices already exist. For custom notices, use `to: ['approvers']` in the request event. Delivery resolves the active
 request's current step against active staff members, excludes its requester, and sends nothing

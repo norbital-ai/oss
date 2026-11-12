@@ -207,7 +207,11 @@ A tab strip with the selected tab's body; `keep_alive` tabs stay mounted while h
 			{@render trailing?.()}
 		</div>
 		{#each tabs as tab (tab.name)}
-			<TabPanel value={tab.name} label={tab.title}>
+			<TabPanel
+				value={tab.name}
+				label={tab.title}
+				class={railEnd ? '@2xl:col-start-1 @2xl:row-start-1' : ''}
+			>
 				{#if tab.name === active || (tab.keep_alive && visited[tab.name])}
 					{@render tab.body()}
 				{/if}
