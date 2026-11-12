@@ -78,14 +78,16 @@ const environment = Config.all({
 export const run = Effect.fn('bolt.templatesProcess')(function* (
 	command: string,
 	args: readonly string[],
-	options: { cwd?: string } = {}
+	/** `extendEnv` hands the child this process's whole environment, as another release's CLI needs it. */
+	options: { cwd?: string; extendEnv?: boolean } = {}
 ) {
 	const env = yield* environment;
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
 			const handle = yield* ChildProcess.make(command, args, {
 				cwd: options.cwd ?? process.cwd(),
-				env
+				env,
+				extendEnv: options.extendEnv ?? false
 			});
 			const [stdout, stderr, code] = yield* Effect.all(
 				[
@@ -262,7 +264,10 @@ export const unsatisfiedFirstPartyPeers = Effect.fnUntraced(function* (lockfile:
 	return [...new Set(problems)];
 });
 /** A frozen install of a template's own pins, with the registry configuration only for its duration. */
-const installFrozen = Effect.fn('bolt.templateInstall')(function* (directory: string) {
+const installFrozen = Effect.fn('bolt.templateInstall')(function* (
+	directory: string,
+	execute: TemplateRunner = run
+) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const npmrc = path.join(directory, '.npmrc');
@@ -270,29 +275,36 @@ const installFrozen = Effect.fn('bolt.templateInstall')(function* (directory: st
 	yield* Effect.acquireRelease(fs.writeFileString(npmrc, credentials), () =>
 		Effect.ignore(fs.remove(npmrc))
 	);
-	yield* run('bun', ['install', '--frozen-lockfile'], { cwd: directory });
+	yield* execute('bun', ['install', '--frozen-lockfile'], { cwd: directory });
 }, Effect.scoped);
 /**
  * A repo verb for one template on another Bolt release, through that release's own `bolt`: installed from the
- * template's frozen lock and run from a root that holds only that template, so no sibling meets its schemas.
+ * template's frozen lock and run from a root that holds only that template, so no sibling meets its schemas. The
+ * root carries the repo root's registry configuration and the child this process's environment, so it
+ * authenticates as this CLI does.
  */
-export const delegateTemplate = Effect.fn('bolt.templatesDelegate')(
-	function* (template: Template, args: readonly string[]) {
-		const fs = yield* FileSystem.FileSystem;
-		const path = yield* Path.Path;
-		yield* installFrozen(template.directory);
-		const root = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-delegate-${template.slug}-` });
-		yield* fs.symlink(template.directory, path.join(root, template.slug));
-		const output = yield* run(
-			path.join(template.directory, 'node_modules', '.bin', 'bolt'),
-			['templates', ...args, `--filter=${template.slug}`],
-			{ cwd: root }
-		);
-		if (output) yield* Console.log(output);
-		return output;
-	},
-	Effect.scoped
-);
+export const delegateTemplate = Effect.fn('bolt.templatesDelegate')(function* (
+	template: Template,
+	args: readonly string[],
+	execute: TemplateRunner = run
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	yield* installFrozen(template.directory, execute);
+	const root = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-delegate-${template.slug}-` });
+	yield* fs.symlink(template.directory, path.join(root, template.slug));
+	for (const file of ['.npmrc', 'bunfig.toml']) {
+		const source = path.join(path.dirname(template.directory), file);
+		if (yield* fs.exists(source)) yield* fs.symlink(source, path.join(root, file));
+	}
+	const output = yield* execute(
+		path.join(template.directory, 'node_modules', '.bin', 'bolt'),
+		['templates', ...args, `--filter=${template.slug}`],
+		{ cwd: root, extendEnv: true }
+	);
+	if (output) yield* Console.log(output);
+	return output;
+}, Effect.scoped);
 export type TemplateDelegate = (
 	template: Template,
 	args: readonly string[]
@@ -441,7 +453,7 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 export type TemplateRunner = (
 	command: string,
 	args: readonly string[],
-	options?: { cwd?: string }
+	options?: { cwd?: string; extendEnv?: boolean }
 ) => Effect.Effect<
 	string,
 	| Effect.Error<ReturnType<typeof run>>

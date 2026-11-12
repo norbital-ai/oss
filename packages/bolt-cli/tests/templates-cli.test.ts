@@ -5,6 +5,7 @@ import { describe, expect } from 'vitest';
 import {
 	actualCounts,
 	checkTemplates,
+	delegateTemplate,
 	discoverTemplates,
 	lockTemplates,
 	publishTemplates,
@@ -183,6 +184,50 @@ describe('bolt templates', () => {
 				['older', ['publish', `--out=${root}/out`]]
 			]);
 		}).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live(
+		'runs a delegated release with the repo root registry configuration and environment',
+		() =>
+			Effect.gen(function* () {
+				const fs = yield* FileSystem.FileSystem;
+				const path = yield* Path.Path;
+				const { root } = yield* fixture;
+				yield* fs.writeFileString(
+					path.join(root, '.npmrc'),
+					'@norbital-ai:registry=https://example.test\n'
+				);
+				yield* fs.writeFileString(path.join(root, 'bunfig.toml'), '[install]\n');
+				const sibling = (yield* discoverTemplates(root))[0];
+				if (sibling === undefined) throw new Error('fixture template missing');
+				const calls: Array<{
+					command: string;
+					npmrc: string;
+					bunfig: string;
+					extendEnv?: boolean;
+				}> = [];
+				yield* delegateTemplate(sibling, ['lock', '--check'], (command, _args, options) =>
+					Effect.gen(function* () {
+						if (options?.cwd === undefined) throw new Error('fixture execution cwd missing');
+						const read = (file: string) =>
+							fs
+								.readFileString(path.join(options.cwd ?? '', file))
+								.pipe(Effect.orElseSucceed(() => ''));
+						calls.push({
+							command,
+							npmrc: yield* read('.npmrc'),
+							bunfig: yield* read('bunfig.toml'),
+							...(options.extendEnv === undefined ? {} : { extendEnv: options.extendEnv })
+						});
+						return '';
+					})
+				);
+				expect(calls.at(-1)).toEqual({
+					command: path.join(sibling.directory, 'node_modules', '.bin', 'bolt'),
+					npmrc: '@norbital-ai:registry=https://example.test\n',
+					bunfig: '[install]\n',
+					extendEnv: true
+				});
+			}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live('resolves a lockfile from the committed one without its first-party entries', () =>
 		Effect.gen(function* () {
