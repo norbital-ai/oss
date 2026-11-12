@@ -1,11 +1,13 @@
 import { it } from '@effect/vitest';
 import * as NodeServices from '@effect/platform-node/NodeServices';
-import { Effect, FileSystem, Path } from 'effect';
+import { Effect, FileSystem, Path, Schema } from 'effect';
 import { describe, expect } from 'vitest';
 import {
 	actualCounts,
 	checkTemplates,
 	discoverTemplates,
+	lockTemplates,
+	publishTemplates,
 	resolveLockfile,
 	testTemplates,
 	unsatisfiedFirstPartyPeers,
@@ -25,26 +27,39 @@ const metadata = {
 /** A bun.lock (JSON with trailing commas): `packages` maps an install path to `[id, registry, meta, integrity]`. */
 const bunLock = (packages: Record<string, readonly unknown[]>) =>
 	`${JSON.stringify({ lockfileVersion: 1, workspaces: { '': { name: 'fixture' } }, packages }, null, 2).replace(/\n(\s*)([}\]])/g, ',\n$1$2')}\n`;
-const fixture = Effect.gen(function* () {
+/** A template in `root` pinning `bolt`: this CLI's own release unless named. */
+const template = Effect.fnUntraced(function* (
+	root: string,
+	slug: string,
+	manifest: object,
+	bolt?: string
+) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-template-cli-' });
-	const directory = path.join(root, 'fixture');
+	const { version: own } = yield* Schema.decodeUnknownEffect(
+		Schema.fromJsonString(Schema.Struct({ version: Schema.String }))
+	)(yield* fs.readFileString(path.join(import.meta.dirname, '..', 'package.json')));
+	const directory = path.join(root, slug);
 	yield* fs.makeDirectory(directory);
 	yield* fs.writeFileString(
 		path.join(directory, 'norbital.template.json'),
-		JSON.stringify(metadata)
+		JSON.stringify(manifest)
 	);
 	yield* fs.writeFileString(
 		path.join(directory, 'package.json'),
 		JSON.stringify({
 			private: true,
 			scripts: { build: 'bolt build', test: 'bolt test' },
-			dependencies: { '@norbital-ai/bolt': '0.0.1' }
+			dependencies: { '@norbital-ai/bolt': bolt ?? own }
 		})
 	);
 	yield* fs.writeFileString(path.join(directory, 'bun.lock'), bunLock({}));
-	return { root, directory };
+	return directory;
+});
+const fixture = Effect.gen(function* () {
+	const fs = yield* FileSystem.FileSystem;
+	const root = yield* fs.makeTempDirectoryScoped({ prefix: 'bolt-template-cli-' });
+	return { root, directory: yield* template(root, 'fixture', metadata) };
 });
 describe('bolt templates', () => {
 	it.live('discovers metadata and resolves both a directory slug and a handle', () =>
@@ -135,6 +150,38 @@ describe('bolt templates', () => {
 			expect((yield* checkTemplates(root).pipe(Effect.flip)).message).toBe(
 				'fixture: committed migrations belong in migrations/, beside src/'
 			);
+		}).pipe(Effect.provide(NodeServices.layer))
+	);
+	it.live('runs a sibling on another Bolt release through its own toolchain, unread', () =>
+		Effect.gen(function* () {
+			const { root } = yield* fixture;
+			// another release's manifest shape: this CLI's schema cannot decode it, and never tries
+			yield* template(
+				root,
+				'older',
+				{ schemaVersion: 1, key: 'norbital_older', counts: { models: 0 } },
+				'0.0.1'
+			);
+			const delegated: Array<readonly [string, readonly string[]]> = [];
+			const delegate = (sibling: { slug: string }, args: readonly string[]) =>
+				Effect.sync(() => {
+					delegated.push([sibling.slug, args]);
+					return '';
+				});
+			expect((yield* discoverTemplates(root)).map(({ handle, bolt }) => [handle, bolt])).toEqual([
+				['norbital_fixture', expect.any(String)],
+				['norbital_older', '0.0.1']
+			]);
+			yield* checkTemplates(root, 'fixture', delegate);
+			expect(delegated).toEqual([]);
+			yield* checkTemplates(root, undefined, delegate);
+			yield* lockTemplates({ root, filter: 'older', check: true }, delegate);
+			yield* publishTemplates({ root, out: 'out', filter: 'norbital_older' }, delegate);
+			expect(delegated).toEqual([
+				['older', ['check']],
+				['older', ['lock', '--check']],
+				['older', ['publish', `--out=${root}/out`]]
+			]);
 		}).pipe(Effect.provide(NodeServices.layer))
 	);
 	it.live('resolves a lockfile from the committed one without its first-party entries', () =>

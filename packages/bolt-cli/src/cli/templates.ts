@@ -14,20 +14,21 @@ import { ChildProcess } from 'effect/process';
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { TemplateManifest } from '@norbital-ai/bolt/protocol';
 import { read_artifact } from '@norbital-ai/bolt/artifact';
 import { ReleaseJson, schemaSql } from '../compiler/artifact/index.ts';
 import { workers } from './test.ts';
 
 export const templateMetadataFile = 'norbital.template.json';
-export type TemplateCounts = TemplateManifest['counts'];
+/** What repo verbs read of any template, whatever Bolt release it pins: its directory, handle and Bolt pin. */
 export type Template = {
 	slug: string;
 	handle: string;
 	directory: string;
 	path: string;
-	metadata: TemplateManifest;
-	counts: TemplateCounts;
+	/** its `@norbital-ai/bolt` pin, '' when it declares none */
+	bolt: string;
 };
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const exactVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -50,6 +51,13 @@ const json = <A>(schema: Schema.Decoder<A>, file: string) =>
 		Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(schema))),
 		Effect.mapError((error) => new TemplateError({ message: `${file}: ${error.message}` }))
 	);
+/** The manifest field every Bolt release keeps; the rest of the shape belongs to the template's own release. */
+const Handle = Schema.Struct({ key: Schema.String });
+/** The Bolt release this CLI ships with: bolt-cli and bolt share one version. */
+const release = json(
+	Schema.Struct({ version: Schema.String }),
+	fileURLToPath(new URL('../../package.json', import.meta.url))
+).pipe(Effect.map((manifest) => manifest.version));
 const environment = Config.all({
 	PATH: Config.String('PATH'),
 	HOME: Config.option(Config.String('HOME')),
@@ -156,18 +164,20 @@ export const discoverTemplates = Effect.fn('bolt.discoverTemplates')(function* (
 		)
 			continue;
 		if (!slugPattern.test(slug)) return yield* fail(`Invalid template directory name: ${slug}`);
-		const metadata = yield* json(TemplateManifest, path.join(directory, templateMetadataFile));
-		if (!/^norbital_[a-z0-9_]+$/.test(metadata.key))
-			return yield* fail(`Template ${slug} has an invalid organization handle: ${metadata.key}`);
+		const { key } = yield* json(Handle, path.join(directory, templateMetadataFile));
+		if (!/^norbital_[a-z0-9_]+$/.test(key))
+			return yield* fail(`Template ${slug} has an invalid organization handle: ${key}`);
+		if (templates.some((template) => template.handle === key))
+			return yield* fail(`Template ${slug} repeats the handle ${key}.`);
 		if (!(yield* fs.exists(path.join(directory, 'package.json'))))
 			return yield* fail(`Template ${slug} has no package.json.`);
+		const manifest = yield* json(Package, path.join(directory, 'package.json'));
 		templates.push({
 			slug,
-			handle: metadata.key,
+			handle: key,
 			directory,
 			path: slug,
-			metadata,
-			counts: metadata.counts
+			bolt: manifest.dependencies?.['@norbital-ai/bolt'] ?? ''
 		});
 	}
 	if (templates.length === 0) return yield* fail('No templates found.');
@@ -251,16 +261,65 @@ export const unsatisfiedFirstPartyPeers = Effect.fnUntraced(function* (lockfile:
 	}
 	return [...new Set(problems)];
 });
+/** A frozen install of a template's own pins, with the registry configuration only for its duration. */
+const installFrozen = Effect.fn('bolt.templateInstall')(function* (directory: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const npmrc = path.join(directory, '.npmrc');
+	const credentials = yield* registryConfiguration;
+	yield* Effect.acquireRelease(fs.writeFileString(npmrc, credentials), () =>
+		Effect.ignore(fs.remove(npmrc))
+	);
+	yield* run('bun', ['install', '--frozen-lockfile'], { cwd: directory });
+}, Effect.scoped);
+/**
+ * A repo verb for one template on another Bolt release, through that release's own `bolt`: installed from the
+ * template's frozen lock and run from a root that holds only that template, so no sibling meets its schemas.
+ */
+export const delegateTemplate = Effect.fn('bolt.templatesDelegate')(
+	function* (template: Template, args: readonly string[]) {
+		const fs = yield* FileSystem.FileSystem;
+		const path = yield* Path.Path;
+		yield* installFrozen(template.directory);
+		const root = yield* fs.makeTempDirectoryScoped({ prefix: `norbital-delegate-${template.slug}-` });
+		yield* fs.symlink(template.directory, path.join(root, template.slug));
+		const output = yield* run(
+			path.join(template.directory, 'node_modules', '.bin', 'bolt'),
+			['templates', ...args, `--filter=${template.slug}`],
+			{ cwd: root }
+		);
+		if (output) yield* Console.log(output);
+		return output;
+	},
+	Effect.scoped
+);
+export type TemplateDelegate = (
+	template: Template,
+	args: readonly string[]
+) => ReturnType<typeof delegateTemplate>;
+/** Templates on this CLI's release (or on no exact release, for check to name) and those pinning another. */
+const byRelease = Effect.fnUntraced(function* (templates: readonly Template[]) {
+	const own = yield* release;
+	const foreign = (template: Template) => template.bolt !== own && exactVersion.test(template.bolt);
+	return {
+		own: templates.filter((template) => !foreign(template)),
+		foreign: templates.filter(foreign)
+	};
+});
 
 export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 	root: string = process.cwd(),
-	filter?: string
+	filter?: string,
+	delegate: TemplateDelegate = delegateTemplate
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const all = yield* discoverTemplates(root);
 	const selected = filter === undefined ? all : yield* discoverTemplates(root, filter);
-	for (const template of selected) {
+	const { own, foreign } = yield* byRelease(selected);
+	for (const template of foreign) yield* delegate(template, ['check']);
+	for (const template of own) {
+		const metadata = yield* json(TemplateManifest, path.join(template.directory, templateMetadataFile));
 		const manifest = yield* json(Package, path.join(template.directory, 'package.json'));
 		if (manifest.private !== true)
 			return yield* fail(`Template ${template.slug} must remain a private application package.`);
@@ -300,9 +359,9 @@ export const checkTemplates = Effect.fn('bolt.templatesCheck')(function* (
 			);
 		const counts = yield* actualCounts(template.directory);
 		for (const key of ['models', 'apps', 'automations'] as const)
-			if (template.counts[key] !== counts[key])
+			if (metadata.counts[key] !== counts[key])
 				return yield* fail(
-					`Template ${template.slug} declares ${template.counts[key]} ${key} in ${templateMetadataFile}; found ${counts[key]}.`
+					`Template ${template.slug} declares ${metadata.counts[key]} ${key} in ${templateMetadataFile}; found ${counts[key]}.`
 				);
 		const forbidden = [
 			'seed_bank',
@@ -484,8 +543,7 @@ const publishedToolchain = Effect.fn('bolt.publishedToolchain')(
 export const toolchainOf = Effect.fn('bolt.templateToolchain')(function* (template: Template) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	const manifest = yield* json(Package, path.join(template.directory, 'package.json'));
-	const version = manifest.dependencies?.['@norbital-ai/bolt'] ?? '';
+	const version = template.bolt;
 	if (!exactVersion.test(version))
 		return yield* fail(`Template ${template.slug} must pin @norbital-ai/bolt to an exact version.`);
 	const installed = path.join(template.directory, 'node_modules', '@norbital-ai', 'bolt');
@@ -536,17 +594,20 @@ export const withToolchain = Effect.fnUntraced(function* (
 		'\t'
 	)}\n`;
 });
-export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (options: {
-	root?: string;
-	filter?: string;
-	check: boolean;
-}) {
+export const lockTemplates = Effect.fn('bolt.templatesLock')(function* (
+	options: { root?: string; filter?: string; check: boolean },
+	delegate: TemplateDelegate = delegateTemplate
+) {
 	return yield* Effect.scoped(
 		Effect.gen(function* () {
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
 			const root = options.root ?? process.cwd();
-			const templates = yield* discoverTemplates(root, options.filter);
+			const { own: templates, foreign } = yield* byRelease(
+				yield* discoverTemplates(root, options.filter)
+			);
+			for (const template of foreign)
+				yield* delegate(template, options.check ? ['lock', '--check'] : ['lock']);
 			const drifted: string[] = [];
 			const resolution = yield* fs.makeTempDirectoryScoped({ prefix: 'norbital-lock-shared-' });
 			// network-bound resolutions sharing one store and metadata cache
@@ -740,24 +801,20 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
 				yield* Console.log(
 					`Verifying ${templates.length} of ${all.length} templates changed since ${since} (name one to verify it alone).`
 				);
-			const credentials = yield* registryConfiguration;
 			const prepare = Effect.fnUntraced(function* (template: Template) {
 				const destination = path.join(dir, template.slug);
 				yield* fs.makeDirectory(destination, { recursive: true });
 				yield* materializeCandidate(root, template, destination);
-				const npmrc = path.join(destination, '.npmrc');
-				yield* fs.writeFileString(npmrc, credentials);
-				const step = (label: string, command: string, args: readonly string[]) =>
-					run(command, args, { cwd: destination }).pipe(
-						Effect.mapError(
-							(error) =>
-								new TemplateError({
-									message: `${template.slug} standalone ${label} failed: ${error.message}`
-								})
-						)
+				const failed = (label: string) =>
+					Effect.mapError(
+						(error: { message: string }) =>
+							new TemplateError({
+								message: `${template.slug} standalone ${label} failed: ${error.message}`
+							})
 					);
-				yield* step('install', 'bun', ['install', '--frozen-lockfile']);
-				yield* fs.remove(npmrc);
+				const step = (label: string, command: string, args: readonly string[]) =>
+					run(command, args, { cwd: destination }).pipe(failed(label));
+				yield* installFrozen(destination).pipe(failed('install'));
 				const bolt = path.join(destination, 'node_modules', '.bin', 'bolt');
 				yield* step('check', bolt, ['check', '.']);
 				// the one build: the tests below run against it
@@ -783,16 +840,17 @@ export const verifyTemplates = Effect.fn('bolt.templatesVerify')(function* (
  * uploads under the release store's `releases/`: `bundle/<b>.tar.gz`, `source/<s>.tar.gz`, `seed/<p>.tar.gz` and
  * `template/<directory>/<b>.json`, named by the digests `bolt build` recorded. `env deploy promote` names the bundle.
  */
-export const publishTemplates = Effect.fn('bolt.templatesPublish')(function* (options: {
-	root?: string;
-	out: string;
-	filter?: string;
-}) {
+export const publishTemplates = Effect.fn('bolt.templatesPublish')(function* (
+	options: { root?: string; out: string; filter?: string },
+	delegate: TemplateDelegate = delegateTemplate
+) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const root = options.root ?? process.cwd(),
 		out = path.resolve(root, options.out);
-	for (const template of yield* discoverTemplates(root, options.filter)) {
+	const { own, foreign } = yield* byRelease(yield* discoverTemplates(root, options.filter));
+	for (const template of foreign) yield* delegate(template, ['publish', `--out=${out}`]);
+	for (const template of own) {
 		const built = path.join(template.directory, '.norbital');
 		if (!(yield* fs.exists(path.join(built, 'release.json'))))
 			return yield* fail(`${template.slug} has no .norbital/release.json; run bolt build`);
