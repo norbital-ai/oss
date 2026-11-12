@@ -26,7 +26,7 @@ import type {
 import type { Json, Point } from '../decl/values.ts';
 import type { Pred } from '@norbital-ai/store';
 import type { GuestProgram } from './guest/runner.ts';
-import type { GuestFinalSchema, GuestTakenSchema, GuestTurnSchema } from './guest/schema.ts';
+import type { GuestTurnSchema } from './guest/schema.ts';
 import type { Holder } from './access/authority.ts';
 import type { BrowserSnapshot, BrowserStep } from '../decl/runtime/browser.ts';
 import type { FacilityMember } from '../decl/runtime/facility-members.ts';
@@ -309,7 +309,7 @@ export const cross_failure = (code: string, message: string): CrossAnswer => ({
 });
 export type GuestOutcome =
 	| { kind: 'ok'; output: Json }
-	/** `ctx.refuse(message, { field, row })`; `row` indexes the batch a write callback received. */
+	/** `ctx.refuse(message_key, { row, field })`; `row` indexes the batch a write callback received. */
 	| {
 			kind: 'refused';
 			message: string;
@@ -379,11 +379,6 @@ export interface ConvertPort {
 		signal: AbortSignal
 	): Promise<Uint8Array>;
 }
-/** An ingest's model calls as Convert reports them (audio): their call ids (the metering keys), model, tokens and charge. */
-export type IngestUsage = NonNullable<IngestMeta['usage']>;
-/** An ingest's metering: audio's model calls (`usage`) and the conversion's compute (`stats`). */
-export type IngestMeta = Ingested['meta'];
-export type IngestImage = Ingested['images'][number];
 /**
  * Plan 12, Norbital Convert's ingest: parsing only, never OCR; a host may add a scanned page's transcript under its image in a `data-read` section. A `document` (pdf, office, html, text, images, audio) is
  * sanitised HTML, one block element per line (audio: one `<section data-speaker data-start data-end>` per segment); `data`
@@ -421,16 +416,15 @@ export type AiRequest = {
 	messages: readonly AiMessage[];
 	tools?: readonly { name: string; description: string; input: Json }[];
 	output?: Json;
-	/** The model call's reasoning effort. */
-	effort?: 'none' | 'low' | 'medium';
 	/** Images and documents for the model to see; `call` is the tool call that opened one, which it follows. */
 	files?: readonly { mime: string; bytes: Uint8Array; call?: string }[];
 	continuation?: string;
 };
-/** `cut`: the 60 s wall ended a stream; `continuation` resumes it as the next step (rule 63). */
-export type AiPortResponse = typeof AiPortResponseSchema.Type;
-/** A model answer as the engine reads it: the port's own shape. */
-export type AiResponse = AiPortResponse;
+/**
+ * A model answer as the engine reads it: the port's own shape. `cut`: the 60 s wall ended a stream; `continuation`
+ * resumes it as the next step (rule 63).
+ */
+export type AiResponse = typeof AiPortResponseSchema.Type;
 /** hook:runtime — bytes supplied by a host, or an engine-resolved stored file read by the provider outside the Cell. */
 export type EmbedInput =
 	| string
@@ -484,7 +478,7 @@ export interface AiPort {
 			signal: AbortSignal,
 			onDelta?: (text: string) => void,
 			onProgress?: (reasoning?: string) => void
-		): Promise<AiPortResponse>;
+		): Promise<AiResponse>;
 	};
 	embed?: EmbeddingsPort['embed'];
 }
@@ -751,12 +745,8 @@ export type GuestStart = {
 	readonly ctx: string;
 	readonly invocation: string;
 };
-/** The body's end state: its JSON result, a refusal, a missing body, or a throw (name, message, stack, facility kind). */
-export type GuestFinal = typeof GuestFinalSchema.Type;
 /** One queued ctx call: member, JSON arguments, call site (stack frame) and call id. */
 export type GuestCall = readonly [member: string, args: string, site: string, id: number];
-/** The prelude's `take()`: end state, the calls crossing now, each call's bytes (`$bin`), and whether a timer ran instead. */
-export type GuestTaken = typeof GuestTakenSchema.Type;
 /** One batch's answers (`give`): call ids, one JSON text per call, and each call's bytes. */
 export type GuestAnswers = {
 	readonly ids: readonly number[];

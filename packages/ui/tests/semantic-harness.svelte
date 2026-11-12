@@ -1,11 +1,11 @@
 <script lang="ts">
+	import type { UiContext } from '../src/client/contract.js';
 	// A record (shared header Save) or a create form (footer Save) whose `FormState` is handed to the test.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
-	import { provide_kinds, type ModelExposure } from '../src/kinds/context.js';
-	import { provide_bolt } from '../src/client/context.js';
+	import { type ModelExposure } from '../src/kinds/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 	import Form from '../src/form/form.svelte';
@@ -27,20 +27,19 @@
 	} = $props();
 	let open = $state(true);
 	// svelte-ignore state_referenced_locally
-	provide_bolt(() => bolt);
-	provide_kinds({
+	const ctx: UiContext = { ui: { bolt: bolt, kinds: {
 		get catalog() {
 			return catalog;
 		}
-	});
+	} } };
 </script>
 
 {#if part === 'record'}
-	<RecordShell of="jobs" id="j1">
+	<RecordShell {ctx} of="jobs" id="j1">
 		{#snippet children()}
-			<Form of="jobs" id="j1" {validate}>
+			<Form {ctx} of="jobs" id="j1" {validate}>
 				{#snippet children(form)}<div {@attach () => onForm(form)}>
-						<Field name="title" />
+						<Field {ctx} name="title" />
 					</div>{/snippet}
 			</Form>
 		{/snippet}
@@ -53,9 +52,9 @@
 {/if}
 
 {#snippet create()}
-	<Form of="jobs" mode="create" {validate}>
+	<Form {ctx} of="jobs" mode="create" {validate}>
 		{#snippet children(form)}<div {@attach () => onForm(form)}>
-				<Field name="title" />
+				<Field {ctx} name="title" />
 			</div>{/snippet}
 	</Form>
 {/snippet}

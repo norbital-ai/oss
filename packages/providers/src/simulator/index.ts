@@ -22,7 +22,7 @@ const closed = (statusCode: number, message: string) =>
 	Object.assign(new Error(message), { output: { statusCode } });
 
 /** A socket over the simulator: pairing, the connection's events and the patched receipt path, as Baileys runs them. */
-export const simulatedSocket =
+const simulatedSocket =
 	(url: string): WaOpen =>
 	async (config) => {
 		const ev = new EventEmitter<Record<string, [unknown]>>(),
@@ -44,7 +44,7 @@ export const simulatedSocket =
 					body: JSON.stringify({ account, jid, content })
 				});
 				if (!response.ok) throw new Error(`the simulator refused a send: ${response.status}`);
-				return Schema.decodeUnknownSync(
+				return Schema.decodeUnknownPromise(
 					Schema.Struct({
 						key: Schema.Struct({ id: Schema.String }),
 						message: Schema.Unknown
@@ -184,4 +184,4 @@ export const simulatedProviders = (url: string): readonly ProviderDef[] => {
 		chatProvider(simulatedChat(url))
 	];
 };
-export { startSimulator, type SimulatedMessage } from './server.ts';
+export { startSimulator } from './server.ts';

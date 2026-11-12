@@ -1,6 +1,7 @@
 // A model's own-field lock, evaluated in the browser exactly as the host's `evaluate` does for the predicates the
 // declaration language allows. Only the record's own scalar fields: a lock never reaches through a relation.
 import { Array as Arr } from 'effect';
+import { equal_json } from '@norbital-ai/std/json';
 import type { Json, Value, Where } from '@norbital-ai/std/kind';
 import { value_object } from '../kinds/kind.js';
 import type { Values } from '../model/types.js';
@@ -15,9 +16,9 @@ const isWhere = (j: Json): j is Where =>
 const compare = (left: Value, op: string, right: Json): boolean => {
 	switch (op) {
 		case 'eq':
-			return JSON.stringify(left) === JSON.stringify(right);
+			return equal_json(left, right);
 		case 'ne':
-			return JSON.stringify(left) !== JSON.stringify(right);
+			return !equal_json(left, right);
 		case 'gt':
 			return Number(left) > Number(right);
 		case 'gte':
@@ -28,7 +29,7 @@ const compare = (left: Value, op: string, right: Json): boolean => {
 			return Number(left) <= Number(right);
 		case 'in':
 			return (
-				Array.isArray(right) && right.some((one) => JSON.stringify(one) === JSON.stringify(left))
+				Array.isArray(right) && right.some((one) => equal_json(one, left))
 			);
 		case 'is_null':
 			return right === true ? left === null : right === false && left !== null;

@@ -1,9 +1,10 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ModelKey, RowOf, Values } from '../model/types.js';
 	import type { Json } from '../client/contract.js';
 	import type { BoardProps } from './Board.svelte';
 
-	export type BoardPageProps<C extends ModelKey> = Pick<BoardProps<C>, 'of' | 'card'> & {
+	export type BoardPageProps<C extends ModelKey> = Pick<BoardProps<C>, 'ctx' | 'of' | 'card'> & {
 		lane: string;
 		where: Json | undefined;
 		order_by: Json | undefined;
@@ -31,13 +32,12 @@
 	import { Equal } from 'effect';
 	import { untrack } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
-	import { useKinds } from '../kinds/context.js';
 	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
 	import { Button } from '../primitives/button/index.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { open_record } from '../record/navigation.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { label, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
 	import { request_json } from '../read/request.js';
@@ -51,6 +51,7 @@
 	import { approvalOf, approvalText } from '../approval/row.js';
 
 	let {
+		ctx,
 		of,
 		card,
 		where,
@@ -69,7 +70,7 @@
 		on_open,
 		moves
 	}: BoardPageProps<C> = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	/** A finger scrolls the lane: a card moves from its menu, not by a drag. */
 	const touch = new MediaQuery('pointer: coarse');
 	const open = (id: string) => (on_open ? on_open(id) : open_record(of, id));
@@ -77,7 +78,7 @@
 		const held = approvalOf(row);
 		return held === null ? undefined : approvalText(bolt, held);
 	};
-	const kinds = useKinds();
+	const kinds = $derived(ctx.ui.kinds);
 	const fields = $derived(typeof card === 'function' ? [] : card);
 	const readFields = $derived([
 		...new Set([
@@ -152,7 +153,7 @@
 </script>
 
 <span hidden {@attach reportRows}></span>
-<ReadGate {state} what={label(bolt, of)}>
+<ReadGate {ctx} {state} what={label(bolt, of)}>
 	{#snippet skeleton()}
 		<div class="flex flex-col gap-2">
 			{#each [0, 1, 2] as i (i)}
@@ -241,7 +242,7 @@
 						}
 					}}
 				>
-					<ApprovalAccent {row} />
+					<ApprovalAccent {ctx} {row} />
 					{#if touch.current && moves !== undefined && moves.length > 0}
 						<Popover.Root>
 							<Popover.Trigger
@@ -282,7 +283,7 @@
 								class={i === 0 ? 'font-medium' : 'text-muted-foreground text-xs'}
 								>{#if i === 0 && (kinds.catalog?.[of]?.record_label !== undefined || typeof row['$label'] === 'string' || kinds.catalog?.[of]?.label.length === 0) && recordText(kinds.catalog?.[of], row)}<span
 										data-record-label>{recordText(kinds.catalog?.[of], row)}</span
-									>{:else}<Value
+									>{:else}<Value {ctx}
 										value={displayed[f]}
 										kind={kinds.catalog?.[of]?.fields[f]}
 										row={displayed}

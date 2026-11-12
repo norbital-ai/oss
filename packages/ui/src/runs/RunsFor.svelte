@@ -3,10 +3,11 @@
 The latest runs of one automation matching `where`, newest first, each with its `RunStatus`.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Json } from '../client/contract.js';
 	/** The latest runs of one automation that match `where` (e.g. those started for a record), newest first; `title`
 	 * names the automation (else its catalog label `automations.<key>.label`, else its name in words). */
-	export type RunsForProps = { automation: string; title?: string; where?: Json; limit?: number };
+	export type RunsForProps = { ctx: UiContext; automation: string; title?: string; where?: Json; limit?: number };
 	/** Set by a record's Runs tab: each `RunsFor` reports its row count, and the tab alone says when there are none. */
 	export const RUNS_GROUP = Symbol('ui.views.runsGroup');
 </script>
@@ -14,15 +15,15 @@ The latest runs of one automation matching `where`, newest first, each with its 
 <script lang="ts">
 	import { getContext } from 'svelte';
 	import { watch as on_change } from 'runed';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
 	import { msg } from '../text/messages.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import RunStatus from './RunStatus.svelte';
 
-	let { automation, title, where, limit = 5 }: RunsForProps = $props();
-	const bolt = useBolt();
-	const runs = bolt.runs;
+	let { ctx, automation, title, where, limit = 5 }: RunsForProps = $props();
+	const bolt = $derived(bolt_of(ctx));
+	const runs = $derived(bolt.runs);
 	const live = watch(() =>
 		runs === undefined
 			? null
@@ -38,10 +39,10 @@ The latest runs of one automation matching `where`, newest first, each with its 
 </script>
 
 {#if runs !== undefined}
-	<ReadGate state={live.state} what={automation}>
+	<ReadGate {ctx} state={live.state} what={automation}>
 		{#snippet children(page)}
 			<div class="flex flex-col gap-2" data-view="runs">
-				{#each page.rows as r (r.id)}<RunStatus {automation} {title} run={r} />{:else}
+				{#each page.rows as r (r.id)}<RunStatus {ctx} {automation} {title} run={r} />{:else}
 					{#if group === undefined}<p class="text-muted-foreground text-sm" data-read="empty">
 							{msg(bolt, 'run.none')}
 						</p>{/if}{/each}

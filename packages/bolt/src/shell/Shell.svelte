@@ -36,11 +36,10 @@
 		Toaster,
 		cn,
 		open_record,
-		provide_bolt,
-		provide_kinds,
 		provide_representations,
 		set_ui_text,
-		ui_text_for
+		ui_text_for,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import { NorbiusStrip } from '@norbital-ai/ui/brand';
 	import type { ShellMountConfig } from './mount.ts';
@@ -220,7 +219,7 @@
 	let bolt = $state.raw<ShellBolt | null>(null);
 	const pageContext = (): ShellPageContext => {
 		if (bolt === null) throw new Error('The workspace shell has not booted.');
-		return page_context(bolt);
+		return page_context(bolt, ctx.ui);
 	};
 	const viewContext = () => {
 		if (bolt === null || boot === null) throw new Error('The workspace shell has not booted.');
@@ -278,8 +277,11 @@
 		if (agentRequest !== null) agentRequest = { ...agentRequest, conversation: id };
 		setSearchParam('agent', id ?? 'new', { replace: true });
 	}
-	// ui's generated forms and record views: the caller's exposure from the boot, pickers paging through `bolt.read`
-	provide_kinds({
+	// what every ui view takes as `ctx` (a page's context carries the same `ui`): the view client, and the generated forms'
+	// and record views' kinds: the caller's exposure from the boot, pickers paging through `bolt.read`
+	const ctx: UiContext = { ui: { get bolt() {
+		return bolt === null || boot === null ? undefined : viewContext();
+	}, kinds: {
 		get catalog() {
 			return boot?.catalog;
 		},
@@ -306,16 +308,13 @@
 		get custom_fields() {
 			return config.custom_fields;
 		}
-	});
+	} } };
 	// the record views of every `RecordShell` under the shell, the `?record=` sheet's and a page's alike
 	// a page's AppShell publishes its identity and actions here; the hero above the page renders them
 	const identity = $state<AppIdentitySlot>({ current: null });
 	set_app_identity_slot(identity);
 	// svelte-ignore state_referenced_locally
 	provide_representations(config.representations ?? {});
-
-	// The UI kit's controls share the client of this shell mount.
-	provide_bolt(viewContext);
 
 	// a preview environment drops the meta tools: Norbius and Studio (`surfaces`), People, Integrations and preview-as
 	const previewEnv = $derived(boot?.workspace.live !== undefined);
@@ -392,7 +391,7 @@
 	}
 	// in-app links are plain anchors; the shell keeps them in the page
 	function intercept(event: MouseEvent): void {
-		const a = (event.target as Element | null)?.closest?.('a');
+		const a = event.target instanceof Element ? event.target.closest('a') : null;
 		// a link out of the workspace opens through the shell, when it has a way
 		if (
 			a !== null &&
@@ -861,12 +860,13 @@
 			</svelte:boundary>
 		{/if}
 	{:else if current.kind === 'inbox' && boot?.surfaces.inbox && bolt}
-		<Inbox {bolt} {t} on_count={(n) => (waiting = n)} />
+		<Inbox {ctx} {bolt} {t} on_count={(n) => (waiting = n)} />
 	{:else if current.kind === 'settings' && boot?.surfaces.settings && bolt}
 		{#await import('./settings/Settings.svelte')}
 			{@render openingFeature()}
 		{:then { default: Settings }}
 			<Settings
+				{ctx}
 				{configuration}
 				{api}
 				{bolt}
@@ -884,6 +884,7 @@
 			{@render openingFeature()}
 		{:then { default: CommandCenter }}
 			<CommandCenter
+				{ctx}
 				automation={url.searchParams.get('automation')}
 				on_automation_close={() => {
 					if (url.searchParams.has('automation')) {
@@ -935,7 +936,7 @@
 	{/if}
 	{#if bolt !== null}
 		{#each records as r, i (`${i}:${r.model}/${r.id}`)}
-			<RecordSheet model={r.model} id={r.id} on_close={() => closeRecord(i)} />
+			<RecordSheet {ctx} model={r.model} id={r.id} on_close={() => closeRecord(i)} />
 		{/each}
 	{/if}
 {/snippet}
@@ -1224,6 +1225,7 @@
 						{@render openingFeature()}
 					{:then { default: AgentPanel }}
 						<AgentPanel
+							{ctx}
 							{api}
 							{bolt}
 							read={(request) => viewContext().query(request)}

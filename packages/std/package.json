@@ -34,10 +34,6 @@
 			"types": "./build/billing/index.d.ts",
 			"default": "./build/billing/index.js"
 		},
-		"./calendar": {
-			"types": "./build/calendar.d.ts",
-			"default": "./build/calendar.js"
-		},
 		"./date": {
 			"types": "./build/date.d.ts",
 			"default": "./build/date.js"
@@ -45,10 +41,6 @@
 		"./decimal": {
 			"types": "./build/decimal.d.ts",
 			"default": "./build/decimal.js"
-		},
-		"./facts": {
-			"types": "./build/facts.d.ts",
-			"default": "./build/facts.js"
 		},
 		"./formula": {
 			"types": "./build/formula.d.ts",
@@ -73,14 +65,6 @@
 		"./label": {
 			"types": "./build/label.d.ts",
 			"default": "./build/label.js"
-		},
-		"./rows": {
-			"types": "./build/rows.d.ts",
-			"default": "./build/rows.js"
-		},
-		"./pricing": {
-			"types": "./build/pricing.d.ts",
-			"default": "./build/pricing.js"
 		},
 		"./sheet": {
 			"types": "./build/sheet.d.ts",

@@ -6,9 +6,12 @@ may decide now, a two-step form: pick Approve, Reject, Request changes or (the r
 reason and confirm.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ApprovalView, Outcome } from '../client/contract.js';
 	/** Every request of one record (or one request), and what to do after a decision settles. */
 	export type ApprovalPanelProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		requests: readonly ApprovalView[];
 		on_outcome?: (outcome: Outcome) => void;
 	};
@@ -22,16 +25,15 @@ reason and confirm.
 	import Textarea from '../primitives/textarea/textarea.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
-	import { useKinds } from '../kinds/context.js';
 	import { format } from '../kinds/kind.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { label, msg, catalogText } from '../text/messages.js';
 	import { skipText } from '../record/history.js';
 	import { approvalStatus } from './row.js';
 
-	let { requests, on_outcome }: ApprovalPanelProps = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	let { ctx, requests, on_outcome }: ApprovalPanelProps = $props();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const ids = $props.id();
 	type Entry = ApprovalView['log'][number];
 	type Move = ApprovalView['moves'][number];

@@ -9,8 +9,8 @@ framework package.
 
 ## Public areas
 
-`billing`, `calendar`, `csv`, `date`, `decimal`, `facts`, `formula`, `hash`, `host-op`, `id`, `json`, `kind`, `label`,
-`pricing`, `rows`, `sheet`, `sql`, `vars`, `versioned`, `wire` and `zone` are
+`billing`, `csv`, `date`, `decimal`, `formula`, `hash`, `host-op`, `id`, `json`, `kind`, `label`,
+`sheet`, `sql`, `vars`, `versioned`, `wire` and `zone` are
 public subpaths. There is no package root.
 
 `csv_rows` from `@norbital-ai/std/csv` tokenizes text into raw string cells. Header rules, blank-row policy and value decoding belong to the caller.

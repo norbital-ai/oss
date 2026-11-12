@@ -900,9 +900,9 @@ declare module '../../src/index.ts' {
 								where: { orders: { some: { owner: { eq: { var: 'requestor.id' } } } } };
 							};
 						};
-						update: true;
+						update: {};
 					};
-					notices: { outputs: { default: true } };
+					notices: { outputs: { default: {} } };
 					sites: {
 						outputs: {
 							summary: {
@@ -955,7 +955,7 @@ declare module '../../src/index.ts' {
 			auditor: {
 				description: 'Audit orders';
 				grants: {
-					orders: { outputs: { logistics: true } };
+					orders: { outputs: { logistics: {} } };
 				};
 			};
 		};
@@ -1059,6 +1059,9 @@ declare module '../../src/index.ts' {
 			CALENDAR_SECRET: {
 				label: 'Calendar OAuth secret';
 			};
+		};
+		messages: {
+			'errors.refused': 'This change is not allowed.';
 		};
 		skills: {
 			quoting: true;

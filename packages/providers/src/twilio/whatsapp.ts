@@ -8,7 +8,7 @@ import type {
 	OutboundAttachment
 } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { ProviderUnavailable, answerFailure } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import {
 	field,
 	hostCall,
@@ -181,7 +181,7 @@ export function twilioWhatsapp(): ProviderDef {
 				) {
 					if (cred === null)
 						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the WhatsApp (Twilio) account is not connected' })
+							notConnected('the WhatsApp (Twilio) account')
 						);
 					const value = cred;
 					const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
@@ -210,7 +210,7 @@ export function twilioWhatsapp(): ProviderDef {
 				reconcile: Effect.fn('TwilioWhatsApp.reconcile')(function* (thread: string, since: string) {
 					if (cred === null)
 						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the WhatsApp (Twilio) account is not connected' })
+							notConnected('the WhatsApp (Twilio) account')
 						);
 					const value = cred,
 						account = `${API}/Accounts/${value.accountSid}`,

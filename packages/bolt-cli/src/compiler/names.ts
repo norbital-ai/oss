@@ -6,11 +6,11 @@
 import { Effect, FileSystem, Path, Predicate } from 'effect';
 import { discover, type Discovered } from './discover.ts';
 import { writeDeclarations } from './declarations.ts';
-import type { Role } from '@norbital-ai/bolt/tooling';
 import { layer_models, literal, split_model, SYSTEM } from '@norbital-ai/bolt/tooling';
-import { type ModelParts } from '@norbital-ai/bolt';
-import type { RelationshipSpec } from '@norbital-ai/bolt';
 import { type Manifest, spec } from './load.ts';
+
+type ModelParts = ReturnType<typeof split_model>;
+type RelationshipSpec = ModelParts['relationships'][string];
 
 const key = JSON.stringify;
 const record = (entries: readonly (readonly [string, string])[], indent: string) =>
@@ -74,7 +74,7 @@ function modelTypes(
 }
 
 /** `Names` part → the role whose evaluated declarations it prints: `spec` parts wrap each literal as `{ spec }`. */
-const PARTS: { part: string; role: Role; shape: 'each' | 'spec' | 'one' }[] = [
+const PARTS: { part: string; role: Discovered['role']; shape: 'each' | 'spec' | 'one' }[] = [
 	{ part: 'apps', role: 'app', shape: 'each' },
 	{ part: 'automations', role: 'automation', shape: 'spec' },
 	{ part: 'integrations', role: 'integration_definition', shape: 'spec' },
@@ -147,7 +147,7 @@ export function namesIndex(
 		for (const [part, text] of Object.entries(modelTypes(manifest.model, t, SYSTEM.relationships)))
 			if (part !== 'layers' || text !== '{}') lines.set(part, text);
 	// pages: app → union of its page names; groups: group → union of its child app and group folder names.
-	const children = (parts: Role[], of: string, name: (f: Discovered) => string) =>
+	const children = (parts: Discovered['role'][], of: string, name: (f: Discovered) => string) =>
 		files
 			.filter(
 				(f) =>

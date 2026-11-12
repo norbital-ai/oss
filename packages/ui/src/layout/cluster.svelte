@@ -7,7 +7,7 @@ A wrapping row of items with a gap: tags, buttons, metadata. Children wrap to th
 	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** The props of `Cluster`. */
-	export interface ClusterProps extends LayoutAttributes {
+	interface ClusterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline';

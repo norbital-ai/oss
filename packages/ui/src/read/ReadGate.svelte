@@ -1,8 +1,9 @@
 <script lang="ts" generics="T">
+	import type { UiContext } from '../client/contract.js';
 	// Every view's non-ready states in one place: loading, "No access to <label>" (never an empty list) and a named error.
 	import type { Snippet } from 'svelte';
 	import Alert from '../primitives/alert/alert.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import TableSkeleton from './TableSkeleton.svelte';
@@ -11,12 +12,13 @@
 
 	/** `skeleton` replaces the default one (rows of a table) with the view's own shape (a board's cards). */
 	let {
+		ctx,
 		state,
 		what,
 		children,
 		skeleton
-	}: { state: ReadState<T>; what: string; children: Snippet<[T]>; skeleton?: Snippet } = $props();
-	const bolt = useBolt();
+	}: { ctx: UiContext; state: ReadState<T>; what: string; children: Snippet<[T]>; skeleton?: Snippet } = $props();
+	const bolt = $derived(bolt_of(ctx));
 </script>
 
 {#if state.kind === 'ready'}

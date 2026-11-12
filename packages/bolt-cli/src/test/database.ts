@@ -15,10 +15,9 @@ import { TenantDb, apply_migrations, type MigrationBundle } from '@norbital-ai/b
 import {
 	db_error,
 	schema_slice,
-	type SchemaSlice,
-	PgliteDb,
-	Pristine
+	type SchemaSlice
 } from '@norbital-ai/bolt/tooling';
+import { PgliteDb, Pristine } from '@norbital-ai/bolt/node';
 import type { DbError, EngineManifest, BoltError, TenantDbShape } from '@norbital-ai/bolt/engine';
 import { CHECKPOINTS, inputs, keep, prune } from './checkpoint.ts';
 import {
@@ -226,7 +225,7 @@ const capture = async (pg: PGlite, { tables, counts, sequences }: Shape) => {
 /** Closing frees a WASM heap only when it is collected: the kit runs with `--expose-gc` and asks once per close. */
 const close = (entry: Pooled) =>
 	Scope.close(entry.scope, Exit.void).pipe(
-		Effect.tap(() => Effect.sync(() => (globalThis as { gc?: () => void }).gc?.()))
+		Effect.tap(() => Effect.sync(() => globalThis.gc?.()))
 	);
 type Prepare<E> = (pg: PGlite) => Effect.Effect<void, E>;
 const load = <E>(

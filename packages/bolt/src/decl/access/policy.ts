@@ -28,7 +28,7 @@ import type { ModelWhere } from '../where.ts';
 
 // ── names a grant uses ──
 /** The names of `C`'s `state` fields: what a policy's `moves` grant is keyed by. */
-export type StateField<C> = StateFieldOf<C>;
+type StateField<C> = StateFieldOf<C>;
 type StateFieldOf<C, Cols = Columns<C>, Keys extends keyof Cols & string = keyof Cols & string> = {
 	[P in Keys]: Cols[P] extends { kind: 'state' } ? P : never;
 }[Keys];
@@ -82,15 +82,15 @@ export type ApprovalSnapshot = {
 
 // ── verdicts: what a write `check` returns ──
 /**
- * A verdict as it crosses the guest edge (JSON): execute, refuse the batch (`at`: its row, write path and column), or
- * hold it for the approval flow snapshot.
+ * A verdict as it crosses the guest edge (JSON): execute, refuse the batch (`at`: its row and root column), or hold it
+ * for the approval flow snapshot.
  */
 export type VerdictData =
 	| { readonly kind: 'allow' }
 	| {
 			readonly kind: 'deny';
 			readonly message: string;
-			readonly at?: { readonly row?: number; readonly path?: string; readonly field?: string };
+			readonly at?: { readonly row?: number; readonly field?: string };
 	  }
 	| { readonly kind: 'approve'; readonly flow: ApprovalSnapshot };
 /** A check's answer: only `ctx.allow()` and `ctx.approve(…)` make one; a plain object is never one. */
@@ -142,9 +142,8 @@ type Scope<C extends ModelName, O, P extends string> = {
 			: never
 	]?: Scope<C, O, Child>;
 };
-/** A grant of an output: every row, or a scope on its root and any of its relations. History uses the root scope. */
-export type ReadGrant<C extends ModelName, O = 'default'> =
-	true | (Scope<C, O, C> & { history?: true });
+/** A grant of an output: `{}` for every row, or a scope on its root and any of its relations. History uses the root scope. */
+export type ReadGrant<C extends ModelName, O = 'default'> = Scope<C, O, C> & { history?: true } & object;
 /** A write grant narrows the model's declared fields at each nested child. */
 type WriteColumns<C, O extends 'create' | 'update', P extends string = C & string> = {
 	readonly fields: readonly LayerColumn<C, O, P>[];
@@ -152,21 +151,19 @@ type WriteColumns<C, O extends 'create' | 'update', P extends string = C & strin
 	readonly [Child in ChildPath<P, WritePath<C, O>> as Child extends `${P}.${infer Relation}` ? Relation : never]?: WriteColumns<C, O, Child>;
 };
 /**
- * A create or update grant: `true` (every declared column, allowed), or the `columns` per write layer it admits (every
- * declared one when omitted, checked before the `check` runs, without guest code) and the `check` that judges the whole
- * batch (allow when omitted). Among the holder's policies any `allow` executes; otherwise the first `approve` in the
- * team's policy order holds the write for its flow; otherwise it is refused with the first `deny`.
+ * A create or update grant: the `columns` per write layer it admits (every declared one when omitted, checked before
+ * the `verdict` runs, without guest code) and the `verdict` that judges the whole batch (allow when omitted), so `{}`
+ * admits every declared column. Among the holder's policies any `allow` executes; otherwise the first `approve` in the
+ * team's policy order holds the write for its flow; otherwise it is refused with the first refusal.
  */
-export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> =
-	| true
-	| ({
-			columns?: WriteColumns<C, O>;
-			verdict?: O extends 'create' ? CreateVerdict<C> : UpdateVerdict<C>;
-	  } & (O extends 'update'
-			? { moves?: 'all' | { [F in StateField<C>]?: readonly Edge<C, F>[] } }
-			: object));
-/** A delete grant: `true`, or `{ verdict }`. */
-export type DeleteGrant<C extends ModelName> = true | ({ verdict?: DeleteVerdict<C> } & object);
+export type WriteGrant<C extends ModelName, O extends 'create' | 'update'> = {
+	columns?: WriteColumns<C, O>;
+	verdict?: O extends 'create' ? CreateVerdict<C> : UpdateVerdict<C>;
+} & (O extends 'update'
+	? { moves?: 'all' | { [F in StateField<C>]?: readonly Edge<C, F>[] } }
+	: object);
+/** A delete grant: `{}`, or `{ verdict }`. */
+type DeleteGrant<C extends ModelName> = { verdict?: DeleteVerdict<C> } & object;
 type Declares<C, V> = ExposureSpecOf<C> extends { [P in V & string]: unknown } ? true : false;
 /**
  * A model grant names the `outputs` its holders may read and the model verbs they may call.
@@ -179,7 +176,7 @@ export type Grant<C extends ModelName> = {
 	delete?: Declares<C, 'delete'> extends true ? DeleteGrant<C> : never;
 };
 /** Rule 38c: identity models are read-only to every policy: their `default` output or a named one (`directory`), rows by scope. */
-export type IdentityGrant<C extends ModelName> = {
+type IdentityGrant<C extends ModelName> = {
 	outputs?: { [O in OutputName<C>]?: ReadGrant<C, O> };
 };
 type Identity = 'sys_user' | 'sys_invitation';
@@ -188,9 +185,9 @@ type Grantable = Exclude<ReadableName, 'sys_api_key'>;
 /** Contextual typing for each write grant's verdict callback. */
 type VerdictSlots = {
 	readonly [C in Grantable]?: {
-		readonly create?: true | (object & { readonly verdict?: CreateVerdict<C> });
-		readonly update?: true | (object & { readonly verdict?: UpdateVerdict<C> });
-		readonly delete?: true | (object & { readonly verdict?: DeleteVerdict<C> });
+		readonly create?: object & { readonly verdict?: CreateVerdict<C> };
+		readonly update?: object & { readonly verdict?: UpdateVerdict<C> };
+		readonly delete?: object & { readonly verdict?: DeleteVerdict<C> };
 	} & { readonly [key: string]: unknown };
 };
 
@@ -199,7 +196,7 @@ type VerdictSlots = {
 export type Limit =
 	Rate | { rate: Rate; per: 'actor' | 'ip' } | readonly { rate: Rate; per: 'actor' | 'ip' }[];
 /** A rate limit on an envoy's inbound traffic, counted `per` sender or per subject. */
-export type EnvoyLimit =
+type EnvoyLimit =
 	| Rate
 	| { rate: Rate; per: 'sender' | 'subject' }
 	| readonly { rate: Rate; per: 'sender' | 'subject' }[];
@@ -262,7 +259,7 @@ type PolicyBase = {
  * 					const mine = job_assignments.rows.every((j) => j.assignee_user_id === ctx.actor.id);
  * 					return mine
  * 						? ctx.approve({ steps: [{ name: 'Controller review', teams: ['field_ops_controllers'] }] })
- * 						: yield* ctx.refuse('Raise variations on your own jobs.', { path: 'variation_requests', field: 'job_assignment_id' });
+ * 						: yield* ctx.refuse('errors.own_jobs_only', { field: 'job_assignment_id' });
  * 				}
  * 			}
  * 		}

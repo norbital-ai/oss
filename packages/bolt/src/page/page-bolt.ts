@@ -34,13 +34,13 @@ import type {
 import type {
 	ActConflict,
 	ActRefused,
-	ActUnknown,
 	ProtocolFailed,
 	ReadFailed,
 	Refusal,
-	TransportFailed,
 	Unavailable
 } from '../decl/errors.ts';
+import type { ActUnknown } from '../decl/errors/act.ts';
+import type { TransportFailed } from '../decl/errors/browser.ts';
 import type { ModelName, FileField, FileSyncName, ReadSyncName, Is, ReadableName } from '../decl/names.ts';
 import type { ConvertSource, PreviewPdfOptions, StartInput } from '../decl/runtime/facilities.ts';
 import type { FileRef, Id, Instant, Json, PlainDate, RequestId } from '../decl/values.ts';
@@ -69,12 +69,12 @@ export interface Query<out T>
  * and continues as a run, followed through `bolt.runs`) succeeds; refusal, conflict and uncertain settlement are typed
  * failures.
  */
-export type PageAct<O> = Effect.Effect<
+type PageAct<O> = Effect.Effect<
 	Committed<O> | PendingApproval | Running,
 	ActRefused | ActConflict | ActUnknown | ProtocolFailed
 >;
 /** Admission of queued runs; a committed output is the queue receipt. `runs` follows execution and its declared result. */
-export type PageRun<A extends string = string> = Effect.Effect<
+type PageRun<A extends string = string> = Effect.Effect<
 	Outcome<{
 		readonly id: Id<'sys_run'>;
 		readonly ids: readonly Id<'sys_run'>[];
@@ -89,9 +89,9 @@ export type PageRun<A extends string = string> = Effect.Effect<
 	readonly automation: A;
 };
 /** A page operation with its own typed failure channel, executed by the mounted UI runtime through `run`, `fork` or `attach`. */
-export type PageCall<A, E> = Effect.Effect<A, E>;
+type PageCall<A, E> = Effect.Effect<A, E>;
 /** The page's clock: today in the workspace zone and the instant. */
-export type PageClock = { readonly today: PlainDate; readonly now: Instant };
+type PageClock = { readonly today: PlainDate; readonly now: Instant };
 
 type UploadField = {
 	[C in ModelName]: `${C}.${FileField<C>}` | `${C}.$import.${FileSyncName<C>}`;

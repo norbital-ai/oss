@@ -2,6 +2,14 @@
 
 Read before adding a model, splitting a catalogue or designing configurable behaviour.
 
+## Design order
+
+1. Learn the domain: its jobs, actors, inputs and the variations its users need.
+2. Design so a new variation is a new configuration record at runtime, never new source: one generic engine model plus the records that configure it.
+3. Use the fewest models that hold the data. Prefer, in order: a field; a custom datatype or shaped `json` on the owner; an owned child model; a separate model.
+4. Take a model over a custom datatype only when the data needs a foreign-key constraint, its own view, its own lifecycle, permissions or approval, history, or relational queries.
+5. Nest each model's folder under the model that owns it: `data/model/<root>/<child>/+model.ts`. Group catalogues and settings under one settings root. The tree reads as the domain.
+
 ## Choose storage
 
 Name the records people find, the actions they take and the changes to prove. A screen, tab, schema property or noun does not justify a model.

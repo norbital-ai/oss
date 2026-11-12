@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import { item_kind } from '@norbital-ai/std/kind';
 	import { format_value as show, format, inferKind, currencyOf } from '../kinds/kind.js';
 	// One stored value, read-only: by its kind through the kit's `Show` when the catalog knows the field, else by shape
@@ -8,14 +9,13 @@
 	import StructuredData from '../kinds/structured-data.svelte';
 	import { dataEntries } from '../kinds/structured-data.js';
 	import { is_json_schema_document } from '../kinds/json-schema.js';
-	import { useKinds } from '../kinds/context.js';
 	import { field_entry } from '../kinds/builtin/index.js';
 	import { fill, humanize } from '../text/messages.js';
 	import type { Kind } from '../kinds/kind.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import type { Values } from '../model/types.js';
 	import { open_record } from '../record/navigation.js';
-	import { useOptionalBolt } from '../client/context.js';
+	import { optional_bolt_of } from '../client/context.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { filesOf } from './value.js';
 	import Overflow from './Overflow.svelte';
@@ -30,6 +30,7 @@
 	 * `name` reaches a custom field's renderer. `link={false}` (a row of a list, which opens the row's own record) shows a
 	 * relation as text, so a tap on a row never lands on the related record instead. */
 	let {
+		ctx,
 		value,
 		kind,
 		row,
@@ -38,6 +39,7 @@
 		dense = false,
 		link: linked = true
 	}: {
+		ctx: UiContext;
 		value: import('@norbital-ai/std/kind').Value | undefined;
 		kind?: Kind | undefined;
 		row?: Values;
@@ -46,14 +48,14 @@
 		dense?: boolean;
 		link?: boolean;
 	} = $props();
-	const bolt = useOptionalBolt();
+	const bolt = $derived(optional_bolt_of(ctx));
 	const text = (
 		key: string,
 		fallback: string,
 		vars: { readonly [name: string]: string | number } = {}
 	) => (bolt === undefined ? fill(fallback, vars) : catalogText(bolt, key, fallback, vars));
 	const files = $derived(filesOf(value ?? null));
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const field = $derived(kind === undefined ? undefined : field_entry(kind, host));
 	const structured = (k: Kind) => ['json', 'object', 'list', 'record', 'union'].includes(k.kind);
 	const inspectKind = $derived(
@@ -249,24 +251,24 @@
 			data-structured-inspector
 		>
 			{#if is_json_schema_document(value)}
-				<StructuredData schema={value} mode="schema" {name} />
+				<StructuredData {ctx} schema={value} mode="schema" {name} />
 			{:else}
-				<StructuredData kind={inspectKind} {value} mode="view" {name} {row} />
+				<StructuredData {ctx} kind={inspectKind} {value} mode="view" {name} {row} />
 			{/if}
 		</Popover.Content>
 	</Popover.Root>
 {:else if kind !== undefined || typeof value === 'boolean'}
 	<!-- a boolean without a catalog kind (a local array's column) is still a check or a cross, not a glyph in text -->
-	<Show
+	<Show {ctx}
 		kind={kind ?? { kind: 'bool' }}
 		{value}
 		{...row === undefined ? {} : { row }}
 		{...name === undefined ? {} : { name }}
 	/>
 {:else if files.length > 0}
-	<FileCollection refs={files} />
+	<FileCollection {ctx} refs={files} />
 {:else if dataEntries(value) !== undefined || Array.isArray(value)}
-	<StructuredData {value} mode="view" {name} {row} />
+	<StructuredData {ctx} {value} mode="view" {name} {row} />
 {:else}
 	{show(value, bolt?.locale ?? host.locale)}
 {/if}

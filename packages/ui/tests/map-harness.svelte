@@ -1,18 +1,16 @@
 <script lang="ts">
+	import type { UiContext } from '../src/client/contract.js';
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import Map, { type MapOverlay } from '../src/map/Map.svelte';
 	import type { ViewBolt } from '../src/client/contract.ts';
-	import { provide_bolt } from '../src/client/context.ts';
-	import { provide_kinds } from '../src/kinds/context.ts';
 	import { mount_edge } from '../src/effect/index.ts';
 	let { bolt }: { bolt: ViewBolt } = $props();
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
-	provide_bolt(() => bolt);
-	provide_kinds({ catalog: { places: {
+	const ctx: UiContext = { ui: { get bolt() { return bolt; }, kinds: { catalog: { places: {
 		record_label: 'record.name', label: ['name'],
 		fields: { name: { kind: 'text' }, position: { kind: 'point' } }
-	} } });
+	} } } } };
 	let overlays = $state<MapOverlay[]>([{ lat: 1, lng: 2, text: 'Initial destination', from: { lat: 0, lng: 0 } }]);
 	let labels = $state<'hover' | 'always'>('hover');
 	let interactive = $state(true);
@@ -29,4 +27,4 @@
 	export function disable_clicks(): void { interactive = false; }
 </script>
 
-<Map of="places" at="position" label="name" {overlays} {labels} {interactive} toolbar={false} />
+<Map {ctx} of="places" at="position" label="name" {overlays} {labels} {interactive} toolbar={false} />

@@ -101,7 +101,7 @@ const m: EngineManifest = {
 				}
 			}
 		},
-		auditor: { description: '', grants: { orders: { outputs: { default: true } } } },
+		auditor: { description: '', grants: { orders: { outputs: { default: {} } } } },
 		root_only: {
 			description: '',
 			grants: { orders: { outputs: { default: { scopes: { orders: {} } } } } }
@@ -350,7 +350,7 @@ describe('engine/access: Authority (rules 33–37)', () => {
 						...m.policies,
 						open: {
 							description: '',
-							grants: { orders: { outputs: { default: true }, update: { verdict: true } } }
+							grants: { orders: { outputs: { default: {} }, update: { verdict: true } } }
 						}
 					}
 				};

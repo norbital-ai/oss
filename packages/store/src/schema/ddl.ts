@@ -52,7 +52,7 @@ export const RANK = {
 	fk: 8,
 	index: 9
 } as const;
-export const SchemaObjectSchema = Schema.Struct({
+const SchemaObjectSchema = Schema.Struct({
 	id: Schema.String,
 	rank: Schema.Literals([
 		'extension',
@@ -886,18 +886,6 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 					index('gin', `using gin (${C})`, [name]);
 				if (k.kind === 'point') index('gist', `using gist (${C})`, [name]);
 				if (k.kind === 'vector') index('hnsw', `using hnsw (${C} vector_${k.metric}_ops)`, [name]);
-				if (k.unique === true)
-					constraint(
-						'uq',
-						`unique (${C})${deferrable}`,
-						[name],
-						dupes(T, [C], `${C} is not null`),
-						{
-							model: t.model,
-							kind: 'unique',
-							fields: [name]
-						}
-					);
 				if (k.kind === 'seq') {
 					const scope = yield* colsOf(k.per ?? []);
 					const cols = [...scope.map(q), C];
@@ -1173,8 +1161,7 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 
 		// relations: FK columns, FKs (checked at end of statement), an index each, the polymorphic CHECK
 		for (const r of rels) {
-			const owner = all.get(r.model);
-			if (owner === undefined)
+			if (!all.has(r.model))
 				return yield* fail(`relation '${r.key}' names unknown table '${r.model}'`);
 			const T = q(r.model);
 			for (const [i, c] of r.cols.entries()) {
@@ -1203,20 +1190,6 @@ const objectsWithSearch = (searchDefinitions: typeof search_functions) =>
 					drop: `alter table ${T} drop constraint if exists ${q(name)}`,
 					violations: `select count(*)::int as n from ${T} c where c.${q(c)} is not null and not exists (select 1 from ${q(target)} p where p.${q(key.name)} = c.${q(c)})`
 				});
-				if (r.spec.unique === true) {
-					const def = `unique (${q(c)})${owner.spec.audit === true ? ' deferrable initially immediate' : ''}`;
-					const name = cname(r.model, 'uq', def);
-					push({
-						id: `constraint:${r.model}.${name}`,
-						rank: 'constraint',
-						table: r.model,
-						deps: [c],
-						meta: { name, model: r.model, kind: 'unique', fields: [r.field] },
-						create: [`alter table ${T} add constraint ${q(name)} ${def}`],
-						drop: `alter table ${T} drop constraint if exists ${q(name)}`,
-						violations: dupes(T, [q(c)], `${q(c)} is not null`)
-					});
-				}
 				const ix = cname(r.model, 'ix', `(${q(c)})`);
 				push({
 					id: `index:${r.model}.${ix}`,
@@ -1295,7 +1268,7 @@ export const schema_objects = /*#__PURE__*/ objectsWithSearch(search_functions);
 export const schemaObjectsForClassification = /*#__PURE__*/ objectsWithSearch(() => []);
 
 /** A json value's text at `path` (`#>> '{a,b}'`), cast to the kind the field's shape declares there. */
-export const path_text = Effect.fn('Store.path_text')(function* (
+const path_text = Effect.fn('Store.path_text')(function* (
 	field: FieldSpec | undefined,
 	column: string,
 	path: readonly string[],
@@ -1655,4 +1628,3 @@ export const constraint_index = Effect.fn('Store.constraint_index')(function* (s
 			}
 	return indexed;
 });
-export type { Json };

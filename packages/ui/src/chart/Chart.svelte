@@ -6,9 +6,12 @@ numbers (`count`, `sum.amount`).
 <Chart of={bolt.aggregate('jobs', { count: true, by: 'status', limit: 20 })} x="status" y="count" kind="bar" />
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ViewSource } from '../read/source.js';
 	/** `of` is an aggregate's page of buckets, a declared query's rows or page, or rows; `y` names numbers (`count`, `sum.amount`). */
-	export type ChartProps = {
+	type ChartProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: ViewSource;
 		x: string;
 		y: string | readonly string[];
@@ -23,13 +26,14 @@ numbers (`count`, `sum.amount`).
 
 <script lang="ts">
 	import { curveStepAfter } from 'd3-shape';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { humanize, msg } from '../text/messages.js';
 	import { series } from './series.js';
 	import ReadGate from '../read/ReadGate.svelte';
 	import { sourceState } from '../read/source.js';
 
 	let {
+		ctx,
 		of,
 		x,
 		y,
@@ -39,7 +43,7 @@ numbers (`count`, `sum.amount`).
 		stack = false,
 		title
 	}: ChartProps = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	// Bottom holds the x tick labels (32) and the legend beneath them (32).
 	const numericPadding = { top: 12, right: 16, bottom: 64, left: 64 };
 	// Band/point x scales show every category by default; thin them to one label per 80px like layerchart's continuous axes.
@@ -66,7 +70,7 @@ numbers (`count`, `sum.amount`).
 
 <figure class="flex min-w-0 flex-col gap-2" data-view="chart">
 	{#if title}<figcaption class="text-sm font-semibold">{title}</figcaption>{/if}
-	<ReadGate state={read} what={title ?? msg(bolt, 'chart.data')}>
+	<ReadGate {ctx} state={read} what={title ?? msg(bolt, 'chart.data')}>
 		{#snippet children(value)}
 			{@const data = series(value, x, ys)}
 			{@const first_y = ys[0]}

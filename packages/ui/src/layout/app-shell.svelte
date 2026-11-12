@@ -11,10 +11,10 @@ Every `+<page>.page.svelte` renders inside one.
 	import type { Snippet } from 'svelte';
 
 	/** `page` wraps the body in the shared inset; `full` leaves it edge to edge (tab strips, full-bleed surfaces). */
-	export type AppShellVariant = 'page' | 'full';
+	type AppShellVariant = 'page' | 'full';
 
 	/** The props of `AppShell`. */
-	export interface AppShellProps {
+	interface AppShellProps {
 		/** Icon name rendered in the workspace hero (for example `lucide:cpu`). */
 		icon: string;
 		/** Page title rendered in the workspace hero and the document head. */

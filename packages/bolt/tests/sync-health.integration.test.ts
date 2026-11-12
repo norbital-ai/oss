@@ -40,7 +40,7 @@ const manifest: EngineManifest = {
 		self: {
 			description: 'Manages their own integration instances',
 			grants: {
-				sys_integration: { outputs: { default: true }, update: { verdict: true } }
+				sys_integration: { outputs: { default: {} }, update: { verdict: true } }
 			}
 		}
 	},

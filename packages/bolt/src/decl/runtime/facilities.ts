@@ -128,14 +128,14 @@ export type StartInput<A> = A extends AutomationName
 /** The result declared by an automation. */
 export type StartOutput<A> = A extends AutomationName ? OutputOf<AutomationSpecOf<A>> : never;
 /** Calls return their declared output; jobs return their durable handle. */
-export type RunResult<A> = A extends AutomationName
+type RunResult<A> = A extends AutomationName
 	? AutomationSpecOf<A> extends { mode: 'call' } ? StartOutput<A> : RunHandle<A>
 	: never;
 /** Code invokes a call in this request or queues a job, according to its declaration. */
 export interface Run {
 	<const A extends string>(automation: Is<A, AutomationName>, input: StartInput<A>): Eff<RunResult<A>, ActRefused>;
 }
-export type JobName = { [A in AutomationName]: AutomationSpecOf<A> extends { mode: 'call' } ? never : A }[AutomationName];
+type JobName = { [A in AutomationName]: AutomationSpecOf<A> extends { mode: 'call' } ? never : A }[AutomationName];
 /** `ctx.schedule`: queues a job automation after the current write commits. */
 export interface Schedule {
 	/** Due at once without `at`; with `key`, a queued run under the same key is replaced (rule 51). */
@@ -162,7 +162,7 @@ export type Recipient =
  * A file a notice carries: a stored file, or a document converted at delivery (after the commit, retried with the
  * delivery) from Markdown or HTML to a target `+workspace.ts` declares under `convert.to`.
  */
-export type NoticeAttachment =
+type NoticeAttachment =
 	FileRef | { document: ConvertSource; to: ConvertTarget; name: string };
 /**
  * One notice. The in-app inbox always gets it; `via` also sends it through persisted conversation instances
@@ -273,7 +273,7 @@ export type Web = { read: Call<[url: string, options?: { raw?: boolean }], WebPa
 
 // ── files (§5.8.1): handles by default, bytes only on request ──
 /** A file reference with its size in bytes and SHA-256. */
-export type FileMeta = FileRef & { readonly bytes: number; readonly sha256: string };
+type FileMeta = FileRef & { readonly bytes: number; readonly sha256: string };
 /**
  * What `ctx.files.image` reads from an image: format, size, SHA-256, the PDQ perceptual hash and EXIF (time taken, GPS, camera).
  */
@@ -314,7 +314,7 @@ export type PaperSize = (typeof PAPER_SIZES)[number];
  * What each conversion target takes beyond `to` and `name`: a `reference` document styles a Word, PowerPoint or
  * OpenDocument output (its fonts, headers, footers and page setup, as pandoc's reference-doc); a PDF sets its paper.
  */
-export type ConvertTargets = {
+type ConvertTargets = {
 	pdf: { page?: PaperSize; landscape?: boolean };
 	docx: { reference?: FileRef };
 	pptx: { reference?: FileRef };
@@ -532,7 +532,7 @@ export type DecisionQuestion =
  * `ctx.ai.sys_1.decide`'s answers, each typed from its question literal (P36, P37): a choice's option key; a score's
  * continuous `score`, its most probable `level` (the level itself), and `probabilities`/`legend` keyed by level index.
  */
-export type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
+type DecisionAnswers<Q extends { readonly [id: string]: DecisionQuestion }> = {
 	[K in keyof Q]: Q[K] extends { type: 'choice'; criteria: infer O }
 		? {
 				type: 'choice';

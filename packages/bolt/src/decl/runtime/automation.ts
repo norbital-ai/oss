@@ -3,8 +3,9 @@ import { Schema } from 'effect';
 import { duration_seconds } from '@norbital-ai/std/date';
 import type { Actor } from '../access/actor.ts';
 import { attached, type AgentUse, type Body } from '../body.ts';
-import type { Act, BodyReturn, CallerQuery, Clock, Eff } from '../ctx.ts';
-import type { ActConflict, ActRefused, ActUnknown, FacilityFailure, Refusal, Unavailable } from '../errors.ts';
+import type { Act, BodyReturn, CallerQuery, Clock, Eff, MessageKey } from '../ctx.ts';
+import type { ActConflict, ActRefused, FacilityFailure, Refusal, Unavailable } from '../errors.ts';
+import type { ActUnknown } from '../errors/act.ts';
 import type {
 	Checked,
 	Exact,
@@ -154,8 +155,8 @@ type RunCtx<A, Tools extends boolean> = Omit<Clock, 'actor'> &
 			>;
 		};
 		run: Run;
-		/** Stops the current body with an authored refusal. */
-		refuse(message: string, at?: { at?: object; field?: string; row?: number }): Eff<never, Refusal>;
+		/** Stops the current body with an authored refusal: a catalogue key, and the input list `row` and `field` it names. */
+		refuse(message: MessageKey, at?: { field?: string; row?: number }): Eff<never, Refusal>;
 		schedule: Schedule;
 		notify: Notify;
 		send: Send;

@@ -15,6 +15,7 @@ import * as Base64 from 'effect/encoding/Base64';
 import { deflateSync, inflateSync } from 'fflate';
 import { StoreError } from './errors.ts';
 import { canonical, sha256_hex } from '@norbital-ai/std/hash';
+import { equal_json } from '@norbital-ai/std/json';
 import { plan, statements, type Plan } from './schema/plan.ts';
 import type { SchemaSpec } from './schema/spec.ts';
 import { schema_snapshot, type SchemaSnapshot } from './schema/snapshot.ts';
@@ -891,7 +892,7 @@ export const migration_status = /*#__PURE__*/ (() =>
 const firstDifference = (held: unknown, declared: unknown, at: string): string => {
 	if (!Predicate.isObject(held) || !Predicate.isObject(declared)) return at;
 	for (const key of new Set([...Object.keys(held), ...Object.keys(declared)]))
-		if (JSON.stringify(held[key]) !== JSON.stringify(declared[key]))
+		if (!equal_json(held[key], declared[key]))
 			return firstDifference(held[key], declared[key], at === '' ? key : `${at}.${key}`);
 	return at;
 };

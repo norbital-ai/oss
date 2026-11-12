@@ -10,7 +10,8 @@ import { program } from '../../bolt-cli/src/test/guest.ts';
 import type { Ingested } from '../src/engine/contracts.ts';
 import { expect } from '@effect/vitest';
 import type { Json } from '../src/decl/values.ts';
-import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const manifest = Result.getOrThrow(
 	decode_projected_manifest({
@@ -39,7 +40,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			ops: {
 				description: 'Ops',
-				grants: { calls: { outputs: { default: true } } },
+				grants: { calls: { outputs: { default: {} } } },
 				capabilities: { automations: ['listen'] }
 			}
 		},

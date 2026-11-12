@@ -39,7 +39,7 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 				}
 			]);
 			if (result === undefined || conv === undefined)
-				return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The transcript read returned an incomplete answer.'));
+				return yield* BoltError.make('corrupt', 'decode', 'The transcript read returned an incomplete answer.');
 			const rows = yield* rowsOf(result.rows);
 			const staff = reader.as === 'workspace' || isStaff(reader.authority);
 			const status = conv?.rows[0]?.['status'];
@@ -77,7 +77,7 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 				}
 			]);
 			if (result === undefined)
-				return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The conversation read returned no answer.'));
+				return yield* BoltError.make('corrupt', 'decode', 'The conversation read returned no answer.');
 			const rows = yield* Schema.decodeUnknownEffect(
 				Schema.Array(ConversationListRow)
 			)(result.rows.map((row) => row['r'])).pipe(
@@ -99,9 +99,7 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 				reader.authority.actor.external ||
 				reader.authority.actor.id !== read.member
 			)
-				return yield* Effect.fail(
-					BoltError.make('forbidden', 'admission', 'No inbox for this member.')
-				);
+				return yield* BoltError.make('forbidden', 'admission', 'No inbox for this member.');
 			const [rows, count, open] = yield* db.read([
 				{
 					text: `SELECT to_jsonb(n) AS r FROM (SELECT id, title, body, link, at, read_at FROM sys_notification WHERE member = $1
@@ -115,7 +113,7 @@ export const agentRead = Effect.fn('Agents.read')(function* (
 				...(read.requests ? [openRequests] : [])
 			]);
 			if (rows === undefined || count === undefined || (read.requests && open === undefined))
-				return yield* Effect.fail(BoltError.make('internal', 'decode', 'The inbox read returned an incomplete answer.'));
+				return yield* BoltError.make('internal', 'decode', 'The inbox read returned an incomplete answer.');
 			const decoded = yield* Schema.decodeUnknownEffect(
 				Schema.Array(StoredNotice)
 			)(rows.rows.map((row) => row['r'])).pipe(

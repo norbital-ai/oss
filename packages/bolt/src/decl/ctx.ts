@@ -7,7 +7,8 @@ import type { Value } from '@norbital-ai/std/kind';
 import type { REFUSAL_CODES } from '../protocol/schema.ts';
 import type { Actor } from './access/actor.ts';
 import type { ApprovalFlow, Verdict } from './access/policy.ts';
-import type { ActConflict, ActRefused, ActUnknown, ReadFailed, Refusal } from './errors.ts';
+import type { ActConflict, ActRefused, ReadFailed, Refusal } from './errors.ts';
+import type { ActUnknown } from './errors/act.ts';
 import type { Checked, DateLiteral, Exact, InputOf, Simplify } from './fields.ts';
 import type {
 	AuthoredModelName,
@@ -161,10 +162,10 @@ export type HistoryOptions<C = string> = {
 // JSON only: the same value crosses the page wire, `ctx.query` and the agent tool (`protocol/read-request.ts`).
 type Dir = 'asc' | 'desc';
 /** A deeper layer's order: its exposed fields, ascending, or `{ field: dir }`; up to four keys, then `id`. */
-export type LayerOrderBy<F extends string> =
+type LayerOrderBy<F extends string> =
 	F | { readonly [K in F]?: Dir } | readonly (F | { readonly [K in F]?: Dir })[];
 /** What a layer `aggregate` measures over the layer's rows (per parent row on a nested layer), bucketed `by` fields. */
-export type LayerAggregate<C, P, O = 'default'> = {
+type LayerAggregate<C, P, O = 'default'> = {
 	count?: true;
 	sum?: readonly NoInfer<NumericColumns<PathModel<C, P>, LayerField<C, P, O> & string>>[];
 	avg?: readonly NoInfer<NumericColumns<PathModel<C, P>, LayerField<C, P, O> & string>>[];
@@ -176,7 +177,7 @@ export type LayerAggregate<C, P, O = 'default'> = {
  * A root layer of `C`: the read `output` it answers (`default` when absent), its filter, fields, order and page, a text
  * or index search, an aggregate, and `as_of`.
  */
-export type RootRequest<C, O = 'default'> = {
+type RootRequest<C, O = 'default'> = {
 	/** The model's named read output: its fixed fields and layers. The caller's policies grant it and filter its rows. */
 	output?: OutputName<C>;
 	where?: Where<C, O>;
@@ -191,7 +192,7 @@ export type RootRequest<C, O = 'default'> = {
 	as_of?: string;
 };
 /** A deeper layer `P` of `C`'s output `O`: `where` filters that layer's rows (a list) or nulls it (a ref), never removing the root. */
-export type LayerRequest<C, P, O = 'default'> = {
+type LayerRequest<C, P, O = 'default'> = {
 	where?: LayerWhere<C, P, O>;
 	fields?: readonly LayerField<C, P, O>[];
 	order_by?: LayerOrderBy<LayerField<C, P, O> & string>;
@@ -229,7 +230,7 @@ type RequestChildren<C, P extends string, Node, O> = {
 		: never;
 };
 /** Each root and nested relation is checked against its selected output. */
-export type RequestSpec<R> = {
+type RequestSpec<R> = {
 	[C in keyof R]: C extends ReadableName
 		? RootRequest<C, OutputOf<R, C>> & RequestChildren<C, C, R[C], OutputOf<R, C>>
 		: `error: '${C & string}' is no read root`;
@@ -257,7 +258,7 @@ type SubAnswer<C, Q extends string, R, T, S> = S extends keyof OneRels<T>
  * and each named sub-layer under its relation name in place of the FK (a ref: the row or `null`; a many-relation: its
  * rows).
  */
-export type LayerRow<
+type LayerRow<
 	C,
 	P extends string,
 	R,
@@ -565,8 +566,6 @@ export type Refused = {
 	code: 'refused' | PlatformRefusal;
 	message: string;
 	field?: string;
-	/** The write path `field` belongs to (a policy `deny`'s `at.path`); the root when absent. */
-	path?: string;
 	row?: number;
 	rows?: readonly number[];
 	/** A.2 L-BOLT-043: the write callback that refused (`'<model>.create'`, `'<model>.update'`, `'<model>.delete'`). */
@@ -609,21 +608,14 @@ export interface Act {
 // Contexts are interfaces with declared variance: measuring the variance of a generic alias over a large names index
 // cost seconds per body (G1 scale fixture).
 // ── policy verdicts (decision 3): one per write verb, the root's policy only ──
-/** Where a refusal points: an input change, batch row, write path and column. */
-export type DenyAt<M, V> = { readonly at?: object } & (V extends 'create' | 'update'
-	? | { readonly row?: number; readonly path?: M & string; readonly field?: LayerColumn<M, V, M> }
-		| {
-				[P in Exclude<WritePath<M, V>, M>]: {
-					readonly row?: number;
-					readonly path: P;
-					readonly field?: LayerColumn<M, V, P>;
-				};
-		  }[Exclude<WritePath<M, V>, M>]
-	: { readonly row?: number });
+/** Where a refusal points: the offending row's index in the batch and, on create and update, a root column. */
+type DenyAt<M, V> = V extends 'create' | 'update'
+	? { readonly row?: number; readonly field?: LayerColumn<M, V, M> }
+	: { readonly row?: number };
 /**
  * What a policy's write `verdict` sees: who writes (`actor`, `policies`), the clock, `query` (read requests as the
  * workspace, at most ten per call, whatever the batch size) and the three verdicts. It writes nothing and does no I/O;
- * it returns `allow()` or `approve(flow)`, or stops with `refuse(message, at?)`.
+ * it returns `allow()` or `approve(flow)`, or stops with `refuse(message_key, at?)`.
  */
 export interface PolicyCtx<
 	in out M,
@@ -634,8 +626,8 @@ export interface PolicyCtx<
 	readonly query: WorkspaceQuery['query'];
 	/** The write executes directly. */
 	allow(): Verdict;
-	/** The whole batch is refused (rule 32) with `message`; `at` names the row, the write path and a column of it. */
-	refuse(message: string, at?: DenyAt<M, V>): Eff<never, Refusal>;
+	/** The whole batch is refused (rule 32) with a catalogue key; `at` names the row and a root column of it. */
+	refuse(message: MessageKey, at?: DenyAt<M, V>): Eff<never, Refusal>;
 	/** The batch is held for the declared approval steps and optional superseding teams. */
 	approve(flow: ApprovalFlow): Verdict;
 }
@@ -751,14 +743,10 @@ export interface WriteCtx<in out M> extends Clock, WorkspaceQuery {
 	 */
 	readonly approving: boolean;
 	/**
-	 * Refuses the whole write (rule 32), `return yield* ctx.refuse(…)`: `field` names the field, `row` the index of the
-	 * offending row in the batch the callback received.
+	 * Refuses the whole write (rule 32), `return yield* ctx.refuse(…)`, with a catalogue key: `field` names the field,
+	 * `row` the index of the offending row in the batch the callback received.
 	 */
-	refuse(message: string, at?: {
-		field?: WritableField<M>;
-		row?: number;
-		at?: { readonly before: unknown; readonly set: unknown; readonly after: unknown };
-	}): Eff<never, Refusal>;
+	refuse(message: MessageKey, at?: { field?: WritableField<M>; row?: number }): Eff<never, Refusal>;
 	query: WorkspaceQuery['query'] & ProspectiveQuery;
 }
 

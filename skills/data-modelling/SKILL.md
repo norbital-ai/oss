@@ -6,7 +6,7 @@ description: Route data modelling decisions - models, fields, layers, state, inv
 ## Protocol
 
 1. Decide the models. Prefer fewer. A value its parent owns, with no identity, lifecycle, permissions, history or relational query of its own, is inline. Configured variation is records; source defines the language.
-2. Read the field contract: `import('@norbital-ai/bolt').ModelLiteral`, `FieldKind`.
+2. Read the field contract: `import('@norbital-ai/bolt/declarations').ModelLiteral`, `FieldKind`.
 3. Declare invariants on the model before writing callback code. Use named `constraints` for checks, locks, period exclusions and uniqueness. Declare state edges, indexes and computed values on the model.
 4. Declare reads as output trees and writes as column trees. Transforms derive and validate values; policy verdicts judge caller authority. A batch commits whole.
 5. Business operations are automations; authority is policies.

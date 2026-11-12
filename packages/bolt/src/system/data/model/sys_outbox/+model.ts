@@ -28,7 +28,7 @@ export default bind_system_model('sys_outbox')({
 		/** The fields changed since the last acknowledged write. */
 		changed: { kind: 'json', default: [], shape: { kind: 'text', many: true } },
 		/** The Idempotency-Key the remote dedupes a retried write by. */
-		key: { kind: 'text', unique: true },
+		key: { kind: 'text' },
 		status: {
 			kind: 'enum',
 			values: ['queued', 'sending', 'acked', 'failed', 'dead', 'skipped'],
@@ -45,6 +45,7 @@ export default bind_system_model('sys_outbox')({
 		at: { kind: 'instant' }
 	},
 	constraints: {
+		key: { unique: ['key'] },
 		coalesce: {
 			unique: ['sync', 'instance', 'record'],
 			where: { status: { eq: 'queued' }, attempts: { eq: 0 } }

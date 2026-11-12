@@ -84,6 +84,10 @@ describe('declarations', () => {
 		expect(() => split_model('notes', {
 			description: 'Notes', fields: { note: { kind: 'text', help: 'Old help' } }
 		})).toThrow(/message catalogue/);
+		// uniqueness has one spelling: a named constraint
+		expect(() => split_model('notes', {
+			description: 'Notes', fields: { code: { kind: 'text', unique: true } }
+		})).toThrow();
 	});
 
 	it('keeps physical key metadata private to native models and rejects it at the workspace boundary', () => {

@@ -23,8 +23,7 @@ import { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import {
 	type Authority,
 	type Bindings,
-	type FacilityError,
-	type EmbedInput
+	type FacilityError
 } from './contracts.ts';
 import type { EngineManifest } from './manifest.ts';
 import { type TenantDbShape } from './db/tenant-db.ts';
@@ -127,7 +126,7 @@ export const DecisionRequestSchema = Schema.Struct({
 	)
 });
 export type DecisionRequest = typeof DecisionRequestSchema.Type;
-export const DecisionAnswerSchema = Schema.Union([
+const DecisionAnswerSchema = Schema.Union([
 	Schema.Struct({ type: Schema.Literal('noul'), noul: Probability }),
 	Schema.Struct({
 		type: Schema.Literal('choice'),
@@ -145,7 +144,7 @@ export const DecisionAnswerSchema = Schema.Union([
 	})
 ]);
 export type DecisionAnswer = typeof DecisionAnswerSchema.Type;
-export const DecisionResultSchema = Schema.Struct({
+export const DecisionResult = Schema.Struct({
 	answers: Schema.Record(Schema.String, DecisionAnswerSchema),
 	cost_usd: Schema.Finite,
 	provider: Schema.String,
@@ -153,8 +152,7 @@ export const DecisionResultSchema = Schema.Struct({
 	call: Schema.optionalKey(Schema.String),
 	tokens: Schema.optionalKey(Schema.Struct({ input: Schema.Number, output: Schema.Number }))
 });
-export type DecisionResult = typeof DecisionResultSchema.Type;
-export type DecisionFile = Extract<EmbedInput, { readonly $file: unknown }>;
+export type DecisionResult = typeof DecisionResult.Type;
 export type System1Request = DecisionRequest;
 /** Provider ABI contract stays Promise/AbortSignal at the host adapter only. */
 export interface System1Port {
@@ -176,10 +174,6 @@ const isFileRef = (v: unknown): v is { id: string; name: string; mime: string } 
 	typeof v['name'] === 'string' &&
 	typeof v['mime'] === 'string' &&
 	Object.keys(v).every((k) => FILE_KEYS.has(k));
-const isDecisionFile = (v: unknown): v is DecisionFile =>
-	Predicate.isObject(v) &&
-	Predicate.isObject(v['$file']) &&
-	v['$file']['bytes'] instanceof Uint8Array;
 const walk = (v: unknown, leaf: (x: unknown) => unknown): unknown => {
 	const r = leaf(v);
 	if (r !== undefined) return r;
@@ -200,16 +194,6 @@ const fileIds = (value: unknown): string[] => {
 	const out = new Set<string>();
 	walk(value, (x) => (isFileRef(x) ? (out.add(x.id), x) : undefined));
 	return [...out];
-};
-/** Hosts: the input with each `$file` replaced by `encode(file, n)`, the provider's format for it (n counts from 0). */
-export const encode_files = (
-	input: unknown,
-	encode: (file: DecisionFile['$file'], n: number) => Json
-): Json => {
-	let n = 0;
-	return Schema.decodeUnknownSync(Schema.Json)(
-		walk(input, (x) => (isDecisionFile(x) ? encode(x.$file, n++) : undefined))
-	);
 };
 
 /** A provider's HTTP refusal as the typed error it maps to (P37); `undefined` is an ordinary failure. Hosts share it. */
@@ -336,7 +320,7 @@ const decodeProviderAnswers = Effect.fn('Decisions.decodeProviderAnswers')(funct
 });
 
 const answerCriteria = (request: DecisionRequest) =>
-	DecisionResultSchema.check(
+	DecisionResult.check(
 		Schema.makeFilter(
 			(result) =>
 				Object.entries(request.questions).every(([id, question]) => {
@@ -507,7 +491,7 @@ export const DecisionsLive = Layer.effect(
 	})
 );
 
-export type DecisionsApiConfig = {
+type DecisionsApiConfig = {
 	/** Jev/OpenRouter by default; OpenAI native `/v1/decisions` uses its own wire format. */
 	format?: 'jev' | 'openai';
 	url: string;

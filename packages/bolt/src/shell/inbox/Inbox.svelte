@@ -19,7 +19,8 @@
 		format,
 		label,
 		open_record,
-		singular
+		singular,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import type { InboxRequest } from './data.ts';
 	import { InboxReadAnswer } from '../api-types.ts';
@@ -32,10 +33,11 @@
 
 	/** `on_count`: the requests the viewer may decide, as it changes: the sidebar's badge. */
 	let {
+		ctx,
 		bolt,
 		t,
 		on_count
-	}: { bolt: ShellBolt; t: (key: string) => string; on_count?: (n: number) => void } = $props();
+	}: { ctx: UiContext; bolt: ShellBolt; t: (key: string) => string; on_count?: (n: number) => void } = $props();
 
 	// svelte-ignore state_referenced_locally
 	const inbox = observe(() =>
@@ -159,7 +161,7 @@
 {#snippet record_({ row }: { row: InboxRequest; value: unknown })}
 	{#if row.action === 'create'}<span>{t('New')} {singular(bolt, row.model)}</span>
 	{:else}<span class="[&_[data-readonly]]:text-xs"
-			><Picker of={row.model} value={row.record} on_change={() => {}} readonly /></span
+			><Picker {ctx} of={row.model} value={row.record} on_change={() => {}} readonly /></span
 		>{/if}
 {/snippet}
 {#snippet decide_({ row }: { row: InboxRequest; value: unknown })}<Acts
@@ -177,7 +179,7 @@
 	{#if requests === null}
 		<TableSkeleton />
 	{:else}
-		<Table
+		<Table {ctx}
 			of={requestRows}
 			key="approvals"
 			toolbar={{ title: t('All approvals'), export: true }}

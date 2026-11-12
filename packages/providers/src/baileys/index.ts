@@ -1528,13 +1528,13 @@ const MediaEnvelope = Schema.Struct({
 /** The real socket. Baileys is an optional dependency, so it is imported by name at first use. */
 export const baileysSocket: WaOpen = async (c) => {
 	const name = '@whiskeysockets/baileys';
-	const b = Schema.decodeUnknownSync(BaileysModule)(await import(name));
-	const encode = (value: unknown): Json =>
-		Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+	const b = await Schema.decodeUnknownPromise(BaileysModule)(await import(name));
+	const encode = (value: unknown): Promise<Json> =>
+		Schema.decodeUnknownPromise(Schema.fromJsonString(Schema.Json))(
 			JSON.stringify(value, b.BufferJSON.replacer)
 		);
 	const revive = (j: Json): unknown => JSON.parse(JSON.stringify(j), b.BufferJSON.reviver);
-	const creds = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(
+	const creds = await Schema.decodeUnknownPromise(Schema.Record(Schema.String, Schema.Unknown))(
 		c.store.creds === null ? b.initAuthCreds() : revive(c.store.creds)
 	);
 	const keys = {
@@ -1549,18 +1549,22 @@ export const baileysSocket: WaOpen = async (c) => {
 			}
 			return out;
 		},
-		set: (data: { [type: string]: { [id: string]: unknown } }) =>
+		set: async (data: { [type: string]: { [id: string]: unknown } }) =>
 			c.store.set(
 				Object.fromEntries(
-					Object.entries(data).map(([type, byId]) => [
-						type,
-						Object.fromEntries(
-							Object.entries(byId).map(([id, v]) => [
-								id,
-								v === null || v === undefined ? null : encode(v)
-							])
-						)
-					])
+					await Promise.all(
+						Object.entries(data).map(async ([type, byId]) => [
+							type,
+							Object.fromEntries(
+								await Promise.all(
+									Object.entries(byId).map(async ([id, v]) => [
+										id,
+										v === null || v === undefined ? null : await encode(v)
+									])
+								)
+							)
+						])
+					)
 				)
 			)
 	};
@@ -1593,8 +1597,8 @@ export const baileysSocket: WaOpen = async (c) => {
 	});
 	// Baileys merges each update into `creds` first; the whole creds goes to the store
 	socket.ev.on('creds.update', () => {
-		void c.store
-			.update(encode(creds))
+		void encode(creds)
+			.then((stored) => c.store.update(stored))
 			.catch((error) => console.warn('[providers] WhatsApp creds not persisted', error));
 	});
 	return {

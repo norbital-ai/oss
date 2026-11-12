@@ -3,11 +3,14 @@
 A related-record grid with explicit child operations, original revisions and parent or independent saves.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Json } from '../client/contract.js';
 	import type { Page, Row, Values } from '../model/types.js';
 	import type { Col } from '../table/Table.svelte';
 	/** The parent model and inverse relation, with an explicit save scope and optional display columns/filter. */
-	export type ChildGridProps = {
+	type ChildGridProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: string;
 		relation: string;
 		id?: string;
@@ -24,7 +27,6 @@ A related-record grid with explicit child operations, original revisions and par
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { watch as changes } from 'runed';
-	import { useKinds } from '../kinds/context.js';
 	import { fields_text, recordText } from '../kinds/kind.js';
 	import { FormState, use_record_controller } from '../form/form-state.svelte.js';
 	import { changed, formSpec, locked } from '../form/draft.js';
@@ -33,7 +35,7 @@ A related-record grid with explicit child operations, original revisions and par
 	import { Button } from '../primitives/button/index.js';
 	import { confirm_action } from '../primitives/dialog/confirm.js';
 	import Picker from '../kinds/picker.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { type Outcome } from '../client/contract.js';
 	import { actOutcome } from '../actions/outcome.js';
 	import { and } from '../filter/scope.js';
@@ -43,9 +45,9 @@ A related-record grid with explicit child operations, original revisions and par
 	import ReadGate from '../read/ReadGate.svelte';
 	import Table from '../table/Table.svelte';
 	import ChildCell from './ChildCell.svelte';
-	let { of, relation, id, save = 'parent', columns, where }: ChildGridProps = $props();
-	const bolt = useBolt(),
-		kinds = useKinds(),
+	let { ctx, of, relation, id, save = 'parent', columns, where }: ChildGridProps = $props();
+	const bolt = $derived(bolt_of(ctx)),
+		kinds = $derived(ctx.ui.kinds),
 		scope = use_record_controller(),
 		owner = scope?.current;
 	const contract = $derived(owner?.spec.children?.[relation]);
@@ -136,12 +138,12 @@ A related-record grid with explicit child operations, original revisions and par
 	const linkedLabels = new SvelteMap<string, string>();
 	let linkBusy = $state(false);
 	let active = true;
-	const text = {
+	const text = $derived({
 		pending_approval: msg(bolt, 'form.pending_approval'),
 		conflict: msg(bolt, 'form.conflict'),
 		unknown: msg(bolt, 'form.unknown'),
 		running: msg(bolt, 'form.running')
-	};
+	});
 	onDestroy(() => {
 		active = false;
 	});
@@ -620,7 +622,7 @@ A related-record grid with explicit child operations, original revisions and par
 
 {#snippet cell({ field: name, row }: { field: string; row: Row })}
 	{@const entry = drafts.get(row.id)}
-	{#if entry !== undefined}<ChildCell
+	{#if entry !== undefined}<ChildCell {ctx}
 			form={entry.form}
 			{name}
 			readonly={!editing}
@@ -694,7 +696,7 @@ A related-record grid with explicit child operations, original revisions and par
 {/snippet}
 
 {#snippet table()}
-	<Table
+	<Table {ctx}
 		of={displayed}
 		layout="grid"
 		toolbar={false}
@@ -757,7 +759,7 @@ A related-record grid with explicit child operations, original revisions and par
 			{msg(bolt, 'child.unavailable')}
 		</p>
 	{:else}
-		{#if id !== undefined}<ReadGate state={loaded} what={model}>{@render table()}</ReadGate
+		{#if id !== undefined}<ReadGate {ctx} state={loaded} what={model}>{@render table()}</ReadGate
 			>{:else}{@render table()}{/if}
 		{#if editing && strategy.create !== undefined}<div>
 				<Button
@@ -778,7 +780,7 @@ A related-record grid with explicit child operations, original revisions and par
 		{#if editing && !identity.owned && strategy.link && (id !== undefined || (save === 'parent' && owner?.mode === 'create'))}<div
 				class="flex items-center gap-2"
 			>
-				<Picker
+				<Picker {ctx}
 					of={model}
 					value={typeof link === 'string' ? link : null}
 					disabled={linkBusy || owner?.pending === true}

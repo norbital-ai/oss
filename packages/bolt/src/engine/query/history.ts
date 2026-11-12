@@ -292,7 +292,9 @@ export const read_history = Effect.fn('Bolt.read_history')(function* (
 			revision: last.revision,
 			at: last.at,
 			schema_version: last.schema_version,
-			fields: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(canonical(fields)),
+			fields: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(canonical(fields)).pipe(
+				Effect.mapError(() => BoltError.make('corrupt', 'decode', 'A history field definition is not JSON.'))
+			),
 			values,
 			compatible,
 			incompatible

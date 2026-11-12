@@ -505,11 +505,10 @@ describe('open_ai_chat', () => {
 					files: [
 						{ mime: 'image/jpeg', bytes: new Uint8Array([2]), call: 'c1' },
 						{ mime: 'image/png', bytes: new Uint8Array([1]), call: 'gone' }
-					],
-					effort: 'low'
+					]
 				});
 				const { sent } = first(seen);
-				expect(sent).toMatchObject({ reasoning_effort: 'low' });
+				expect(sent).not.toHaveProperty('reasoning_effort');
 				expect(sent.messages.map((m) => m.role)).toEqual([
 					'user',
 					'assistant',

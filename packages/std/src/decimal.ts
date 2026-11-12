@@ -3,8 +3,8 @@
 // decimals fails loudly instead of concatenating strings (`>` on Decimal is doctor DR-1).
 
 /** The rounding modes; `half_up` is Postgres `round(numeric)`: half away from zero. */
-export const Rounding = ['half_up', 'half_even', 'down', 'up', 'floor', 'ceil'] as const;
-export type Rounding = (typeof Rounding)[number];
+const Rounding = ['half_up', 'half_even', 'down', 'up', 'floor', 'ceil'] as const;
+type Rounding = (typeof Rounding)[number];
 /** An ISO 4217 currency code, branded. */
 export type CurrencyCode = string & { readonly __currency: unique symbol };
 /** A decimal string, a bigint, an integer, or a tagged wire value (`{ $dec: '1.20' }`). */
@@ -58,7 +58,7 @@ export class Decimal {
 	}
 	/** `x instanceof Decimal` holds for a decimal from any std copy; its methods are its own copy's, and `of` re-reads it. */
 	static [Symbol.hasInstance](v: unknown): boolean {
-		return typeof v === 'object' && v !== null && (v as { [BRAND]?: unknown })[BRAND] === true;
+		return typeof v === 'object' && v !== null && BRAND in v && v[BRAND] === true;
 	}
 	get [BRAND](): true {
 		return true;
@@ -196,7 +196,8 @@ export class Decimal {
 	}
 }
 /** Bolt's decoders (the guest prelude, the `$bolt` client) build row decimals with this class once it is loaded. */
-(globalThis as { [k: symbol]: unknown })[Symbol.for('norbital.std.Decimal')] ??= Decimal;
+if (Reflect.get(globalThis, Symbol.for('norbital.std.Decimal')) == null)
+	Reflect.set(globalThis, Symbol.for('norbital.std.Decimal'), Decimal);
 
 /** Shorthand for `Decimal.of`: a decimal from a string, bigint, integer or tagged wire value. */
 export const dec = (v: DecimalLike): Decimal => Decimal.of(v);
@@ -231,11 +232,13 @@ let known: ReadonlySet<string> | undefined;
 
 /** An ISO 4217 code (from the runtime's Intl data); anything else throws. */
 export function currency(code: string): CurrencyCode {
-	known ??= new Set(Intl.supportedValuesOf('currency'));
-	if (!/^[A-Z]{3}$/.test(code) || !known.has(code))
-		throw new RangeError(`'${code}' is not an ISO 4217 currency`);
-	return code as CurrencyCode;
+	if (!is_currency(code)) throw new RangeError(`'${code}' is not an ISO 4217 currency`);
+	return code;
 }
+const is_currency = (code: string): code is CurrencyCode => {
+	known ??= new Set(Intl.supportedValuesOf('currency'));
+	return /^[A-Z]{3}$/.test(code) && known.has(code);
+};
 /** ISO 4217 minor-unit digits. */
 export const minor_digits = (c: CurrencyCode | string): 0 | 2 | 3 =>
 	ZERO.has(c) ? 0 : THREE.has(c) ? 3 : 2;

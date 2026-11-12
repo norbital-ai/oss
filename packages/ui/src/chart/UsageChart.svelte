@@ -3,13 +3,16 @@
 	(a capacity, a machine's total). Hovering reads every line at that time.
 -->
 <script lang="ts" module>
-	export type UsageChartLine = Readonly<{
+	import type { UiContext } from '../client/contract.js';
+	type UsageChartLine = Readonly<{
 		label: string;
 		bound: boolean;
 		points: ReadonlyArray<Readonly<{ at: number; value: number | null }>>;
 	}>;
 
 	export type UsageChartProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		title: string;
 		unit: string;
 		lines: ReadonlyArray<UsageChartLine>;
@@ -49,11 +52,10 @@
 </script>
 
 <script lang="ts">
-	import { useKinds } from '../kinds/context.js';
 	import { ui_text } from '../primitives/utils.js';
 
-	let { title, unit, lines, utilization = null }: UsageChartProps = $props();
-	const host = useKinds();
+	let { ctx, title, unit, lines, utilization = null }: UsageChartProps = $props();
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const metric = (value: number | null) =>
 		value === null ? t('unavailable') : format_metric_value(unit, value, host.locale);

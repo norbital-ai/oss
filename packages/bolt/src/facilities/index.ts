@@ -1,7 +1,7 @@
 // `@norbital-ai/bolt/facilities` (plan 01): the host contract. A bundle records what it NEEDS; a host supplies six
-// groups of facilities. Bolt ships only the interfaces (Promise + AbortSignal, as HOST_API), `off`, the needs check and
-// `activate`; every adapter belongs to the host that writes it. Every key is required: `satisfies Facilities` turns a
-// missing one into a type error, `off` is the only way to leave a member out, and `mail` has no `off`.
+// groups of facilities. Bolt ships only the interfaces (Promise + AbortSignal, as HOST_API) and `off`; `HOST_API.activate`
+// checks the needs. Every adapter belongs to the host that writes it. Every key is required: `satisfies Facilities` turns
+// a missing one into a type error, `off` is the only way to leave a member out, and `mail` has no `off`.
 import type {
 	AiPort,
 	BrowserPort,
@@ -19,47 +19,37 @@ import type {
 import type { Provider } from '../engine/integrations/driver.ts';
 import type { PhoneVerifier } from '../engine/identity/session.ts';
 import type { AuditPort } from '../protocol/audit.ts';
-import {
-	HOST_API,
-	type ActiveWorkspace,
-	type AgentPorts,
-	type HostPorts,
-	type HostTenantDb,
-	type LinkHost,
-	type ShellPorts,
-	type Signal
-} from '../protocol/host-api.ts';
+import type { AgentPorts, HostTenantDb, LinkHost, ShellPorts } from '../protocol/host-api.ts';
 import type { Off } from './off.ts';
 
-export { off, is_off, type Off } from './off.ts';
-export { needs_of, unmet, NEEDS, type Need } from './needs.ts';
+export { off, is_off } from './off.ts';
 
 /** A member the host may leave out, explicitly. */
-export type Optional<T> = T | Off;
+type Optional<T> = T | Off;
 
 // ── 1. storage ──
 /** Tenant rows (run status and chat history included): the engine's SQL over the host's driver. */
-export type Database = HostTenantDb;
+type Database = HostTenantDb;
 /** Uploads and blobs. */
-export type Files = FilesPort;
+type Files = FilesPort;
 
 // ── 2. log storage ──
 /** Runtime events; the host may drop entries under load. */
-export type RuntimeLog = LogPort;
+type RuntimeLog = LogPort;
 /** The durable audit stream, outside the tenant database, surviving a tenant restore. */
-export type AuditLog = AuditPort;
+type AuditLog = AuditPort;
 
 // ── 3. transactional ──
 /** Emailed codes and invitations: `send('email', message, signal)`. Mandatory for every host. */
-export type Mail = TransportPort;
+type Mail = TransportPort;
 /** Texted invitations: `send('sms', message, signal)`. */
-export type Sms = TransportPort;
+type Sms = TransportPort;
 /** Sends and checks a mobile number's sign-in code. */
-export type Phone = PhoneVerifier;
+type Phone = PhoneVerifier;
 /** Web and native push for inbox notices, over the environment's database (a gone subscription is deleted there). */
-export type Push = (database: Database) => TransportPort;
+type Push = (database: Database) => TransportPort;
 /** A local host's sign-in codes are all `123456` (38a(f)); a deployed host's are random. */
-export type FixedCodes = boolean;
+type FixedCodes = boolean;
 /** Turnstile-style bot protection: the public site key the widget renders, and the server-side check. */
 export interface Challenge {
 	readonly site_key: string;
@@ -68,19 +58,19 @@ export interface Challenge {
 
 // ── 4. intelligence ──
 /** Fast structured decisions (`ctx.ai.sys_1.decide`, triage). */
-export type System1 = AiPort['sys_1'];
+type System1 = AiPort['sys_1'];
 /** The LLM (`ctx.ai.sys_2.infer`, agents). */
-export type System2 = AiPort['sys_2'];
+type System2 = AiPort['sys_2'];
 /** Multimodal embeddings (`ctx.ai.embed`). */
-export type Embed = EmbeddingsPort;
+type Embed = EmbeddingsPort;
 
 // ── 5. ports: how Bolt reaches the outside ──
 /** Inbound: the public URL under which the host routes `/hooks/integration/<instance>` and OAuth callbacks into Bolt. */
-export interface Webhooks {
+interface Webhooks {
 	readonly public_url: string;
 }
 /** A client WebSocket (Discord, WhatsApp, CDP): the platform's standard `WebSocket`. */
-export interface Websockets {
+interface Websockets {
 	connect(
 		url: string,
 		options: {
@@ -91,7 +81,7 @@ export interface Websockets {
 	): Promise<WebSocket>;
 }
 /** Outbound under the host's egress policy: HTTP for APIs and OAuth, TCP/TLS for IMAP and SMTP. */
-export interface Outbound {
+interface Outbound {
 	readonly http: HttpPort;
 	readonly tcp: TcpPort;
 }
@@ -110,7 +100,7 @@ export type SandboxResult = {
 	readonly files: ReadonlyMap<string, Uint8Array>;
 };
 /** Agents' bash: one command over a working tree, confined by the host. */
-export interface Sandbox {
+interface Sandbox {
 	exec(
 		command: string,
 		files: ReadonlyMap<string, Uint8Array>,
@@ -167,16 +157,3 @@ export type Serving = {
 	readonly shell?: Pick<ShellPorts, 'environment' | 'push'>;
 	close?(): Promise<void>;
 };
-
-/** What the host serves around the facilities: the release, its scope and URL, isolates, the shell and agent parts. */
-export type Bundle = Omit<HostPorts, 'facilities'>;
-
-/**
- * Activates `bundle` with `facilities`: the bundle's recorded needs are checked first, and a need left `off` refuses
- * the activation naming every unmet member. There is no fallback.
- */
-export const activate = (
-	bundle: Bundle,
-	facilities: Facilities,
-	options: Signal
-): Promise<ActiveWorkspace> => HOST_API.activate({ ...bundle, facilities }, options);

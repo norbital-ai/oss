@@ -216,10 +216,10 @@ describe('layer maps at compile time (bolt check)', () => {
 								outputs: {
 									default: { scopes: { orders: {}, 'orders.party.orders': {} } },
 									logistics: { scopes: { 'orders.party': {} } },
-									wholesale: true
+									wholesale: {}
 								},
 								create: { columns: { orders: ['number', 'total'], 'orders.notes': ['body'] } },
-								update: true
+								update: {}
 							}
 						}
 					}

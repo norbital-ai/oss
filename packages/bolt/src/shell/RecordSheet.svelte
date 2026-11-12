@@ -4,12 +4,12 @@
 	(`open_record`'s third argument) are set above it, so a create keeps the scope of the page that opened it.
 -->
 <script lang="ts">
-	import { Sheet } from '@norbital-ai/ui';
+	import { Sheet, type UiContext } from '@norbital-ai/ui';
 	import { carried_contexts, on_page_contexts, page_contexts, RecordShell } from '@norbital-ai/ui';
 	import { onDestroy } from 'svelte';
 	import Carry from './Carry.svelte';
 
-	let { model, id, on_close }: { model: string; id: string; on_close: () => void } = $props();
+	let { ctx, model, id, on_close }: { ctx: UiContext; model: string; id: string; on_close: () => void } = $props();
 	// the opener's contexts; else the page's (a reload or a link), which may mount after this sheet: it remounts once then
 	// svelte-ignore state_referenced_locally
 	const carried = carried_contexts(model, id);
@@ -34,7 +34,7 @@
 				if (!open) on_close();
 			}}
 		>
-			{#if id === 'new'}<RecordShell of={model} mode="create" />{:else}<RecordShell
+			{#if id === 'new'}<RecordShell {ctx} of={model} mode="create" />{:else}<RecordShell {ctx}
 					of={model}
 					{id}
 				/>{/if}

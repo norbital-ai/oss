@@ -5,7 +5,7 @@ import { HttpClientRequest } from 'effect/http';
 import { decodeMessage, Email, invalid, providerJson, strings } from '@norbital-ai/providers';
 import type { TransportDef } from './mail.ts';
 
-export type ResendMail = { readonly key: string; readonly from: string };
+type ResendMail = { readonly key: string; readonly from: string };
 const Sent = Schema.Struct({ id: Schema.NonEmptyString });
 export function resendMail(options: ResendMail): TransportDef {
 	return {

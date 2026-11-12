@@ -23,7 +23,7 @@ In show mode `view` supplies `value`, `dense`, `row` and `name`; edit mode also 
 nullability and write typed values through `on_change`, without round-tripping them through JSON.
 
 The renderer is used automatically in Table cells (dense), Board cards, Form and RecordShell
-fields, history diffs, Matrix labels and bulk relation pickers. Built-in money, file, point and
+fields, history diffs and bulk relation pickers. Built-in money, file, point and
 phone renderers follow the same lookup and reserve their names. Renderers are statically bundled
 because cells render synchronously; keep them light and import heavier tools only on demand.
 

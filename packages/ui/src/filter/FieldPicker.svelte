@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	// The view popover's field tree with search (rule 16b): own fields, one-relations (a record condition, or expanded to
 	// the target's fields, two hops) and, at the top, many-relations — exactly the paths the engine's catalogue offers.
 	import FieldIndicator from './FieldIndicator.svelte';
@@ -8,7 +9,7 @@
 	import type { ModelExposure } from '../kinds/context.js';
 	import { cn, stepActive } from '../primitives/utils.js';
 	import { CONTROL } from '../kinds/classes.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { filterable, INDEX, offeredPaths, resolve, childOf, type FilterStep, type Offer } from './catalog.js';
 	import { pathLabel } from './text.js';
 	import { humanize, msg } from '../text/messages.js';
@@ -16,6 +17,7 @@
 
 	type Entry = { path: string; label: string; depth: number; many?: true; open?: boolean };
 	let {
+		ctx,
 		catalog,
 		model,
 		offers,
@@ -24,6 +26,7 @@
 		many = true,
 		on_pick
 	}: {
+		ctx: UiContext;
 		catalog: { readonly [c: string]: ModelExposure };
 		model: string;
 		/** The engine's catalogue for the view. */
@@ -36,7 +39,7 @@
 		many?: boolean;
 		on_pick(path: string, many: boolean): void;
 	} = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	let open = $state(false),
 		query = $state(''),
 		active = $state(0);
@@ -174,7 +177,7 @@
 					: msg(bolt, 'view.field')}
 				data-field-picker
 			>
-				<FieldIndicator resolved={selected} many={selectedMany} nested={value.includes('.')} />
+				<FieldIndicator {ctx} resolved={selected} many={selectedMany} nested={value.includes('.')} />
 				<span
 					class={cn(
 						'min-w-0 flex-1 whitespace-normal break-words',
@@ -237,7 +240,7 @@
 						onmousemove={() => (active = i)}
 						onclick={() => pick(e)}
 					>
-						<FieldIndicator
+						<FieldIndicator {ctx}
 							resolved={resolve(catalog, model, e.path)}
 							many={e.many === true}
 							nested={e.path.includes('.')}

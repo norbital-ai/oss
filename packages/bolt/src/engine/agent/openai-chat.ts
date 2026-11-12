@@ -3,7 +3,7 @@
 // (`modelCall`) cuts a long generation into a continued step instead of a `timeout` (rule 63); tool calls assemble from
 // their pieces and usage comes from the last chunk. A refusal rejects with the HTTP `status` (the engine spots context
 // overflow by it). An endpoint that ignores `stream` and answers `application/json` is read whole.
-import { Clock, Effect, Option, Predicate, Queue, Schema, Stream } from 'effect';
+import { Clock, Effect, Option, Queue, Schema, Stream } from 'effect';
 import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
 import { FacilityFailure } from '../../decl/errors.ts';
 import { Port, type PortFailure } from '../port.ts';
@@ -209,7 +209,6 @@ export function open_ai_chat(config: OpenAiChatConfig, options: HttpOptions = {}
 						messages: messagesOf(request),
 						stream: true,
 						stream_options: { include_usage: true },
-						...(request.effort === undefined ? {} : { reasoning_effort: request.effort }),
 						...(request.tools === undefined || request.tools.length === 0
 							? {}
 							: {

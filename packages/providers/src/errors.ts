@@ -46,6 +46,15 @@ export type ProviderFailure =
 	| FacilityFailure
 	| Fenced;
 
+/** A `Retry-After` header's delay in seconds as milliseconds; absent, zero or a date gives none. */
+export const retry_after_ms = (header: string | null | undefined): number | undefined => {
+	const seconds = Number(header ?? Number.NaN);
+	return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+};
+/** The connection a call needs is not open (never paired, or closed). */
+export const notConnected = (what: string): ProviderUnavailable =>
+	new ProviderUnavailable({ message: `${what} is not connected` });
+
 /** A provider API's failed answer: a 4xx other than 429 refuses for good; anything else is unavailable, retried. */
 export const answerFailure = (
 	message: string,

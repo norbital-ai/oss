@@ -7,7 +7,7 @@ A single non-wrapping row of children with a gap and alignment: a toolbar, a lab
 	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** The props of `Inline`. */
-	export interface InlineProps extends LayoutAttributes {
+	interface InlineProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch';

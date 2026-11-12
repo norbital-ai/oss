@@ -1,18 +1,11 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
-import {
-	build,
-	compile_write,
-	read,
-	schema,
-	store,
-	table,
-	type Insert,
-	type StoreError
-} from '../src/index.ts';
+import { build, read, schema, store, table, type StoreError } from '../src/index.ts';
 import { shop } from './fixture.ts';
 import { database, exec as raw, required, run, script } from './support.ts';
+import { compile_write } from '../src/write/sql.ts';
+import type { Insert } from '../src/types.ts';
 
 const db = store(shop);
 const fresh = Effect.gen(function* () {

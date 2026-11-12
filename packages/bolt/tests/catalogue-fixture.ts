@@ -52,12 +52,12 @@ export const manifest = Result.getOrThrow(
 		policies: {
 			viewer: {
 				description: 'Reads the catalogue',
-				grants: { products: { outputs: { default: true } } }
+				grants: { products: { outputs: { default: {} } } }
 			},
 			integration: { description: 'Holds no catalogue grant', grants: {} },
 			sales: {
 				description: 'Sales',
-				grants: { products: { outputs: { default: true }, create: true, update: true } }
+				grants: { products: { outputs: { default: {} }, create: {}, update: {} } }
 			}
 		},
 		teams: {},

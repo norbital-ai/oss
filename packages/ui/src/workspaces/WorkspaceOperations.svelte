@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import type {
 		WorkspaceOperationsData,
@@ -6,7 +7,9 @@
 		WorkspaceRange,
 		WorkspaceView
 	} from './types.js';
-	export type WorkspaceOperationsProps = {
+	type WorkspaceOperationsProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		data: WorkspaceOperationsData;
 		range: WorkspaceRange;
 		view: WorkspaceView;
@@ -34,9 +37,9 @@
 	import ToolbarFilter from '../model/toolbar/ToolbarFilter.svelte';
 	import LogView from '../logs/LogView.svelte';
 	import UsageChart, { format_metric_value } from '../chart/UsageChart.svelte';
-	import { useKinds } from '../kinds/context.js';
 	import { filterMembers, newestReleases, release_window } from './filters.js';
 	let {
+		ctx,
 		data,
 		range,
 		view,
@@ -114,7 +117,7 @@
 				...(row.run === null ? {} : { source: `run ${row.run}` })
 			}));
 	});
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const when = (value: string | null) =>
 		value === null ? t('Not recorded') : new Date(value).toLocaleString(host.locale);
 	const online = (value: string | null) =>
@@ -180,7 +183,7 @@
 			</nav>
 		</div>
 		<div class="grid gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
-			{#each data.usage as chart (chart.title)}<UsageChart {...chart} />{/each}
+			{#each data.usage as chart (chart.title)}<UsageChart {ctx} {...chart} />{/each}
 		</div>
 	</div>
 {/snippet}

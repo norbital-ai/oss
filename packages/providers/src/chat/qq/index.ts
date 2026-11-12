@@ -2,8 +2,8 @@
 // a key derived from the app secret. Webhooks only: it offers no history, edits or deletes.
 // A reply names the message it answers, for five minutes, each with a new `msg_seq`. Past that, or after a restart, a
 // send goes out as a message of the bot's own, which QQ limits.
-import { tokenCache } from '../token.ts';
-import { Schema } from 'effect';
+import { loadToken, tokenCache } from '../token.ts';
+import { Effect, Schema } from 'effect';
 import { parse as parseJson, download as downloadFile } from '../http.ts';
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
@@ -133,28 +133,33 @@ export const qq: ChatPlatform = {
 				type: 'pkcs8'
 			}),
 			publicKey = createPublicKey(privateKey);
-		const tokens = tokenCache(async () => {
-			const response = await host.fetch(TOKEN, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ appId, clientSecret })
-			});
-			const answer = await Schema.decodeUnknownPromise(
-				Schema.Struct({
-					access_token: Schema.optionalKey(Schema.String),
-					expires_in: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
-					message: Schema.optionalKey(Schema.String)
+		const tokens = await Effect.runPromise(
+			tokenCache(() =>
+				loadToken(async () => {
+					const response = await host.fetch(TOKEN, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ appId, clientSecret })
+					});
+					const answer = await Schema.decodeUnknownPromise(
+						Schema.Struct({
+							access_token: Schema.optionalKey(Schema.String),
+							expires_in: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
+							message: Schema.optionalKey(Schema.String)
+						})
+					)(await response.json().catch(() => ({})));
+					if (answer.access_token === undefined)
+						throw new PlatformError(
+							answer.message ?? 'QQ refused the app credentials',
+							response.ok ? 401 : response.status
+						);
+					return { token: answer.access_token, ttl: Number(answer.expires_in) * 1000 - 300_000 };
 				})
-			)(await response.json().catch(() => ({})));
-			if (answer.access_token === undefined)
-				throw new PlatformError(
-					answer.message ?? 'QQ refused the app credentials',
-					response.ok ? 401 : response.status
-				);
-			return { token: answer.access_token, ttl: Number(answer.expires_in) * 1000 - 300_000 };
-		});
+			)
+		);
+		const accessToken = () => Effect.runPromise(tokens.get());
 		const content = (url: string) => downloadFile(host.fetch, url);
-		await tokens.get();
+		await accessToken();
 		const answering = recent<{ readonly id: string; readonly at: number; seq: number }>();
 		const connection: ChatConnection = {
 			account: appId,
@@ -207,7 +212,7 @@ export const qq: ChatPlatform = {
 					{
 						method: 'POST',
 						headers: {
-							authorization: `QQBot ${await tokens.get()}`,
+							authorization: `QQBot ${await accessToken()}`,
 							'content-type': 'application/json'
 						},
 						body: JSON.stringify({ content: text, msg_type: 0, ...answers })

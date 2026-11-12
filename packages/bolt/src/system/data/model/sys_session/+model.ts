@@ -5,7 +5,7 @@ export default bind_system_model('sys_session')({
 	description: 'A signed-in session of a member.',
 	record_label: 'record.via',
 	fields: {
-		token_hash: { kind: 'text', unique: true },
+		token_hash: { kind: 'text' },
 		/** The member signed in; the session is deleted with them. */
 		user: { kind: 'ref', to: 'sys_user', on_delete: 'cascade' },
 		/** The administrator previewing as `user`. */
@@ -18,5 +18,6 @@ export default bind_system_model('sys_session')({
 		/** Minted for the agent's browser: the conversation it acts in (`Authority.agent`). */
 		agent: { kind: 'text', optional: true }
 	},
+	constraints: { token_hash: { unique: ['token_hash'] } },
 	table: { primary: 'text' }
 });

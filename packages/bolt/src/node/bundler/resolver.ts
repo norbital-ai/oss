@@ -2,6 +2,7 @@
 // `package.json` `exports`, `module` and `main`, and the tree's own `node_modules`, inside `/app` only. It runs in the
 // bundler process beside rolldown, over the bytes the kernel sent: nothing on disk is consulted, so a link, a host path
 // or a path out of the tree never resolves. Self-contained: the confined process may read nothing but its own code.
+import { isBuiltin } from 'node:module';
 import { posix } from 'node:path';
 
 /** The tree's mount: every id the bundler sees is a path under it. */
@@ -14,45 +15,6 @@ export const BUILTINS: ReadonlySet<string> = new Set([
 	'buffer',
 	'process',
 	'util'
-]);
-const CORE: ReadonlySet<string> = new Set([
-	'assert',
-	'async_hooks',
-	'child_process',
-	'cluster',
-	'console',
-	'constants',
-	'crypto',
-	'dgram',
-	'diagnostics_channel',
-	'dns',
-	'domain',
-	'events',
-	'http',
-	'http2',
-	'https',
-	'inspector',
-	'module',
-	'net',
-	'os',
-	'perf_hooks',
-	'punycode',
-	'querystring',
-	'readline',
-	'repl',
-	'stream',
-	'string_decoder',
-	'sys',
-	'timers',
-	'tls',
-	'trace_events',
-	'tty',
-	'url',
-	'v8',
-	'vm',
-	'wasi',
-	'worker_threads',
-	'zlib'
 ]);
 
 export type Resolved =
@@ -126,7 +88,7 @@ export function resolver(files: ReadonlyMap<string, Uint8Array>) {
 	return (specifier: string, importer: string, mode: Mode): Resolved => {
 		const name = specifier.startsWith('node:') ? specifier.slice(5) : specifier;
 		if (BUILTINS.has(name)) return { builtin: name };
-		if (specifier.startsWith('node:') || CORE.has(name.split('/')[0] ?? name))
+		if (specifier.startsWith('node:') || isBuiltin(name))
 			return { error: `'${specifier}' is not available in run_js` };
 		let path: string | undefined;
 		if (/^\.{0,2}\//.test(specifier)) {

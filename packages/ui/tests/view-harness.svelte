@@ -2,11 +2,10 @@
 	// Each fixture passes the view component it mounts (`view`): a file loads only the components it uses.
 	import type { ComponentProps } from 'svelte';
 	import type { KindsHost } from '../src/kinds/context.js';
-	import type { ViewBolt } from '../src/client/contract.js';
+	import type { UiContext, ViewBolt } from '../src/client/contract.js';
 	import type NativeTable from '../src/table/Table.svelte';
 	import type { TableSource } from '../src/table/Table.svelte';
 	import type Board from '../src/board/Board.svelte';
-	import type Matrix from '../src/matrix/Matrix.svelte';
 	import type RecordShell from '../src/record/RecordShell.svelte';
 	import type PointInput from '../src/kinds/point-input.svelte';
 	import type Picker from '../src/kinds/picker.svelte';
@@ -16,22 +15,15 @@
 	import type BulkRelation from '../src/model/BulkRelation.svelte';
 	type Table = typeof NativeTable<TableSource>;
 	export type ViewPart =
-		| { part: 'table'; view: Table; props: ComponentProps<Table> }
-		| {
-				part: 'matrix';
-				view: typeof Matrix;
-				props: ComponentProps<typeof Matrix>;
-				onTrailing?: () => void;
-				onColumn?: (col: import('../src/client/contract.js').Json) => void;
-		  }
-		| { part: 'board'; view: typeof Board; props: ComponentProps<typeof Board> }
-		| { part: 'record'; view: typeof RecordShell; props: ComponentProps<typeof RecordShell> }
-		| { part: 'point'; view: typeof PointInput; props: ComponentProps<typeof PointInput> }
-		| { part: 'picker'; view: typeof Picker; props: ComponentProps<typeof Picker> }
-		| { part: 'form'; view: typeof Form; props: ComponentProps<typeof Form> }
-		| { part: 'approval'; view: typeof ApprovalPanel; props: ComponentProps<typeof ApprovalPanel> }
-		| { part: 'child'; view: typeof ChildGrid; props: ComponentProps<typeof ChildGrid> }
-		| { part: 'bulk-relation'; view: typeof BulkRelation; props: ComponentProps<typeof BulkRelation> };
+		| { part: 'table'; view: Table; props: Omit<ComponentProps<Table>, 'ctx'> }
+		| { part: 'board'; view: typeof Board; props: Omit<ComponentProps<typeof Board>, 'ctx'> }
+		| { part: 'record'; view: typeof RecordShell; props: Omit<ComponentProps<typeof RecordShell>, 'ctx'> }
+		| { part: 'point'; view: typeof PointInput; props: Omit<ComponentProps<typeof PointInput>, 'ctx'> }
+		| { part: 'picker'; view: typeof Picker; props: Omit<ComponentProps<typeof Picker>, 'ctx'> }
+		| { part: 'form'; view: typeof Form; props: Omit<ComponentProps<typeof Form>, 'ctx'> }
+		| { part: 'approval'; view: typeof ApprovalPanel; props: Omit<ComponentProps<typeof ApprovalPanel>, 'ctx'> }
+		| { part: 'child'; view: typeof ChildGrid; props: Omit<ComponentProps<typeof ChildGrid>, 'ctx'> }
+		| { part: 'bulk-relation'; view: typeof BulkRelation; props: Omit<ComponentProps<typeof BulkRelation>, 'ctx'> };
 	export type ViewHarnessProps = {
 		catalog: NonNullable<KindsHost['catalog']>;
 		automations?: KindsHost['automations'];
@@ -50,19 +42,14 @@
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
-	import { provide_kinds } from '../src/kinds/context.js';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
-	import { provide_bolt } from '../src/client/context.js';
-	import Button from '../src/primitives/button/button.svelte';
-	import Icon from '../src/primitives/icon/icon-wrapper.svelte';
 	import type { BoardProps } from '../src/board/Board.svelte';
 
 	let fixture: ViewHarnessProps = $props();
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
 	const client = fixture.bolt;
-	if (client !== undefined) provide_bolt(() => client);
-	provide_kinds({
+	const ctx: UiContext = { ui: { bolt: client, kinds: {
 		get catalog() {
 			return fixture.catalog;
 		},
@@ -82,7 +69,7 @@
 			const bolt = fixture.bolt;
 			return fixture.query ?? (bolt === undefined ? undefined : (request) => bolt.query(request));
 		}
-	});
+	} } };
 	let boardScope = $state<BoardProps['where']>(undefined);
 	export function setBoardScope(where: BoardProps['where']) {
 		boardScope = where;
@@ -103,50 +90,26 @@
 
 {#if fixture.part === 'table'}
 	<fixture.view
+		{ctx}
 		{...fixture.props}
 		{...tableSource === undefined ? {} : { of: tableSource }}
 		{...tableColumns === undefined ? {} : { columns: tableColumns }}
 		{...tableScope === undefined ? {} : { where: tableScope }}
 	/>
 {:else if fixture.part === 'board'}
-	<fixture.view {...fixture.props} {...boardScope === undefined ? {} : { where: boardScope }} />
-{:else if fixture.part === 'matrix'}
-	{#snippet trailing()}
-		<Button
-			variant="ghost"
-			size="icon"
-			aria-label="Schedule details"
-			onclick={fixture.onTrailing}><Icon name="lucide:info" /></Button
-		>
-	{/snippet}
-	{#snippet columnHeader({
-		col,
-		label
-	}: {
-		col: import('../src/client/contract.js').Json;
-		label: string;
-	})}
-		<Button variant="ghost" onclick={() => fixture.onColumn?.(col)}>{label}</Button>
-	{/snippet}
-	<fixture.view
-		{...fixture.props}
-		{...fixture.onColumn === undefined ? {} : { column_header: columnHeader }}
-		{...fixture.onTrailing === undefined
-			? {}
-			: { toolbar: { ...(fixture.props.toolbar || {}), trailing } }}
-	/>
+	<fixture.view {ctx} {...fixture.props} {...boardScope === undefined ? {} : { where: boardScope }} />
 {:else if fixture.part === 'record'}
-	<Sheet open><fixture.view {...fixture.props} /></Sheet>
+	<Sheet open><fixture.view {ctx} {...fixture.props} /></Sheet>
 {:else if fixture.part === 'point'}
-	<fixture.view {...fixture.props} />
+	<fixture.view {ctx} {...fixture.props} />
 {:else if fixture.part === 'picker'}
-	<fixture.view {...fixture.props} />
+	<fixture.view {ctx} {...fixture.props} />
 {:else if fixture.part === 'form'}
-	<fixture.view {...fixture.props} />
+	<fixture.view {ctx} {...fixture.props} />
 {:else if fixture.part === 'approval'}
-	<fixture.view {...fixture.props} />
+	<fixture.view {ctx} {...fixture.props} />
 {:else if fixture.part === 'bulk-relation'}
-	<fixture.view {...fixture.props} />
+	<fixture.view {ctx} {...fixture.props} />
 {:else}
-	<fixture.view {...fixture.props} />
+	<fixture.view {ctx} {...fixture.props} />
 {/if}

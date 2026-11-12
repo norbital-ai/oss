@@ -44,22 +44,22 @@ const manifest: EngineManifest = {
 		public: {
 			description: 'Names only',
 			grants: {
-				entries: { outputs: { public: true } },
-				approval_request: { outputs: { default: true } }
+				entries: { outputs: { public: {} } },
+				approval_request: { outputs: { default: {} } }
 			}
 		},
 		directory: {
 			description: 'Named output only',
 			grants: {
-				entries: { outputs: { directory: true } },
-				approval_request: { outputs: { default: true } }
+				entries: { outputs: { directory: {} } },
+				approval_request: { outputs: { default: {} } }
 			}
 		},
 		blocked: {
 			description: 'The label fields are visible but the target row is not',
 			grants: {
 				entries: { outputs: { directory: { scopes: { entries: { code: { eq: 'P-NONE' } } } } } },
-				approval_request: { outputs: { default: true } }
+				approval_request: { outputs: { default: {} } }
 			}
 		}
 	},

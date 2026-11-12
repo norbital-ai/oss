@@ -25,6 +25,8 @@ export class AgentBackground extends Context.Service<
 	{ readonly start: (effect: Effect.Effect<unknown, EngineError>) => Effect.Effect<void> }
 >()('bolt/AgentBackground') {}
 
+/** What a caller who may not see a conversation is told: the same as when it does not exist. */
+const hidden = () => BoltError.make('not_found', 'admission', 'Not found or no access.');
 /** One query decides access and returns the conversation image. */
 export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 	authority: Authority,
@@ -40,7 +42,7 @@ export const conversationFor = Effect.fn('Agents.conversationFor')(function* (
 		params: [id, authority.admin, member, isStaff(authority)]
 	});
 	if (Option.isNone(row))
-		return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
+		return yield* hidden();
 	return row.value;
 });
 
@@ -74,7 +76,7 @@ export const agentCallables = Effect.gen(function* () {
 	const own = Effect.fn('Agents.own')(function* (authority: Authority, id: string) {
 		const row = yield* readable(authority, id);
 		if (row.integration !== null || row.owner === null)
-			return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
+			return yield* hidden();
 		return row;
 	});
 	const member = (authority: Authority) =>
@@ -88,7 +90,7 @@ export const agentCallables = Effect.gen(function* () {
 			{ text: 'SELECT conversation FROM sys_message WHERE id = $1', params: [id] }
 		);
 		if (Option.isNone(conversation))
-			return yield* Effect.fail(BoltError.make('not_found', 'admission', 'Not found or no access.'));
+			return yield* hidden();
 		yield* own(authority, conversation.value.conversation);
 		return conversation.value.conversation;
 	});
@@ -123,9 +125,7 @@ export const agentCallables = Effect.gen(function* () {
 			Effect.fn('Agents.startCallable')(function* (input, authority) {
 				const who = member(authority);
 				if (who === null)
-					return yield* Effect.fail(
-						BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.')
-					);
+					return yield* BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.');
 				return committed({ id: yield* agents.start({ owner: who, ...input }) });
 			})
 		),
@@ -135,15 +135,11 @@ export const agentCallables = Effect.gen(function* () {
 				const who = member(authority),
 					conv = yield* own(authority, input.conversation);
 				if (who === null || conv.owner !== who)
-					return yield* Effect.fail(
-						BoltError.make('not_found', 'admission', 'Not found or no access.')
-					);
+					return yield* hidden();
 				if (input.text.trim() === '' && (input.attachments?.length ?? 0) === 0)
-					return yield* Effect.fail(
-						BoltError.make('invalid', 'decode', 'a post needs text or an attachment')
-					);
+					return yield* BoltError.make('invalid', 'decode', 'a post needs text or an attachment');
 				if (input.question !== undefined && input.schedule !== undefined)
-					return yield* Effect.fail(BoltError.make('invalid', 'decode', 'An answer cannot be scheduled.'));
+					return yield* BoltError.make('invalid', 'decode', 'An answer cannot be scheduled.');
 				const files = yield* agents.attachments(who, input.attachments ?? []);
 				const team = authority.key.startsWith('preview:team:')
 					? authority.key.split(':')[2]
@@ -160,9 +156,7 @@ export const agentCallables = Effect.gen(function* () {
 				if (input.schedule !== undefined) {
 					const at = input.schedule === 'finish' ? null : input.schedule;
 					if (at !== null && !(Date.parse(at) > (yield* Clock.currentTimeMillis)))
-						return yield* Effect.fail(
-							BoltError.make('invalid', 'decode', 'Pick a time in the future.')
-						);
+						return yield* BoltError.make('invalid', 'decode', 'Pick a time in the future.');
 					// with no turn running there is nothing to finish: it goes now
 					if (at !== null || conv.status === 'running') {
 						const row = yield* queue.schedule({
@@ -242,7 +236,7 @@ export const agentCallables = Effect.gen(function* () {
 				const conversation = yield* message(authority, input.message);
 				const who = member(authority);
 				if (who === null)
-					return yield* Effect.fail(BoltError.make('forbidden', 'admission', 'Only a member can revise a message.'));
+					return yield* BoltError.make('forbidden', 'admission', 'Only a member can revise a message.');
 				const files = input.attachments === undefined ? undefined : yield* agents.attachments(who, input.attachments);
 				const id = yield* agents.revise(input.message, input.text, authority, files);
 				yield* background(agents.drain(conversation));
@@ -254,11 +248,11 @@ export const agentCallables = Effect.gen(function* () {
 			Effect.fn('Agents.restartCallable')(function* (input, authority) {
 				yield* message(authority, input.message);
 				if (member(authority) === null)
-					return yield* Effect.fail(BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.'));
+					return yield* BoltError.make('forbidden', 'admission', 'The assistant is not available to you here.');
 				const result = yield* agents.restart(input.message, authority);
 				const draft = transcriptRow(result.message, isStaff(authority), false);
 				if (draft === null)
-					return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The restart input could not be read.'));
+					return yield* BoltError.make('corrupt', 'decode', 'The restart input could not be read.');
 				return committed({ conversation: result.conversation, message: draft, mode: result.message.mode });
 			})
 		),
@@ -284,9 +278,7 @@ export const agentCallables = Effect.gen(function* () {
 				const conv = yield* own(authority, input.conversation),
 					who = member(authority);
 				if (who === null || conv.owner !== who)
-					return yield* Effect.fail(
-						BoltError.make('not_found', 'admission', 'Not found or no access.')
-					);
+					return yield* hidden();
 				yield* background(agents.execute_plan(input.conversation, { member: who }));
 				return committed({ id: input.conversation });
 			})
@@ -297,9 +289,7 @@ export const agentCallables = Effect.gen(function* () {
 			Effect.fn('Agents.readCallable')(function* (input, authority) {
 				yield* readable(authority, input.conversation);
 				if (authority.actor.kind !== 'member')
-					return yield* Effect.fail(
-						BoltError.make('not_found', 'admission', 'Not found or no access.')
-					);
+					return yield* hidden();
 				yield* agents.mark_read(input.conversation, authority.actor.id);
 				return committed({ id: input.conversation });
 			})
@@ -330,9 +320,7 @@ export const agentCallables = Effect.gen(function* () {
 					{ text: 'SELECT conversation FROM sys_message WHERE id = $1', params: [input.message] }
 				);
 				if (Option.isNone(image) || !isStaff(authority))
-					return yield* Effect.fail(
-						BoltError.make('not_found', 'admission', 'Not found or no access.')
-					);
+					return yield* hidden();
 				yield* readable(authority, image.value.conversation);
 				if (input.about !== null) {
 					const now = yield* Clock.currentTimeMillis;
@@ -342,9 +330,7 @@ export const agentCallables = Effect.gen(function* () {
 						bindingsAt(now, manifest.workspace.tz)
 					);
 					if (answer[0] == null)
-						return yield* Effect.fail(
-							BoltError.make('not_found', 'admission', 'Not found or no access.')
-						);
+						return yield* hidden();
 				}
 				yield* agents.file(input.message, input.about);
 				return committed({ id: input.message, about: input.about });

@@ -3,11 +3,14 @@
 An editable list of child rows inside a parent's form: add, edit and remove rows, reported as the relation operations of the parent's one act.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Row } from '../model/types.js';
 	import type { RowsOps } from './operations.js';
 	import type { Col } from '../table/Table.svelte';
 	/** The props of `Rows`. */
-	export type RowsProps = {
+	type RowsProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		/** The child rows as loaded (empty on create). */
 		rows: readonly Row[];
 		columns: readonly Col[];
@@ -27,7 +30,7 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 	import { watch } from 'runed';
 	import Table from '../table/Table.svelte';
 
-	let { rows, columns, add, min = 0, max = Infinity, on_change }: RowsProps = $props();
+	let { ctx, rows, columns, add, min = 0, max = Infinity, on_change }: RowsProps = $props();
 	let current = $state<readonly Row[]>([]);
 	let removed = $state<string[]>([]);
 	watch.pre(() => rows, (rows) => {
@@ -51,7 +54,7 @@ An editable list of child rows inside a parent's form: add, edit and remove rows
 	);
 </script>
 
-<Table
+<Table {ctx}
 	of={current}
 	columns={editable}
 	on_change={change}

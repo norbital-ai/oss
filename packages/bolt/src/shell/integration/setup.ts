@@ -45,9 +45,28 @@ export const sayOf =
 	(x: LocalText): string =>
 		typeof x === 'string' ? t(x) : local_text(x, locale ?? 'en');
 
-/** A definition can supply its own setup or add an administrator-only settings tab. */
+/**
+ * What a definition's `create` export is given under New connection, in place of the generic name and configuration
+ * form: it names the account, collects its configuration and makes the `sys_integration` row; the connection's sheet
+ * then opens on it and `default` pairs it.
+ */
+type IntegrationCreateProps = {
+	integration: string;
+	/** Makes the connection; a refusal arrives as `error`, so it never fails. */
+	create: (input: { name: string; configuration?: Json }) => Effect.Effect<void>;
+	busy: boolean;
+	error: string | null;
+	t: (key: string) => string;
+	locale?: string | undefined;
+};
+
+/** A definition can supply its own create and setup steps, or add an administrator-only settings tab. */
 export type IntegrationSetupLoader = () => Promise<
-	| { default: Component<IntegrationSetupProps>; configuration_tab?: undefined }
+	| {
+			default: Component<IntegrationSetupProps>;
+			create?: Component<IntegrationCreateProps>;
+			configuration_tab?: undefined;
+	  }
 	| { default: Component<{ ctx: ShellPageContext }>; configuration_tab: string }
 >;
 /** The compiled registry's entry for a definition's `+integration.svelte`. */

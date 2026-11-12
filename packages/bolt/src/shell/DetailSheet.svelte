@@ -5,12 +5,13 @@
 -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { Sheet, StructuredData, type Kind } from '@norbital-ai/ui';
+	import { Sheet, StructuredData, type Kind, type UiContext } from '@norbital-ai/ui';
 	import type { Json } from '../decl/values.ts';
 	import Acts, { type Act } from './Acts.svelte';
 	import { displayWireValue } from './wire-value.ts';
 
 	let {
+		ctx,
 		title,
 		fields = [],
 		acts = [],
@@ -19,6 +20,7 @@
 		footer,
 		on_close
 	}: {
+		ctx: UiContext;
 		title: string;
 		fields?: readonly { label: string; value: Json | undefined; kind?: Kind }[];
 		acts?: readonly Act[];
@@ -54,7 +56,7 @@
 							<dd class="min-w-0 wrap-anywhere">
 								{#if f.kind !== undefined || (typeof f.value === 'object' && f.value !== null)}
 									<div class="max-h-80 overflow-auto" data-detail-structured>
-										<StructuredData
+										<StructuredData {ctx}
 											{...f.value === undefined ? {} : { value: displayWireValue(f.value) }}
 											name={f.label}
 											{...f.kind === undefined ? {} : { kind: f.kind }}

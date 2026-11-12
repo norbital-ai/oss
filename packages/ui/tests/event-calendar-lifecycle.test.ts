@@ -4,6 +4,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import EventCalendar from '../src/event-calendar/event-calendar.svelte';
 import Harness from './event-calendar-harness.svelte';
 import { lanes, type CalendarEvent } from '../src/event-calendar/calendar.ts';
+import { bare_ctx } from './bare-ctx.ts';
 
 const date = new Date(2026, 10, 6, 15, 30);
 const grid_of = (target: HTMLElement) => {
@@ -18,7 +19,7 @@ it('retains the time-grid scroll anchor when the displayed date and scale change
 	vi.useFakeTimers();
 	vi.setSystemTime(date);
 	const target = document.body.appendChild(document.createElement('div'));
-	const app = mount(Harness, { target, props: { initial: { events: [], view: 'day', date } } });
+	const app = mount(Harness, { target, props: { initial: { ctx: bare_ctx(), events: [], view: 'day', date } } });
 	try {
 		flushSync();
 		const scroller = target.querySelector<HTMLElement>('[data-calendar-scroll]');
@@ -42,7 +43,7 @@ it('creates, moves and resizes with the actual day and event from the grid', asy
 	const event = { id: 'meeting', title: 'Meeting', start: new Date(2026, 10, 6, 9), end: new Date(2026, 10, 6, 10) };
 	const on_event_create = vi.fn(), on_event_move = vi.fn();
 	const target = document.body.appendChild(document.createElement('div'));
-	const app = mount(EventCalendar, { target, props: { events: [event], view: 'day', date, on_event_create, on_event_move } });
+	const app = mount(EventCalendar, { target, props: { ctx: bare_ctx(), events: [event], view: 'day', date, on_event_create, on_event_move } });
 	try {
 		flushSync();
 		const grid = grid_of(target);
@@ -71,7 +72,7 @@ it('creates, moves and resizes with the actual day and event from the grid', asy
 it('cancels a pointer gesture without writing and releases its handlers when the grid unmounts', async () => {
 	const on_event_create = vi.fn();
 	const target = document.body.appendChild(document.createElement('div'));
-	const app = mount(EventCalendar, { target, props: { events: [], view: 'day', date, on_event_create } });
+	const app = mount(EventCalendar, { target, props: { ctx: bare_ctx(), events: [], view: 'day', date, on_event_create } });
 	flushSync();
 	const grid = grid_of(target);
 	grid.dispatchEvent(pointer('pointerdown', 9 * 56));
@@ -100,7 +101,7 @@ it('uses snake_case event fields for the all-day band and locked timed-event too
 	];
 	const on_event_click = vi.fn(), on_event_move = vi.fn();
 	const target = document.body.appendChild(document.createElement('div'));
-	const app = mount(EventCalendar, { target, props: { events, view: 'day', date, on_event_click, on_event_move } });
+	const app = mount(EventCalendar, { target, props: { ctx: bare_ctx(), events, view: 'day', date, on_event_click, on_event_move } });
 	try {
 		flushSync();
 		expect(target.querySelector('[data-event="all-day"]')?.tagName).toBe('BUTTON');

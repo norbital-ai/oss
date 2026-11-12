@@ -3,10 +3,13 @@
 A phone number: a country calling-code picker (flag and code) joined to the number box; the value is E.164.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Value } from './kind.js';
 
 	/** A phone number (E.164, `+6591234567`): the calling code is picked, the national digits typed and grouped as they read. */
 	export type PhoneInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: Value;
 		on_change(next: Value): void;
 		id?: string;
@@ -16,18 +19,18 @@ A phone number: a country calling-code picker (flag and code) joined to the numb
 </script>
 
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { watch } from 'runed';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
 	import Input from '../primitives/input/input.svelte';
 	import { ui_text } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
 	import { callingCode, groupDigits, regionOf, splitPhone, toE164 } from './phone.js';
 
-	let { value, on_change, id, disabled = false, invalid = false }: PhoneInputProps = $props();
-	const host = useKinds();
+	let { ctx, value, on_change, id, disabled = false, invalid = false }: PhoneInputProps = $props();
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
-	const home = regionOf(host.locale);
+	const home = $derived(regionOf(host.locale));
 	const options = $derived.by(() => {
 		const names = new Intl.DisplayNames([host.locale ?? 'en'], { type: 'region' });
 		return COUNTRY_CODES.flatMap((r) => {
@@ -46,7 +49,7 @@ A phone number: a country calling-code picker (flag and code) joined to the numb
 		}).sort((a, b) => a.description.localeCompare(b.description));
 	});
 
-	let region = $state(home),
+	let region = $state(untrack(() => home)),
 		text = $state(''),
 		blurred = $state(false);
 	let last: Value | undefined;

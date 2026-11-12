@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { Effect, Schema } from 'effect';
+import { equal_json } from '@norbital-ai/std/json';
 import {
 	APPLIED,
 	AppliedRow,
@@ -31,7 +32,7 @@ import type { DbError } from '../engine/errors.ts';
 import { PgliteDb, Pristine } from './db/pglite.ts';
 import { audit_log_spec } from './audit-schema.ts';
 
-export type AuditMigrations = {
+type AuditMigrations = {
 	readonly spec: AppendOnlyLogSpec;
 	readonly files: readonly MigrationFile[];
 	readonly snapshot: string;
@@ -123,8 +124,8 @@ export const apply_audit_migrations = (db: TenantDbShape, migrations: AuditMigra
 		const physical = yield* read_physical_definitions(migrations.physical);
 		const names = ['', ...migrations.files.map(({ name }) => name)].sort();
 		if (
-			JSON.stringify(Object.keys(physical).sort()) !== JSON.stringify(names) ||
-			JSON.stringify(Object.keys(lock.physical ?? {}).sort()) !== JSON.stringify(names)
+			!equal_json(Object.keys(physical).sort(), names) ||
+			!equal_json(Object.keys(lock.physical ?? {}).sort(), names)
 		)
 			return yield* invalid('proofs must cover every immutable prefix');
 		for (const [name, lines] of Object.entries(physical))

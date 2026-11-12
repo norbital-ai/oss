@@ -4,6 +4,7 @@ One field of the enclosing `Form` by name: its label, help, the kind's editor (o
 Readonly, it is a label over the value as copyable text (or a `view` snippet): no field chrome, and no `editor` snippet.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import { required, wideKind, type Value, type Kind } from '../kinds/kind.js';
 
@@ -25,6 +26,8 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	 * `address` names the text field a `point` field's geocoded address is written to.
 	 */
 	export type FieldProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		name: string;
 		label?: string | undefined;
 		/** The field's description: an info button beside the label, never text under the control. */
@@ -40,7 +43,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		 * the viewer cannot write (no update grant, a state lock) is readonly whatever this says.
 		 */
 		readonly?: boolean;
-		/** Overrides the enclosing `Form`/`Fieldset`: the editor stays, muted and inert. */
+		/** Overrides the enclosing `Form`: the editor stays, muted and inert. */
 		disabled?: boolean;
 		/** A table cell keeps its accessible field name while the column heading supplies its visible label. */
 		dense?: true;
@@ -54,10 +57,11 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	import Show from '../kinds/show.svelte';
 	import { use_form, type FormState } from './form-state.svelte.js';
 	import { claimSectionField } from './section.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { use_field_label, use_field_help } from '../model/context.js';
 
 	let {
+		ctx,
 		name,
 		label,
 		help,
@@ -73,9 +77,9 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 	// svelte-ignore state_referenced_locally -- a field's name is fixed for its life
 	claimSectionField(name);
 	const t = ui_text();
-	const bolt = useBolt();
-	const fieldLabel = use_field_label();
-	const field_help = use_field_help();
+	const bolt = $derived(bolt_of(ctx));
+	const fieldLabel = use_field_label(() => ctx);
+	const field_help = use_field_help(() => ctx);
 	const errors = $derived(form?.field_errors);
 	const rawError = $derived(errors?.get(name));
 	const error = $derived(rawError === undefined ? undefined : bolt.t(rawError));
@@ -125,7 +129,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 		{#if view}
 			{@render view({ value: form.get(name), kind: field.kind, name, id: `${id}-${name}` })}
 		{:else}
-			<Show
+			<Show {ctx}
 				readonly
 				kind={field.kind}
 				value={form.get(name)}
@@ -170,7 +174,7 @@ Readonly, it is a label over the value as copyable text (or a `view` snippet): n
 				form
 			})}
 		{:else}
-			<Editor
+			<Editor {ctx}
 				kind={field.kind}
 				value={form.get(name)}
 				on_change={(v) => form.set(name, v)}

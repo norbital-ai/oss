@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Effect, Stream } from 'effect';
 	import { observe as liveEdge } from '@norbital-ai/ui/effect';
-	import { Button, Icon, ReadonlyMarkdown, Spinner, StructuredData, virtual_list } from '@norbital-ai/ui';
+	import { Button, Icon, ReadonlyMarkdown, Spinner, StructuredData, virtual_list, type UiContext } from '@norbital-ai/ui';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { watch } from 'runed';
@@ -22,10 +22,11 @@
 	import { decision_of, type Decided } from './decisions.ts';
 	import { AgentPanelFailed, refused } from './actions.ts';
 	import { checkpointSections, contextView, doingOf, failedVerbs, modelDividers, revisable, waiting_question } from './view.ts';
-	let { api, t, zone, admin, conversation, rows, status, sent, thread, automation, goals, plan, before,
+	let { ctx, api, t, zone, admin, conversation, rows, status, sent, thread, automation, goals, plan, before,
 		loading_older, load_older, port = $bindable(null), pinned = $bindable(true), latest,
 		load_failed, on_retry, decision_frame, dispatch, on_error, file_href, model_label,
 		on_revise, revision_pending, on_restart, restart }: {
+		ctx: UiContext;
 		api: ShellApi;
 		t: (key: string) => string;
 		zone: string | undefined;
@@ -534,7 +535,7 @@
 												class="ml-auto size-3.5 shrink-0 transition-transform group-open/work:rotate-90 motion-reduce:transition-none"
 											/>
 										</summary>
-										<Steps steps={item.steps} {t} opened={expanded} />
+										<Steps {ctx} steps={item.steps} {t} opened={expanded} />
 									</details>
 									{#each item.steps.filter((step) => approval_cards.has(step.id)) as st (st.id)}
 										<!-- a live change the host holds for the person: at the call that asked for it -->
@@ -742,7 +743,7 @@
 										>
 											<summary class="cursor-pointer">{t('Details')}</summary>
 											<div class="mt-1 max-h-48 min-w-0 overflow-auto">
-												<StructuredData value={call.input} name={t('Input')} />
+												<StructuredData {ctx} value={call.input} name={t('Input')} />
 											</div>
 										</details>
 										<Inline gap="xs" class="mt-2" align="center">

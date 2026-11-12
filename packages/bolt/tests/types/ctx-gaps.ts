@@ -45,7 +45,7 @@ automation({
 		const target =
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
-		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		if (target === null) return yield* ctx.refuse('errors.refused');
 		yield* ctx.act({ 'orders.update': [{ target, set: { note: 'observed' } }] });
 		// @ts-expect-error write options reject the retired observed map
 		yield* ctx.act({ 'orders.update': [{ target, set: { note: 'invalid' } }] }, { observed: { [target.id]: '1' } });

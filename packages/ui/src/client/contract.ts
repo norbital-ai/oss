@@ -5,6 +5,7 @@ import type { Value, FileRef, FileUrlOptions, Kind } from '@norbital-ai/std/kind
 import type { ModelKey, Page, RecordOf, Row, RowOf, SourceColumns, SourceRow, Values, ViewSource } from '../model/types.js';
 import type { RecordCapabilities, RecordParentContext, RestorePreview } from '../record/types.js';
 import type { Offer } from '../filter/catalog.js';
+import type { KindsHost } from '../kinds/context.js';
 export type { Json } from '@norbital-ai/std/wire';
 export type { FileRef } from '@norbital-ai/std/kind';
 /** A read's wire form (`Query<T>['read']`): the host's method and its arguments. */
@@ -189,7 +190,15 @@ export type RowApproval = {
 	readonly requested_by: string;
 };
 /**
- * The client a view reads and acts through (the page context), as `provide_bolt` hands it to the
+ * What every view, input and editor takes as its `ctx` prop: pass the page's `ctx` whole (`<Table {ctx} of="projects">`),
+ * and a view hands it on to what it renders. `ui.bolt` is the view client (absent: controlled local views render without
+ * one); `ui.kinds` is what kind editors learn from the host.
+ */
+export type UiContext = {
+	readonly ui: { readonly bolt?: ViewBolt | undefined; readonly kinds: KindsHost };
+};
+/**
+ * The client a view reads and acts through, as a page context's `ui.bolt` carries it to the
  * views. Dynamic reads have fixed structural answers; model reads derive their row from the actual model input.
  */
 export type ViewBolt = {

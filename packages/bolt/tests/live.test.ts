@@ -34,9 +34,9 @@ import type { EngineManifest, GrantData } from '../src/engine/manifest.ts';
 // without their checks, so these routing tests reach the patch paths
 const unchecked = (g: GrantData): GrantData => ({
 	...g,
-	...(g.create === undefined ? {} : { create: true }),
-	...(g.update === undefined ? {} : { update: true }),
-	...(g.delete === undefined ? {} : { delete: true })
+	...(g.create === undefined ? {} : { create: {} }),
+	...(g.update === undefined ? {} : { update: {} }),
+	...(g.delete === undefined ? {} : { delete: {} })
 });
 const manifest: EngineManifest = {
 	...fixture,
@@ -651,6 +651,20 @@ describe('engine/live: deltas from the RETURNING image (rule 65)', () => {
 			expect(x.frames).toEqual([
 				{ t: 'patch', view: 'v', v: 1, ops: [{ op: 'upsert', index: 0, row: got }] }
 			]);
+			expect(x.sweep.conservative).toBe(1);
+		})
+	);
+
+	// audit bug 46: a view whose narrow read falls back to a whole re-read is one conservative view, not two
+	it.effect('a by-id read that cannot patch falls back to one re-read, counted once', () =>
+		Effect.gen(function* () {
+			const withCustomer = {
+				select: { title: true, customer: { select: { name: true } } },
+				all: true
+			};
+			// the by-id answer is no page: the delta is inexact and the view is read again whole
+			const x = yield* after(withCustomer, page(), [cap(null, row(1))], admin, () => null);
+			expect(x.frames.map((f) => f.t)).toEqual(['answer']);
 			expect(x.sweep.conservative).toBe(1);
 		})
 	);

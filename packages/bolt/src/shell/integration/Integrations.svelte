@@ -20,11 +20,13 @@
 		Table,
 		Tabs,
 		value_object,
-		type FieldEditor
+		type FieldEditor,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import IntegrationCard from '../../page/IntegrationCard.svelte';
 	import { humanise_word } from '../i18n.ts';
-	import { driverLabel, workspaceConnection, type IntegrationSetupEntry } from './setup.ts';
+	import { driverLabel, instanceMade, workspaceConnection, type IntegrationSetupEntry } from './setup.ts';
+	import type { Json } from '../../decl/values.ts';
 	import type { InstanceMessage } from '../api-types.ts';
 	import type { Settings } from '../settings/data.ts';
 	import { page_context, type ShellBolt } from '../runtime.ts';
@@ -33,6 +35,7 @@
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		t,
@@ -43,6 +46,7 @@
 		connections = false,
 		configuration = null
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
@@ -83,6 +87,23 @@
 	let creating = $state(false);
 	let creating_definition = $state<string | null>(null);
 	const new_definition = $derived(settings.integrations.find((item) => item.name === creating_definition));
+	let create_busy = $state(false);
+	let create_error = $state<string | null>(null);
+	/** A definition's own create step makes the row as the generic form does, then opens its sheet. */
+	const create_connection = (integration: string) => (input: { name: string; configuration?: Json }) =>
+		Effect.suspend(() => {
+			create_busy = true;
+			create_error = null;
+			return bolt
+				.act({ 'sys_integration.create': [{ integration, name: input.name, ...(input.configuration === undefined ? {} : { configuration: input.configuration }) }] })
+				.pipe(
+					Effect.flatMap((outcome) => instanceMade(outcome, t('This connection could not be made.'))),
+					Effect.tap((id) => Effect.sync(() => { creating = false; open = id; })),
+					Effect.andThen(reload()),
+					Effect.catch((cause) => Effect.sync(() => { create_error = cause.message; })),
+					Effect.ensuring(Effect.sync(() => { create_busy = false; }))
+				);
+		});
 	let configured = $state<string | null>(null);
 	watch([() => configuration, () => settings], ([intent, current]) => {
 		if (intent?.request.capability === 'integration.create' && connections && configured !== intent.key) {
@@ -277,7 +298,7 @@
 					>
 					{#if help}<DescriptionHint text={help} />{/if}
 				</div>
-				<Editor
+				<Editor {ctx}
 					id={`${id}-${name}`}
 					{name}
 					kind={f}
@@ -292,7 +313,7 @@
 {#if current === undefined}
 {#if connections}
 	{#snippet stateCell({ row }: { row: (typeof rows)[number] })}
-		<StateBadge
+		<StateBadge {ctx}
 			state={row.state}
 			label={t(
 				row.state === 'paused'
@@ -307,7 +328,7 @@
 			)}
 		/>
 	{/snippet}
-	{#if !creating}<Table
+	{#if !creating}<Table {ctx}
 		of={rows}
 		key="workspace-connections"
 		on_open={(row) => (open = row.id)}
@@ -330,7 +351,12 @@
 				{#if new_definition !== undefined}
 					{@const creating_fields = new_definition.configuration}
 					{#key new_definition.name}
-						<Form of="sys_integration" mode="create" values={{ integration: new_definition.name }} submit={t('Create connection')}
+					{#await integration_setups?.[new_definition.name]?.load().catch(() => undefined) then companion}
+					{#if companion?.configuration_tab === undefined && companion?.create !== undefined}
+						<companion.create integration={new_definition.name} create={create_connection(new_definition.name)}
+							busy={create_busy} error={create_error} {t} {locale} />
+					{:else}
+						<Form {ctx} of="sys_integration" mode="create" values={{ integration: new_definition.name }} submit={t('Create connection')}
 							on_outcome={(outcome) => {
 								if (outcome.kind !== 'committed') return;
 								const record = outcome.records.find((row) => row.model === 'sys_integration');
@@ -339,18 +365,20 @@
 								open = record.id;
 								fork(reload());
 							}}>
-							<Field name="name" label={t('Name')} />
+							<Field {ctx} name="name" label={t('Name')} />
 							{#if Object.keys(creating_fields).length > 0}
-								<Field name="configuration" label={t('Configuration')}>
+								<Field {ctx} name="configuration" label={t('Configuration')}>
 									{#snippet editor(field)}{@render configurationFields(new_definition.name, creating_fields, field)}{/snippet}
 								</Field>
 							{/if}
 						</Form>
+					{/if}
+					{/await}
 					{/key}
 				{/if}
 		</section>
 	{/if}
-{:else}<Envoys
+{:else}<Envoys {ctx}
 		{api}
 		{bolt}
 		{settings}
@@ -533,21 +561,21 @@
 						d?.configuration ?? {},
 						e
 					)}{/snippet}
-				<Form
+				<Form {ctx}
 					of="sys_integration"
 					mode="update"
 					id={i.id}
 					submit={t('Save')}
 					on_outcome={() => fork(reload())}
 				>
-					<Field name="name" label={t('Name')} />
-					<Field name="active" label={t('Active')} />
-					{#if d?.conversation === true && i.owner === null}<Field
+					<Field {ctx} name="name" label={t('Name')} />
+					<Field {ctx} name="active" label={t('Active')} />
+					{#if d?.conversation === true && i.owner === null}<Field {ctx}
 							name="envoy"
 							label={t('Envoy')}
 							editor={envoyEditor}
 						/>{/if}
-					{#if Object.keys(d?.configuration ?? {}).length > 0}<Field
+					{#if Object.keys(d?.configuration ?? {}).length > 0}<Field {ctx}
 							name="configuration"
 							label={t('Configuration')}
 							editor={configurationEditor}
@@ -592,7 +620,7 @@
 												: format_handle(d?.driver ?? '', x.thread ?? '')}</span
 										>
 										<span class="flex-1"></span>
-										{#if x.direction === 'outbound' && x.status !== null}<StateBadge
+										{#if x.direction === 'outbound' && x.status !== null}<StateBadge {ctx}
 												state={x.status}
 												label={t(x.status)}
 											/>{/if}
@@ -693,7 +721,7 @@
 				<p role="status" class="text-sm text-muted-foreground">{t('Loading…')}</p>
 			{:then module}
 				{#if module?.configuration_tab !== undefined}
-					{#snippet extraTab()}<module.default ctx={page_context(bolt)} />{/snippet}
+					{#snippet extraTab()}<module.default ctx={page_context(bolt, ctx.ui)} />{/snippet}
 					{@render instanceTabs({ title: t(module.configuration_tab), body: extraTab })}
 				{:else}
 					{@render instanceTabs()}

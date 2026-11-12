@@ -1,24 +1,17 @@
 // Type corpus for the page context (§3.5) and ui's view props (§3.6) over the fixture's names: a page's reads, acts and `t`,
 // and a view's `of`, `columns`, `values` and `record`, checked like `ctx`. Each `@ts-expect-error` is a planted mistake.
 import { Effect } from 'effect';
-import { Form, Table } from '@norbital-ai/ui';
+import { Form, Table, type UiContext } from '@norbital-ai/ui';
 import type { PageContext } from '../../src/page/index.ts';
-import type {
-	ActOutput,
-	Committed,
-	Decimal,
-	Id,
-	Outcome,
-	PendingApproval,
-	PlainDate,
-	RowApproval,
-	RowState,
-	Row,
-	Running
-} from '../../src/index.ts';
+import type { ActOutput, Id, Outcome, PlainDate, Row } from '../../src/index.ts';
+import type { Decimal } from '@norbital-ai/std/decimal';
+import type { Committed, PendingApproval } from '../../src/decl/ctx.ts';
 import './registry.ts';
+import type { RowApproval, RowState } from '../../src/decl/names.ts';
+import type { Running } from '../../src/decl/ctx.ts';
 
 declare const ctx: PageContext;
+declare const ui: UiContext;
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -167,19 +160,19 @@ ctx.t('hello');
 // type-only: the components' call signature is the one svelte-check checks a page's props against
 const table: typeof Table = Table,
 	form: typeof Form = Form;
-table(null, { of: 'orders', columns: ['number', 'status', { field: 'due', label: 'Due' }] });
+table(null, { ctx: ui, of: 'orders', columns: ['number', 'status', { field: 'due', label: 'Due' }] });
 // @ts-expect-error U1 an unknown model
-table(null, { of: 'orderz', columns: ['number'] });
+table(null, { ctx: ui, of: 'orderz', columns: ['number'] });
 // @ts-expect-error U2 an unknown column
-table(null, { of: 'orders', columns: ['number', 'nope'] });
+table(null, { ctx: ui, of: 'orders', columns: ['number', 'nope'] });
 // @ts-expect-error U3 a where over an unknown field
-table(null, { of: 'orders', columns: ['number'], where: { nope: { eq: 1 } } });
-table(null, { of: [{ id: 'a', n: 1 }], columns: ['n'] });
+table(null, { ctx: ui, of: 'orders', columns: ['number'], where: { nope: { eq: 1 } } });
+table(null, { ctx: ui, of: [{ id: 'a', n: 1 }], columns: ['n'] });
 // @ts-expect-error U4 a local array's column
-table(null, { of: [{ id: 'a', n: 1 }], columns: ['m'] });
-form(null, { of: 'orders', mode: 'create', values: { note: 'x' } });
+table(null, { ctx: ui, of: [{ id: 'a', n: 1 }], columns: ['m'] });
+form(null, { ctx: ui, of: 'orders', mode: 'create', values: { note: 'x' } });
 // @ts-expect-error U5 a create value outside the model's input
-form(null, { of: 'orders', mode: 'create', values: { number: 'x' } });
+form(null, { ctx: ui, of: 'orders', mode: 'create', values: { number: 'x' } });
 // @ts-expect-error U6 a create value of the wrong type
-form(null, { of: 'orders', mode: 'create', values: { note: 5 } });
-form(null, { of: { automation: 'orders_renote' }, values: { note: 'x' } });
+form(null, { ctx: ui, of: 'orders', mode: 'create', values: { note: 5 } });
+form(null, { ctx: ui, of: { automation: 'orders_renote' }, values: { note: 'x' } });

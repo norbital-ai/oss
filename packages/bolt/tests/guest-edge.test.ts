@@ -31,7 +31,7 @@ import {
 import { type GuestOptions, type GuestProgram } from '../src/engine/guest/runner.ts';
 
 const EFFECT = JSON.stringify(createRequire(import.meta.url).resolve('effect'));
-const ERRORS = JSON.stringify(fileURLToPath(new URL('../src/decl/errors.ts', import.meta.url)));
+const ERRORS = JSON.stringify(fileURLToPath(new URL('../src/decl/errors/refusal.ts', import.meta.url)));
 
 /** Unknown module exports cross the real runtime attachment boundary without acquiring a claimed callback type. */
 const attach_unknown = (body: unknown): void => {
@@ -440,10 +440,10 @@ describe('the bundle', () => {
 			const allow = attached_verdict(function* () { return Verdict.allow(); }, -1);
 			expect(yield* Effect.promise(() => allow())).toEqual({ kind: 'allow' });
 			const deny = attached_verdict(function* () {
-				return yield* Effect.fail(new Refusal({ message: 'No update.', field: 'title', row: 2, path: 'orders.lines' }));
+				return yield* Effect.fail(new Refusal({ message: 'No update.', field: 'title', row: 2 }));
 			}, -1);
 			expect(yield* Effect.promise(() => deny())).toEqual({
-				kind: 'deny', message: 'No update.', at: { field: 'title', row: 2, path: 'orders.lines' }
+				kind: 'deny', message: 'No update.', at: { field: 'title', row: 2 }
 			});
 		})
 	);

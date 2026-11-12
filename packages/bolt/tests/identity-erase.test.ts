@@ -12,6 +12,7 @@ const m: EngineManifest = {
 			description: '',
 			record_label: 'record.number',
 			key: ['number'],
+			unique: [{ fields: ['email'], name: 'email' }],
 			locks: { paid: { where: { status: { eq: 'paid' } } } },
 			fields: {
 				number: { kind: 'text' },
@@ -19,7 +20,7 @@ const m: EngineManifest = {
 				bank: { kind: 'text' },
 				net: { kind: 'money' },
 				gross: { kind: 'money' },
-				email: { kind: 'text', unique: true },
+				email: { kind: 'text' },
 				lines_total: { kind: 'sum', of: 'lines.amount' },
 				status: {
 					kind: 'state',

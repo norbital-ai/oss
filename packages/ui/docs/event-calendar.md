@@ -1,6 +1,6 @@
 # Event calendar
 
-`EventCalendar` and its `CalendarEvent`, `CalendarView`, `CreateSlot` and `EventRenderContext`
+`EventCalendar` and its `CalendarEvent` and `CalendarView`
 types are exported from `@norbital-ai/ui`.
 
 An event has `id`, `title`, `start` and `end`. Set `all_day: true` to present an event in the

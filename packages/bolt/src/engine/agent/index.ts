@@ -1,6 +1,6 @@
 // The agent engine (§5.9, rules 57–63b): a turn is a loop over a conversation's rows. Each step claims the queued inputs
-// (a steer joins at the next step and acts as its own sender), builds the context, makes one model request under the
-// 60 s wall and runs the tool calls it asks for as the actor. A turn ends on a reply with no tool calls, a confirmation
+// (a steer joins at the next step and acts as its own sender), builds the context, makes one model request (60 s to its
+// first byte, then the 20 s idle wall) and runs the tool calls it asks for as the actor. A turn ends on a reply with no tool calls, a confirmation
 // card or a stop: no step count ends it, only guards against no progress. An executed plan is checked by an independent verifier sub-run; a sub-agent is a
 // child conversation run under the delegating turn's `as`, never wider. Hosts drive `drain`; nothing here names a host.
 // A claimed turn holds a three-minute lease its heartbeat renews and queues the platform run `agent.turn`, so a turn
@@ -75,10 +75,9 @@ import type { AgentQuestion, PageResult, ToolBehavior } from '../../protocol/sch
 import { enqueueTurn, TURN_RUN, TurnHandlers } from './turns.ts';
 import { LEASE_MS, leaseUntil } from '../queue.ts';
 import { MessageQueue, messageQueue, SCHEDULED_RUN } from './queue.ts';
-import { attachmentsFor, file_attachments, triageAttachments } from './attachments.ts';
-import { route } from './ingest.ts';
+import { attachmentsFor, file_attachments } from './attachments.ts';
 import { Chain } from '../write/sql.ts';
-import { enqueue, next_due } from '../runs/queue.ts';
+import { next_due } from '../runs/queue.ts';
 import { runPiece } from '../runs/rows.ts';
 import { activeEnvoys, envoySpec } from '../envoys/spec.ts';
 import {
@@ -89,8 +88,7 @@ import {
 	claim as claimMessage,
 	mark as markMessage,
 	msg as messagePiece,
-	MSG,
-	preview
+	MSG
 } from '../conversations/store.ts';
 import { bindingsAt } from '../query/reader.ts';
 import type { EngineManifest, SkillSpec } from '../manifest.ts';
@@ -185,7 +183,7 @@ export type AgentEngine = {
 };
 /** A host skill (the platform authoring skill, a person's own): its tree's listing and each file's bytes by path. */
 export type HostSkill = SkillSpec & { read(path: string): Promise<Uint8Array> };
-export type DrainOptions = {
+type DrainOptions = {
 	force?: boolean | undefined;
 	receipts?: readonly Receipt[] | undefined;
 	onWrite?: ((row: MessageRow) => Effect.Effect<unknown, EngineError>) | undefined;
@@ -276,18 +274,7 @@ const memoryOf = (): {
 	heapTotalMiB?: number;
 	externalMiB?: number;
 } => {
-	const usage = (
-		globalThis as {
-			process?: {
-				memoryUsage?: () => {
-					rss: number;
-					heapUsed: number;
-					heapTotal: number;
-					external: number;
-				};
-			};
-		}
-	).process?.memoryUsage?.();
+	const usage = globalThis.process?.memoryUsage?.();
 	if (usage === undefined) return {};
 	const mib = (bytes: number) => Math.round((bytes / MIB) * 10) / 10;
 	return {
@@ -567,14 +554,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				`agent:${as.run}:${as.policies.join(',')}`
 			);
 		});
-	const running = yield* FiberMap.make<
-		string,
-		{
-			ran: boolean;
-			reply: MessageRow | null;
-		},
-		EngineError
-	>();
+	const running = yield* FiberMap.make<string, { ran: boolean; reply: MessageRow | null }, EngineError>();
 	/** Sub-agent runs and the parent turns their reports start: detached from any one turn, ended with the service. */
 	const detached = yield* FiberSet.make<unknown, never>();
 	/** The conversations inside a step: a planned close waits for none, and holds each turn at its next step. */
@@ -625,17 +605,9 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			Effect.tapCause(Effect.logWarning)
 		);
 	const conversation = Effect.fn('Agents.conversation')(function* (id: string) {
-		const [r] = yield* db.read([
-			sql(`SELECT ${CONV_COLS} FROM sys_conversation WHERE id = $1`, id)
-		]);
-		if (r === undefined)
-			return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The conversation query returned no result.'));
-		const row = r.rows[0];
-		if (row === undefined)
-			return yield* Effect.fail(new AgentRefusal({ message: `no conversation '${id}'` }));
-		return yield* Schema.decodeUnknownEffect(Conversation)(row).pipe(
-			Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
-		);
+		const row = yield* db.one(Conversation, sql(`SELECT ${CONV_COLS} FROM sys_conversation WHERE id = $1`, id));
+		if (Option.isNone(row)) return yield* new AgentRefusal({ message: `no conversation '${id}'` });
+		return row.value;
 	});
 	const maybeConversation = (id: string) => conversation(id).pipe(
 		Effect.tapCause(Effect.logWarning),
@@ -644,14 +616,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	/** A conversation's messages in `seq` order: all, those `from` a seq on, or the `limit` just `before` one (a panel's older page). */
 	const transcript = Effect.fn('Agents.transcript')(function* (
 		id: string,
-		page?:
-			| {
-					from: number;
-			  }
-			| {
-					before: number;
-					limit: number;
-			  }
+		page?: { from: number } | { before: number; limit: number }
 	) {
 		const [result] = yield* db.read([
 			page === undefined
@@ -669,9 +634,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							page.limit
 						)
 		]);
-		if (result === undefined)
-			return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The transcript query returned no result.'));
-		return yield* rowsOf(result.rows);
+		return yield* rowsOf(result?.rows ?? []);
 	});
 	const insert = Effect.fn('Agents.insert')(function* (row: {
 		conversation: string;
@@ -701,9 +664,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		});
 		const [message] = yield* messageStatement(chain, source);
 		if (message === undefined)
-			return yield* Effect.fail(
-				BoltError.make('corrupt', 'commit', 'the message insert returned no row')
-			);
+			return yield* BoltError.make('corrupt', 'commit', 'the message insert returned no row');
 		return message;
 	});
 	/** The host resolves this class; runtime settings narrow the models each step may use. */
@@ -865,19 +826,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 	 * Job lines no running turn takes (a job that ended after its turn, or one the turn left untaken): queued in the
 	 * conversation as notes from the starter, and the conversation is kicked, so a turn runs on them.
 	 */
+	const queuedNote = (conversation: string, as: As | null, text: string) =>
+		insert({ conversation, role: 'system', content: { text }, text, state: 'queued', mode: 'agent', as, meta: { tag: 'note' } });
 	const steer = (conversation: string, as: As | null, lines: readonly string[]) =>
 		Effect.gen(function* () {
-			for (const line of lines)
-				yield* insert({
-					conversation,
-					role: 'system',
-					content: { text: line },
-					text: line,
-					state: 'queued',
-					mode: 'agent',
-					as,
-					meta: { tag: 'note' }
-				});
+			for (const line of lines) yield* queuedNote(conversation, as, line);
 			yield* FiberSet.run(detached, kick(conversation));
 		}).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore);
 	/** The workspace events a conversation has not heard: after its newest event row, else after its first row. */
@@ -930,11 +883,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			if (rows.some(inFlight)) {
 				yield* unfinished(id);
 				if ((yield* transcript(id)).some(inFlight))
-					return yield* Effect.fail(BoltError.make('corrupt', 'admission', 'The previous step could not be settled.'));
+					return yield* BoltError.make('corrupt', 'admission', 'The previous step could not be settled.');
 				continue;
 			}
 			if (rows.some((row) => row.role === 'tool' && (row.state === 'confirm' || row.state === 'approved') && row.meta?.tag !== 'confirm'))
-				return yield* Effect.fail(BoltError.make('corrupt', 'admission', 'An unsettled confirmation has no saved call.'));
+				return yield* BoltError.make('corrupt', 'admission', 'An unsettled confirmation has no saved call.');
 			if (rows.some((row) => row.role === 'tool' && row.state === 'confirm')) { yield* declinePending(id); continue; }
 			if (!rows.some((row) => row.role === 'tool' && row.state === 'approved')) {
 				const missing = projection(rows, conv).flatMap((row) => row.role === 'assistant' && row.content !== null && typeof row.content === 'object'
@@ -1169,9 +1122,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		const write = Effect.fn('Agents.write')(function* (r: Parameters<typeof insert>[0]) {
 			return yield* wrote(yield* insert({ ...r, turn }));
 		});
-		const appendNote = (text: string) => write({
-			conversation: id, role: 'system', content: { text }, text, meta: { tag: 'note' }
-		});
+		/** A system row of this turn: the step's closing notes, events, asides, checkpoints and verdicts. */
+		const systemRow = (text: string, meta: Meta, extra: Pick<Parameters<typeof insert>[0], 'state' | 'mode' | 'as'> = {}) =>
+			write({ conversation: id, role: 'system', content: { text }, text, meta, ...extra });
+		const appendNote = (text: string) => systemRow(text, { tag: 'note' });
 		/** Rewrites a row the step already wrote (its streamed reply, its running tool call) as finished, in one statement. */
 		const rewrite = Effect.fn('Agents.rewrite')(function* (
 			row: MessageRow,
@@ -1190,11 +1144,14 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				});
 			const [updated] = yield* messageStatement(chain, source);
 			if (updated === undefined)
-				return yield* Effect.fail(
-					BoltError.make('corrupt', 'commit', 'the message settle returned no row')
-				);
+				return yield* BoltError.make('corrupt', 'commit', 'the message settle returned no row');
 			return updated;
 		});
+		/** An assistant row: the step's streamed row finished in place, else a new one. */
+		const reply = (partial: MessageRow | null, content: Json, text: string, meta: Meta | null) =>
+			partial !== null
+				? Effect.flatMap(rewrite(partial, content, text, meta), wrote)
+				: write({ conversation: id, role: 'assistant', content, text, meta });
 		/**
 		 * The step's reply as the model writes it: one `streaming` row (the cut row a continuation extends), rewritten with
 		 * everything so far at most every STREAM_FLUSH_MS and never while the previous flush is still in flight.
@@ -1258,17 +1215,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			code: string,
 			detail?: string
 		) {
-			current.reply = yield* write({
-				conversation: id,
-				role: 'assistant',
-				content: { text, toolCalls: [] },
-				text,
-				meta: {
-					tag: 'failed',
-					code,
-					...(detail !== undefined && inApp(conv) ? { detail } : {}),
-					...(current.usage.calls === 0 ? {} : { usage: { ...current.usage } })
-				}
+			current.reply = yield* reply(null, { text, toolCalls: [] }, text, {
+				tag: 'failed',
+				code,
+				...(detail !== undefined && inApp(conv) ? { detail } : {}),
+				...(current.usage.calls === 0 ? {} : { usage: { ...current.usage } })
 			});
 			// hook:wiring — a failed turn is a workspace log line (§5.12) naming the real reason; only an absent port is the missing provider
 			const message =
@@ -1317,17 +1268,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const waiting = rows
 					.filter((row) => row.state === 'queued' || row.state === 'pending')
 					.map((row) => row.id);
-				yield* write({
-					conversation: id,
-					role: 'system',
-					content: { text: summary },
-					text: summary,
-					meta: {
-						tag: 'compact',
-						cutoff: Math.max(0, ...rows.map((row) => row.seq)),
-						keep: [...keep, ...waiting],
-						origin
-					}
+				yield* systemRow(summary, {
+					tag: 'compact',
+					cutoff: Math.max(0, ...rows.map((row) => row.seq)),
+					keep: [...keep, ...waiting],
+					origin
 				});
 			}).pipe(
 				Effect.retry({ times: 1, while: (error) => error instanceof Unusable }),
@@ -1367,73 +1312,45 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					state: 'running',
 					turn
 				});
-				const took = (now: number) => now - started;
+				/** The running row finished in place with the call's answer. */
+				const finish = Effect.fnUntraced(function* (result?: Json, meta: Meta | null = null, extra: { state?: 'confirm'; as?: As } = {}) {
+					const ms = (yield* Clock.currentTimeMillis) - started;
+					const content = { id: call.id, name: call.name, ...role, args, ...(result === undefined ? {} : { ms, result }) };
+					yield* wrote(yield* rewrite(step, content, null, meta, extra));
+				});
 				const tool = tools.find((t) => t.name === call.name),
 					key = callKey(call.name, call.input);
-				// the same call that already failed this often is not run again; nor is a call identical to the one
-				// just made (beside it or the step before), whose answer the model already has
 				const discoveryCall = operation.behavior.discovery === true;
-				const repeated = key === current.previous;
-				// a call the dead generation made (its result never recorded) is not made again
-				const replay = current.replayed.delete(stepKey(call.name, args));
-				const skip =
-					tool === undefined ||
-					replay ||
-					repeated ||
-					(discoveryCall && current.discoveryPaused) ||
-					(current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure;
+				// a call the dead generation made (its result never recorded) is not made again; nor is a call identical to the
+				// one just made (beside it or the step before), whose answer the model already has, or one that already failed
+				// this often
+				const skipped = current.replayed.delete(stepKey(call.name, args))
+					? NUDGE.replayed
+					: discoveryCall && current.discoveryPaused
+						? NUDGE.discoveryPaused
+						: key === current.previous
+							? 'Not run: you just made this exact call; its answer is above. Change the arguments to get something new.'
+							: (current.failures.get(key) ?? 0) >= AGENT_LIMITS.sameFailure
+								? 'Not run: this exact call already failed several times this turn.'
+								: undefined;
+				const skip = tool === undefined || skipped !== undefined;
 				const answer: ToolAnswer =
 					tool === undefined
 						? { result: { error: `No tool '${call.name}'.` } }
 						: invalid !== undefined
 							? { result: invalid }
-							: skip
-								? {
-										result: {
-											error: replay
-												? NUDGE.replayed
-												: discoveryCall && current.discoveryPaused
-													? NUDGE.discoveryPaused
-													: repeated
-														? 'Not run: you just made this exact call; its answer is above. Change the arguments to get something new.'
-														: 'Not run: this exact call already failed several times this turn.'
-										}
-									}
+							: skipped !== undefined
+								? { result: { error: skipped } }
 								: yield* toolset.run(call.name, call.input, call.id);
 				// what the call opened goes right after the call's result, on the next request
 				for (const file of current.files) file.call ??= call.id;
 				current.previous =
 					operation.behavior.pure !== true || ('result' in answer && failedResult(answer.result)) ? '' : key;
-				if ('confirm' in answer && conv.parent !== null) {
-					yield* wrote(
-						yield* rewrite(
-							step,
-							{
-								id: call.id,
-								name: call.name,
-								...role,
-								args,
-								ms: took(yield* Clock.currentTimeMillis),
-								result: {
-									error:
-										"This needs the person's confirmation; hand it back to the delegating agent."
-								}
-							},
-							null,
-							null
-						)
-					);
-				} else if ('confirm' in answer) {
+				if ('confirm' in answer && conv.parent !== null)
+					yield* finish({ error: "This needs the person's confirmation; hand it back to the delegating agent." });
+				else if ('confirm' in answer) {
 					waiting = true;
-					yield* wrote(
-						yield* rewrite(
-							step,
-							{ id: call.id, name: call.name, ...role, args },
-							null,
-							{ tag: 'confirm', call },
-							{ state: 'confirm', as: sender }
-						)
-					);
+					yield* finish(undefined, { tag: 'confirm', call }, { state: 'confirm', as: sender });
 				} else {
 					let result = answer.result;
 					if (failedResult(result)) {
@@ -1465,21 +1382,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					const stored = storedToolResult(call.id, shown, whole);
 					if (stored.full !== undefined) truncated.push(`${operation.name} (call '${call.id}')`);
 					rests.push(...rest(operation.name, call.id, shown, operation.behavior.resume, call.name === 'host'));
-					yield* wrote(
-						yield* rewrite(
-							step,
-							{
-								id: call.id,
-								name: call.name,
-								...role,
-								args,
-								ms: took(yield* Clock.currentTimeMillis),
-								result: stored.result
-							},
-							null,
-							stored.full === undefined ? null : { tag: 'output', full: stored.full }
-						)
-					);
+					yield* finish(stored.result, stored.full === undefined ? null : { tag: 'output', full: stored.full });
 				}
 				return Option.none();
 			}));
@@ -1492,18 +1395,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				const question = current.question;
 				const text = [question.question, ...question.options.map((option, index) => `${index + 1}. ${option}`)].join('\n\n');
 				current.question = null;
-				current.reply = yield* write({
-					conversation: id,
-					role: 'assistant',
-					content: { text, toolCalls: [] },
-					text,
-					meta: {
-						tag: 'reply',
-						receipts: [...current.receipts],
-						asked: true,
-						question,
-						usage: { ...current.usage, context: current.lastInput, window, model: conv.model }
-					}
+				current.reply = yield* reply(null, { text, toolCalls: [] }, text, {
+					tag: 'reply',
+					receipts: [...current.receipts],
+					asked: true,
+					question,
+					usage: { ...current.usage, context: current.lastInput, window, model: conv.model }
 				});
 				current.receipts.length = 0;
 				return yield* settle(id);
@@ -1623,22 +1520,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				files: current.files,
 				jobs: work,
 				inlineMs: config.host_inline_ms,
-				setPlan: Effect.fn('Agents.setPlan')(function* (body) {
-					return yield* setConv(
-						id,
-						'plan = $2::jsonb',
-						j({
-							revision: (conv.plan?.revision ?? 0) + 1,
-							body,
-							status: 'draft',
-							checkpoint: 0,
-							verdicts: 0
-						} satisfies Plan)
-					).pipe(Effect.map(() => {}));
-				}),
-				setGoals: Effect.fn('Agents.setGoals')(function* (goals: Goal[]) {
-					return yield* setConv(id, 'goals = $2::jsonb', j(goals)).pipe(Effect.map(() => {}));
-				}),
+				setPlan: (body) =>
+					setConv(id, 'plan = $2::jsonb', j({
+						revision: (conv.plan?.revision ?? 0) + 1, body, status: 'draft', checkpoint: 0, verdicts: 0
+					} satisfies Plan)).pipe(Effect.asVoid),
+				setGoals: (goals: Goal[]) => setConv(id, 'goals = $2::jsonb', j(goals)).pipe(Effect.asVoid),
 				ask: (text) => {
 					if (current.question !== null) return false;
 					current.question = text;
@@ -1680,9 +1566,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							call
 						)
 					]);
-					if (result === undefined)
-						return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The tool-output query returned no result.'));
-					return result.rows[0]?.['full'] ?? undefined;
+					return result?.rows[0]?.['full'] ?? undefined;
 				}),
 				history: Effect.fn('Agents.history')(function* (text, scope, limit) {
 					const a = authority.actor,
@@ -1731,16 +1615,8 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							model: conv.model,
 							title: task.slice(0, 80)
 						}); // no instance: nothing it says is sent
-						yield* post({
-							conversation: child,
-							as: sender,
-							text: brief,
-							author: 'delegating agent'
-						});
-						yield* FiberSet.run(
-							detached,
-							drain(child).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
-						);
+						yield* post({ conversation: child, as: sender, text: brief, author: 'delegating agent' });
+						yield* FiberSet.run(detached, drain(child).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore));
 						return {
 							conversation: child,
 							note: 'It works in the background. Its report arrives as a message in this conversation when it finishes or asks you something: carry on, or end your reply, and you are prompted again then.'
@@ -1748,10 +1624,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					}),
 					list: Effect.fn('Agents.subagentList')(function* () {
 						const [r] = yield* db.read([
-							sql(
-								`SELECT id, title, status, goals FROM sys_conversation WHERE parent = $1 ORDER BY created_at`,
-								id
-							)
+							sql(`SELECT id, title, status, goals FROM sys_conversation WHERE parent = $1 ORDER BY created_at`, id)
 						]);
 						return { subagents: r?.rows ?? [] };
 					}),
@@ -1770,25 +1643,15 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 							messages: rows
 								.filter((r) => (r.role === 'user' || r.role === 'assistant') && !!r.text)
 								.slice(-10)
-								.map((r) => ({
-									role: r.role,
-									text: r.text,
-									...(r.asked ? { asked: true } : {})
-								})),
+								.map((r) => ({ role: r.role, text: r.text, ...(r.asked ? { asked: true } : {}) })),
 							steps: rows
-								.flatMap((r) =>
-									r.tool === undefined
-										? []
-										: [
-												{
-													tool: r.tool.name,
-													...(r.tool.running ? { running: true } : {}),
-													...(r.tool.failed ? { failed: true } : {}),
-													...(r.tool.args === undefined ? {} : { input: brief(r.tool.args) }),
-													...(r.tool.result === undefined ? {} : { result: brief(r.tool.result) })
-												}
-											]
-								)
+								.flatMap(({ tool }) => tool === undefined ? [] : [{
+									tool: tool.name,
+									...(tool.running ? { running: true } : {}),
+									...(tool.failed ? { failed: true } : {}),
+									...(tool.args === undefined ? {} : { input: brief(tool.args) }),
+									...(tool.result === undefined ? {} : { result: brief(tool.result) })
+								}])
 								.slice(-30),
 							changes: rows.flatMap((r) => r.receipts ?? []),
 							files: rows.flatMap((r) => (r.role === 'tool' ? (r.files ?? []) : []))
@@ -1798,10 +1661,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 						if (!(yield* ownChild(id, child))) return { error: 'Not one of your sub-agents.' };
 						yield* post({ conversation: child, as: sender, text, author: 'delegating agent' });
 						yield* FiberSet.run(detached, kick(child));
-						return {
-							sent: true,
-							note: 'It carries on; its next report arrives as a message here.'
-						};
+						return { sent: true, note: 'It carries on; its next report arrives as a message here.' };
 					}),
 					stop: Effect.fn('Agents.stopChild')(function* (child) {
 						return (yield* ownChild(id, child))
@@ -1873,14 +1733,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			// workspace events since the conversation last heard one (or began): each once, never a turn of their own
 			if (inApp(conv))
 				for (const event of yield* unheard(id)) {
-					const text = `Workspace event (${event.at}): ${event.title}${event.body === undefined ? '' : `\n${event.body}`}`;
-					yield* write({
-						conversation: id,
-						role: 'system',
-						content: { text },
-						text,
-						meta: { tag: 'event', at: event.at }
-					});
+					yield* systemRow(
+						`Workspace event (${event.at}): ${event.title}${event.body === undefined ? '' : `\n${event.body}`}`,
+						{ tag: 'event', at: event.at }
+					);
 				}
 			if (current.as === null) {
 				const prior = (yield* transcript(id)).findLast((r) => r.as !== null);
@@ -1905,7 +1761,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				? yield* Effect.sleep('1500 millis').pipe(Effect.andThen(modelRows(id, conv)))
 				: seen;
 			for (const aside of senderAsides(rows, conv, 'envoy' in sender ? sender.envoy.sender : undefined))
-				rows = [...rows, yield* write({ conversation: id, role: 'system', content: { text: aside.text }, text: aside.text, meta: { tag: 'aside', message: aside.message } })];
+				rows = [...rows, yield* systemRow(aside.text, { tag: 'aside', message: aside.message })];
 			if (current.mode === 'compact') {
 				// `/compact`: a checkpoint now, then the turn ends
 				if (current.compactions < AGENT_LIMITS.compactions) yield* compact(conv, rows, [], 'manual');
@@ -2062,15 +1918,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			// a turn never settles on silence: an empty reply is asked for once more, then answered visibly
 			if (done && text.trim() === '' && current.cut === null) {
 				// a reasoning-only reply is kept (the panel shows it) and continued once like any empty one
-				if (reasoning !== '')
-					yield* partial === null
-						? write({
-								conversation: id,
-								role: 'assistant',
-								content: { text: '', toolCalls: [], reasoning },
-								text: ''
-							})
-						: wrote(yield* rewrite(partial, { text: '', toolCalls: [], reasoning }, '', null));
+				if (reasoning !== '') yield* reply(partial, { text: '', toolCalls: [], reasoning }, '', null);
 				else if (partial !== null) yield* discard(partial);
 				if (current.emptied) {
 					yield* fail(conv, FIXED.empty, 'emptyReply');
@@ -2102,16 +1950,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 								usage: { ...current.usage, context: current.lastInput, window, model: conv.model }
 							}
 						: null;
-			const row: MessageRow =
-				partial !== null
-					? yield* wrote(yield* rewrite(partial, content, content.text, meta))
-					: yield* write({
-							conversation: id,
-							role: 'assistant',
-							content,
-							text: content.text,
-							meta
-						});
+			const row = yield* reply(partial, content, content.text, meta);
 			if (r.finish === 'cut') {
 				current.cut = { row, ...stepped.carry };
 				return false;
@@ -2149,16 +1988,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					const verdicts = conv.plan.verdicts + (verdict?.complete ? 0 : 1);
 					const status: Plan['status'] = verdict?.complete ? 'verified' : 'active';
 					yield* setConv(id, 'plan = $2::jsonb', j({ ...conv.plan, status, verdicts }));
-					yield* write({
-						conversation: id,
-						role: 'system',
-						content: { text: note },
-						text: note,
-						meta: { tag: 'verdict', complete: verdict?.complete === true, gaps },
-						...(status === 'active'
-							? { state: 'queued' as const, mode: 'agent' as const, as: sender }
-							: {})
-					});
+					yield* systemRow(
+						note,
+						{ tag: 'verdict', complete: verdict?.complete === true, gaps },
+						status === 'active' ? { state: 'queued', mode: 'agent', as: sender } : {}
+					);
 				}
 				return yield* settle(id);
 			}
@@ -2376,17 +2210,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				]
 					.filter((x) => x !== '')
 					.join('\n');
-				if (as !== null)
-					yield* insert({
-						conversation: id,
-						role: 'system',
-						content: { text },
-						text,
-						state: 'queued',
-						mode: 'agent',
-						as,
-						meta: { tag: 'note' }
-					});
+				if (as !== null) yield* queuedNote(id, as, text);
 			}
 			return yield* drain(id);
 		}),
@@ -2397,9 +2221,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					Effect.mapError((error) => BoltError.make(error.kind, 'facility', error.message, error))
 				))
 			)
-				return yield* Effect.fail(
-					new AgentRefusal({ message: `the host runs no model '${model}'` })
-				);
+				return yield* new AgentRefusal({ message: `the host runs no model '${model}'` });
 			yield* setConv(id, 'model = $2', model);
 		}),
 		revise: queue.revise,
@@ -2408,15 +2230,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		reorder: queue.reorder,
 		turnRun: Effect.fn('Agents.turnRun')(function* (
 			input: Json,
-			run: (
-				conversation: string,
-				envoy: boolean
-			) => Effect.Effect<
-				{
-					ran: boolean;
-				},
-				EngineError
-			>
+			run: (conversation: string, envoy: boolean) => Effect.Effect<{ ran: boolean }, EngineError>
 		) {
 			const { conversation: id } = yield* Schema.decodeUnknownEffect(TurnInput, { onExcessProperty: 'error' })(input).pipe(
 				Effect.mapError((error) => BoltError.make('invalid_input', 'decode', 'An agent turn needs a conversation id.', error))
@@ -2431,9 +2245,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					id
 				)
 			]);
-			if (lease === undefined)
-				return yield* Effect.fail(BoltError.make('corrupt', 'decode', 'The turn lease query returned no result.'));
-			const live = lease.rows[0];
+			const live = lease?.rows[0];
 			if (live === undefined) return { conversation: id, ran: false };
 			const due = new Date(
 				Math.max(Number(live['until']), Date.parse((yield* config.bindings).now)) + 1000
@@ -2450,20 +2262,11 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		execute_plan: Effect.fn('Agents.execute_plan')(function* (id: string, as: As) {
 			const conv = yield* conversation(id);
 			if (conv.plan === null)
-				return yield* Effect.fail(new AgentRefusal({ message: 'there is no plan to execute' }));
+				return yield* new AgentRefusal({ message: 'there is no plan to execute' });
 			const checkpoint = yield* db.value(Schema.Number,
 				sql(`SELECT coalesce(max(seq), 0)::int AS s FROM sys_message WHERE conversation = $1`, id)
 			);
-			yield* setConv(
-				id,
-				'plan = $2::jsonb',
-				j({
-					...conv.plan,
-					status: 'active',
-					checkpoint,
-					verdicts: 0
-				} satisfies Plan)
-			);
+			yield* setConv(id, 'plan = $2::jsonb', j({ ...conv.plan, status: 'active', checkpoint, verdicts: 0 } satisfies Plan));
 			yield* post({ conversation: id, as, text: 'Execute the plan.', mode: 'agent' });
 			return yield* drain(id);
 		}),
@@ -2472,15 +2275,12 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 		}),
 		set_agent: Effect.fn('Agents.set_agent')(function* (id: string, agent: string) {
 			if (agent !== 'workspace' && (yield* envoySpec(db, agent)) === undefined)
-				return yield* Effect.fail(new AgentRefusal({ message: `there is no agent '${agent}'` }));
+				return yield* new AgentRefusal({ message: `there is no agent '${agent}'` });
 			yield* setConv(id, 'envoy = $2', agent === 'workspace' ? null : agent);
 		}),
 		file: Effect.fn('Agents.file')(function* (
 			messageId: string,
-			about: {
-				model: string;
-				id: string;
-			} | null
+			about: { model: string; id: string } | null
 		) {
 			const chain = new Chain();
 			yield* messageStatement(chain, markMessage(chain, messageId, { about }));
@@ -2520,14 +2320,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 			by: Authority
 		) {
 			const [answer] = yield* db.read([sql(`SELECT ${MSG} FROM sys_message m WHERE id = $1`, messageId)]);
-			if (answer === undefined)
-				return yield* BoltError.make('corrupt', 'decode', 'The confirmation query returned no result.');
-			const [r] = yield* rowsOf(answer.rows);
+			const [r] = yield* rowsOf(answer?.rows ?? []);
 			if (r === undefined || r.copied_from != null || r.meta?.tag !== 'confirm')
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'nothing awaits confirmation here' })
-				);
-			if (r.state !== 'confirm') return yield* Effect.fail(new AgentRefusal({ message: ANSWERED }));
+				return yield* new AgentRefusal({ message: 'nothing awaits confirmation here' });
+			if (r.state !== 'confirm') return yield* new AgentRefusal({ message: ANSWERED });
 			if (
 				by.agent !== undefined ||
 				by.actor.kind !== 'member' ||
@@ -2535,9 +2331,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				!('member' in r.as) ||
 				r.as.member !== by.actor.id
 			)
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only the person this turn serves can confirm it' })
-				);
+				return yield* new AgentRefusal({ message: 'only the person this turn serves can confirm it' });
 			const as = r.as;
 			const confirmation = r.meta;
 			const receipts = yield* withConfirmation(r.conversation, Effect.gen(function* () {
@@ -2551,7 +2345,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					)
 				)).length === 0
 			)
-				return yield* Effect.fail(new AgentRefusal({ message: ANSWERED }));
+				return yield* new AgentRefusal({ message: ANSWERED });
 			const call = confirmation.call;
 			const settle = (result: Json) => {
 				const stored = storedToolResult(call.id, bounded(result).value, result);
@@ -2578,17 +2372,10 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 					const authority = yield* resolve(as);
 					if (authority === null) result = { error: FIXED.stale };
 					else if (call.name !== 'act')
-						return yield* Effect.fail(
-							new AgentRefusal({ message: 'only a write awaits confirmation' })
-						);
+						return yield* new AgentRefusal({ message: 'only a write awaits confirmation' });
 					else {
-						const write = yield* Schema.decodeUnknownEffect(
-							WriteInput,
-							CLOSED
-						)(call.input).pipe(
-							Effect.mapError((error) =>
-								BoltError.make('invalid_input', 'decode', error.message, error)
-							)
+						const write = yield* Schema.decodeUnknownEffect(WriteInput, CLOSED)(call.input).pipe(
+							Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
 						);
 						const started = yield* perform(
 							{
@@ -2619,10 +2406,7 @@ export const agents = Effect.fn('Agents.make')(function* (config: AgentConfig) {
 				Effect.catch((failure) => Effect.succeed<Json>({ error: failure.message })),
 				// the call can outlive this generation: the card still gets its answer
 				Effect.onInterrupt(() =>
-					settle({ error: FIXED.unreported }).pipe(
-						Effect.tapCause(Effect.logWarning),
-						Effect.ignore
-					)
+					settle({ error: FIXED.unreported }).pipe(Effect.tapCause(Effect.logWarning), Effect.ignore)
 				)
 			);
 			yield* settle(result);

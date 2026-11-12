@@ -13,7 +13,7 @@ const cursorKeys = (v: Json | undefined): readonly (string | null)[] =>
 	EffectArray.isArray<typeof v>(v) ? v.map((x) => (typeof x === 'string' ? x : null)) : [];
 
 /** A many-relation arm asked for `all` holds at most `STORE_LIMITS.page.relationArm` rows, at any depth. */
-export const arms_fit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, StoreError> => {
+const arms_fit = (ir: ReadIR, rows: readonly Wire[]): Effect.Effect<void, StoreError> => {
 	if (ir.kind !== 'read' && ir.kind !== 'get') return Effect.void;
 	const over = (sel: SelectIR, rs: readonly Wire[]): string | undefined => {
 		for (const [rel, r] of Object.entries(sel.relations))

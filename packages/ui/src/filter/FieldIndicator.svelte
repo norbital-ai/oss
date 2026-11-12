@@ -1,14 +1,16 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import type { Resolved } from './catalog.js';
 	let {
+		ctx,
 		resolved = null,
 		many = false,
 		nested = false
-	}: { resolved?: Resolved | null; many?: boolean; nested?: boolean } = $props();
-	const bolt = useBolt();
+	}: { ctx: UiContext; resolved?: Resolved | null; many?: boolean; nested?: boolean } = $props();
+	const bolt = $derived(bolt_of(ctx));
 	const info = $derived.by((): { name: GlyphName; label: string } => {
 		if (many) return { name: 'links', label: msg(bolt, 'view.type.many') };
 		if (resolved?.leaf === 'rel')

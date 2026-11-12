@@ -3,8 +3,9 @@
 A `state` field's value as a coloured pill, in its words (`label`, else the catalog's, else the value humanized).
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	/** The props of `StateBadge`. */
-	export type StateBadgeProps = { state: string; label?: string; class?: string };
+	export type StateBadgeProps = { ctx: UiContext; state: string; label?: string; class?: string };
 </script>
 
 <script lang="ts">
@@ -12,8 +13,8 @@ A `state` field's value as a coloured pill, in its words (`label`, else the cata
 	import { use_enum_text } from '../model/context.js';
 	import { tone } from './kind.js';
 
-	let { state, label, class: className }: StateBadgeProps = $props();
-	const words = use_enum_text();
+	let { ctx, state, label, class: className }: StateBadgeProps = $props();
+	const words = use_enum_text(() => ctx);
 	const VARIANT = {
 		neutral: 'outline',
 		info: 'info',

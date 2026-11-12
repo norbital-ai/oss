@@ -6,10 +6,6 @@
 	import { onMount } from 'svelte';
 	import type { ChallengeQueue } from '../runtime.ts';
 
-	type Api = {
-		render(el: HTMLElement, o: { sitekey: string; callback(token: string): void }): string;
-		reset(id: string): void;
-	};
 	let { site_key, queue }: { site_key: string; queue: ChallengeQueue } = $props();
 	let el = $state<HTMLElement | null>(null);
 
@@ -23,7 +19,7 @@
 		script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 		script.async = true;
 		script.onload = () => {
-			const ts = (window as Window & { turnstile?: Api }).turnstile;
+			const ts = window.turnstile;
 			if (ts === undefined || el === null) return;
 			const id = ts.render(el, { sitekey: site_key, callback: (token) => queue.put(token) });
 			queue.setReset(() => ts.reset(id));

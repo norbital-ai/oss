@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import type { Value } from '../kinds/kind.js';
 	import type { Row } from './draft.js';
@@ -37,6 +38,8 @@
 		readonly before: Readonly<Record<string, Value>>;
 	}) => ConfirmOptions | null;
 	export type FormProps<S = FormSource> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: S;
 		mode?: 'view' | 'edit' | 'create' | 'update';
 		/** The row a model update edits. */
@@ -56,11 +59,11 @@
 		submit?: string;
 		/**
 		 * Every field shows its value as copyable text, no field chrome, and no submit: the form as a view of the row. It
-		 * reaches every `Field` and input beneath through context (a `Field` or `Fieldset` may override it). An update the
+		 * reaches every `Field` and input beneath through context (a `Field` may override it). An update the
 		 * viewer cannot make (no update grant) is readonly whatever this says. A form never inherits an outer mode.
 		 */
 		readonly?: boolean;
-		/** Every field stays an editor, muted and inert, and the submit is disabled; a `Field` or `Fieldset` may override it. */
+		/** Every field stays an editor, muted and inert, and the submit is disabled; a `Field` may override it. */
 		disabled?: boolean;
 		/** An automation reports queue admission here; its retained run is followed separately by RunStatus. */
 		on_outcome?(outcome: Outcome): void;
@@ -80,14 +83,14 @@
 	import ReadOnce from '../read/ReadOnce.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
 	import { ui_text } from '../primitives/utils.js';
-	import { useKinds } from '../kinds/context.js';
 	import { provide_model, provide_field_text } from '../model/context.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { use_record_view } from '../record/context.js';
 	import { formSpec } from './draft.js';
 	import FormBody from './form-body.svelte';
 
 	let {
+		ctx,
 		of,
 		mode,
 		id,
@@ -105,8 +108,8 @@
 		actions,
 		class: className
 	}: FormProps<S> = $props();
-	const bolt = useBolt();
-	const host = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const model = $derived(typeof of === 'string' ? of : '');
 	const exposure = $derived(host.catalog?.[model]);
@@ -236,7 +239,7 @@
 				<ReadOnce effect={prefill} pending={loading}>
 					{#snippet ready(inherited)}
 						{#key `${spec.callable}:${id ?? ''}`}
-							<FormBody
+							<FormBody {ctx}
 								{spec}
 								record={stored}
 								values={{ ...inherited, ...seeded }}

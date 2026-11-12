@@ -380,7 +380,7 @@ describe('next guest runner', () => {
 			Effect.gen(function* () {
 				const source = `export default { policy: { rep: { grants: { orders: {
 					create: { verdict: function* (rows, ctx) {
-						return rows.length === 0 ? ctx.allow() : yield* ctx.refuse('Keys: ' + Object.keys(ctx).sort().join(','), { row: 0, path: 'orders.lines', field: 'qty' });
+						return rows.length === 0 ? ctx.allow() : yield* ctx.refuse('Keys: ' + Object.keys(ctx).sort().join(','), { row: 0, field: 'qty' });
 					} }
 				} } } } };`;
 				const target = 'rep.orders.create';
@@ -391,7 +391,7 @@ describe('next guest runner', () => {
 					kind: 'deny',
 					message:
 						'Keys: actor,allow,approve,invocation_id,now,policies,query,refuse,today,today_in,tz',
-					at: { row: 0, path: 'orders.lines', field: 'qty' }
+					at: { row: 0, field: 'qty' }
 				});
 			})
 	);

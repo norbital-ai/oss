@@ -2,7 +2,8 @@
 import { expectTypeOf } from '@effect/vitest';
 import type { Effect } from 'effect';
 import type { Act, Committed, PendingApproval } from '../../src/decl/ctx.ts';
-import type { ActConflict, ActRefused, ActUnknown } from '../../src/decl/errors.ts';
+import type { ActConflict, ActRefused } from '../../src/decl/errors.ts';
+import type { ActUnknown } from '../../src/decl/errors/act.ts';
 import type { Row } from '../../src/index.ts';
 import type { Json } from '../../src/decl/values.ts';
 import './registry.ts';

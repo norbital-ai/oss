@@ -16,8 +16,9 @@ import type {
 	ProviderChoice
 } from '../src/protocol/instance-status.ts';
 import Setup from '../src/shell/integration/Setup.svelte';
-import type { IntegrationSetupEntry, IntegrationSetupLoader } from '../src/page/integration.ts';
+import type { IntegrationSetupEntry } from '../src/shell/integration/setup.ts';
 import { reactive } from './support/reactive.svelte.ts';
+import type { IntegrationSetupLoader } from '../src/shell/integration/setup.ts';
 
 const views: (() => Promise<void>)[] = [];
 let dispose: (() => Promise<void>) | undefined;

@@ -78,7 +78,7 @@ export const GuestLimits = Context.Reference<GuestLimitsShape>('bolt/GuestLimits
 });
 
 // ── activation: values the host binds for one generation ──
-export type ActivationShape = {
+type ActivationShape = {
 	readonly scope: string;
 	readonly epoch: string;
 	readonly release: string;

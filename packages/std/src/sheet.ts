@@ -4,14 +4,15 @@
 // period is two columns `<name>.from` / `<name>.to` (inclusive, blank `to` = open), and an unknown header is an error.
 import { Decimal } from './decimal.ts';
 import * as Result from 'effect/Result';
-import { add_days, PlainDate, type DatePeriod } from './date.ts';
+import { add_days, is_plain_date, PlainDate, type DatePeriod } from './date.ts';
+import * as Predicate from 'effect/Predicate';
 
 /** One spreadsheet cell's value. */
 export type Cell = string | number | boolean | null;
 /**
  * How a sheet column decodes to a typed value: a scalar kind, an enum, or a date period over two columns (`<name>.from`, `<name>.to`).
  */
-export type ColumnSpec =
+type ColumnSpec =
 	| 'text'
 	| 'int'
 	| 'decimal'
@@ -168,16 +169,43 @@ export function decode<const C extends Spec>(
 			if (c.kind === 'period') {
 				const day = { name: c.name, kind: 'date', optional: c.optional } as const;
 				const from = read(`${c.name}.from`, day, c.optional),
-					to = read(`${c.name}.to`, day, true) as PlainDate | null;
-				if (from !== null && to !== null && to < (from as string))
+					to = read(`${c.name}.to`, day, true);
+				if (is_plain_date(from) && is_plain_date(to) && to < from)
 					errors.push({ row: i + 2, column: `${c.name}.to`, message: 'ends before it starts' });
 				row[c.name] = from === null ? null : { from, to };
 			} else row[c.name] = read(c.name, c, c.optional);
 		}
-		if (errors.length === before) rows.push(row as RowOf<C>);
+		if (errors.length === before && fits(row)) rows.push(row);
 	});
 	return { rows, errors };
+	/** A row whose every column decoded to its kind. */
+	function fits(row: Record<string, unknown>): row is RowOf<C> {
+		return columns.every((c) => {
+			const v = row[c.name];
+			if (v === null) return c.optional;
+			switch (c.kind) {
+				case 'period':
+					return isPeriod(v);
+				case 'int':
+					return typeof v === 'number';
+				case 'decimal':
+					return v instanceof Decimal;
+				case 'date':
+					return is_plain_date(v);
+				case 'bool':
+					return typeof v === 'boolean';
+				default:
+					return typeof v === 'string';
+			}
+		});
+	}
 }
+const isPeriod = (v: unknown): v is DatePeriod =>
+	Predicate.isObject(v) &&
+	'from' in v &&
+	is_plain_date(v.from) &&
+	'to' in v &&
+	(v.to === null || is_plain_date(v.to));
 
 /** Cells from rows: the header, then one line per row (a period as its two cells, a decimal as its exact text). */
 export function encode<const C extends Spec>(
@@ -186,14 +214,18 @@ export function encode<const C extends Spec>(
 ): Cell[][] {
 	const columns = columnsOf(cols);
 	const out = (v: unknown): Cell =>
-		v === null || v === undefined ? null : v instanceof Decimal ? v.toString() : (v as Cell);
+		typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+			? v
+			: v instanceof Decimal
+				? v.toString()
+				: null;
 	return [
 		columns.flatMap(headersOf),
 		...rows.map((r) =>
 			columns.flatMap((c): Cell[] => {
-				const v = (r as Record<string, unknown>)[c.name];
+				const v: unknown = new Map(Object.entries(r)).get(c.name);
 				if (c.kind === 'period') {
-					const p = v as DatePeriod | null;
+					const p = isPeriod(v) ? v : null;
 					return [p?.from ?? null, p?.to ?? null];
 				}
 				return [out(v)];

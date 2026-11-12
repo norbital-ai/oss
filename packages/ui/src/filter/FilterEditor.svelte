@@ -4,7 +4,9 @@
 
 	/** A saved native filter, independent of a table's viewer preferences and URL. */
 	export type FilterValue = { readonly where?: Json; readonly order_by?: Json };
-	export type FilterEditorProps = {
+	type FilterEditorProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		model: string;
 		value?: FilterValue;
 		readonly?: boolean;
@@ -14,10 +16,10 @@
 </script>
 
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
-	import { useBolt } from '../client/context.js';
-	import { useKinds } from '../kinds/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import FilterPanel from './FilterPanel.svelte';
 	import { fromWhere, rowsWhere } from './where.js';
@@ -27,9 +29,9 @@
 	import { operatorsFor } from './operators.js';
 	import type { Node } from './node.js';
 
-	let { model, value = {}, readonly = false, variables, on_change }: FilterEditorProps = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	let { ctx, model, value = {}, readonly = false, variables, on_change }: FilterEditorProps = $props();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const catalog = $derived(savedFilterCatalog(kinds.catalog ?? {}));
 	const sortFields = $derived(sortable(catalog[model], true, catalog));
 	let rows = $state<readonly Node[]>([]);
@@ -207,5 +209,5 @@
 			>{msg(bolt, 'view.replaceSaved')}</button
 		>{/if}
 {:else}
-	<FilterPanel {view} {catalog} {model} sortable={sortFields} {variables} {readonly} expanded />
+	<FilterPanel {ctx} {view} {catalog} {model} sortable={sortFields} {variables} {readonly} expanded />
 {/if}

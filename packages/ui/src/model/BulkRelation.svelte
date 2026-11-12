@@ -5,6 +5,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 `<c>.update` act.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ChildInput, KindsHost } from '../kinds/context.js';
 	import type { Values } from './types.js';
 	import { formSpec } from '../form/draft.js';
@@ -34,12 +35,12 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 	import Picker from '../kinds/picker.svelte';
 	import Show from '../kinds/show.svelte';
 	import { initial } from '../kinds/kind.js';
-	import { useKinds } from '../kinds/context.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { label, msg } from '../text/messages.js';
 	import { toast } from '../toast/toast.svelte.js';
 
 	let {
+		ctx,
 		name,
 		child,
 		parent_id,
@@ -49,6 +50,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 		errors,
 		disabled = false
 	}: {
+		ctx: UiContext;
 		/** The relation's name on the parent (the key the act's `set` carries). */
 		name: string;
 		child: ChildInput;
@@ -60,8 +62,8 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 		errors: ReadonlyMap<string, string>;
 		disabled?: boolean;
 	} = $props();
-	const kinds = useKinds(),
-		bolt = useBolt();
+	const kinds = $derived(ctx.ui.kinds),
+		bolt = $derived(bolt_of(ctx));
 	const fields = $derived(childFields(kinds.catalog, child));
 	const ops = $derived(SINGLE.filter((op) => child[op] === true));
 	const opText = (op: (typeof SINGLE)[number]) =>
@@ -80,7 +82,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 				<label class="text-sm font-medium" for={`${id}-${i}-${field.name}`}
 					>{field.kind.label ?? label(bolt, child.model, field.name)}</label
 				>
-				<Editor
+				<Editor {ctx}
 					kind={field.kind}
 					value={row[field.name] ?? null}
 					on_change={(next) =>
@@ -144,7 +146,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 				<label class="text-meta" for={`${id}-${op}`}>{opText(op)}</label>
 				{#each value[op] as chosen (chosen.id)}
 					<div class="flex min-w-0 items-center gap-2">
-						<Show kind={{ kind: 'ref', to: child.model }} value={chosen.id ?? null} readonly />
+						<Show {ctx} kind={{ kind: 'ref', to: child.model }} value={chosen.id ?? null} readonly />
 						<Button
 							type="button"
 							variant="ghost"
@@ -155,7 +157,7 @@ record, existing children to link, unlink or delete. Explicit commands only (rul
 						</Button>
 					</div>
 				{/each}
-				<Picker
+				<Picker {ctx}
 					of={child.model}
 					value={null}
 					on_change={(next) => {

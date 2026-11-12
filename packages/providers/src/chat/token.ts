@@ -1,27 +1,32 @@
-/** One connection's app token, refreshed once for concurrent callers. */
-export function tokenCache(load: () => Promise<{ readonly token: string; readonly ttl: number }>) {
-	let cached: { readonly token: string; readonly until: number } | undefined;
-	let loading: Promise<string> | undefined;
-	let generation = 0;
-	return {
-		get: (): Promise<string> => {
-			if (cached !== undefined && Date.now() < cached.until) return Promise.resolve(cached.token);
-			if (loading !== undefined) return loading;
-			const started = generation;
-			loading = load()
-				.then(({ token, ttl }) => {
-					if (generation === started) cached = { token, until: Date.now() + ttl };
-					return token;
-				})
-				.finally(() => {
-					if (generation === started) loading = undefined;
-				});
-			return loading;
-		},
-		invalidate: () => {
-			generation++;
-			cached = undefined;
-			loading = undefined;
-		}
-	};
-}
+import { Cache, Effect, Exit } from 'effect';
+import { PlatformError } from './adapter.ts';
+
+/** An app token and how long it stays good, in milliseconds. */
+export type Token = { readonly token: string; readonly ttl: number };
+
+/**
+ * One connection's app token per credential `key`, refreshed once for concurrent callers. A failed refresh is not kept:
+ * the next `get` asks again. `invalidate` drops it after a refusal names a revoked token.
+ */
+export const tokenCache = <E, K = void>(load: (key: K) => Effect.Effect<Token, E>) =>
+	Effect.map(
+		Cache.makeWith(load, {
+			capacity: 1,
+			timeToLive: (exit) =>
+				Exit.isSuccess(exit) && Number.isFinite(exit.value.ttl) ? Math.max(0, exit.value.ttl) : 0
+		}),
+		(cache) => ({
+			get: (key: K) => Effect.map(Cache.get(cache, key), (t) => t.token),
+			invalidate: Cache.invalidateAll(cache)
+		})
+	);
+
+/** A chat adapter's Promise token load, its rejection a `PlatformError`. */
+export const loadToken = (load: () => Promise<Token>) =>
+	Effect.tryPromise({
+		try: load,
+		catch: (cause) =>
+			cause instanceof PlatformError
+				? cause
+				: new PlatformError(cause instanceof Error ? cause.message : String(cause), 502)
+	});

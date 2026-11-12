@@ -20,13 +20,8 @@ import type { EngineManifest } from '../src/engine/manifest.ts';
 import { NOTICES } from '../src/engine/envoys/index.ts';
 import { simulatedProviders, startSimulator } from '../../providers/src/simulator/index.ts';
 import { hookServer, host } from '../../providers/tests/kit.ts';
-import {
-	layer,
-	TestWorkspace,
-	type Kit,
-	type WorkspaceServices,
-	respond_system_1
-} from '../../bolt-cli/src/test/index.ts'; // hook:decisions
+import { TestWorkspace, type Kit, type WorkspaceServices, respond_system_1 } from '../../bolt-cli/src/test/index.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts'; // hook:decisions
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -60,12 +55,12 @@ const manifest = {
 	policies: {
 		desk: {
 			description: 'What the envoys may do',
-			grants: { jobs: { outputs: { default: true }, create: true } },
+			grants: { jobs: { outputs: { default: {} }, create: {} } },
 			limits: { 'envoys.receive': [{ rate: '2/min', per: 'sender' }] }
 		},
 		contractor: {
 			description: 'Contractors',
-			grants: { jobs: { outputs: { default: true }, update: true } }
+			grants: { jobs: { outputs: { default: {} }, update: {} } }
 		},
 		desk_turns: {
 			description: 'The public desk turn budget',
@@ -578,8 +573,8 @@ layer(
 							)
 						)
 				});
-				hook.route.to = (request) => Effect.runPromiseWith(services)(h.link.webhook!(request));
-				yield* h.link.pair!({ token: '424242:simulated' });
+				hook.route.to = (request) => Effect.runPromiseWith(services)(present(h.link.webhook)(request));
+				yield* present(h.link.pair)({ token: '424242:simulated' });
 				const before = sent('sales_tg').length,
 					answer = yield* Effect.promise(() =>
 						fetch(`${running.url}/inbound`, {
@@ -607,7 +602,7 @@ layer(
 				});
 				// the kit's links stand where the host's do; what the envoy queued now takes the provider's real send
 				const reply = present(sent('sales_tg')[before]);
-				yield* h.link.send!(reply.message, []);
+				yield* present(h.link.send)(reply.message, []);
 				expect(running.messages().at(-1)).toMatchObject({
 					channel: 'telegram',
 					direction: 'out',

@@ -135,7 +135,7 @@ export type SignInMethods = {
 	/** The workspace's locale: a mobile number's country defaults to its region. */
 	locale: string;
 };
-export type TurnstileShape = {
+type TurnstileShape = {
 	readonly site_key: string | undefined;
 	readonly verify: (token: string, ip: string) => Effect.Effect<boolean, Unavailable>;
 };

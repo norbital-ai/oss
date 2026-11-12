@@ -5,6 +5,7 @@ import { Schema } from 'effect';
 import { download as downloadFile } from '../http.ts';
 import type { UnwrapWebhookEvent } from '@linqapp/sdk/resources/webhooks';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 
 const Part = Schema.Union([
@@ -94,7 +95,7 @@ export const linq: ChatPlatform = {
 				throw new PlatformError(
 					error.message,
 					error.status,
-					Number(error.headers?.get('retry-after')) * 1000 || undefined
+					retry_after_ms(error.headers?.get('retry-after'))
 				);
 			throw error;
 		};

@@ -51,7 +51,7 @@ const imaged: EngineManifest = {
 		...manifest.policies,
 		rep: {
 			...rep,
-			grants: { ...rep.grants, orders: { ...repOrders, create: true, update: true, delete: true } }
+			grants: { ...rep.grants, orders: { ...repOrders, create: {}, update: {}, delete: {} } }
 		}
 	}
 };

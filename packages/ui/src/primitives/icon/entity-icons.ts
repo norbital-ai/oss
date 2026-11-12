@@ -82,9 +82,8 @@ type EntityName<C extends EntityCategory> = keyof (typeof ENTITY_ICONS)[C];
 
 export function resolveIcon(name: EntityName<EntityCategory> | string): string {
 	for (const category of Object.values(ENTITY_ICONS)) {
-		if (name in category) {
-			return category[name as keyof typeof category];
-		}
+		const icon = Object.entries(category).find(([key]) => key === name)?.[1];
+		if (icon !== undefined) return icon;
 	}
 	return name;
 }

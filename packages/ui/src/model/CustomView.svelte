@@ -4,6 +4,7 @@ The standard toolbar over a custom view (a roster grid, a calendar, cards): titl
 sort popover over the page's own rows, the actions menu and the page's scope controls. The body gets the rows they leave.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import type { Row, Values } from './types.js';
@@ -13,6 +14,8 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	export type CustomField<R> = (keyof R & string) | { field: keyof R & string; label: string };
 	/** The props of `CustomView`. */
 	export type CustomViewProps<R extends Values = Row> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		/** The rows the custom view draws; the toolbar narrows and orders them. */
 		of: readonly R[];
 		fields: readonly CustomField<R>[];
@@ -32,7 +35,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 <script lang="ts" generics="R extends Values = Row">
 	import Cover from '../layout/cover.svelte';
 	import { Button } from '../primitives/button/index.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import { localExposure, matches, sortRows } from '../filter/local.js';
 	import { sortable } from '../filter/order.js';
@@ -41,8 +44,8 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 	import { viewState } from '../filter/view-state.svelte.js';
 	import ViewToolbar from './ViewToolbar.svelte';
 
-	let { of, fields, key, toolbar = {}, children, empty, model = '' }: CustomViewProps<R> = $props();
-	const bolt = useBolt();
+	let { ctx, of, fields, key, toolbar = {}, children, empty, model = '' }: CustomViewProps<R> = $props();
+	const bolt = $derived(bolt_of(ctx));
 	const LOCAL = '$local';
 	const names = $derived(fields.map((f) => (typeof f === 'string' ? f : f.field)));
 	const labelOf = (f: string) =>
@@ -50,7 +53,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 		humanize(f);
 	const rows = $derived(of);
 	const catalog = $derived({ [LOCAL]: localExposure(rows, names, labelOf) });
-	const view = viewState(bolt, {
+	const view = viewState(() => ctx, {
 		key: () => key,
 		model: () => LOCAL,
 		catalog: () => catalog,
@@ -73,7 +76,7 @@ sort popover over the page's own rows, the actions menu and the page's scope con
 </script>
 
 {#snippet bar()}
-	<ViewToolbar
+	<ViewToolbar {ctx}
 		config={toolbar}
 		{model}
 		{view}

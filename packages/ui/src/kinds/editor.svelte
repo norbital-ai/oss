@@ -3,6 +3,7 @@
 The editor of one value by its field kind: every kind's input in one component (derived kinds read-only).
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Array as Arr } from 'effect';
 	import type { Value, Kind } from './kind.js';
 	import type { JsonSchema } from './json-schema.js';
@@ -10,6 +11,8 @@ The editor of one value by its field kind: every kind's input in one component (
 
 	/** The editor of one value by its kind (every §3.3.2 kind; derived kinds render read-only). */
 	export type EditorProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		kind: Kind;
 		/** JSON Schema for a generated structured editor; omitted infers the stored structure. */
 		json_schema?: JsonSchema;
@@ -22,9 +25,9 @@ The editor of one value by its field kind: every kind's input in one component (
 		id?: string;
 		/** The label naming a control that has no single input to point at (a group of boxes). */
 		labelledby?: string;
-		/** Shows the value as copyable text (`Show`); an enclosing readonly `Form`, `Fieldset` or `Field` sets it. */
+		/** Shows the value as copyable text (`Show`); an enclosing readonly `Form` or `Field` sets it. */
 		readonly?: boolean;
-		/** The editor stays, muted and inert; an enclosing disabled `Form`, `Fieldset` or `Field` sets it. */
+		/** The editor stays, muted and inert; an enclosing disabled `Form` or `Field` sets it. */
 		disabled?: boolean;
 		/** Problems by dotted path under `name` (`lines.0.amount`), as a refusal or decode reports them. */
 		errors?: ReadonlyMap<string, string>;
@@ -50,12 +53,10 @@ The editor of one value by its field kind: every kind's input in one component (
 	import CodeEditor from '../editors/code-editor.svelte';
 	import MarkdownEditor from '../editors/markdown-editor.svelte';
 	import { use_enum_text } from '../model/context.js';
-	import { usePageContext } from '../client/context.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import Textarea from '../primitives/textarea/textarea.svelte';
 	import { provideControls, ui_text } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
 	import { field_entry } from './builtin/index.js';
 	import TimeInput from './time-input.svelte';
@@ -71,6 +72,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	import TypedInput from './typed-input.svelte';
 
 	let {
+		ctx,
 		kind,
 		json_schema,
 		raw_json = false,
@@ -87,13 +89,12 @@ The editor of one value by its field kind: every kind's input in one component (
 		on_address,
 		relation
 	}: EditorProps = $props();
-	const pageContext = usePageContext();
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	// an explicit mode here reaches every control of a structured value too
 	const controls = provideControls(() => ({ readonly, disabled: ownDisabled }));
 	const disabled = $derived(controls.disabled);
 	const t = ui_text();
-	const words = use_enum_text();
+	const words = use_enum_text(() => ctx);
 	const v = $derived(value);
 	// a declared enum transition offers only the next states (and the current one) once the record has a state
 	const enumValues = $derived.by(() => {
@@ -158,9 +159,9 @@ The editor of one value by its field kind: every kind's input in one component (
 </script>
 
 {#if controls.readonly && kind.kind === 'json' && json_schema !== undefined}
-	<StructuredData schema={json_schema} {value} mode="view" {name} {id} {errors} {row} />
+	<StructuredData {ctx} schema={json_schema} {value} mode="view" {name} {id} {errors} {row} />
 {:else if controls.readonly}
-	<Show {kind} {value} {name} {row} {relation} {address} {id} readonly />
+	<Show {ctx} {kind} {value} {name} {row} {relation} {address} {id} readonly />
 {:else if relation !== undefined && relation.targets.length > 1}
 	<!-- an arc: its target first, then the record there; the value is `{ model, id }` -->
 	{@const ref = arcOf(v)}
@@ -177,7 +178,7 @@ The editor of one value by its field kind: every kind's input in one component (
 			{disabled}
 			aria-label={humanize(name)}
 		/>
-		<Picker
+		<Picker {ctx}
 			of={arm}
 			value={ref?.model === arm ? ref.id : null}
 			on_change={(next) => on_change(next === null ? null : { model: arm, id: next })}
@@ -187,7 +188,7 @@ The editor of one value by its field kind: every kind's input in one component (
 		/>
 	</div>
 {:else if relation !== undefined}
-	<Picker
+	<Picker {ctx}
 		of={relation.targets[0] ?? ''}
 		value={str(v)}
 		where={relation.where}
@@ -198,11 +199,11 @@ The editor of one value by its field kind: every kind's input in one component (
 	/>
 {:else if plan.derived}
 	<!-- derived and state values are never typed: a state moves by its edges (an action or a board move) -->
-	<Show {kind} {value} {name} {row} />
+	<Show {ctx} {kind} {value} {name} {row} />
 {:else if field?.entry.renderer}
 	{@const Renderer = field.entry.renderer}
 	<Renderer
-		ctx={pageContext?.()}
+		{ctx}
 		view={{
 			mode: 'edit',
 			name,
@@ -297,6 +298,7 @@ The editor of one value by its field kind: every kind's input in one component (
 {:else if plan.editor === 'time' && (kind.kind === 'date' || kind.kind === 'instant' || kind.kind === 'time')}
 	{#if Arr.isArray<Value>(v)}
 		<TimeInput
+			{ctx}
 			of={kind.kind}
 			precision={kind.precision}
 			value={v.map(str)}
@@ -307,6 +309,7 @@ The editor of one value by its field kind: every kind's input in one component (
 		/>
 	{:else}
 		<TimeInput
+			{ctx}
 			of={kind.kind}
 			precision={kind.precision}
 			value={str(v)}
@@ -318,6 +321,7 @@ The editor of one value by its field kind: every kind's input in one component (
 	{/if}
 {:else if plan.editor === 'period' && kind.kind === 'period'}
 	<TimeRangeInput
+		{ctx}
 		of={kind.of}
 		precision={kind.precision}
 		{value}
@@ -352,10 +356,10 @@ The editor of one value by its field kind: every kind's input in one component (
 		{invalid}
 	/>
 {:else if plan.editor === 'id' && kind.kind === 'ref' && typeof kind.to === 'string'}
-	<Picker of={kind.to} value={str(v)} {on_change} where={kind.where} {id} {disabled} {invalid} />
+	<Picker {ctx} of={kind.to} value={str(v)} {on_change} where={kind.where} {id} {disabled} {invalid} />
 {:else if structured !== undefined}
 	{#key structured.key}
-		<StructuredData {...structured.props} {on_change} {name} {id} {disabled} {errors} />
+		<StructuredData {ctx} {...structured.props} {on_change} {name} {id} {disabled} {errors} />
 	{/key}
 {:else if plan.editor === 'json'}
 	<!-- Explicit raw/source editing, also used by the shared renderer for unconstrained leaves. -->
@@ -382,5 +386,5 @@ The editor of one value by its field kind: every kind's input in one component (
 	/>
 	{#if jsonError}<p class="text-xs text-destructive">{jsonError}</p>{/if}
 {:else}
-	<Show {kind} {value} {name} {row} />
+	<Show {ctx} {kind} {value} {name} {row} />
 {/if}

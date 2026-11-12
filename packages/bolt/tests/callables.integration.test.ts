@@ -14,9 +14,11 @@ import type { Json } from '../src/decl/values.ts';
 import type { Authority } from '../src/engine/contracts.ts';
 import { DbError } from '../src/engine/errors.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
-import { ActConflict, act_failure } from '../src/decl/errors.ts';
+import { ActConflict } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import { for_actor } from '../src/engine/callables/index.ts';
-import { TestWorkspace, type ActOptions, type TestOptions } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, type TestOptions } from '../../bolt-cli/src/test/index.ts';
+import type { ActOptions } from '../src/decl/ctx.ts';
 
 const present = <A>(value: A | null | undefined): A => {
 	if (value === null || value === undefined) throw new Error('Missing fixture value');
@@ -106,28 +108,28 @@ const manifest = Result.getOrThrow(
 				description: 'Rep',
 				capabilities: { automations: ['followup', 'place', 'revise'] },
 				grants: {
-					customers: { outputs: { default: true } },
+					customers: { outputs: { default: {} } },
 					orders: {
 						outputs: {
 							default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
 						},
-						create: true,
+						create: {},
 						update: { moves: { status: ['draft->submitted'] } }
 					},
-					notes: { outputs: { default: true }, create: true }
+					notes: { outputs: { default: {} }, create: {} }
 				}
 			},
 			// the runs' own: a run is the system identity, so the rep's own-orders scope would match nothing there
 			ordering: {
 				description: 'Place and revise orders',
 				grants: {
-					customers: { outputs: { default: true } },
+					customers: { outputs: { default: {} } },
 					orders: {
-						outputs: { default: true },
-						create: true,
+						outputs: { default: {} },
+						create: {},
 						update: { moves: { status: ['draft->submitted'] } }
 					},
-					notes: { outputs: { default: true }, create: true }
+					notes: { outputs: { default: {} }, create: {} }
 				}
 			},
 			applicant: {
@@ -135,7 +137,7 @@ const manifest = Result.getOrThrow(
 				grants: {
 					openings: { outputs: { listing: { scopes: { openings: { status: { eq: 'open' } } } } } },
 					// a closed opening is no ref this visitor reads, so no write `where` is needed
-					applications: { create: true }
+					applications: { create: {} }
 				},
 				limits: { act: { rate: '3/h', per: 'ip' } }
 			}
@@ -331,7 +333,7 @@ const batch = (f: Fixture, authority: Authority, acts: Batch, key: string = cryp
 
 class Fx extends Context.Service<Fx, Fixture>()('test/CallablesFixture') {}
 // The suite's database fails its next serializable commits while armed: a replay, then a terminal conflict.
-const serialization = { armed: false, failures: 0, attempts: [] as DbBatch[] };
+const serialization = { armed: false, failures: 0, attempts: new Array<DbBatch>() };
 let customerReadFailure: DbError | undefined;
 const interceptedDb = Layer.effect(
 	TenantDb,

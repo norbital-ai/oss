@@ -1,10 +1,10 @@
-// What the kit's renderers and editors learn from the shell, once per page (hook:ui-shell sets `provide_kinds` beside
-// `provide_bolt`): the models' exposure, the workspace's custom fields, and the optional facilities the host has.
+// What the kit's renderers and editors learn from the shell, once per page (`ctx.ui.kinds`, beside `ctx.ui.bolt`): the
+// models' exposure, the workspace's custom fields, and the optional facilities the host has.
 // Every optional member absent is a working page: files show names, points search with the keyless geocoder.
 import { Effect, Result, Schema } from 'effect';
 import { FetchHttpClient, HttpClient, HttpClientResponse, type HttpClientError } from 'effect/http';
-import { getContext, setContext, type Component } from 'svelte';
-import type { ActFailure, ReadError, ViewBolt } from '../client/contract.js';
+import type { Component } from 'svelte';
+import type { ActFailure, ReadError, UiContext } from '../client/contract.js';
 import type { FileRef, Fields, Json, Kind, Point, Value } from './kind.js';
 import type { FileUrlOptions, Where } from '@norbital-ai/std/kind';
 
@@ -119,7 +119,7 @@ export type KindView<V = Value> =
 export type CustomFieldEntry = {
 	shape: Kind;
 	label?: string;
-	renderer?: Component<{ view: KindView; ctx: ViewBolt | undefined }>;
+	renderer?: Component<{ view: KindView; ctx: UiContext }>;
 };
 /** The host's address search (and reverse lookup) a `PointInput` uses when present. */
 export type Geocoder = {
@@ -166,11 +166,6 @@ export type KindsHost = {
 	currency?: string | undefined;
 };
 
-const KEY = Symbol.for('norbital.ui.kinds');
-/** Hands the host's `KindsHost` to every kind editor beneath; the shell calls it once. */
-export const provide_kinds = (host: KindsHost) => setContext(KEY, host);
-/** The `KindsHost` provided above, or an empty host. */
-export const useKinds = (): KindsHost => getContext<KindsHost | undefined>(KEY) ?? {};
 /** The keyless OpenStreetMap tile template used when the host names no basemap. */
 export const DEFAULT_BASEMAP = {
 	url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',

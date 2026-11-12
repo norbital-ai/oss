@@ -3,11 +3,14 @@
 Edits a date period (inclusive) or an instant period (closed-open), both ends picked in `precision`.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Value } from './kind.js';
 	import type { Precision } from './precision.js';
 
 	/** A date period `{ from, to | null }` (inclusive) or an instant period `{ start, end | null }` (closed-open). */
 	export type PeriodInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: Value;
 		on_change(next: Value): void;
 		of: 'date' | 'instant';
@@ -35,7 +38,6 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	import { cn, narrowViewport, ui_text, use_controls } from '../primitives/utils.js';
 	import CalendarGrid from './calendar-grid.svelte';
 	import { SEGMENT, SEGMENTS } from './classes.js';
-	import { useKinds } from './context.js';
 	import { dateText, dateValue, fromDay, localDay, snapHour } from './date-input.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { CONTROL } from './classes.js';
@@ -46,6 +48,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 	import { fieldPopoverAlignment } from './popover-alignment.svelte.js';
 
 	let {
+		ctx,
 		value,
 		on_change,
 		of,
@@ -66,7 +69,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 		() => calendarContent,
 		() => (narrowViewport.current ? 0 : 8)
 	);
-	const locale = useKinds().locale;
+	const locale = $derived(ctx.ui.kinds.locale);
 	const [a, b] = $derived(of === 'date' ? ['from', 'to'] : ['start', 'end']);
 	const v = $derived.by(() => {
 		const x = value;
@@ -136,7 +139,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 </script>
 
 {#if readonly ?? controls.readonly}
-	<Show readonly kind={displayKind} {value} {id} />
+	<Show {ctx} readonly kind={displayKind} {value} {id} />
 {:else if unit !== null}
 	<Popover.Root
 		bind:open={unitOpen}
@@ -159,7 +162,7 @@ Edits a date period (inclusive) or an instant period (closed-open), both ends pi
 			></Popover.Trigger
 		>
 		<Popover.Content align="start" class="w-auto max-w-[calc(100vw-1rem)] p-3">
-			<UnitPicker
+			<UnitPicker {ctx}
 				{unit}
 				inline
 				picking_end={choosingEnd}

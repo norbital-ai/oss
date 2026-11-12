@@ -34,7 +34,6 @@ import { BoltRoutes } from '../src/protocol/http.ts';
 import { active_app, media, navigation_model } from '../src/shell/model.ts';
 import { file_attachments } from '../src/engine/agent/attachments.ts';
 import {
-	language_of,
 	StudioOp,
 	studio_view,
 	suggest_message,
@@ -1334,14 +1333,6 @@ describe('Studio port boundary', () => {
 			decodeOp({ op: 'preview', id: '' }),
 			decodeOp({ op: 'preview', id: 3 })
 		]).toEqual([null, null, null, null, null, null]);
-	});
-	it('edits a path in its language (L-BOLT-528)', () => {
-		expect(['a.ts', 'b.svelte', 'c.json', 'd.md'].map(language_of)).toEqual([
-			'javascript',
-			'javascript',
-			'json',
-			'plaintext'
-		]);
 	});
 	it('cuts the workbench manifest to the Manifest chips, each entry with its source path (L-BOLT-527)', () => {
 		const manifest = Result.getOrThrow(

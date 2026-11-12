@@ -71,7 +71,7 @@ export function tables_of(
 			...relationship,
 			...(where === undefined
 				? {}
-				: { where: Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(where) })
+				: { where })
 		};
 		refs.set(model, own);
 	}
@@ -121,7 +121,7 @@ export const BrowserCatalog = Schema.Record(Schema.String, Schema.Struct({
 }));
 export type BrowserCatalog = typeof BrowserCatalog.Type;
 export function browser_catalog(b: BrowserCatalog): Catalog {
-	const exposed = Object.entries(Schema.decodeUnknownSync(BrowserCatalog)(b));
+	const exposed = Object.entries(b);
 	const system = tables_of({}, {});
 	// the built-in layer's relationships hold whatever the browser knows a system model as
 	const systemRefs = (c: string) =>

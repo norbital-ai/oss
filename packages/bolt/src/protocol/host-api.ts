@@ -22,7 +22,6 @@ import {
 	Logger,
 	ManagedRuntime,
 	Option,
-	PlatformError,
 	References,
 	Result,
 	Schema,
@@ -83,14 +82,12 @@ import { is_off, off, type Off } from '../facilities/off.ts';
 import { unmet } from '../facilities/needs.ts';
 import { TenantDb, type DbBatch, type TenantDbShape } from '../engine/db/tenant-db.ts';
 import { audit_from_abi } from '../engine/audit.ts';
+import { cryptoLayer, facility_layers } from './facility-layers.ts';
 import type { AuditPort } from './audit.ts';
 import { copiedBatch, db_error } from '../engine/db/wire.ts';
-import { sha1 } from '../engine/crypto.ts';
-import { sha256 } from '@norbital-ai/store';
 import { EngineLive, type EngineServices, type EngineHost } from '../engine/host.ts';
 import { Activation, Agents, Automations, HostIdentity, Live, Manifest, Runs } from '../engine/services.ts';
 import {
-	Ai,
 	ArtifactFiles,
 	Bundler,
 	Convert,
@@ -99,13 +96,10 @@ import {
 	Files,
 	Geo,
 	GuestIsolates,
-	Http,
 	Images,
 	Docs,
 	Keys,
-	Logs,
 	Mcp,
-	Transport,
 	WebRead,
 	Browser,
 	RunUnits
@@ -143,7 +137,6 @@ import {
 	authority_of,
 	ShellConfig,
 	ShellRoutes,
-	Turnstile,
 	type ShellHostConfig
 } from '../shell/host.ts';
 import { COOKIES, cookie_site, frame_policy } from '../shell/nav.ts';
@@ -159,12 +152,11 @@ import { needs_guest, RateLimits, SessionAuthority } from './http.ts';
 import { BoltHost, BoltHostLive } from './host.ts';
 import { PublicPages, public_pages } from './pages.ts';
 export { render_mode } from './pages.ts';
-export { MigrationImpact, impact_lines } from './migration-impact.ts';
+export { MigrationImpact } from './migration-impact.ts';
 import { IntegrationManager, integration_routes } from './integrations.ts';
 
 /** Bumped on any change a host on an older copy could misread; the host refuses a release whose `version` differs. */
 export const HOST_API_VERSION = 18;
-export { CELL_ABI_VERSION } from './membrane.ts';
 export type { CellEnd, Kernel } from './cell.ts';
 
 // ── failures (D10a) ──
@@ -176,8 +168,8 @@ export const HostFailure = Schema.TaggedStruct('HostFailure', {
 });
 export type HostFailure = typeof HostFailure.Type;
 /** Anything else: the database went away, a host port threw. The host may retry it elsewhere; an engine answer stands. */
-export const HostDefect = Schema.TaggedStruct('HostDefect', { message: Schema.String });
-export type HostDefect = typeof HostDefect.Type;
+const HostDefect = Schema.TaggedStruct('HostDefect', { message: Schema.String });
+type HostDefect = typeof HostDefect.Type;
 export const HostApiFailure = Schema.Union([HostFailure, HostDefect]);
 export type HostApiFailure = typeof HostApiFailure.Type;
 
@@ -205,11 +197,6 @@ export type Release = {
 	/** The release's files (`artifact.json`, `client/…`) and its seed packs (`../seed/<pack>/…`), read-only. */
 	readonly artifact: ArtifactPort;
 };
-/**
- * The environment's database (D10a): Promise + AbortSignal; failures are `DbError`s (or what a driver threw, read as one).
- * The host owns the driver and its lifetime; rows are the adapters' JSON (`engine/db/wire.ts`).
- */
-export type { DbBatch } from '../engine/db/tenant-db.ts';
 export type HostTenantDb = {
 	read(statements: readonly Sql[], signal?: AbortSignal): Promise<readonly Rows[]>;
 	write(statement: Sql, lock?: Lock, signal?: AbortSignal): Promise<Rows>;
@@ -492,9 +479,7 @@ const encode = (error: unknown): HostApiFailure => {
 const guard = <A>(work: () => Promise<A>): Promise<A> =>
 	Promise.resolve()
 		.then(work)
-		.catch((error: unknown) =>
-			Promise.reject(Schema.encodeUnknownSync(HostApiFailure)(encode(error)))
-		);
+		.catch((error: unknown) => Promise.reject(encode(error)));
 type PromiseRunner<R> = <A, E>(effect: Effect.Effect<A, E, R>, options?: Effect.RunOptions) => Promise<A>;
 /** Unwrap typed failures without changing their release-native identity. */
 const effectPromise = <R>(runner: PromiseRunner<R>) =>
@@ -562,25 +547,7 @@ const database = (port: HostTenantDb): TenantDbShape => {
 };
 /** This release's own diagnostics, in every runtime: one JSON event per line on stdout, for the host's collector. */
 const logging = Logger.layer([Logger.consoleJson]);
-/** Random bytes from the runtime's `crypto`; the digests are this release's own (a cell has no `crypto.subtle`). */
-const cryptoLayer = Layer.succeed(
-	Crypto.Crypto,
-	Crypto.make({
-		randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
-		digest: (algorithm, data) =>
-			algorithm === 'SHA-1'
-				? Effect.succeed(sha1(data))
-				: algorithm === 'SHA-256'
-					? Effect.succeed(sha256(data))
-					: Effect.fail(
-							PlatformError.badArgument({
-								module: 'Crypto',
-								method: 'digest',
-								description: `${algorithm} is not supported`
-							})
-						)
-	})
-);
+
 /** The release's files root: artifact paths are relative to it. */
 const ROOT = '';
 /** One call's effect over the release's files; nothing outlives the call. */
@@ -631,22 +598,6 @@ const activation = (ports: HostPorts, artifact: Artifact) =>
 		guest: Option.some(artifact.guest),
 		...(ports.overran === undefined ? {} : { overran: ports.overran })
 	});
-/** The facilities' engine services, each member across its Promise ABI adapter; the test kit composes the same. */
-export const facility_layers = (f: Facilities) =>
-	Layer.mergeAll(
-		audit_from_abi(f.logs.audit).pipe(Layer.provide(cryptoLayer)),
-		Logs.fromAbi(f.logs.runtime),
-		Files.fromAbi(f.storage.files),
-		Ai.fromAbi(f.intelligence),
-		Keys.fromAbi(f.keys),
-		Http.fromAbi(is_off(f.ports.outbound) ? off : f.ports.outbound.http),
-		Turnstile.fromAbi(f.transactional.challenge),
-		Transport.fromAbi({
-			Mail: f.transactional.mail,
-			Sms: f.transactional.sms,
-			Push: is_off(f.transactional.push) ? off : f.transactional.push(f.storage.database)
-		})
-	);
 /** Host-provided records cross only this explicit Promise ABI adapter. */
 const portLayers = ({ units, ...ports }: HostPorts) =>
 	Layer.mergeAll(
@@ -898,7 +849,7 @@ const branch = Effect.fn('bolt.hostApi.branch')(function* (ports: BranchPorts) {
 							decode_seed(
 								m,
 								Object.fromEntries(
-									Object.entries(rows).filter(([c]) => !(IDENTITY as readonly string[]).includes(c))
+									Object.entries(rows).filter(([c]) => !IDENTITY.some((i) => i === c))
 								)
 							);
 							return memory_source('private', rows, start, assets, (path) =>
@@ -1132,12 +1083,7 @@ export const HOST_API: HostApi = {
 	cookies: { session: COOKIES.session, preview: COOKIES.preview },
 	cookie_site: cookie_site,
 	needs_guest: (request) =>
-		hostRun(
-			needs_guest(HttpServerRequest.fromWeb(request.clone())).pipe(
-				Effect.catch(() => Effect.succeed(true))
-			),
-			request.signal
-		),
+		hostRun(needs_guest(HttpServerRequest.fromWeb(request.clone())), request.signal),
 	verify: (release, options) => hostRun(Effect.asVoid(artifactOf(release)), options.signal),
 	frame_policy: (release, path, options) =>
 		hostRun(

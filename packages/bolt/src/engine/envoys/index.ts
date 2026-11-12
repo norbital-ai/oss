@@ -129,7 +129,7 @@ export const envoys = Effect.fn('Envoys.make')(function* (cfg: EnvoysConfig) {
 	 * Every limit is the envoy's own (P32, §3.9): `envoys.*` per sender and per subject, and rule 72's `agent` keyed by the
 	 * envoy, so a desk's turns share one budget whoever sends (G12 (4)). A member's policies never add limits.
 	 */
-	const charge = Effect.fn('Agents.work1')(function* (
+	const charge = Effect.fn('Envoys.charge')(function* (
 		envoy: string,
 		a: Arrived,
 		key: 'envoys.receive' | 'envoys.unrecognised',

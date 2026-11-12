@@ -1,34 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
 import { database, exec, script } from './support.ts';
-import {
-	INTROSPECT,
-	IntrospectRow,
-	archive_of,
-	check_file,
-	check_squash_sources,
-	checksum_of,
-	compare_physical,
-	generate,
-	generate_squash,
-	lock_of,
-	migration_status,
-	pending,
-	physical_hash,
-	physical_definitions_of,
-	read_lock,
-	read_physical_definitions,
-	read_snapshot,
-	schema,
-	schema_snapshot,
-	snapshot_of,
-	table,
-	verify,
-	verify_squash,
-	type Applied,
-	type MigrationFile,
-	type StoreError
-} from '../src/index.ts';
+import { INTROSPECT, IntrospectRow, archive_of, check_file, check_squash_sources, checksum_of, generate, generate_squash, lock_of, migration_status, pending, physical_hash, physical_definitions_of, read_lock, read_physical_definitions, read_snapshot, schema, schema_snapshot, snapshot_of, table, verify, verify_squash, type Applied, type MigrationFile, type StoreError } from '../src/index.ts';
+import { compare_physical } from '../src/migrate.ts';
 
 const originals: readonly MigrationFile[] = [
 	{ name: '0001_entry.sql', sql: 'create table entry (id uuid primary key, value text);' },
@@ -443,7 +417,7 @@ describe('safe baseline authoring', () => {
 					entry: table({ audit: true, fields: { value: { kind: 'text' } } })
 				});
 				const after = schema({
-					entry: table({ audit: true, fields: { value: { kind: 'text', unique: true } } })
+					entry: table({ audit: true, unique: [{ fields: ['value'] }], fields: { value: { kind: 'text' } } })
 				});
 				const initial = yield* generate(null, before, { number: 1, name: 'initial' });
 				const unique = yield* generate(yield* read_snapshot(initial.snapshot), after, {

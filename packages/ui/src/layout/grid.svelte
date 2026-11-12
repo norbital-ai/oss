@@ -7,9 +7,9 @@ An auto-fitting grid of cards at a minimum cell width (`compact`, `card`, `panel
 	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
 	/** The smallest cell width an auto-fit `Grid` keeps before wrapping. */
-	export type GridMinimum = 'compact' | 'card' | 'panel';
+	type GridMinimum = 'compact' | 'card' | 'panel';
 	/** The props of `Grid`. */
-	export interface GridProps extends LayoutAttributes {
+	interface GridProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		/** Space between rows when it differs from `gap` (a definition list: wide columns, tight rows). */

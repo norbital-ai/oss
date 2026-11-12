@@ -13,6 +13,7 @@
 <div class="bg-background h-dvh"></div>
 <Sheet bind:open title="Norbius">
 	<Agent
+		ctx={{ ui: { kinds: {} } }}
 		{api}
 		{bolt}
 		{read}

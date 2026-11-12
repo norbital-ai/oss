@@ -31,12 +31,11 @@ export const AuditActor = Schema.Struct({
 export type AuditActor = typeof AuditActor.Type;
 
 /** A historical model identity; removed or renamed models remain searchable. */
-export const AuditSubject = Schema.Struct({
+const AuditSubject = Schema.Struct({
 	model: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	revision: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
 });
-export type AuditSubject = typeof AuditSubject.Type;
 
 const metadata = {
 	id: Schema.NonEmptyString,

@@ -43,7 +43,7 @@ const manifest: EngineManifest = {
 	policies: {
 		annotator: {
 			description: 'Annotates a queried contact',
-			grants: { contacts: { outputs: { default: true }, update: true } }
+			grants: { contacts: { outputs: { default: {} }, update: {} } }
 		}
 	},
 	automations: {

@@ -4,7 +4,7 @@ import { Cause, Context, Effect, Exit, Fiber, Layer, Stream } from 'effect';
 import { FacilityFailure, Unavailable } from '../src/decl/errors.ts';
 import type {
 	AiPort,
-	AiPortResponse,
+	AiResponse,
 	BrowserPort,
 	DeadlinesPort,
 	LinksPort,
@@ -361,7 +361,7 @@ describe('fromAbi', () => {
 		'Ai: ask round-trips, infer streams its deltas then the response, an embeddings-only port embeds',
 		() =>
 			Effect.gen(function* () {
-				const response: AiPortResponse = {
+				const response: AiResponse = {
 					content: 'hello',
 					tool_calls: [{ id: 'call-1', name: 'lookup', input: { query: 'hello' } }],
 					finish: 'tool',

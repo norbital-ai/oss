@@ -4,8 +4,10 @@ One compact schema, value, editor and inline comparison. Record lists use the mo
 leaf values retain the workspace's native kinds, custom renderers and inherited controls.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { item_kind } from '@norbital-ai/std/kind';
 	import type { Value, Kind } from './kind.js';
+	import type { KindsHost } from './context.js';
 	import type { JsonSchema } from './json-schema.js';
 	import type { ArrayKeys } from './structured-data.js';
 	import type { Values } from '../model/types.js';
@@ -13,6 +15,8 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import { input_schema } from '@norbital-ai/std/kind';
 	/** A schema or native kind with current data, editing controls, or a prior value for comparison. */
 	export type StructuredDataProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		schema?: JsonSchema;
 		kind?: Kind;
 		value?: Value;
@@ -94,7 +98,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const visible = (
 		value: Value | undefined,
 		kind: Kind | undefined,
-		host: ReturnType<typeof useKinds>
+		host: KindsHost
 	): Value => {
 		if (value === undefined) return null;
 		const native = kind ? field_entry(kind, host) : undefined;
@@ -146,7 +150,6 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	import Overflow from '../cell/Overflow.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { field_entry } from './builtin/index.js';
-	import { useKinds } from './context.js';
 	import { armValue, format_value, inferKind, initial, wideKind } from './kind.js';
 	import { FIELD_TYPES, json_schema_from_rows, json_schema_rows } from './json-schema-rows.js';
 	import { provideControls, ui_text } from '../primitives/utils.js';
@@ -169,10 +172,11 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	} from './structured-data.js';
 	import { use_form } from '../form/form-state.svelte.js';
 	import FieldControl, { useFieldPresentation } from '../form/field-control.svelte';
-	import { useOptionalBolt } from '../client/context.js';
+	import { optional_bolt_of } from '../client/context.js';
 	import { useSectionTitle } from '../form/section.svelte';
 
 	let {
+		ctx,
 		schema,
 		kind: declaredKind,
 		value,
@@ -197,7 +201,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	}: StructuredDataProps = $props();
 	const uid = $props.id();
 	const form = use_form();
-	const bolt = useOptionalBolt();
+	const bolt = $derived(optional_bolt_of(ctx));
 	const presentation = useFieldPresentation();
 	const errors = $derived(ownErrors ?? form?.field_errors);
 	const errorFor = (name: string) => {
@@ -207,7 +211,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	const newRecord = $derived(create ?? form?.mode === 'create');
 	const controlId = $derived(id ?? uid);
 	const controls = provideControls(() => ({ readonly, disabled }));
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const currentMode = $derived(mode ?? (on_change ? 'edit' : 'view'));
 	const editing = $derived(currentMode === 'edit' && !controls.readonly && !!on_change);
@@ -691,7 +695,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	row: Values,
 	before_row: Values | undefined
 )}
-	<Self
+	<Self {ctx}
 		schema={child}
 		kind={nativeKind}
 		value={next}
@@ -840,7 +844,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 {/snippet}
 
 {#snippet fieldSelf(field: (typeof fields)[number], heading: string | undefined)}
-	<Self
+	<Self {ctx}
 		schema={field.schema}
 		kind={field.kind}
 		value={object[field.key]}
@@ -980,7 +984,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 {/snippet}
 
 {#snippet listBody()}
-	{#if tableRows.length}<Table
+	{#if tableRows.length}<Table {ctx}
 			of={tableRows}
 			columns={tableColumns}
 			controlled
@@ -1019,7 +1023,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			: declared}
 	{#if held === undefined}<span class="text-sm text-muted-foreground">Not set</span>
 	{:else if held === null}<span class="text-sm text-muted-foreground">Null</span>
-	{:else if field}<Show kind={declared} value={held} {name} row={context} readonly />
+	{:else if field}<Show {ctx} kind={declared} value={held} {name} row={context} readonly />
 	{:else if Array.isArray(held) && held.length === 0}<span class="text-sm text-muted-foreground"
 			>Empty array</span
 		>
@@ -1048,7 +1052,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				value={JSON.stringify(visible(held, shape(declaredKind, held), host), null, 2)}
 				aria-label={name || 'Nested value'}
 			/>
-		{:else}<Self
+		{:else}<Self {ctx}
 				schema={rawSchema}
 				kind={declaredKind}
 				value={held}
@@ -1060,7 +1064,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 				depth={depth + 1}
 				{frame}
 			/>{/if}
-	{:else}<Show
+	{:else}<Show {ctx}
 			kind={nativeKind.many === true ||
 			['json', 'custom', 'object', 'record', 'union'].includes(nativeKind.kind)
 				? inferKind(held)
@@ -1079,7 +1083,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 	data-structured-data={currentMode}
 >
 	{#if currentMode === 'schema' && on_change && !controls.readonly}
-		<Self
+		<Self {ctx}
 			schema={authorSchema}
 			value={json_schema_rows(schema ?? true)}
 			mode="edit"
@@ -1092,7 +1096,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			{frame}
 		/>
 	{:else if currentMode === 'schema'}
-		<Table
+		<Table {ctx}
 			of={schemaFields}
 			columns={schemaColumns}
 			controlled
@@ -1116,7 +1120,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 		<span class="flex min-w-0 flex-wrap gap-1" data-structured-chips>
 			{#each list as item, index (index)}
 				<span class="bg-muted inline-flex max-w-full min-w-0 items-center rounded-sm px-1.5 text-sm"
-					><Self
+					><Self {ctx}
 						schema={schemaAt(index)}
 						kind={itemKind}
 						value={item}
@@ -1197,7 +1201,7 @@ leaf values retain the workspace's native kinds, custom renderers and inherited 
 			/></span
 		>
 	{:else}
-		<Editor
+		<Editor {ctx}
 			kind={leafKind}
 			value={value ?? null}
 			{name}

@@ -9,7 +9,7 @@ import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { catalog_of } from '../src/engine/access/pred.ts';
-import { lower_read } from '../src/engine/index.ts';
+import { lower_read } from '../src/engine/query/engine.ts';
 import { aggregate } from '@norbital-ai/store';
 import type { Frame } from '../src/protocol/wire.ts';
 import { from_store } from '../src/protocol/errors.ts';

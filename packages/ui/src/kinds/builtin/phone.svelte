@@ -3,12 +3,13 @@
 The built-in `phone` custom field's renderer: calling code and number when edited, a formatted `tel:` link when shown.
 -->
 <script lang="ts">
+	import type { UiContext } from '../../client/contract.js';
 	import CopyText from '../../primitives/copy-text/copy-text.svelte';
 	import type { KindView } from '../context.js';
 	import PhoneInput from '../phone-input.svelte';
 	import { formatPhone } from '../phone.js';
 
-	let { view }: { view: KindView } = $props();
+	let { ctx, view }: { ctx: UiContext; view: KindView } = $props();
 	const raw = $derived(typeof view.value === 'string' ? view.value : '');
 </script>
 
@@ -20,7 +21,7 @@ The built-in `phone` custom field's renderer: calling code and number when edite
 {/snippet}
 
 {#if view.mode === 'edit'}
-	<PhoneInput
+	<PhoneInput {ctx}
 		value={view.value}
 		on_change={view.on_change}
 		id={view.id}

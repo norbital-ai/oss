@@ -2,9 +2,9 @@
 // `sys_message.post`, `sys_message.confirm`) with the transcript; web push of inbox notices through `bolt.push`.
 import { describe, expect, layer } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
-import { act_failure } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
-import type { AiPortResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
+import type { AiResponse, ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { AgentRow } from '../src/protocol/schema.ts';
@@ -42,8 +42,8 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				grants: {
-					quotes: { outputs: { default: true }, create: true },
-					logs: { outputs: { default: true }, create: true }
+					quotes: { outputs: { default: {} }, create: {} },
+					logs: { outputs: { default: {} }, create: {} }
 				},
 				capabilities: { automations: ['quotes_mark'] }
 			}
@@ -77,7 +77,7 @@ const guest = {
 };`
 };
 
-type Step = () => AiPortResponse;
+type Step = () => AiResponse;
 const say =
 	(text: string): Step =>
 	() => ({ content: text, tool_calls: [], finish: 'stop', usage: { input: 10, output: 5 } });

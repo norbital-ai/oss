@@ -79,24 +79,24 @@ const manifest: EngineManifest = {
 	},
 	policies: {
 		visible: { description: 'Visit and nested helper, no helper root grant', grants: {
-			visits: { outputs: { default: true } }, notes: { outputs: { default: true } }, approval_request: { outputs: { default: true } }
+			visits: { outputs: { default: {} } }, notes: { outputs: { default: {} } }, approval_request: { outputs: { default: {} } }
 		} },
 		named: { description: 'Named visit output only', grants: {
-			visits: { outputs: { directory: true } }, approval_request: { outputs: { default: true } }
+			visits: { outputs: { directory: {} } }, approval_request: { outputs: { default: {} } }
 		} },
 		named_only: { description: 'Related label through a named output only', grants: {
-			named_visits: { outputs: { directory: true } }
+			named_visits: { outputs: { directory: {} } }
 		} },
 		default_only: { description: 'Default output hides the label relation', grants: {
-			named_visits: { outputs: { default: true } }
+			named_visits: { outputs: { default: {} } }
 		} },
 		hidden: { description: 'The helper name is outside this output', grants: {
-			visits: { outputs: { hidden: true } }, approval_request: { outputs: { default: true } }
+			visits: { outputs: { hidden: {} } }, approval_request: { outputs: { default: {} } }
 		} },
-		plain: { description: 'No helper layer', grants: { visits: { outputs: { plain: true } }, approval_request: { outputs: { default: true } } } },
+		plain: { description: 'No helper layer', grants: { visits: { outputs: { plain: {} } }, approval_request: { outputs: { default: {} } } } },
 		blocked: { description: 'The helper row is outside the layer scope', grants: {
 			visits: { outputs: { default: { scopes: { 'visits.helper': { visible: { eq: false } } } } } },
-			approval_request: { outputs: { default: true } }
+			approval_request: { outputs: { default: {} } }
 		} }
 	},
 	teams: {}

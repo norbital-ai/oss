@@ -19,13 +19,14 @@
 				"$TURBO_DEFAULT$",
 				".env*",
 				"!build/**",
+				"!src/system/index.ts",
 				"!src/system/names.ts",
 				"!.generated/**",
 				"!.norbital/dist/**",
 				"!.svelte-kit/**",
 				"!.vercel/**"
 			],
-			"outputs": ["build/**", "src/system/names.ts", ".generated/**", ".norbital/dist/**", ".svelte-kit/**", ".vercel/**"]
+			"outputs": ["build/**", "src/system/index.ts", "src/system/names.ts", ".generated/**", ".norbital/dist/**", ".svelte-kit/**", ".vercel/**"]
 		},
 		"lint": {
 			"dependsOn": ["^build", "^lint"]

@@ -21,7 +21,7 @@ const salesId = '0199a000-0000-7000-8000-000000000001',
 const left = '0199a000-0000-7000-8000-000000000011',
 	right = '0199a000-0000-7000-8000-000000000012';
 const grant: GrantData = {
-	outputs: { default: true },
+	outputs: { default: {} },
 	update: { columns: { orders: ['note'] }, verdict: true }
 };
 const manifest: EngineManifest = {
@@ -44,7 +44,7 @@ const manifest: EngineManifest = {
 	teams: { Sales: { policies: ['seller'] }, Finance: { policies: ['reviewer'] } },
 	policies: {
 		seller: { description: 'Seller', grants: { orders: grant } },
-		reviewer: { description: 'Reviewer', grants: { orders: { outputs: { default: true } } } }
+		reviewer: { description: 'Reviewer', grants: { orders: { outputs: { default: {} } } } }
 	},
 	automations: {},
 	integrations: {},

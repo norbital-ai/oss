@@ -419,7 +419,7 @@ const dispatchWrites = Effect.fn('protocol.dispatchWrites')(function* (
 	});
 });
 
-export type ActCall = {
+type ActCall = {
 	readonly callable: string;
 	readonly input: Json;
 	readonly key: string;

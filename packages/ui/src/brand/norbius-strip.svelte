@@ -20,9 +20,7 @@
 	/** The live attribute Svelte keeps in sync: the attach closure must not snapshot `state`. */
 	const liveState = (root: Element): NorbiusStripState => {
 		const v = root.getAttribute('data-state');
-		return (NORBIUS_STRIP_STATES as readonly string[]).includes(v ?? '')
-			? (v as NorbiusStripState)
-			: 'ready';
+		return NORBIUS_STRIP_STATES.find((known) => known === v) ?? 'ready';
 	};
 </script>
 

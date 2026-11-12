@@ -10,7 +10,8 @@ import { MODEL_FILES } from '../src/engine/agent/ai.ts';
 import { Port } from '../src/engine/port.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { ActReply, WireError } from '../src/protocol/schema.ts';
-import { ActRefused, act_failure } from '../src/decl/errors.ts';
+import { ActRefused } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import type {
 	AiRequest,
@@ -47,7 +48,7 @@ const manifest = Result.getOrThrow(
 			}
 		},
 		policies: {
-			inspector: { description: 'Inspectors', grants: { photos: { outputs: { default: true } } } }
+			inspector: { description: 'Inspectors', grants: { photos: { outputs: { default: {} } } } }
 		},
 		teams: { Inspectors: { policies: ['inspector'] } },
 		agent: { internal: 'Staff brief.', skills: {} },

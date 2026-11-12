@@ -31,7 +31,7 @@ const flags = (kind: Kind) => ({
 });
 /** Metadata retains native scalar validation, never defaults, labels, migration/workflow data or predicates. */
 function atom(kind: Kind): OutputValueContract {
-	const { default: _default, was: _was, key: _key, unique: _unique, label: _label, help: _help, hidden: _hidden, ...plain } = kind;
+	const { default: _default, was: _was, key: _key, label: _label, help: _help, hidden: _hidden, ...plain } = kind;
 	switch (plain.kind) {
 		case 'sum': return { kind: 'atom', spec: { kind: 'decimal', scale: 0, ...flags(plain) } };
 		case 'count': return { kind: 'atom', spec: { kind: 'int', min: 0, ...flags(plain) } };

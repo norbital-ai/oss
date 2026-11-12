@@ -6,7 +6,7 @@ import {
 	HttpClientRequest,
 	type HttpClientResponse
 } from 'effect/http';
-import { TransportFailed } from '../decl/errors.ts';
+import { TransportFailed } from '../decl/errors/browser.ts';
 import type { Json } from '../decl/values.ts';
 
 /** A release cutover holds the host's admission closed for seconds; requests wait it out up to this budget. */

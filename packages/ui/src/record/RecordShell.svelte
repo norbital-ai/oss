@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import type { ModelKey, InsertOf, RecordOf, Row } from '../model/types.js';
 	import type { Outcome } from '../client/contract.js';
@@ -18,12 +19,14 @@
 		keep_alive?: true;
 	};
 	/** The props of `RecordShell`, typed by the model `of`. */
-	export type RecordShellProps<C extends ModelKey = ModelKey> = {
+	type RecordShellProps<C extends ModelKey = ModelKey> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: C;
 		/** The stored row; absent with `mode="create"`. */
 		id?: FormProps<C>['id'];
 		mode?: 'view' | 'edit' | 'create';
-		/** Create mode: the pre-filled values (`{ [row], [col] }` from a Matrix cell, a page's scope). */
+		/** Create mode: the pre-filled values (a page's scope). */
 		values?: Partial<InsertOf<C>>;
 		/** Generated view: create offers these beyond `values`' keys; update shows only these, in this order (else every field). */
 		fields?: FormProps<C>['fields'];
@@ -96,12 +99,11 @@
 	import FormBody from '../form/form-body.svelte';
 	import ChildGrid from '../relations/ChildGrid.svelte';
 	import Alert from '../primitives/alert/alert.svelte';
-	import { useKinds } from '../kinds/context.js';
 	import { fields_text, format, recordText, type Value as FieldValue } from '../kinds/kind.js';
 	import { open_record } from './navigation.js';
 	import { provide_model } from '../model/context.js';
 	import { provideRecordView, representations } from './context.js';
-	import { useBolt, usePageContext } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { type RestorePreview } from './types.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import Value from '../cell/Value.svelte';
@@ -132,6 +134,7 @@
 	import RunsFor from '../runs/RunsFor.svelte';
 
 	let {
+		ctx,
 		of,
 		id,
 		mode = 'view',
@@ -161,9 +164,8 @@
 	// never drops to its skeleton and back
 	const readOf = $derived(of),
 		readId = $derived(id);
-	const bolt = useBolt();
-	const pageContext = usePageContext();
-	const kinds = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const formText = ui_text();
 	provide_model(() => of);
 
@@ -915,7 +917,7 @@
 {/snippet}
 
 {#snippet recordForm(props: Pick<FormProps<ModelKey>, 'mode' | 'id' | 'record' | 'values' | 'readonly'>)}
-	<Form
+	<Form {ctx}
 		of={formOf}
 		{...props}
 		{validate}
@@ -937,7 +939,7 @@
 		</div>
 	{:else if controller !== null && shown !== null && exposure !== undefined}
 		<!-- Narrow outputs keep their real native draft; only complete records enter an authored representation. -->
-		<FormBody
+		<FormBody {ctx}
 			spec={controller.spec}
 			record={shown}
 			values={{}}
@@ -951,7 +953,7 @@
 		/>
 	{/if}
 	{#key controller}{#each Object.keys(controller?.spec.children ?? {}) as relation (relation)}
-			<ChildGrid {of} {id} {relation} save="parent" />
+			<ChildGrid {ctx} {of} {id} {relation} save="parent" />
 		{/each}{/key}
 {/snippet}
 
@@ -970,7 +972,7 @@
 	{#if requests.error}<Alert variant="destructive" role="alert"
 			>{msg(bolt, 'approval.loadFailed')}</Alert
 		>{/if}
-	{#if (requests.current?.length ?? 0) > 0}<ApprovalPanel
+	{#if (requests.current?.length ?? 0) > 0}<ApprovalPanel {ctx}
 			requests={requests.current ?? []}
 			on_outcome={() => {
 				fork(requests.refetch());
@@ -1011,7 +1013,7 @@
 						></span>{/if}
 				</button>
 			{/each}
-			{#if latest >= 1}<RecordTimeline
+			{#if latest >= 1}<RecordTimeline {ctx}
 					{of}
 					{latest}
 					{viewing}
@@ -1086,7 +1088,7 @@
 							>{msg(bolt, 'record.historyUncompatible')}</Badge
 						>{/if}
 				</div>
-				<Value
+				<Value {ctx}
 					value={archived.value}
 					kind={archived.kind}
 					row={snapshot.values}
@@ -1125,7 +1127,7 @@
 						<span class="text-muted-foreground truncate">{label(bolt, of, c.field)}</span>
 						<span class="flex min-w-0 flex-wrap items-baseline gap-1.5">
 							<span class="text-muted-foreground line-through"
-								><Value
+								><Value {ctx}
 									value={c.current}
 									kind={exposure?.fields[c.field]}
 									name={c.field}
@@ -1133,7 +1135,7 @@
 								/></span
 							>
 							<Glyph name="right" class="size-3 shrink-0" />
-							<Value value={c.restored} kind={exposure?.fields[c.field]} name={c.field} dense />
+							<Value {ctx} value={c.restored} kind={exposure?.fields[c.field]} name={c.field} dense />
 							{#if c.approval}<Badge variant="warning"
 									>{msg(bolt, 'record.restoreApproval')}</Badge
 								>{/if}
@@ -1154,7 +1156,7 @@
 							<span class="flex min-w-0 flex-wrap items-center gap-2">
 								{#if c.reason === 'incompatible' || c.reason === 'definition_changed'}<Badge
 										variant="warning">{skipText(bolt, c.reason)}</Badge
-									><Value value={c.restored} dense />
+									><Value {ctx} value={c.restored} dense />
 								{:else}{skipText(bolt, c.reason)}{/if}
 							</span>
 						</li>{/each}
@@ -1232,7 +1234,7 @@
 		<!-- a representation chunk that fails to load says which model's view and why (final-ui §7.2, L-BOLT-515) -->
 		{#await Representation}{@render skeleton()}{:then R}{#key shownPast}<R
 					{view}
-					ctx={pageContext?.() ?? bolt}
+					{ctx}
 				/>{/key}{:catch e}{@render failure(
 				msg(bolt, 'record.viewFailed', {
 					model: of,

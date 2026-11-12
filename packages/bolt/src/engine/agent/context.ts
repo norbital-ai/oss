@@ -45,32 +45,25 @@ const fitPrefix = (text: string, max: number, wrap: (prefix: string) => Json): s
 
 /** A clipped result's whole text, as `read_file { call }` pages it: a string as is, else indented JSON. */
 export const outputText = (v: Json) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
-function clipCells(v: Json, keep: ReadonlySet<string>): Json {
+function clipCells(v: Json): Json {
 	if (typeof v === 'string') {
 		if (size(v) <= BOUNDS.cellBytes) return v;
 		const note = `... [clipped, ${size(v)} bytes; read_file { call } reads it whole]`;
 		return `${fitPrefix(v, BOUNDS.cellBytes, (prefix) => prefix + note)}${note}`;
 	}
-	if (EffectArray.isArray<typeof v>(v)) return v.map((x) => clipCells(x, keep));
-	if (isObj(v))
-		return Object.fromEntries(
-			Object.entries(v).map(([k, x]) => [k, keep.has(k) ? x : clipCells(x, keep)])
-		);
+	if (EffectArray.isArray<typeof v>(v)) return v.map(clipCells);
+	// a cursor is never clipped
+	if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'next' ? x : clipCells(x)]));
 	return v;
 }
 
 /**
- * A tool result within 64 KiB: long cells clipped (except the fields the caller named in `keep`), then trailing rows of
- * a list dropped with a note. `kept` is the number of rows left, so a read can re-page from the last one it shows.
+ * A tool result within 64 KiB: long cells clipped (a `next` cursor never), then trailing rows of a list dropped with a
+ * note. `kept` is the number of rows left, so a read can re-page from the last one it shows.
  */
-export function bound(result: Json, keep: readonly string[] = []): Json {
-	return bounded(result, keep).value;
-}
-export function bounded(
-	result: Json,
-	keep: readonly string[] = []
-): { value: Json; kept: number | null } {
-	const v = clipCells(result, new Set([...keep, 'next'])); // a cursor is never clipped
+export const bound = (result: Json): Json => bounded(result).value;
+export function bounded(result: Json): { value: Json; kept: number | null } {
+	const v = clipCells(result);
 	if (size(v) <= BOUNDS.resultBytes) return { value: v, kept: null };
 	const page = isObj(v) ? v : null;
 	const rows = isList(v) ? v : page !== null && isList(page['rows']) ? page['rows'] : null;
@@ -123,7 +116,6 @@ const source = (named: (role: StudioRole) => string | undefined) =>
 	`# Source
 Before your first source edit read the bolt-primer skill once; it holds the contract, and nothing outside this workspace does. Source is under src/; workspace_list_dir shows it with each role. Host actions run through host { op: "call", tool, input }; host { op: "list" } lists their schemas. workspace_lang answers any API: never guess an import or a shape. If a role has no card, query its exported type through workspace_lang. Edits stay uncommitted in your working tree: workspace_diagnose checks its types, workspace_generate writes what a schema change needs, workspace_migrate runs it on your own workspace's database so you see what it did, workspace_test runs its tests, and workspace_commit records it. ${named('preview') ?? 'Preview'} builds and serves the last commit, ${named('merge') ?? 'merge'} asks the person to take it live. A preview URL opens only signed in: host { op: "call", tool: "browser", input: { workspace: { environment, path } } }. Quote a Version by its label. Data a merge depends on is a migration in your commits, never a write on live: the merge applies your migrations to the live database. An approval summary is one or two short sentences about the visible result and any material data risk. Keep evaluation scores, implementation inventories and test logs in the work evidence, not the approval summary: the native card provides its own version and data-change details.`;
 
-/** Envoy turns: a chat is read by people, not engineers. */
 /**
  * What an envoy is called when its workspace declared no name. A tenant's active release is a built artifact that
  * outlives the template it came from, so an artifact built before envoys were named is still served: the name reaching
@@ -250,9 +242,6 @@ function envelope(r: MessageRow, all: readonly MessageRow[]): string {
 		.join('\n');
 }
 
-/** Rows as model messages. Inbound conversation rows carry their envelope, posted rows their sender header (rules 57, 60); notes travel as user text.
- * `all` is the conversation's rows, projected or not, where a quote-reply finds the message it quotes; without `reasoning`
- * a reply goes without its reasoning (what a reviewer reads). */
 /** Delivery/approval UI metadata is kept outside the immutable tool answer sent to a model. */
 const asSent = (content: MessageRow['content']): MessageRow['content'] => {
 	if (!isObj(content)) return content;
@@ -262,6 +251,9 @@ const asSent = (content: MessageRow['content']): MessageRow['content'] => {
 		result: Object.fromEntries(Object.entries(stable['result']).filter(([key]) => key !== 'page_result' && key !== 'pageClaim'))
 	} : stable;
 };
+/** Rows as model messages. Inbound conversation rows carry their envelope, posted rows their sender header (rules 57, 60); notes travel as user text.
+ * `all` is the conversation's rows, projected or not, where a quote-reply finds the message it quotes; without `reasoning`
+ * a reply goes without its reasoning (what a reviewer reads). */
 export function messages(
 	rows: readonly MessageRow[], all: readonly MessageRow[] = rows, reasoning = true
 ): AiMessage[] {
@@ -304,11 +296,6 @@ export function localTime(now: string, tz: string): string {
 }
 
 /**
- * The system prompt, static per conversation in one release (rule 62, P32): kernel, envoy guidance, identity, brief,
- * envoy task, the workspace's skills list and how its source is laid out (the agent explores the rest on demand).
- * Byte-identical across turns and days, so providers cache it.
- */
-/**
  * Whom the agent acts as and the policies that are its whole authority: the same for a conversation, so it rides the
  * cached system prompt. A staff member's policy is a source file it can read; an envoy's sender changes per message and
  * stays in the closing note.
@@ -329,6 +316,11 @@ function identity(a: Authority, source: boolean): string {
 					.join(', ');
 	return `# Who you are\nYou act as ${who}${a.admin ? ', an administrator' : ''}. Your policies: ${policies}.`;
 }
+/**
+ * The system prompt, static per conversation in one release (rule 62, P32): kernel, envoy guidance, identity, brief,
+ * envoy task, the workspace's skills list and how its source is laid out (the agent explores the rest on demand).
+ * Byte-identical across turns and days, so providers cache it.
+ */
 export function system(parts: {
 	envoy?: string | undefined;
 	brief?: string | undefined;
@@ -364,11 +356,15 @@ export function system(parts: {
 /** A received file at its message's position: what read_file takes, once, never rewritten. */
 const fileLine = (f: FileRef, r: MessageRow) =>
 	`[file: ${f.name ?? 'file'} ${f.mime ?? ''} ${f.id === undefined ? 'not received' : `id:${shortId(f.id)}`} from ${authorOf(r) ?? 'someone'}${ambient(r) ? ' (not addressed to you)' : ''}]`;
+/** The last seq behind a compaction checkpoint or an executed plan's checkpoint. */
+const floorOf = (shown: readonly MessageRow[], conv: Pick<ConversationRow, 'plan'>) => {
+	const checkpoint = shown.findLast((row) => row.meta?.tag === 'compact');
+	return Math.max(checkpoint?.meta?.tag === 'compact' ? checkpoint.meta.cutoff : 0, conv.plan !== null && conv.plan.status !== 'draft' ? conv.plan.checkpoint : 0);
+};
 /** A sender's own earlier unaddressed messages, copied once at the end of the transcript. */
 export function senderAsides(rows: readonly MessageRow[], conv: Pick<ConversationRow, 'plan'>, sender: string | undefined) {
 	if (sender === undefined) return [];
-	const shown = projection(rows, conv), checkpoint = shown.findLast((row) => row.meta?.tag === 'compact');
-	const floor = Math.max(checkpoint?.meta?.tag === 'compact' ? checkpoint.meta.cutoff : 0, conv.plan !== null && conv.plan.status !== 'draft' ? conv.plan.checkpoint : 0);
+	const floor = floorOf(projection(rows, conv), conv);
 	const copied = new Set(rows.flatMap((row) => row.meta?.tag === 'aside' ? [row.meta.message] : []));
 	return rows.filter((row) => ambient(row) && row.sender === sender && row.seq > floor && !['pending', 'queued', 'scheduled', 'cancelled'].includes(row.state ?? '') && (row.deleted_at ?? null) === null && !copied.has(row.id)).map((row) => ({
 		message: row.id,
@@ -378,9 +374,7 @@ export function senderAsides(rows: readonly MessageRow[], conv: Pick<Conversatio
 
 /** Complete call/result groups and fixed per-message aside notes keep every emitted prefix stable. */
 export function modelTranscript(rows: readonly MessageRow[], conv: Pick<ConversationRow, 'plan'>, reasoning = true): AiMessage[] {
-	const shown = projection(rows, conv), ids = new Set(shown.map((row) => row.id));
-	const checkpoint = shown.findLast((row) => row.meta?.tag === 'compact');
-	const floor = Math.max(checkpoint?.meta?.tag === 'compact' ? checkpoint.meta.cutoff : 0, conv.plan !== null && conv.plan.status !== 'draft' ? conv.plan.checkpoint : 0);
+	const shown = projection(rows, conv), ids = new Set(shown.map((row) => row.id)), floor = floorOf(shown, conv);
 	const tools = rows.flatMap((row) => row.role === 'tool' ? [row] : []);
 	const emitted = new Set<string>(), out: AiMessage[] = [];
 	for (const row of rows) {

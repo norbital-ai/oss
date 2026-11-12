@@ -7,7 +7,7 @@ export default bind_system_model('sys_api_key')({
 	record_label: 'record.name',
 	fields: {
 		name: { kind: 'text' },
-		prefix: { kind: 'text', unique: true },
+		prefix: { kind: 'text' },
 		hash: { kind: 'text' },
 		/** The team handle the key acts as, declared in source (`+team.ts`); writes refuse an undeclared handle. */
 		team: { kind: 'text', format: 'team', optional: true },
@@ -18,6 +18,7 @@ export default bind_system_model('sys_api_key')({
 		revision: { kind: 'int', default: 1 },
 		created_at: { kind: 'instant', default: { var: 'now' } }
 	},
+	constraints: { prefix: { unique: ['prefix'] } },
 	table: { primary: 'text' },
 	outputs: {
 		default: {

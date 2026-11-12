@@ -7,12 +7,11 @@ import { page_reads, readValue } from '../../page/read-value.ts';
 import { view_client } from '../../page/view-client.ts';
 import { read_wire } from '../../protocol/read-answer.ts';
 import { ReadFailed } from '../../decl/errors.ts';
-import type { ViewBolt } from '@norbital-ai/ui';
 import { public_read_key, type PublicBoot } from '../../protocol/public-page.ts';
 import type { WireRead } from '../../protocol/wire.ts';
 import type { Json } from '../../decl/values.ts';
 import type { PublicClient } from './client.ts';
-import { public_context } from './context.ts';
+import { public_context, public_ui } from './context.ts';
 
 const unavailable = (): never => {
 	throw new Error('Start interactive page effects on mount.');
@@ -64,7 +63,7 @@ const pageRead = <A>(lookup: Lookup, method: PublicRead['m'], args: readonly Wir
 };
 
 const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup) => {
-	const ctx: PublicClient = {
+	const page: Omit<PublicClient, 'ui'> = {
 		...public_context(boot),
 		...page_reads(boot.read_catalog, (method, args, schema) => pageRead(lookup, method, args, schema)),
 		refresh: unavailable,
@@ -91,12 +90,13 @@ const publicServerContext = (boot: PublicBoot, now: string, lookup: Lookup) => {
 				String(vars[name] ?? whole)
 			)
 	};
-	const views = view_client({ ...ctx, native_query: <A>(read: WireRead, schema: Schema.Decoder<A>) => {
+	const views = view_client({ ...page, native_query: <A>(read: WireRead, schema: Schema.Decoder<A>) => {
 		if (read.m !== 'query' && read.m !== 'aggregate' && read.m !== 'history')
 			throw new ReadFailed({ code: 'protocol', message: 'This read is unavailable on a public page.' });
 		return pageRead(lookup, read.m, read.a, () => schema);
 	} }, boot.read_catalog, boot.catalog);
-	return { ctx, views };
+	const ctx: PublicClient = { ...page, ui: public_ui(boot, page, views) };
+	return ctx;
 };
 
 /** Re-render after each batch of newly used reads. The guest bridge admits and meters every read. */
@@ -104,7 +104,7 @@ export const renderPublicPage = Effect.fnUntraced(function* <E>(
 	boot: PublicBoot,
 	now: string,
 	read: (request: PublicRead) => Effect.Effect<unknown, E>,
-	render: (ctx: PublicClient, views: ViewBolt) => { body: string; head: string }
+	render: (ctx: PublicClient) => { body: string; head: string }
 ) {
 	const reads = new Map<string, Json>();
 	for (;;) {
@@ -115,7 +115,7 @@ export const renderPublicPage = Effect.fnUntraced(function* <E>(
 			if (value === undefined) pending.set(key, request);
 			return value;
 		});
-		const { body, head } = render(context.ctx, context.views);
+		const { body, head } = render(context);
 		if (pending.size === 0) return { body, head, reads: Object.fromEntries(reads) };
 		yield* Effect.forEach(
 			pending,

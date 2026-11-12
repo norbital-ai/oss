@@ -1,82 +1,14 @@
-// bolt-server's self-host adapters: deadlines and FIFO admission.
-import { describe, expect, it, vi } from '@effect/vitest';
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from 'effect';
+// bolt-server's self-host adapters: FIFO admission.
+import { describe, expect, it } from '@effect/vitest';
+import { Deferred, Effect, Fiber, Schema } from 'effect';
 import { TestClock } from 'effect/testing';
-import { DeadlinePort, in_process_deadlines } from '@norbital-ai/bolt/engine';
 import { envelope } from '../src/envelope.ts';
 
 class WorkFailed extends Schema.TaggedError<WorkFailed>()('WorkFailed', {
 	message: Schema.String
 }) {}
 
-describe('the in-process timekeeper and the envelope (rules 52a, 71)', () => {
-	it.effect('wakes a scope once at its earliest announcement and takes the settled answer', () =>
-		Effect.gen(function* () {
-			const woke: string[] = [];
-			let dk: DeadlinePort['Service'] | undefined;
-			const context = yield* Layer.build(
-				in_process_deadlines({
-					wake: (scope) =>
-						Effect.gen(function* () {
-							woke.push(scope);
-							if (woke.length === 1) {
-								if (dk === undefined) throw new Error('deadline layer has not opened');
-								yield* dk.settle(scope, new Date(30).toISOString());
-							}
-						}),
-					pulse: () => Effect.succeed(true)
-				})
-			);
-			dk = Context.get(context, DeadlinePort);
-			yield* dk.announce('ws', new Date(40).toISOString());
-			yield* dk.announce('ws', new Date(10).toISOString());
-			yield* dk.announce('ws', new Date(60).toISOString());
-			yield* TestClock.adjust('9 millis');
-			expect(woke).toEqual([]);
-			yield* TestClock.adjust('1 millis');
-			expect(woke).toEqual(['ws']);
-			yield* TestClock.adjust('20 millis');
-			expect(woke).toEqual(['ws', 'ws']);
-			yield* TestClock.adjust('1 second');
-			expect(woke).toEqual(['ws', 'ws']);
-		})
-	);
-	it.effect(
-		'stays silent about a wake that a stop interrupted, and never wakes again (rule 71a)',
-		() =>
-			Effect.gen(function* () {
-				const errors = vi.spyOn(console, 'error');
-				yield* Effect.addFinalizer(() => Effect.sync(() => errors.mockRestore()));
-				let calls = 0,
-					released = false;
-				const scope = yield* Scope.make();
-				yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-				const context = yield* Layer.build(
-					in_process_deadlines({
-						wake: () =>
-							Effect.sync(() => {
-								calls++;
-							}).pipe(
-								Effect.andThen(Effect.never),
-								Effect.ensuring(
-									Effect.sync(() => {
-										released = true;
-									})
-								)
-							),
-						pulse: () => Effect.succeed(true)
-					})
-				).pipe(Scope.provide(scope));
-				const dk = Context.get(context, DeadlinePort);
-				yield* dk.announce('ws', new Date(1).toISOString());
-				yield* TestClock.adjust('1 millis');
-				expect(calls).toBe(1);
-				yield* Scope.close(scope, Exit.void);
-				yield* TestClock.adjust('1 second');
-				expect([calls, released]).toEqual([1, true]);
-				expect(errors).not.toHaveBeenCalled();
-			})
-	);
+describe('the envelope (rule 71)', () => {
 	it.effect('admits FIFO under the limit, request-path work ahead of automations', () =>
 		Effect.gen(function* () {
 			const admit = yield* envelope(1),
@@ -228,34 +160,3 @@ describe('the in-process timekeeper and the envelope (rules 52a, 71)', () => {
 			})
 	);
 });
-
-it.effect('a slow deadline cannot starve another scope or overlap itself', () =>
-	Effect.gen(function* () {
-		const woke: string[] = [],
-			held = yield* Deferred.make<void>(),
-			scope = yield* Scope.make();
-		yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-		const context = yield* Layer.build(
-			in_process_deadlines({
-				wake: (name) =>
-					Effect.sync(() => {
-						woke.push(name);
-					}).pipe(Effect.andThen(name === 'slow' ? Deferred.await(held) : Effect.void)),
-				// a due announcement during the slow wake goes to that wake
-				pulse: () => Effect.succeed(true)
-			})
-		).pipe(Scope.provide(scope));
-		const dk = Context.get(context, DeadlinePort);
-		yield* dk.announce('slow', new Date(1).toISOString());
-		yield* dk.announce('fast', new Date(1).toISOString());
-		yield* TestClock.adjust('1 millis');
-		expect(woke).toEqual(['slow', 'fast']);
-		yield* dk.announce('slow', new Date(1).toISOString());
-		yield* TestClock.adjust('1 millis');
-		expect(woke).toEqual(['slow', 'fast']);
-		yield* Scope.close(scope, Exit.void);
-		yield* Deferred.succeed(held, undefined);
-		yield* TestClock.adjust('1 millis');
-		expect(woke).toEqual(['slow', 'fast']);
-	})
-);

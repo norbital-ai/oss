@@ -168,7 +168,7 @@ export const orders_submit = automation({
 	run: function* ({ target }, ctx) {
 		const order = (yield* ctx.query({ orders: { where: { id: { eq: target } }, limit: 1 } })).orders
 			.rows[0];
-		if (order === undefined) return yield* ctx.refuse('Choose an existing order.');
+		if (order === undefined) return yield* ctx.refuse('errors.refused');
 		yield* ctx.act({ 'orders.update': [{ target: order, set: { status: 'submitted' } }] });
 	}
 });
@@ -230,7 +230,7 @@ export const customers_return_row = automation({
 	run: function* (_, ctx) {
 		const page = yield* ctx.query({ customers: { limit: 1 } });
 		const customer = page.customers.rows[0];
-		if (customer === undefined) return yield* ctx.refuse('Choose an existing customer.');
+		if (customer === undefined) return yield* ctx.refuse('errors.refused');
 		return customer;
 	}
 });

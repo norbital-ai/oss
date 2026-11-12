@@ -232,9 +232,9 @@ describe('the Decisions API sys_1 client', () => {
 						body: { model: 'vendor/model', questions: request.questions, state: request.state }
 					}
 				]);
-				const headers = seen[0]!.headers;
-				const [, traceId, spanId] = headers.traceparent!.split('-');
-				expect(headers.b3!.split('-').slice(0, 3)).toEqual([traceId, spanId, '1']);
+				const headers = seen[0]?.headers;
+				const [, traceId, spanId] = headers?.traceparent?.split('-') ?? [];
+				expect(headers?.b3?.split('-').slice(0, 3)).toEqual([traceId, spanId, '1']);
 			})
 	);
 

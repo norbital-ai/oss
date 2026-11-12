@@ -3,6 +3,7 @@
 Events on a day, week or month grid: timed boxes, all-day bars, month pills; dragging creates, moves and resizes, and the caller writes the change. In a narrow container the month is a grid of days with a dot per event over the chosen day's events in full, and the week is a strip of days over the chosen day. Under touch a finger scrolls: a tap opens an event or creates in a slot.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from './calendar.js';
 
@@ -14,6 +15,8 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	 * reflows by its own width; under touch a tap on a slot creates and a tap on a box opens it.
 	 */
 	export type EventCalendarProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		events: readonly CalendarEvent[];
 		view?: CalendarView;
 		views?: readonly CalendarView[];
@@ -47,7 +50,6 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	import { watch } from 'runed';
 	import { Button } from '../primitives/button/index.js';
 	import TabStrip from '../primitives/tabs/tab-strip.svelte';
-	import { useKinds } from '../kinds/context.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import {
 		addDays,
@@ -63,6 +65,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 	} from './calendar.js';
 
 	let {
+		ctx,
 		events,
 		view = 'week',
 		views = ['day', 'week', 'month'],
@@ -82,7 +85,7 @@ Events on a day, week or month grid: timed boxes, all-day bars, month pills; dra
 		actions,
 		class: className
 	}: EventCalendarProps = $props();
-	const locale = useKinds().locale;
+	const locale = $derived(ctx.ui.kinds.locale);
 	const t = ui_text();
 	let shown = $derived(view);
 	let at = $derived(date ?? new Date());

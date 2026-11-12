@@ -3,11 +3,9 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { page } from 'vitest/browser';
 import { mount, unmount } from 'svelte';
-import {
-	IntegrationSetup,
-	type IntegrationClient,
-	type InstanceStatus
-} from '../src/page/integration.ts';
+import { IntegrationSetup } from '../src/page/index.ts';
+import type { InstanceStatus } from '../src/protocol/instance-status.ts';
+import type { IntegrationClient } from '../src/page/integrations.ts';
 
 it('the shared instance setup renders and pairs in Chromium without server-only imports', async () => {
 	const dispose = mount_edge(ManagedRuntime.make(Layer.empty));

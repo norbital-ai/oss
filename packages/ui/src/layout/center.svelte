@@ -7,10 +7,10 @@ Centres its content at a reading measure (`narrow`, `reading`, `wide`, `full`), 
 	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
 
 	/** The maximum width a `Center` holds its content to. */
-	export type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
+	type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
 	type CenterLayout = 'block' | 'stack' | 'inline' | 'cluster' | 'grid';
 	/** The props of `Center`. */
-	export interface CenterProps extends LayoutAttributes {
+	interface CenterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		measure?: CenterMeasure;
 		/** Arrange direct children while keeping centring and composition on the same element. */

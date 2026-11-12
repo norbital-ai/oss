@@ -13,7 +13,8 @@ import { Agents, Conversations } from '../src/engine/services.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
 import { json, route_fixture } from './support/route-fixture.ts';
-import { ActRefused, act_failure } from '../src/decl/errors.ts';
+import { ActRefused } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { ActOutcome as Outcome } from '../src/engine/contracts.ts';
 import { conversationId } from '../src/engine/conversations/store.ts';
@@ -44,7 +45,7 @@ const manifest = Result.getOrThrow(
 				create: { columns: { quotes: ['title'] } }
 			}
 		},
-		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: true } } } } },
+		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: {} } } } } },
 
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },
 		integrations: {},

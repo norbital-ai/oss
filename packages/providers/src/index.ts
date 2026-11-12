@@ -26,18 +26,10 @@ export function default_providers(): readonly ProviderDef[] {
 		...chatProviders()
 	];
 }
-export { OAuthRefused, ProviderRefused, ProviderUnavailable } from './errors.ts';
+export { ProviderRefused, ProviderUnavailable } from './errors.ts';
 // a host's own HTTP adapters answer and fail as these drivers do
 export { decodeMessage, Email, invalid, providerJson, strings, Text } from './transport.ts';
 export { twilio, type TwilioAccount } from './twilio/whatsapp.ts';
 // the shared OAuth grant (PKCE S256, a `state` that lives `STATE_MS`) a host's own oauth driver signs in with (bolt-server's `http`)
-export {
-	attempt,
-	authorizeUrl,
-	grant,
-	tokenHolder,
-	Tokens,
-	STATE_MS,
-	type OAuthApp
-} from './oauth.ts';
+export { attempt, authorizeUrl, grant, STATE_MS, type OAuthApp } from './oauth.ts';
 export { same, field, hostCall, withFetch } from './util.ts';

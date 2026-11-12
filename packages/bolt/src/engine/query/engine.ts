@@ -76,10 +76,10 @@ type ReadEngineConfig = {
 	/** What must settle before a read reads `held`. */
 	ready?: Effect.Effect<void, DbError>;
 	index?: (model: string, name: string, bindings: Bindings) => IndexBodies | undefined;
-	/** Reads another area answers: `history` (§5.2), `after` (the write compiler), `transcript` (the agent). */
+	/** Reads another area answers: `history` (§5.2), `transcript` (the agent). */
 	delegate?: Partial<
 		Record<
-			'history' | 'after' | 'transcript' | 'inbox' | 'conversations' | 'runs',
+			'history' | 'transcript' | 'inbox' | 'conversations' | 'runs',
 			(
 				read: ReadIR,
 				reader: Reader,
@@ -211,6 +211,13 @@ type Plan = {
 	};
 	answer?: Effect.Effect<Json, EngineError>;
 };
+const decodeSemanticInput = Schema.decodeUnknownEffect(
+	Schema.Union([Schema.String, Schema.Struct({ record: Schema.Struct({ id: Schema.String }) })])
+);
+const isRow = (v: Json): v is { readonly [k: string]: Json } =>
+	typeof v === 'object' && v !== null && !Array.isArray(v);
+const decodeCursorKey = Schema.decodeUnknownEffect(Schema.Array(Schema.NullOr(Schema.String)));
+
 export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	catalog: Catalog;
 } {
@@ -245,9 +252,10 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		for (const model of config.held ?? []) approvals.add(model);
 		if (ir.kind === 'request')
 			return yield* BoltError.make('internal', 'decode', 'a read request is answered by its roots');
+		if (ir.kind === 'after')
+			return yield* BoltError.make('internal', 'decode', 'an after read is answered by the write compiler');
 		if (
 			ir.kind === 'history' ||
-			ir.kind === 'after' ||
 			ir.kind === 'transcript' ||
 			ir.kind === 'inbox' ||
 			ir.kind === 'conversations' ||
@@ -332,13 +340,11 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 			};
 		}
 		if (ir.kind === 'similar' && ir.index === SEMANTIC) {
-			const to = ir.input as
-				| string
-				| {
-						record: {
-							id: string;
-						};
-				  };
+			const to = yield* decodeSemanticInput(ir.input).pipe(
+				Effect.mapError(() =>
+					BoltError.make('invalid_input', 'decode', 'search.semantic takes text or { record: { id } }')
+				)
+			);
 			return {
 				compiled: yield* compile(
 					cat,
@@ -431,16 +437,9 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 	) {
 		const c = p.compiled;
 		if (c === undefined) return yield* BoltError.make('corrupt', 'decode', 'The statement read has no compiled plan.');
-		const counted = total_of(
-			rows.map(
-				(r) =>
-					r.j as {
-						[k: string]: Json;
-					}
-			)
-		);
+		const counted = total_of(rows.map((r) => r['j'] ?? null));
 		const total = counted.total === undefined ? {} : { total: counted.total };
-		const answered = counted.rows;
+		const answered = counted.rows.filter(isRow);
 		// the database stopped at the read's byte budget (`budgeted`): the marker is no row
 		const over = answered.at(-1)?.[OVER] === true;
 		const js = over ? answered.slice(0, -1) : answered;
@@ -482,7 +481,14 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		const page = js.slice(0, c.limit);
 		const last = page.at(-1);
 		const next =
-			more && last !== undefined ? encode_cursor(c.hash, last.$k as (string | null)[]) : null;
+			more && last !== undefined
+				? encode_cursor(
+						c.hash,
+						yield* decodeCursorKey(last['$k']).pipe(
+							Effect.mapError(() => BoltError.make('corrupt', 'decode', 'A paged row has no cursor key.'))
+						)
+					)
+				: null;
 		return { rows: page.map(({ $k: _, ...row }) => row), next, ...total };
 	});
 	const run: ReadEngine['run'] = Effect.fn('Bolt.read')(function* (
@@ -583,13 +589,7 @@ export function read_engine(config: ReadEngineConfig): ReadEngine & {
 		const ctes = plans.flatMap((p, k) =>
 			p.compiled === undefined
 				? []
-				: [
-						(
-							irs[k] as {
-								cte?: string;
-							}
-						).cte
-					]
+				: [((ir) => (ir !== undefined && 'cte' in ir ? ir.cte : undefined))(irs[k])]
 		);
 		const base = statements.length;
 		statements.push(...mergedSql);

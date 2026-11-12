@@ -2,17 +2,9 @@
 // the model's own declaration. Each `@ts-expect-error` line is a planted mistake from the plan's table; a clean tsc proves
 // every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
-import type {
-	CreateInput,
-	LayerField,
-	OutputName,
-	PathModel,
-	ReadPath,
-	StoredTree,
-	UpdateInput,
-	WritePath
-} from '../../src/index.ts';
+import type { CreateInput, StoredTree, UpdateInput } from '../../src/index.ts';
 import './registry.ts';
+import type { LayerField, OutputName, PathModel, ReadPath, WritePath } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -53,11 +45,7 @@ export const layered = policy({
 				verdict: function* (rows, ctx) {
 					const bad = rows.findIndex((o) => (o.after.lines ?? []).some((l) => l.item === ''));
 					if (bad >= 0)
-						return yield* ctx.refuse('Every line names its item.', {
-							row: bad,
-							path: 'orders.lines',
-							field: 'item'
-						});
+						return yield* ctx.refuse('errors.refused', { row: bad });
 					const { customers } = yield* ctx.query({
 						customers: { where: { id: { in: rows.map((r) => r.after.customer) } }, fields: ['tier'] }
 					});
@@ -73,19 +61,19 @@ export const layered = policy({
 					const mine = changes.every((c) => c.before.owner === me && c.before.lines.length < 100);
 					return mine
 						? ctx.allow()
-						: yield* ctx.refuse('Only your own orders change.', { field: 'status' });
+						: yield* ctx.refuse('errors.refused', { field: 'status' });
 				}
 			},
 			delete: {
 				verdict: function* (rows, ctx) {
 					return rows.length < 10
 						? ctx.allow()
-						: yield* ctx.refuse('Delete fewer at once.', { row: 0 });
+						: yield* ctx.refuse('errors.refused', { row: 0 });
 				}
 			}
 		},
-		notices: { outputs: { default: true } },
-		customers: { update: true }
+		notices: { outputs: { default: {} } },
+		customers: { update: {} }
 	}
 });
 
@@ -113,12 +101,12 @@ policy({
 policy({
 	description: 'x',
 	// @ts-expect-error a verb the model does not declare (sites declares no create)
-	grants: { sites: { create: true } }
+	grants: { sites: { create: {} } }
 });
 policy({
 	description: 'x',
 	// @ts-expect-error `read` on a model without `read`
-	grants: { sys_session: { outputs: { default: true } } }
+	grants: { sys_session: { outputs: { default: {} } } }
 });
 policy({
 	description: 'x',
@@ -132,7 +120,7 @@ policy({
 			delete: {
 				// @ts-expect-error an unknown ctx member
 				verdict: function* (_rows, ctx) {
-					return ctx.refuse('no');
+					return ctx.refuse('errors.refused');
 				}
 			}
 		}
@@ -157,8 +145,8 @@ policy({
 		orders: {
 			create: {
 				verdict: function* (_rows, ctx) {
-					// @ts-expect-error `deny`'s path is a write path of this verb
-					return yield* ctx.refuse('no', { path: 'orders.customer' });
+					// @ts-expect-error a refusal names a row and a root column, never a write path
+					return yield* ctx.refuse('errors.refused', { path: 'orders.lines' });
 				}
 			}
 		}
@@ -170,8 +158,8 @@ policy({
 		orders: {
 			create: {
 				verdict: function* (_rows, ctx) {
-					// @ts-expect-error `deny`'s field is a column of its path
-					return yield* ctx.refuse('no', { path: 'orders.lines', field: 'note' });
+					// @ts-expect-error `field` is a root column of the verb
+					return yield* ctx.refuse('errors.refused', { field: 'item' });
 				}
 			}
 		}

@@ -88,7 +88,7 @@ export const claimFieldControl = (): string | undefined =>
 export type Controls = { readonly readonly: boolean; readonly disabled: boolean };
 const CONTROLS = Symbol.for('norbital.ui.controls');
 const FREE: Controls = { readonly: false, disabled: false };
-/** The enclosing `Form`'s, `Fieldset`'s or `Field`'s control mode; editable outside any. */
+/** The enclosing `Form`'s or `Field`'s control mode; editable outside any. */
 export const use_controls = (): Controls => getContext<Controls | undefined>(CONTROLS) ?? FREE;
 /** Hands a control mode to every control beneath; a member `own` leaves `undefined` inherits the enclosing one. Readonly
  * only adds: a `readonly={false}` beneath a readonly form (a viewed record) stays readonly. Only a form's own boundary

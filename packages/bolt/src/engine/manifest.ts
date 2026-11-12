@@ -20,41 +20,30 @@ import { ManifestInvalid } from './errors.ts';
 import { NEEDS, needs_of } from '../facilities/needs.ts';
 
 // ── parts without a decl type of their own: the literal as the manifest holds it ──
-/** A `history` (or identity read) scope: `true` or a `Where`. */
-const ReadGrantData = Schema.Union([
-	Schema.Literal(true),
-	Schema.Struct({
-		scopes: Schema.optionalKey(Schema.Record(Schema.String, Schema.JsonObject)),
-		history: Schema.optionalKey(Schema.Literal(true))
-	})
-]);
+/** An output grant: its row scopes by read path (none: every row) and whether its holders read history. */
+const ReadGrantData = Schema.Struct({
+	scopes: Schema.optionalKey(Schema.Record(Schema.String, Schema.JsonObject)),
+	history: Schema.optionalKey(Schema.Literal(true))
+});
 export type ReadGrantData = typeof ReadGrantData.Type;
-/**
- * A create or update grant: `true`, or the admitted `columns` and the guest verdict marker.
- */
+/** A create or update grant: the admitted `columns` (none: every declared one) and the guest verdict marker. */
 const writeGrantFields = {
 	columns: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
 	verdict: Schema.optionalKey(Schema.Literal(true))
 };
-const WriteGrantData = Schema.Union([Schema.Literal(true), Schema.Struct(writeGrantFields)]);
-export type WriteGrantData = typeof WriteGrantData.Type;
-const UpdateGrantData = Schema.Union([
-	Schema.Literal(true),
-	Schema.Struct({
-		...writeGrantFields,
-		moves: Schema.optionalKey(
-			Schema.Union([
-				Schema.Literal('all'),
-				Schema.Record(Schema.String, Schema.Array(Schema.String))
-			])
-		)
-	})
-]);
-const DeleteGrantData = Schema.Union([
-	Schema.Literal(true),
-	Schema.Struct({ verdict: Schema.optionalKey(Schema.Literal(true)) })
-]);
-export type DeleteGrantData = typeof DeleteGrantData.Type;
+const WriteGrantData = Schema.Struct(writeGrantFields);
+type WriteGrantData = typeof WriteGrantData.Type;
+const UpdateGrantData = Schema.Struct({
+	...writeGrantFields,
+	moves: Schema.optionalKey(
+		Schema.Union([
+			Schema.Literal('all'),
+			Schema.Record(Schema.String, Schema.Array(Schema.String))
+		])
+	)
+});
+const DeleteGrantData = Schema.Struct({ verdict: Schema.optionalKey(Schema.Literal(true)) });
+type DeleteGrantData = typeof DeleteGrantData.Type;
 /** A policy's grant on one model, with each output's scopes keyed by the compiled read paths. */
 const GrantData = Schema.Struct({
 	outputs: Schema.optionalKey(Schema.Record(Schema.String, ReadGrantData)),
@@ -250,16 +239,16 @@ const manifestFields = {
 	custom_fields: Schema.Record(Schema.String, CustomFieldData),
 	agent: Agent
 };
-export const EngineManifestSchema = Schema.Struct({
+export const EngineManifest = Schema.Struct({
 	...manifestFields,
 	/** What the bundle needs from its host (`@norbital-ai/bolt/facilities`), recorded at build. */
 	needs: Schema.Array(Schema.Literals(NEEDS))
 });
 /** Pure data: declaration literals by path-derived name, bodies stripped (they run in the guest). */
-export type EngineManifest = Schema.Schema.Type<typeof EngineManifestSchema>;
+export type EngineManifest = typeof EngineManifest.Type;
 
 const options = { errors: 'all', onExcessProperty: 'error' } as const;
-const decode = Schema.decodeUnknownResult(EngineManifestSchema, options),
+const decode = Schema.decodeUnknownResult(EngineManifest, options),
 	decodeProjected = Schema.decodeUnknownResult(Schema.Struct(manifestFields), options);
 const invalid = (e: Schema.SchemaError) => new ManifestInvalid({ issues: e.message.split('\n') });
 /** The one manifest decoder (A.4): every artifact read. */

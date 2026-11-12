@@ -3,9 +3,9 @@ import { hydrate, mount, tick, unmount, type Component } from 'svelte';
 import { mount_edge } from '@norbital-ai/ui/effect';
 import { create_bolt, type Bolt, type BoltConfig } from '../../page/bolt.ts';
 import { await_device } from '../../page/device.ts';
-import { public_context } from './context.ts';
+import { public_context, public_ui } from './context.ts';
 import { view_client } from '../../page/view-client.ts';
-import type { ViewBolt } from '@norbital-ai/ui';
+import type { UiContext } from '@norbital-ai/ui';
 import {
 	decodePublicHydration,
 	PublicHydrationFailure,
@@ -18,7 +18,8 @@ import type { ChallengeQueue } from '../runtime.ts';
 import { HEADERS, PATHS } from '../../protocol/wire.ts';
 
 export type PublicClient = Omit<Bolt, 'native_query' | 'observe' | 'closed' | 'sync'> &
-	ReturnType<typeof public_context>;
+	ReturnType<typeof public_context> &
+	UiContext;
 
 const scopedFetch =
 	(
@@ -53,7 +54,7 @@ const scopedFetch =
 
 /** Hydrates the same wrapper and decoded props the isolated server rendered; navigation stays document based. */
 export const hydrate_public_page = (
-	component: Component<{ boot: PublicBoot; ctx: PublicClient; views: ViewBolt }>,
+	component: Component<{ boot: PublicBoot; ctx: PublicClient }>,
 	route: string,
 	options: {
 		readonly fetch?: typeof globalThis.fetch;
@@ -119,11 +120,12 @@ export const hydrate_public_page = (
 			Effect.onError(() => Scope.close(scope, Exit.void))
 		);
 		const { native_query: _native_query, observe: _observe, closed: _closed, sync: _sync, ...authored } = pageClient;
-		const ctx = Object.assign(authored, public_context(props.boot));
+		const page = Object.assign(authored, public_context(props.boot));
 		const views = view_client({ ...pageClient, ...public_context(props.boot) }, props.boot.read_catalog, props.boot.catalog);
+		const ctx = Object.assign(page, { ui: public_ui(props.boot, page, views) });
 		const dispose = mount_edge(ManagedRuntime.make(Layer.empty));
 		const view = yield* Effect.try({
-			try: () => hydrate(component, { target, props: { boot: props.boot, ctx, views }, recover: false }),
+			try: () => hydrate(component, { target, props: { boot: props.boot, ctx }, recover: false }),
 			catch: (cause) => new PublicHydrationFailure({ reason: String(cause) })
 		}).pipe(
 			Effect.onError(() =>

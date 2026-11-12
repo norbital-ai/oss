@@ -4,10 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { Result } from 'effect';
 import type { Plugin } from 'vite';
 import type { Discovered } from '../discover.ts';
-import type { Role } from '@norbital-ai/bolt/tooling';
 
 /** These roles supply browser modules; every other authored declaration stays on the compiler/server side. */
-const CLIENT_ROLES: ReadonlySet<Role> = new Set([
+const CLIENT_ROLES: ReadonlySet<Discovered['role']> = new Set([
 	'page',
 	'session',
 	'representation',

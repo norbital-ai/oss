@@ -11,7 +11,7 @@
 	import { observe } from '@norbital-ai/ui/effect';
 	import { Option, Schema } from 'effect';
 	import { watch } from 'runed';
-	import { Button, Icon, ReadonlyMarkdown, Spinner } from '@norbital-ai/ui';
+	import { Button, Icon, ReadonlyMarkdown, Spinner, type UiContext } from '@norbital-ai/ui';
 	import { TranscriptReadAnswer } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
 	import Steps from './Steps.svelte';
@@ -21,6 +21,7 @@
 	import { callableWords, childStatus } from './view.ts';
 
 	let {
+		ctx,
 		bolt,
 		t,
 		id,
@@ -30,6 +31,7 @@
 		on_state,
 		control
 	}: {
+		ctx: UiContext;
 		bolt: Pick<ShellBolt, 'observe' | 'file_url'>;
 		t: (key: string) => string;
 		id: string;
@@ -234,7 +236,7 @@
 					{/each}
 				</ol>
 			{/if}
-			{#if steps.length > 0}<Steps {steps} {t} activity />{/if}
+			{#if steps.length > 0}<Steps {ctx} {steps} {t} activity />{/if}
 			{#if changes.length > 0}
 				<!-- what it changed in the workspace -->
 				<ul class="grid gap-1" data-subagent-changes>

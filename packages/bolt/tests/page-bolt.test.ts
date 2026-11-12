@@ -20,12 +20,12 @@ import type { EventSourceLike } from '../src/page/stream.ts';
 import {
 	ActConflict,
 	ActRefused,
-	ActUnknown,
 	ReadFailed,
-	Refusal,
-	TransportFailed,
 	Unavailable
 } from '../src/decl/errors.ts';
+import { TransportFailed } from '../src/decl/errors/browser.ts';
+import { ActUnknown } from '../src/decl/errors/act.ts';
+import { Refusal } from '../src/decl/errors/refusal.ts';
 import type { ApprovalView } from '../src/engine/approvals/approvals.ts';
 import { PATHS, type Frame } from '../src/protocol/wire.ts';
 import type {} from './types/registry.ts';

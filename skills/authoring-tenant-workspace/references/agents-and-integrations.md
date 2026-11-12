@@ -1,6 +1,6 @@
 # Agents and integrations
 
-Exact shapes: `Row<'sys_envoy'>`, `McpSpec` and `IntegrationSpec` from `@norbital-ai/bolt`. Read the contract skill's actual file list; there is no envoy source declaration or assumed envoy card.
+Exact shapes: `Row<'sys_envoy'>`, `Parameters<typeof import('@norbital-ai/bolt').mcp>[0]` and `IntegrationLiteral` from `@norbital-ai/bolt/declarations`. Read the contract skill's actual file list; there is no envoy source declaration or assumed envoy card.
 
 ## Briefs and skills
 
@@ -35,7 +35,7 @@ Exact shapes: `Row<'sys_envoy'>`, `McpSpec` and `IntegrationSpec` from `@norbita
 - `integration(spec)` declares description, driver, typed configuration, credentials or OAuth, webhook verification, optional `rate`, inline `test`. Models own their syncs; definitions own no business projection.
 - Built-in conversation definitions reserve whatsapp, email, telegram, slack, discord and wechat.
 - `rate` paces every request. HTTP paths stay under the declared HTTPS base URL.
-- SQL Server takes structured operations from `DatabaseRequester`; inspect that contract before constructing a request. The host bounds execution.
+- SQL Server takes structured operations (`DatabaseRequest` from `@norbital-ai/bolt/engine`); inspect that contract before constructing a request. The host bounds execution.
 - Keep template-specific SQL, retention, assembly and business meaning in template source. Provider and platform code hold no domain rules.
 
 ## Instances
@@ -45,7 +45,7 @@ Exact shapes: `Row<'sys_envoy'>`, `McpSpec` and `IntegrationSpec` from `@norbita
 - Credentials stay sealed host-side, never in configuration, seeds, status, browser data or guest contexts.
 - A personal instance has an owner: it syncs, sends no conversation messages, deploys no envoy.
 - Manage through `sys_integration` grants; pair, unpair, test and status authorize as update on that row. Use native Settings and Connections, never a template account model.
-- `ctx.integration(instance)` gives Effect operations and a status Stream. Native `IntegrationCard` and `IntegrationSetup` share the setup flow; `+integration.svelte` uses the supplied controller only when setup truly differs.
+- `ctx.integration(instance)` gives Effect operations and a status Stream. Native `IntegrationSetup` owns the setup flow; `+integration.svelte` uses the supplied controller only when setup truly differs; its optional `create` export replaces the generic New connection form. Connections are made at runtime, never in source.
 - Automations call `ctx.request(instance, op)` and `ctx.send`. Resolve an active workspace account from runtime records and narrow its definition with `instance_id`; refuse missing or ambiguous routing. A send may queue before pairing, while a live request needs its connected account. Decode external answers once. A response editing a read row passes that selected row as `target`.
 - One OAuth redirect per workspace, `<public URL>/hooks/oauth/callback`; state routes it. Tokens refresh host-side. A Google sign-in needs no tenant client; declare `oauth` only to use the workspace's own.
 - A record's instance ref pins its definition with `where` and carries `InstanceId`.

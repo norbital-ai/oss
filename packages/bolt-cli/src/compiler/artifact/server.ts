@@ -65,7 +65,7 @@ export default { page: { ${key(route)}: { body: attached(function* (input, ctx) 
 		boot,
 		ctx.now,
 		(read) => ctx[read.m](...read.a),
-		(context, views) => render(Page, { props: { boot, ctx: context, views } })
+		(context) => render(Page, { props: { boot, ctx: context } })
 	);
 	return { ...rendered, messages };
 }, 1) } } };`;

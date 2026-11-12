@@ -76,7 +76,7 @@ Explicit keys must be present and unique in both versions. With valid identities
 
 ## Native datatypes and fallback
 
-`Editor` and `Show` retain the shared `provide_kinds` registry and built-in controls for dates, date-times, periods, numbers, enums, files, money, points, and custom datatypes. A schema's `x-norbital.datatype` names a registered custom field. Preserve a declared `Kind` when its semantics are richer than JSON Schema; schema inference does not guess a date, currency, period, or tenant datatype from a string or object.
+`Editor` and `Show` read the page's `ctx.ui.kinds` registry and built-in controls for dates, date-times, periods, numbers, enums, files, money, points, and custom datatypes. A schema's `x-norbital.datatype` names a registered custom field. Preserve a declared `Kind` when its semantics are richer than JSON Schema; schema inference does not guess a date, currency, period, or tenant datatype from a string or object.
 
 When no schema or native shape is supplied, `infer_json_schema` describes the observed data. Every list item contributes to the inferred shape; mixed values remain mixed. Inference does not invent required fields, defaults, enums, or formats. Unknown properties survive edits. Native hidden fields and masked values stay hidden.
 

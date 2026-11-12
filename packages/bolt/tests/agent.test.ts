@@ -28,6 +28,7 @@ import {
 	system
 } from '../src/engine/agent/context.ts';
 import { listed, type MessageRow } from '../src/engine/agent/schema.ts';
+import { keyedSerial } from '../src/engine/agent/throttle.ts';
 import { preview } from '../src/engine/conversations/store.ts';
 import { respond_system_1 } from '../../bolt-cli/src/test/effect.ts';
 import { clock_probe } from './support/clock-probe.ts';
@@ -1747,3 +1748,21 @@ it.effect(
 			expect(calls).toBe(1);
 		})
 );
+
+describe('the throttle lock (bug 37)', () => {
+	it.effect('holds one decision per conversation and keeps no lock once its holders leave', () =>
+		Effect.scoped(
+			Effect.gen(function* () {
+				const { serial, keys } = yield* keyedSerial();
+				const order: string[] = [];
+				const step = (id: string) => Effect.sync(() => order.push(id));
+				yield* Effect.all(
+					[serial('a')(Effect.andThen(step('a1'), Effect.yieldNow)), serial('a')(step('a2')), serial('b')(step('b1'))],
+					{ concurrency: 'unbounded' }
+				);
+				expect(order.indexOf('a1')).toBeLessThan(order.indexOf('a2'));
+				expect([...(yield* keys)]).toEqual([]);
+			})
+		)
+	);
+});

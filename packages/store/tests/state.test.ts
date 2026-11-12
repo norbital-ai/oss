@@ -1,15 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Schema } from 'effect';
-import {
-	build,
-	compile_write,
-	constraint_index,
-	schema,
-	store,
-	table,
-	type Sql
-} from '../src/index.ts';
+import { build, constraint_index, schema, store, table, type Sql } from '../src/index.ts';
 import { database, required, run, script } from './support.ts';
+import { compile_write } from '../src/write/sql.ts';
 
 const declaration = schema({
 	ticket: table({

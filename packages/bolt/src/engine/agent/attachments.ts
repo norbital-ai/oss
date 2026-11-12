@@ -139,9 +139,9 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 					key: string;
 					size: number;
 				}) {
-					if (++images > 4 || image.size > 8 * 1024 * 1024) return undefined;
+					if (++images > 4 || image.size > MODEL_FILES.fileBytes) return undefined;
 					const jpeg = yield* image_jpeg(
-						yield* ports.files.get(image.key, 8 * 1024 * 1024),
+						yield* ports.files.get(image.key, MODEL_FILES.fileBytes),
 						1024
 					).pipe(Effect.provideService(Images, ports.images));
 					const label = `message-${message.id}-image-${images}`;
@@ -174,7 +174,7 @@ export const triageAttachments = Effect.fn('Agents.triageAttachments')(function*
 							.pipe(Effect.as({ unread: true } as const));
 					const content = yield* Effect.gen(function* () {
 						if (file === undefined || route(file.mime, file.name) !== 'image') return {};
-						if (file.size > 8 * 1024 * 1024 || (bytes += file.size) > 20 * 1024 * 1024)
+						if (file.size > MODEL_FILES.fileBytes || (bytes += file.size) > MODEL_FILES.bytes)
 							return { unread: true };
 						const image = yield* addImage(file);
 						return image === undefined ? { unread: true } : { image };

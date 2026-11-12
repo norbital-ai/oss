@@ -5,7 +5,7 @@ Svelte views, field inputs, primitives, design tokens and layout primitives for 
 See the [UI package overview](./docs/README.md) for goals, layering, and styling boundaries.
 
 Public entries: `.` (views, inputs, editors, primitives), `./layout`, `./brand` (brand and access
-artwork), `./capture` (`CaptureKit`, so its face engine loads only in pages that import it), `./effect`
+artwork), `./effect`
 (the mounted Svelte Effect edge) and `./base.css`; `./assets/*` holds the logo and favicons.
 
 ```svelte

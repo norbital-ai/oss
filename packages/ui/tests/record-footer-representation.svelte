@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import type { ViewBolt } from '../src/client/contract.js';
+	import type { UiContext } from '../src/client/contract.js';
 	import type { FormState } from '../src/form/form-state.svelte.js';
 	import type { RecordView } from '../src/record/types.js';
 	import type { FooterFixtureOptions } from './record-footer-harness.svelte';
@@ -8,7 +8,7 @@
 	import Button from '../src/primitives/button/button.svelte';
 	import RecordShell from '../src/record/RecordShell.svelte';
 
-	let { view }: { view: RecordView; ctx: ViewBolt } = $props();
+	let { view, ctx }: { view: RecordView; ctx: UiContext } = $props();
 	const fixture = getContext<FooterFixtureOptions>('test.record.footer');
 	const id = $derived(view.mode === 'create' ? undefined : view.record.id);
 </script>
@@ -27,7 +27,7 @@
 	<!-- A normal authored h-full/min-height body must never push native chrome beyond the viewport. -->
 	<div style="height:100%;min-height:1600px" data-long-detail>
 		<p>Authored record detail</p>
-		<Form
+		<Form {ctx}
 			of={view.model}
 			{id}
 			mode={view.mode === 'create' ? 'create' : 'update'}
@@ -37,7 +37,7 @@
 			actions={fixture.form_actions ? formActions : undefined}
 		/>
 		{#if fixture.independent_form}
-			<Form of="notes" mode="create" fields={['title']} submit="Create independent note" />
+			<Form {ctx} of="notes" mode="create" fields={['title']} submit="Create independent note" />
 		{/if}
 		{#each Array.from({ length: 40 }, (_, i) => i + 1) as row (row)}
 			<p>Detail row {row}</p>
@@ -59,7 +59,7 @@
 {#if fixture.representation === 'raw'}
 	{@render detail()}
 {:else}
-	<RecordShell
+	<RecordShell {ctx}
 		of={view.model}
 		{id}
 		mode={view.mode}

@@ -61,15 +61,6 @@ export type PhoneVerifier = {
 	check(to: string, code: string, signal: AbortSignal): Promise<boolean>;
 };
 /**
- * The host's transactional messaging, its one injected messaging facility (the host picks the provider: Bird,
- * Twilio). `email` is required; without `sms` nobody is texted an invitation, without `phone` nobody signs in by number.
- */
-export type TransactionalProvider = {
-	email: TransportPort;
-	sms?: TransportPort | undefined;
-	phone?: PhoneVerifier | undefined;
-};
-/**
  * A local host's phone verifier: its own code, printed by `log` as `(sign-in code 123456)` (bolt dev, a local host,
  * tests). `fixed` is 38a(f)'s `123456`.
  */
@@ -91,7 +82,7 @@ export function logged_phone(log: (line: string) => void, fixed = false): PhoneV
 	};
 }
 /**
- * What identity needs from its host (its `TransactionalProvider`'s parts): `mail` sends emailed codes and
+ * What identity needs from its host (the host's transactional messaging): `mail` sends emailed codes and
  * invitations, `sms` texted invitations, `phone` sends and checks a mobile number's code — without it, numbers
  * cannot sign in. `dev_sink` is a local host's (its facilities' `fixed_codes`) and the test kit's: the fixed code `123456` (38a(f)).
  */
@@ -856,7 +847,7 @@ const lookup = Effect.fn('Bolt.lookup')(function* (
 		capturePiece(c, 'seen', 'sys_user', `UPDATE sys_user SET last_seen = ${c.p(now.toISOString())}::timestamptz WHERE id = ${c.p(r.user)}`);
 		yield* nativeCommit(h.db.write, h.publication, c, CapturedResult);
 	}
-	let expiresAt = Date.parse(String(r.expires_at));
+	let expiresAt = Date.parse(r.expires_at);
 	if (now.getTime() - Date.parse(r.refreshed_at) >= DAY) {
 		expiresAt = now.getTime() + (r.via === ANONYMOUS ? ANONYMOUS_MS : SESSION_MS);
 		const c = new Chain();

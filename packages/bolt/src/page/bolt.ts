@@ -23,14 +23,13 @@ import type { FileUrlOptions } from '@norbital-ai/std/kind';
 import {
 	ActConflict,
 	ActRefused,
-	ActUnknown,
-	DescribeTimeout,
 	ProtocolFailed,
 	ReadFailed,
-	Refusal,
-	TransportFailed,
 	Unavailable
 } from '../decl/errors.ts';
+import { DescribeTimeout, TransportFailed } from '../decl/errors/browser.ts';
+import { ActUnknown } from '../decl/errors/act.ts';
+import { Refusal } from '../decl/errors/refusal.ts';
 import type { ActOutcome, EngineActor } from '../engine/contracts.ts';
 import {
 	RecordCapabilitiesSchema,

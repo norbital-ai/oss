@@ -56,11 +56,10 @@ const WireInput: Schema.Decoder<Wired> = Schema.suspend(() => Schema.Union([
 ]));
 /** Validate rich authored inputs before encoding, so invalid functions and non-JSON values cannot silently disappear. */
 export function read_wire(value: unknown): Json {
-	try {
-		return encode_wire(Schema.decodeUnknownSync(WireInput)(value));
-	} catch {
-		return failed('A read takes plain JSON values and declared Decimal values.');
-	}
+	const decoded = Schema.decodeUnknownResult(WireInput)(value);
+	return Result.isSuccess(decoded)
+		? encode_wire(decoded.success)
+		: failed('A read takes plain JSON values and declared Decimal values.');
 }
 const own = <A>(record: Readonly<Record<string, A>>, key: string): A | undefined =>
 	Object.hasOwn(record, key) ? record[key] : undefined;
@@ -181,7 +180,9 @@ export type AggregateArguments = Omit<typeof AggregateArguments.Type, 'by'> &
 	({ readonly by?: never } | ({ readonly by: Json } & Paged));
 type AggregateAnswer<C, A> = A extends { readonly by: infer B } ? Page<AggRow<C, B>> : AggRow<C>;
 export const aggregate_answer = (catalog: ReadCatalog, model: string, args: unknown): Codec => {
-	const options = Schema.decodeUnknownSync(AggregateArguments)(read_wire(args));
+	const decoded = Schema.decodeUnknownResult(AggregateArguments)(read_wire(args));
+	if (Result.isFailure(decoded)) return failed(decoded.failure.message);
+	const options = decoded.success;
 	const output = output_of(catalog, model, options.output ?? 'default');
 	const level = own(output, model) ?? failed(`'${model}' has no root read schema.`);
 	const { output: _output, ...measures } = options;

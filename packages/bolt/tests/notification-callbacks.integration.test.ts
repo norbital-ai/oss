@@ -41,11 +41,11 @@ const manifest: EngineManifest = {
 	policies: {
 		pinger: { description: 'Pings', grants: {} },
 		author: { description: 'Requests orders', grants: { orders: {
-			outputs: { default: true }, create: { verdict: true }
+			outputs: { default: {} }, create: { verdict: true }
 		} } },
-		reviewer: { description: 'Reviews orders', grants: { orders: { outputs: { default: true } } } },
+		reviewer: { description: 'Reviews orders', grants: { orders: { outputs: { default: {} } } } },
 		restricted: { description: 'Only reads visible orders', grants: { orders: {
-			outputs: { default: { scopes: { orders: { title: { eq: 'visible' } } } } }, create: true
+			outputs: { default: { scopes: { orders: { title: { eq: 'visible' } } } } }, create: {}
 		} } }
 	},
 	teams: { authors: { policies: ['author'] }, reviewers: { policies: ['reviewer'] }, restricted: { policies: ['restricted'] } }

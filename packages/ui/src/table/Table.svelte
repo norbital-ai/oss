@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import { Effect, Result, Schema } from 'effect';
 	const Strings = Schema.mutable(Schema.Array(Schema.String));
@@ -66,6 +67,8 @@
 	};
 	/** Typed by the source `of` names, including the native row and authored column field types. */
 	export type TableProps<S = TableSource, R extends Values = RowIn<S>, K = ColumnsIn<S>> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: S & TableSource<R & Partial<K>>;
 		columns?: readonly Col<R, K>[];
 		/** The author's fixed scope: ANDed under every viewer filter, shown read-only in the view popover, never clearable. */
@@ -127,12 +130,11 @@
 	import Tooltip from '../primitives/tooltip/tooltip.svelte';
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { virtual_list } from '../primitives/virtual/virtual.svelte.js';
-	import { useKinds } from '../kinds/context.js';
 	import { likeWhere } from '../kinds/kind.js';
 	import { KINDS } from '../kinds/registry.js';
 	import { open_record } from '../record/navigation.js';
 	import { provide_model } from '../model/context.js';
-	import { useOptionalBolt } from '../client/context.js';
+	import { optional_bolt_of } from '../client/context.js';
 	import type { ViewBolt } from '../client/contract.js';
 	import EmptyState from '../primitives/empty-state/EmptyState.svelte';
 	import Glyph, { type GlyphName } from '../primitives/icon/Glyph.svelte';
@@ -162,6 +164,7 @@
 	import { approvalOf, approvalText } from '../approval/row.js';
 
 	let {
+		ctx,
 		of,
 		columns: authoredColumns = [],
 		where,
@@ -184,15 +187,15 @@
 		add,
 		remove
 	}: TableProps<S, RowIn<S>, ColumnsIn<S>> = $props();
-	const client = useOptionalBolt();
-	if (client === undefined && !untrack(() => embedded && controlled && localSource(of)))
-		throw new Error('A view needs the shell: call provide_bolt above it.');
+	const client = $derived(optional_bolt_of(ctx));
+	if (untrack(() => client === undefined && !(embedded && controlled && localSource(of))))
+		throw new Error('A view needs the shell: pass the page ctx with its ui.bolt.');
 	const host = () => {
 		if (client === undefined) throw new Error('A remote table needs the shell.');
 		return client;
 	};
-	const text: Pick<ViewBolt, 't'> = client ?? { t: (key) => key };
-	const kinds = useKinds();
+	const text: Pick<ViewBolt, 't'> = $derived(client ?? { t: (key) => key });
+	const kinds = $derived(ctx.ui.kinds);
 
 	type ReadRow = RowIn<S> & Partial<ColumnsIn<S>>;
 	// Keep the actual input's type alongside the tagged presentation; deriving only its name loses S.
@@ -301,7 +304,7 @@
 			? sortable(catalog[source], kind !== 'local', catalog)
 			: []
 	);
-	const vs = viewState(client, {
+	const vs = viewState(() => ctx, {
 		key: () => urlKey,
 		model: () => source,
 		catalog: () => catalog,
@@ -788,12 +791,15 @@
 	/** A click on a row opens it, as the phone's card does; a link, a control, a sheet or selected text keeps its own. */
 	// only a control inside the row counts: the sheet the table sits in is a dialog too, and keeps nothing
 	const rowClick = (e: MouseEvent, row: ReadRow) => {
-		const own = (e.target as Element).closest(
-			'a, button, input, select, textarea, label, summary, [contenteditable], [role=dialog]'
-		);
+		const own =
+			e.target instanceof Element
+				? e.target.closest(
+						'a, button, input, select, textarea, label, summary, [contenteditable], [role=dialog]'
+					)
+				: null;
 		if (
 			!opens ||
-			(own !== null && (e.currentTarget as Element).contains(own)) ||
+			(own !== null && e.currentTarget instanceof Element && e.currentTarget.contains(own)) ||
 			(getSelection()?.toString() ?? '') !== ''
 		)
 			return;
@@ -887,7 +893,7 @@
 	{:else if plainText(row, col.field)}<Overflow
 			text={fullText(row, col.field)}
 			expand={title ? 'never' : 'row'}
-			><Value
+			><Value {ctx}
 				value={valueAt(displayed, col.field)}
 				kind={kindOf(col.field)}
 				row={displayed}
@@ -896,7 +902,7 @@
 				dense
 				link={false}
 			/></Overflow
-		>{:else}<Value
+		>{:else}<Value {ctx}
 			value={valueAt(displayed, col.field)}
 			kind={kindOf(col.field)}
 			row={displayed}
@@ -1070,7 +1076,7 @@
 	data-source={kind}
 	data-embedded={embedded || undefined}
 >
-	{#if !embedded}<ViewToolbar
+	{#if !embedded}<ViewToolbar {ctx}
 			config={toolbar}
 			{model}
 			view={canFilter ? vs : undefined}
@@ -1479,7 +1485,7 @@
 								ontouchend={(e) => swipeEnd(e, key)}
 								{@attach narrow.measure(rowKey(i))}
 							>
-								<ApprovalAccent {row} />
+								<ApprovalAccent {ctx} {row} />
 								{#if selectable && recordRow(row)}
 									<!-- its 44px reaches out around the box, over the row's edge -->
 									<label class="-m-2.5 shrink-0 p-2.5">
@@ -1560,7 +1566,7 @@
 	{#if embedded}
 		{@render content(shownRows)}
 	{:else}
-		<ReadGate
+		<ReadGate {ctx}
 			state={view}
 			what={model === '' ? catalogText(text, 'table.rows', 'these rows') : label(text, model)}
 		>

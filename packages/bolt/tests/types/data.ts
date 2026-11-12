@@ -4,16 +4,7 @@ import { automation, custom_field } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { PlainDate as plainDate } from '@norbital-ai/std/date';
-import type {
-	Id,
-	CreateInput,
-	UpdateInput,
-	PlainDate,
-	PlainTime,
-	Row,
-	RowApproval,
-	Where
-} from '../../src/index.ts';
+import type { Id, CreateInput, UpdateInput, PlainDate, PlainTime, Row, Where } from '../../src/index.ts';
 import type { DateLiteral, Exact, ValidInput, ValueOf } from '../../src/decl/fields.ts';
 import type { Expr, KindOfExpr, NullableOfExpr } from '../../src/decl/model.ts';
 import type { Expr as StoreExpr } from '@norbital-ai/store';
@@ -21,6 +12,7 @@ import type { Columns, ColumnValue, StoredRow } from '../../src/decl/names.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
+import type { RowApproval } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};

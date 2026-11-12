@@ -5,7 +5,7 @@
 import { Effect, Predicate, Schedule, Schema, Semaphore } from 'effect';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { LinkDef, ProviderDef, ProviderText } from '../abi.ts';
-import { answerFailure, PairingInvalid, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, notConnected, PairingInvalid, ProviderUnavailable } from '../errors.ts';
 import { inbound, type ChatMessage } from '../inbound.ts';
 import { hostCall, storedCredential } from '../util.ts';
 
@@ -263,7 +263,7 @@ export const chatProvider = (platform: ChatPlatform): ProviderDef => ({
 			});
 		const need = Effect.suspend(() =>
 			live === null
-				? Effect.fail(new ProviderUnavailable({ message: `${name} is not connected` }))
+				? Effect.fail(notConnected(name))
 				: Effect.succeed(live)
 		);
 		const settings = yield* storedCredential(ctx, Settings);

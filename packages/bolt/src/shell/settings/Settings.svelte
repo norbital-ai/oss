@@ -14,7 +14,8 @@
 		format,
 		Input,
 		Table,
-		Tabs
+		Tabs,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import { read_answer } from '../../protocol/read-answer.ts';
@@ -35,6 +36,7 @@
 	import secretsBanner from '../assets/banners/secrets.jpg';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		t,
@@ -44,6 +46,7 @@
 		integration_setups,
 		configuration = null
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
@@ -251,7 +254,7 @@
 
 	// L-COL-199: the workspace's logo, when the host lets an administrator edit it; a saved change reloads the shell's branding
 	// svelte-ignore state_referenced_locally
-	let brand = $state({ logo: workspace.logo ?? (null as string | null) });
+	let brand = $state<{ logo: string | null }>({ logo: workspace.logo ?? null });
 	/** The host's ceiling on an inline logo (a `data:` URL's length). */
 	const LOGO_MAX = 256 * 1024;
 	function pickLogo(file: File | undefined): void {
@@ -549,7 +552,7 @@
 		{/if}
 	{:else if tab === 'integrations'}
 		{#snippet connectionsTab()}
-			<Integrations
+			<Integrations {ctx}
 				connections
 				{configuration}
 				{api}
@@ -562,7 +565,7 @@
 			/>
 		{/snippet}
 		{#snippet envoysTab()}
-			<Integrations
+			<Integrations {ctx}
 				{configuration}
 				{api}
 				{bolt}
@@ -574,7 +577,7 @@
 			/>
 		{/snippet}
 		{#snippet keysTab()}
-			<Table
+			<Table {ctx}
 				of={keys}
 				key="keys"
 				on_open={show('key')}
@@ -604,7 +607,7 @@
 			</Table>
 		{/snippet}
 		{#snippet mcpTab()}
-			<Table
+			<Table {ctx}
 				of={remotes}
 				key="mcp-servers"
 				on_open={show('remote')}
@@ -650,7 +653,7 @@
 			]}
 		/>
 	{:else if tab === 'secrets'}
-		<Table
+		<Table {ctx}
 			of={secrets}
 			key="secrets"
 			on_open={(x) => {
@@ -686,7 +689,7 @@
 	{#if open.kind === 'key'}
 		{@const k = keys.find((x) => x.id === open?.id)}
 		{#if k !== undefined}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={k.name}
 				acts={keyActs(k)}
 				on_close={close}
@@ -702,7 +705,7 @@
 	{:else if open.kind === 'remote'}
 		{@const r = remotes.find((x) => x.id === open?.id)}
 		{#if r !== undefined}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={r.name}
 				on_close={close}
 				fields={[{ label: t('URL secret'), value: r.url }]}
@@ -718,7 +721,7 @@
 	{:else if open.kind === 'secret'}
 		{@const x = secrets.find((y) => y.id === open?.id)}
 		{#if x !== undefined}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={x.label}
 				acts={secretActs(x)}
 				on_close={close}

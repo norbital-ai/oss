@@ -53,8 +53,8 @@ const manifest: EngineManifest = {
 			description: 'Start and execute debits',
 			capabilities: { automations: ['debit_a', 'debit_b', 'reread', 'fanout'] },
 			grants: {
-				accounts: { outputs: { default: true }, update: true },
-				ledger: { outputs: { default: true }, create: true }
+				accounts: { outputs: { default: {} }, update: {} },
+				ledger: { outputs: { default: {} }, create: {} }
 			}
 		}
 	},

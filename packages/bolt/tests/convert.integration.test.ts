@@ -43,7 +43,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			ops: {
 				description: 'Ops',
-				grants: { docs: { outputs: { default: true } } },
+				grants: { docs: { outputs: { default: {} } } },
 				capabilities: { automations: ['make'] }
 			}
 		},

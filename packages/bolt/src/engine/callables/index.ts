@@ -95,7 +95,7 @@ const refused = (code: Refused['code'], message: string, field?: string): Refuse
 const HOUR = 3_600_000;
 const problems = (d: Decoded) => d.problems.map((p) => `${p.path}: ${p.message}`).join('; ');
 /** The `Holder` a started run records (`sys_run.starter`): a sync's authority, who may read an automation run's result. */
-const starterOf = (a: Authority): Json => Schema.encodeSync(Schema.Json)(holderOf(a));
+const starterOf = (a: Authority): Json => holderOf(a);
 /** A start's trigger (`sys_run.trigger`): the person, and the agent conversation they started it through; a run's code is a schedule. */
 export const triggerOf = (
 	a: Authority,

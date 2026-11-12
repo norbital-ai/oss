@@ -1,3 +1,4 @@
+import { required } from './support/required.ts';
 import { with_accounts } from './support/accounts.ts';
 import { with_envoys } from './support/envoys.ts';
 // Native agent turns over scoped PGlite workspaces, provider streams and a local MCP ABI fixture.
@@ -81,14 +82,14 @@ const manifest: EngineManifest = {
 	policies: {
 		narrow: {
 			description: 'Titles only',
-			grants: { quotes: { outputs: { titles: true } } }
+			grants: { quotes: { outputs: { titles: {} } } }
 		},
 		rep: {
 			description: 'Rep',
-			grants: { quotes: { outputs: { default: true }, create: true, update: true } },
+			grants: { quotes: { outputs: { default: {} }, create: {}, update: {} } },
 			capabilities: { mcp: ['hq'], automations: ['quotes_mark'] }
 		},
-		reader: { description: 'Reads quotes', grants: { quotes: { outputs: { default: true } } } }
+		reader: { description: 'Reads quotes', grants: { quotes: { outputs: { default: {} } } } }
 	},
 
 	mcp: {
@@ -658,7 +659,7 @@ describe('in-app turns', () => {
 				const c = yield* agent.start({ owner: ann });
 				yield* agent.post({ conversation: c, as: { member: ann }, text: 'Read them' });
 				yield* agent.drain(c);
-				const [fields, roots] = [toolResults(ai.requests[1]!)[0], toolResults(ai.requests[2]!)[1]];
+				const [fields, roots] = [toolResults(required(ai.requests[1]))[0], toolResults(required(ai.requests[2]))[1]];
 				expect(JSON.stringify(fields)).toContain("no readable fields 'nope', 'nada'");
 				expect(JSON.stringify(roots)).toContain('search cannot be combined with aggregate');
 				expect(JSON.stringify(roots)).toContain("no readable field 'nope'");
@@ -929,13 +930,13 @@ describe('in-app turns', () => {
 							tag: 'reply',
 							receipts: [{ outcome: 'committed', callable: 'quotes.create' }]
 						});
-						expect(ai.requests[0]!.messages[0]).toEqual({
+						expect(required(ai.requests[0]).messages[0]).toEqual({
 							role: 'user',
 							content: '[Ann] Make a quote for a desk'
 						});
-						expect(ai.requests[0]!.system).toContain('Staff brief.');
-						expect(ai.requests[0]!.system).not.toContain('Customer brief.');
-						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({ kind: 'committed' });
+						expect(required(ai.requests[0]).system).toContain('Staff brief.');
+						expect(required(ai.requests[0]).system).not.toContain('Customer brief.');
+						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({ kind: 'committed' });
 						// the conversation's status reaches the live lane as the turn runs and settles
 						yield* published.settled;
 						expect(
@@ -948,7 +949,7 @@ describe('in-app turns', () => {
 						const tool = published.messages().filter((row) => row.role === 'tool');
 						expect(tool.map((row) => row.state)).toEqual(['running', null]);
 						expect(new Set(tool.map((x) => x.id)).size).toBe(1);
-						expect(tool.at(-1)!.tool).toMatchObject({
+						expect(required(tool.at(-1)).tool).toMatchObject({
 							name: 'act',
 							args: expect.stringContaining('quotes.create'),
 							ms: expect.any(Number)
@@ -981,7 +982,7 @@ describe('in-app turns', () => {
 						);
 						// an unreachable server is unavailable, never a failed turn
 						expect(discovery(ai.requests[0]).mcp_servers).not.toContain('down');
-						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
+						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({
 							content: [{ type: 'text', text: 'echo: hi' }]
 						});
 						expect(hq.calls).toContainEqual({ name: 'echo', arguments: { text: 'hi' } });
@@ -1024,8 +1025,8 @@ describe('in-app turns', () => {
 						const c = yield* agent.start({ owner: root });
 						yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
 						yield* agent.drain(c);
-						expect(ai.requests[1]!.system).toBe(COMPACT_FORMAT);
-						const after = ai.requests[2]!.messages.map((x) => JSON.stringify(x.content));
+						expect(required(ai.requests[1]).system).toBe(COMPACT_FORMAT);
+						const after = required(ai.requests[2]).messages.map((x) => JSON.stringify(x.content));
 						expect(after.some((x) => x.includes('context checkpoint'))).toBe(true);
 						expect(after.some((x) => x.includes('d1'))).toBe(false);
 						expect(after.some((x) => x.includes('go'))).toBe(true);
@@ -1092,8 +1093,8 @@ describe('in-app turns', () => {
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'go' });
 					yield* agent.drain(c);
 					// 200k is 20% of a 1M window: no checkpoint is forced
-					expect(ai.requests[1]!.system).not.toBe(COMPACT_FORMAT);
-					const after = ai.requests[1]!.messages.map((x) => JSON.stringify(x.content));
+					expect(required(ai.requests[1]).system).not.toBe(COMPACT_FORMAT);
+					const after = required(ai.requests[1]).messages.map((x) => JSON.stringify(x.content));
 					expect(after.some((x) => x.includes('context checkpoint'))).toBe(false);
 				}).pipe(Effect.provide(fixture.context));
 			})
@@ -1112,8 +1113,8 @@ describe('in-app turns', () => {
 						const c = yield* agent.start({ owner: cus });
 						yield* agent.post({ conversation: c, as: { member: cus }, text: 'hello' });
 						yield* agent.drain(c);
-						expect(ai.requests[0]!.system).toContain('Customer brief.');
-						expect(ai.requests[0]!.system).not.toContain('Staff brief.');
+						expect(required(ai.requests[0]).system).toContain('Customer brief.');
+						expect(required(ai.requests[0]).system).not.toContain('Staff brief.');
 						expect(discovery(ai.requests[0]).tools).not.toContain('subagent');
 					}).pipe(Effect.provide(fixture.context));
 				})
@@ -1250,7 +1251,7 @@ describe('envoy conversations', () => {
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'one' });
 					yield* agent.stop(c);
 					expect((yield* agent.drain(c)).ran).toBe(false);
-					expect((yield* agent.transcript(c))[0]!.state).toBe('cancelled');
+					expect(required((yield* agent.transcript(c))[0]).state).toBe('cancelled');
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'two' });
 					expect((yield* agent.resume(c)).reply?.text).toBe('late');
 					expect(ai.requests).toHaveLength(1);
@@ -1328,7 +1329,7 @@ describe('durable turns (rule 48)', () => {
 						});
 						yield* t.run_due();
 						expect(ai.requests).toHaveLength(2);
-						const history = JSON.stringify(ai.requests[1]!.messages);
+						const history = JSON.stringify(required(ai.requests[1]).messages);
 						const at = ['first question', 'first answer', 'second question'].map((text) =>
 							history.indexOf(text)
 						);
@@ -1475,13 +1476,13 @@ describe('durable turns (rule 48)', () => {
 						});
 						yield* t.run_due();
 						expect(ai.requests).toHaveLength(3);
-						const closing = ai.requests[2]!.messages.filter(
+						const closing = required(ai.requests[2]).messages.filter(
 							(message) => message.role === 'user'
 						).map((message) => JSON.stringify(message.content));
 						// the resumed step's last word before the state note is the open request, not the model's own cut row
 						expect(closing.at(-2)).toContain('has resumed');
 						expect(closing.at(-2)).toContain('How many quotes?');
-						expect(ai.requests[2]!.messages.at(-1)?.role).toBe('user');
+						expect(required(ai.requests[2]).messages.at(-1)?.role).toBe('user');
 						expect((yield* agent.transcript(c)).at(-1)).toMatchObject({
 							role: 'assistant',
 							text: 'Two quotes.'
@@ -1570,13 +1571,13 @@ describe('a replayed ingest takes its fewest calls', () => {
 						});
 						yield* agent.drain(c);
 						expect(ai.requests).toHaveLength(3);
-						const prompt = ai.requests[0]!.system ?? '';
+						const prompt = required(ai.requests[0]).system ?? '';
 						expect(prompt).toContain('# Models you read\nsys_user, quotes');
-						expect(toolResults(ai.requests[1]!)[0]).toMatchObject({
+						expect(toolResults(required(ai.requests[1]))[0]).toMatchObject({
 							sys_user: { rows: [{ id: poa, name: 'Poa', team: 'rep' }] },
 							quotes: { rows: [] }
 						});
-						expect(toolResults(ai.requests[2]!).at(-1)).toMatchObject({ kind: 'committed' });
+						expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({ kind: 'committed' });
 					}).pipe(Effect.provide(fixture.context));
 				})
 			)
@@ -1615,7 +1616,7 @@ describe('an agent-started automation run is a job', () => {
 			yield* agent.post({ conversation: c, as: { member: root }, text: 'Tally the desk quotes.' });
 			const { reply } = yield* agent.drain(c);
 			expect(reply?.text).toBe('Started the tally.');
-			const answer = toolResults(ai.requests[1]!)[0];
+			const answer = toolResults(required(ai.requests[1]))[0];
 			expect(answer).toMatchObject({
 				job: expect.any(String),
 				run: expect.any(String),
@@ -1711,22 +1712,22 @@ describe('an agent-started automation run is a job', () => {
 					open();
 					expect((yield* Fiber.join(turn)).reply?.text).toBe('Lamp tallied.');
 					const { job } = Schema.decodeUnknownSync(Schema.Struct({ job: Schema.String }))(
-						toolResults(ai.requests[1]!)[0]
+						toolResults(required(ai.requests[1]))[0]
 					);
 					expect(ai.requests.map(notes)).toEqual([
 						[],
 						[],
 						[
-							`[note]\n[job ${job} done] automation quotes_tally run ${rows[0]!.id} → succeeded: "Lamp"`
+							`[note]\n[job ${job} done] automation quotes_tally run ${required(rows[0]).id} → succeeded: "Lamp"`
 						]
 					]);
 					// the line is the step's transcript note, never also queued to wake the conversation
-					const [line] = (yield* t.db.read([
+					const [line] = required((yield* t.db.read([
 						{
 							text: `SELECT count(*)::int AS n, count(*) FILTER (WHERE state = 'queued')::int AS queued FROM sys_message WHERE conversation = $1 AND text LIKE '[job %'`,
 							params: [c]
 						}
-					]))[0]!.rows;
+					]))[0]).rows;
 					expect(line).toEqual({ n: 1, queued: 0 });
 				}).pipe(Effect.provide(fixture.context));
 			})
@@ -1779,16 +1780,16 @@ describe('an agent-started automation run is a job', () => {
 					t.clock.set(new Date().toISOString());
 					yield* t.run_due();
 					expect((yield* Fiber.join(turn)).reply?.text).toBe('Chair tallied.');
-					expect(toolResults(ai.requests[2]!).at(-1)).toMatchObject({
+					expect(toolResults(required(ai.requests[2])).at(-1)).toMatchObject({
 						settled: { result: { status: 'succeeded', result: 'Chair' } }
 					});
 					expect(ai.requests.flatMap(notes)).toEqual([]);
-					const [queuedNotes] = (yield* t.db.read([
+					const [queuedNotes] = required((yield* t.db.read([
 						{
 							text: `SELECT count(*)::int AS n FROM sys_message WHERE conversation = $1 AND text LIKE '[job %'`,
 							params: [c]
 						}
-					]))[0]!.rows;
+					]))[0]).rows;
 					expect(queuedNotes).toEqual({ n: 0 });
 				}).pipe(Effect.provide(fixture.context));
 			})
@@ -1844,7 +1845,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 						}
 						const { reply } = yield* Fiber.join(turn);
 						expect(reply?.text).toBe('Reading the tender; I file its lines when it is read.');
-						expect(toolResults(ai.requests[1]!)[0]).toEqual({
+						expect(toolResults(required(ai.requests[1]))[0]).toEqual({
 							reading: 'tender.pdf',
 							job: expect.any(String),
 							note: expect.stringContaining('wait { jobs:')
@@ -1869,7 +1870,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							r.messages.filter(
 								(m) => typeof m.content === 'string' && m.content.includes('] ingest of tender.pdf')
 							);
-						expect(steering(ai.requests[2]!)).toEqual([
+						expect(steering(required(ai.requests[2]))).toEqual([
 							{
 								role: 'user',
 								content: expect.stringMatching(
@@ -1878,8 +1879,8 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 							}
 						]);
 						// sent exactly once: later steps carry it as history, never a second copy
-						expect(steering(ai.requests[5]!)).toHaveLength(1);
-						expect(toolResults(ai.requests[3]!).at(-1)).toMatchObject({
+						expect(steering(required(ai.requests[5]))).toHaveLength(1);
+						expect(toolResults(required(ai.requests[3])).at(-1)).toMatchObject({
 							lines: [
 								'4: <table>',
 								'5: <tr><td>Lot</td><td>Rate</td></tr>',
@@ -1890,7 +1891,7 @@ describe('a replayed ingest: job, steering message, windows, act, read-back', ()
 						expect(yield* quotes(t, 'Lot 7 at 12.50')).toEqual([
 							{ title: 'Lot 7 at 12.50', created_by: root }
 						]);
-						expect(JSON.stringify(toolResults(ai.requests[5]!).at(-1))).toContain('Lot 7 at 12.50');
+						expect(JSON.stringify(toolResults(required(ai.requests[5])).at(-1))).toContain('Lot 7 at 12.50');
 						for (const r of ai.requests)
 							expect((r.files ?? []).every((f) => f.mime !== 'application/pdf')).toBe(true);
 					}).pipe(Effect.provide(fixture.context));
@@ -2027,7 +2028,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 						const c = yield* agent.start({ owner: root });
 						yield* agent.post({ conversation: c, as: { member: root }, text: 'Long quotes?' });
 						yield* agent.drain(c);
-						expect(toolResults(ai.requests[3]!).at(-1)).toMatchObject({
+						expect(toolResults(required(ai.requests[3])).at(-1)).toMatchObject({
 							note: expect.stringContaining('this is the latest clipped result')
 						});
 					}).pipe(Effect.provide(fixture.context));
@@ -2052,7 +2053,7 @@ describe('a tool answer that stops short says where the rest is', () => {
 					const c = yield* agent.start({ owner: root });
 					yield* agent.post({ conversation: c, as: { member: root }, text: 'Quotes?' });
 					yield* agent.drain(c);
-					const last = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String }))(toolResults(ai.requests[5]!).at(-1));
+					const last = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.String }))(toolResults(required(ai.requests[5])).at(-1));
 					expect(last.error).toBeDefined();
 					expect(last.error).not.toContain('Not run');
 				}).pipe(Effect.provide(fixture.context));
@@ -2129,7 +2130,7 @@ describe('a turn never settles silently', () => {
 						const c = yield* agent.start({ owner: root });
 						yield* agent.post({ conversation: c, as: { member: root }, text: 'How many quotes?' });
 						yield* agent.drain(c);
-						expect(toolResults(ai.requests[1]!)[0]).toEqual({
+						expect(toolResults(required(ai.requests[1]))[0]).toEqual({
 							error: expect.stringContaining('not valid JSON (Expected double-quoted')
 						});
 						expect(visible(yield* agent.transcript(c))).toEqual([

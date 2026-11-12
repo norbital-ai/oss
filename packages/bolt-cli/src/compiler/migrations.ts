@@ -34,10 +34,9 @@ import {
 	migration_lines,
 	read_migration_sources,
 	history_schema_objects,
-	from_store,
-	PgliteDb,
-	Pristine
+	from_store
 } from '@norbital-ai/bolt/tooling';
+import { PgliteDb, Pristine } from '@norbital-ai/bolt/node';
 import { migration_objects, migration_schema, BoltError } from '@norbital-ai/bolt/engine';
 
 /** `function <name> <definition>` lines by name: what a body comparison reads off an introspection. */

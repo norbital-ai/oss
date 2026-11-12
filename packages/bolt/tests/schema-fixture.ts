@@ -13,7 +13,7 @@ export const slice = (): SchemaSlice => ({
 				record_label: 'record.name',
 				fields: {
 					name: { kind: 'text', max: 20 },
-					email: { kind: 'text', format: 'email', optional: true, unique: true },
+					email: { kind: 'text', format: 'email', optional: true },
 					tags: { kind: 'enum', values: ['vip', 'new'], many: true, default: [] },
 					open_orders: { kind: 'count', of: 'orders', where: { status: { eq: 'open' } } },
 					spent: { kind: 'sum', of: 'orders.total' },
@@ -21,7 +21,7 @@ export const slice = (): SchemaSlice => ({
 					colour: { kind: 'vector', dim: 3, metric: 'l2', optional: true }
 				},
 				key: ['name'],
-				unique: [{ fields: ['name'], name: 'one_name', import_key: true }],
+				unique: [{ fields: ['name'], name: 'one_name', import_key: true }, { fields: ['email'], name: 'email' }],
 				search: { text: ['name', 'tags', 'shout'] },
 				computed: { shout: { kind: 'text', expr: { upper: { field: 'name' } } } }
 			},

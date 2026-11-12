@@ -92,7 +92,7 @@ const tool = <A, I>(
 ): HostTool => ({
 	name: options.name,
 	description: options.description,
-	input: Schema.decodeUnknownSync(Schema.Json)(model_schema(options.input)),
+	input: model_schema(options.input),
 	behavior: options.behavior,
 	...(options.read_only === undefined ? {} : { read_only: options.read_only }),
 	...(options.studio === undefined ? {} : { studio: options.studio }),

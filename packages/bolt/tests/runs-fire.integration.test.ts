@@ -68,7 +68,7 @@ const manifest = {
 		cal: { description: 'Calendars', driver: 'calendar' }
 	},
 	policies: {
-		ops: { description: 'Ops', grants: { quotes: { outputs: { default: true }, create: true } } }
+		ops: { description: 'Ops', grants: { quotes: { outputs: { default: {} }, create: {} } } }
 	},
 	automations: {
 		tidy: { description: 'Files a quote', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },

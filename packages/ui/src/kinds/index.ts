@@ -8,20 +8,12 @@ export { format_handle } from './phone.js';
 export { BUILTIN_FIELDS, field_entry } from './builtin/index.js';
 /** A relation/id picker that searches only rows and labels the viewer may read, displays the chosen record's label, and emits its typed id. */
 export { default as Picker, type PickerProps } from './picker.svelte';
-export {
-	default as NumberTuple,
-	split_numbers,
-	type NumberTupleProps,
-	type NumberTupleSegment,
-	type NumberTupleValue
-} from './number-tuple.svelte';
 export { default as PointInput, type PointInputProps } from './point-input.svelte';
 export { default as Show, type ShowProps } from './show.svelte';
 export { default as StateBadge, type StateBadgeProps } from './state-badge.svelte';
 export { default as StructuredData, type StructuredDataProps } from './structured-data.svelte';
 export { default as TimeRangeInput, type TimeRangeInputProps } from './time-range-input.svelte';
 export {
-	provide_kinds,
 	DEFAULT_BASEMAP,
 	photon_geocoder,
 	type ModelExposure,

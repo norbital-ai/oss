@@ -97,7 +97,7 @@ export const SqlServerRequest = Schema.Union([
 	})
 ]);
 export type SqlServerRequest = typeof SqlServerRequest.Type;
-export type SqlServerStatement = {
+type SqlServerStatement = {
 	readonly parameters: Readonly<Record<string, Scalar>>;
 	readonly max_rows: number;
 	readonly transaction?: 'serializable';

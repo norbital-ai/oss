@@ -91,7 +91,7 @@ export type Attachment = {
 };
 type Address = { readonly address: string; readonly name: string | null };
 /** An inbound email: the full text and headers. */
-export type InboundMail = {
+type InboundMail = {
 	readonly id: string;
 	readonly thread: string | null;
 	readonly sent_at: Instant;
@@ -108,7 +108,7 @@ export type InboundMail = {
 	readonly authenticated?: boolean;
 };
 /** An inbound chat message. `thread` is the chat; `reply_to` the message it answers. */
-export type InboundChat = {
+type InboundChat = {
 	readonly id: string;
 	readonly thread: string;
 	readonly sent_at: Instant;
@@ -129,7 +129,7 @@ type Common = {
 	about?: RecordRef;
 };
 /** What a conversation sends, by its kind: a sync `write`'s `ctx.send`, an automation's `ctx.send` and an envoy's reply. */
-export type Outgoing<K> = K extends 'email'
+type Outgoing<K> = K extends 'email'
 	? Common & {
 			to: readonly string[];
 			cc?: readonly string[];
@@ -206,7 +206,7 @@ export type WebhookDelivery = {
 	readonly body: Json;
 };
 /** An inbound message a conversation instance received since the last read. */
-export type MessageDelivery<K> = { readonly kind: 'message'; readonly message: MessageItem<K> };
+type MessageDelivery<K> = { readonly kind: 'message'; readonly message: MessageItem<K> };
 /**
  * What a sync over definition `D` receives as `deliveries`: for a conversation definition, the inbound messages and the
  * delivery reports of the messages its `write` sent (each report is one arm, discriminated by `kind`); for any other,
@@ -216,7 +216,7 @@ export type DeliveryOf<D, K = ConversationOf<D>> = [K] extends [never]
 	? WebhookDelivery
 	: MessageDelivery<K> | { [E in DeliveryKind]: DeliveryEvent<E, K> }[DeliveryKind];
 /** When a calendar event starts or ends: a whole day, or an instant with the zone it was set in. */
-export type CalendarTime =
+type CalendarTime =
 	{ readonly date: PlainDate } | { readonly at: Instant; readonly zone: IanaZone | null };
 /** One event a `calendar` driver pushes to a sync's `read` (`items`); the read's `partition` is its calendar. */
 export type CalendarEvent = {
@@ -248,11 +248,11 @@ export type HttpOp<O> = {
  * An instance's live request: credential host-side, paced by the definition's `rate` (a `429` with
  * `Retry-After` is honoured); it fails with a `FacilityFailure` or `Unavailable`.
  */
-export interface HttpRequester {
+interface HttpRequester {
 	<const O extends InputKind>(op: HttpOp<O>): Eff<ValueOf<O>, FacilityFailure | Unavailable>;
 }
 /** A database instance's live request: one bounded statement, its connection string host-side. */
-export interface DatabaseRequester {
+interface DatabaseRequester {
 	(op: DatabaseRequest): Eff<DatabaseResult, FacilityFailure | Unavailable>;
 }
 
@@ -400,7 +400,7 @@ type OAuthFor<S, D = DriverIn<S>> =
 
 // ── the test body ──
 /** The `test` body's ctx: the instance's configuration and its live request. */
-export interface TestCtx<S> {
+interface TestCtx<S> {
 	readonly configuration: ConfigurationIn<S>;
 	request: Requester<S>;
 }

@@ -1,6 +1,6 @@
 # Teams, policies and approvals
 
-Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').policy>[0]`, `Grant`, `ApprovalFlow`.
+Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').policy>[0]`, `ApprovalFlow`.
 
 ## Source homes
 
@@ -12,9 +12,9 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 ## Grants
 
 - A policy can grant only what the model declares: its outputs, paths and verbs. `bolt check` refuses the rest.
-- `outputs: { default: …, <name>: … }` grants declared outputs. Each is `true` or a nested scope tree with `where` on its root or relation nodes. A root `where` scopes roots and may hop relations; a nested `where` filters that layer, or nulls a ref, never the root. An unnamed layer is unfiltered.
+- `outputs: { default: …, <name>: … }` grants declared outputs. Each is a nested scope tree with `where` on its root or relation nodes; `{}` grants every row. A root `where` scopes roots and may hop relations; a nested `where` filters that layer, or nulls a ref, never the root. An unnamed layer is unfiltered.
 - A policy never changes an output's fields. A narrower audience gets a narrower output.
-- An output grant with `history: true` admits history under that root's `where`; losing access to the row also loses its history. `create` and `update` are `true` or `{ columns?, verdict? }`; `delete` is `true` or `{ verdict? }`. Update `moves` grants state transitions.
+- An output grant with `history: true` admits history under that root's `where`; losing access to the row also loses its history. `create` and `update` are `{ columns?, verdict? }` (`{}` admits every declared column); `delete` is `{ verdict? }`. There is no `true` shorthand. Update `moves` grants state transitions.
 - `capabilities.automations` grants manual starts by a person or the agent; code needs none.
 - `capabilities.syncs` grants remote refreshes as `'<model>.<sync>'`; the model must also be readable. File controls use the native caller grants. Syncs are not automation starts.
 - `capabilities` expose apps, including kiosk apps, tools and MCP. Declaring a server does not grant it.
@@ -27,7 +27,7 @@ Access control is source. Exact shapes: `Parameters<typeof import('@norbital-ai/
 
 1. `columns` trees with `fields` at each node are checked before guest code; outside them is `forbidden`.
 2. Each admitting policy's `verdict` judges changes with `before`, `set`, `after` and `changed(...)`; create has null `before`, delete has null `after`. It uses workspace `ctx.query`, prefetches before mapping and does no writes or I/O.
-3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Refuse through `yield* ctx.refuse(message, { row, path, field })`.
+3. Any `ctx.allow()` executes. Else the first `ctx.approve(...)` in team policy order commits provisionally under a request. Refuse through `yield* ctx.refuse('<message key>', { row?, field? })`: a catalogue key, the batch row's index and a root column.
 
 A provisional commit is an ordinary write: validation, ownership, locks, revisions and atomicity apply. Its `with` rows are held with it; its `on_approved` rows commit in the approving decision, or the decision is refused and the request stays pending.
 

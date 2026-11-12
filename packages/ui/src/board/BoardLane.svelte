@@ -1,14 +1,16 @@
 <script lang="ts" generics="C extends ModelKey">
+	import type { UiContext } from '../client/contract.js';
 	// One lane: a stack of keyset pages, each its own live view. Scrolling near the lane's end opens the next page (server-side
 	// infinite loading); the "Load more" button is the same step for a keyboard or where nothing observes the scroll.
 	import { watch } from 'runed';
 	import { Button } from '../primitives/button/index.js';
 	import type { ModelKey } from '../model/types.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import BoardPage, { type BoardPageProps } from './BoardPage.svelte';
 	import { msg } from '../text/messages.js';
 
 	let {
+		ctx,
 		of,
 		card,
 		lane,
@@ -25,7 +27,7 @@
 		on_open,
 		moves
 	}: Omit<BoardPageProps<C>, 'index' | 'after' | 'on_next'> = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	let pages = $state<(string | null)[]>([null]);
 	let nexts = $state<(string | null)[]>([]);
 	// a new filter or sort starts the lane over (cursors are bound to the query, rule 11)
@@ -59,7 +61,7 @@
 </script>
 
 {#each pages as after, i (after ?? '')}
-	<BoardPage
+	<BoardPage {ctx}
 		{of}
 		{card}
 		{lane}

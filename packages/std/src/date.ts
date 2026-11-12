@@ -9,7 +9,7 @@ export type Zone = string & { readonly __zone: unique symbol };
 /** An inclusive period of dates; `to: null` is open-ended. */
 export type DatePeriod = { readonly from: PlainDate; readonly to: PlainDate | null };
 /** `Intl.DateTimeFormat` options plus the `locale` to format in. */
-export type DateFormatOptions = Intl.DateTimeFormatOptions & { locale?: string };
+type DateFormatOptions = Intl.DateTimeFormatOptions & { locale?: string };
 type DateIn = PlainDate | string;
 
 const UNITS = { s: 1, min: 60, h: 3_600, d: 86_400 };
@@ -57,24 +57,23 @@ export function PlainDate(s: string): PlainDate {
 export function Instant(v: string | Date): Instant {
 	const ms = v instanceof Date ? v.getTime() : ISO.test(v) ? Date.parse(v) : Number.NaN;
 	if (Number.isNaN(ms)) throw new RangeError(`'${String(v)}' is not an ISO instant with a zone`);
-	return new Date(ms).toISOString() as Instant;
+	const iso = new Date(ms).toISOString();
+	if (!is_utc(iso)) throw new RangeError(`'${iso}' is outside four-digit years`);
+	return iso;
 }
-/** Moves a UTC instant by a signed duration. */
-export const add_instant = (at: Instant, offset: EffectDuration.Input): Instant =>
-	Instant(new Date(Date.parse(at) + EffectDuration.toMillis(offset)));
-/** The signed duration from one instant to another. */
-export const diff_instants = (from: Instant, to: Instant): EffectDuration.Duration =>
-	EffectDuration.millis(Date.parse(to) - Date.parse(from));
+const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const is_utc = (s: string): s is Instant => UTC.test(s);
 
 /** An IANA zone id the runtime knows. */
 export function Zone(v: string): Zone {
-	const result = Result.try(() => new Intl.DateTimeFormat('en-US', { timeZone: v }));
-	if (Result.isFailure(result)) throw new RangeError(`'${v}' is not an IANA time zone`);
-	return v as Zone;
+	if (!is_zone(v)) throw new RangeError(`'${v}' is not an IANA time zone`);
+	return v;
 }
+const is_zone = (v: string): v is Zone =>
+	Result.isSuccess(Result.try(() => new Intl.DateTimeFormat('en-US', { timeZone: v })));
 
 const toDays = (d: DateIn) => Date.parse(`${d}T00:00:00Z`) / DAY_MS;
-const fromDays = (n: number) => new Date(n * DAY_MS).toISOString().slice(0, 10) as PlainDate;
+const fromDays = (n: number) => PlainDate(new Date(n * DAY_MS).toISOString().slice(0, 10));
 
 /** An inclusive period; `to < from` throws. */
 export function date_period(from: DateIn, to: DateIn | null): DatePeriod {
@@ -125,7 +124,9 @@ export function add_months(d: DateIn, n: number): PlainDate {
 	const targetYear = Math.floor(index / 12),
 		targetMonth = (index % 12) + 1,
 		targetDay = Math.min(day, daysInMonth(targetYear, targetMonth));
-	return `${String(targetYear).padStart(4, '0')}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}` as PlainDate;
+	return PlainDate(
+		`${String(targetYear).padStart(4, '0')}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`
+	);
 }
 /** The calendar month containing `d`, as a closed period. */
 export function month_of(d: DateIn): DatePeriod {
@@ -168,7 +169,7 @@ export function parse_instant(text: string, zone?: Zone | string): Instant | nul
 	const s = text.trim();
 	if (ISO.test(s)) {
 		const ms = Date.parse(s);
-		return Number.isNaN(ms) ? null : (new Date(ms).toISOString() as Instant);
+		return Number.isNaN(ms) ? null : Instant(new Date(ms));
 	}
 	const m = zone === undefined ? null : LOCAL.exec(s);
 	if (m === null || Number(m[2]) > 23 || Number(m[3]) > 59 || Number(m[4] ?? 0) > 59) return null;
@@ -179,7 +180,7 @@ export function parse_instant(text: string, zone?: Zone | string): Instant | nul
 		Result.isFailure(Result.try(() => PlainDate(date)))
 	)
 		return null;
-	return new Date(
-		utc_of(date, ((Number(m[2]) * 60 + Number(m[3])) * 60 + Number(m[4] ?? 0)) * 1000, zone)
-	).toISOString() as Instant;
+	return Instant(
+		new Date(utc_of(date, ((Number(m[2]) * 60 + Number(m[3])) * 60 + Number(m[4] ?? 0)) * 1000, zone))
+	);
 }

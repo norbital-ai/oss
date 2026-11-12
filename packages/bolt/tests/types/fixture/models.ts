@@ -130,7 +130,7 @@ export const orders = bind_model('orders')({
 				}
 			});
 			const at = rows.findIndex((r) => !known.customers.rows.some((c) => c.id === r.after.customer));
-			if (at >= 0) return yield* ctx.refuse('Unknown customer.', { field: 'customer', row: at });
+			if (at >= 0) return yield* ctx.refuse('errors.refused', { field: 'customer', row: at });
 			return rows.map(({ set }) => ({ ...set, placed_at: ctx.now }));
 		},
 		effect: function* (changes, ctx) {

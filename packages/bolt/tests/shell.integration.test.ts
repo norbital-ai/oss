@@ -73,12 +73,12 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				capabilities: { apps: ['sales', 'desk'] },
-				grants: { openings: { outputs: { default: true } } }
+				grants: { openings: { outputs: { default: {} } } }
 			},
 			proposer: {
 				description: 'Propose an application',
 				grants: {
-					openings: { outputs: { default: true } },
+					openings: { outputs: { default: {} } },
 					applications: { create: { verdict: true } }
 				}
 			}

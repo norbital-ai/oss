@@ -1,12 +1,13 @@
 import { expect } from '@effect/vitest';
 import { Effect } from 'effect';
-import { layer, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { AgentDrains } from '../src/engine/agent/index.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { envoys, type EnvoysConfig } from '../src/engine/envoys/index.ts';
 import { Conversations, Live } from '../src/engine/services.ts';
 import { manifest } from './catalogue-fixture.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const configuration = Effect.gen(function* () {
 	const t = yield* TestWorkspace;

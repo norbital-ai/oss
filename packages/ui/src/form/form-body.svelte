@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	// The mounted draft: built once its row is known, and handed to every `Field` below by context.
 	import { Effect } from 'effect';
 	import { fork, observe_once } from '../effect/index.js';
@@ -14,7 +15,7 @@
 	import Grid from '../layout/grid.svelte';
 	import RunStatus from '../runs/RunStatus.svelte';
 	import Section, { groupSections } from './section.svelte';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { msg } from '../text/messages.js';
 	import { FormState, provideForm, use_record_controller, type Act } from './form-state.svelte.js';
 	import { confirm_action } from '../primitives/dialog/confirm.js';
@@ -22,6 +23,7 @@
 	import { pendingUnload } from './unload.js';
 
 	let {
+		ctx,
 		spec,
 		record,
 		values,
@@ -38,7 +40,7 @@
 		children,
 		actions,
 		class: className
-	}: Pick<FormProps, 'sections' | 'submit' | 'readonly' | 'disabled' | 'on_outcome' |
+	}: Pick<FormProps, 'ctx' | 'sections' | 'submit' | 'readonly' | 'disabled' | 'on_outcome' |
 		'confirm' | 'validate' | 'children' | 'actions' | 'class'> & {
 		spec: FormSpec;
 		record: Row | null;
@@ -76,7 +78,7 @@
 	);
 	const readonly = $derived(controls.readonly);
 	const t = ui_text();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	// svelte-ignore state_referenced_locally -- the key belongs to this mounted form
 	const storageKey = scope?.historical === true ? undefined : draftKey(bolt.actor, spec, values);
 	// svelte-ignore state_referenced_locally -- a draft is built once per mount; a new row is a new form
@@ -219,13 +221,13 @@
 						>
 							<!-- short fields flow across the width; a structured or long one spans its row (Field) -->
 							<Grid minimum="card"
-								>{#each g.names as name (name)}<Field {name} />{/each}</Grid
+								>{#each g.names as name (name)}<Field {ctx} {name} />{/each}</Grid
 							>
 						</Section>
 					{/each}
 				{:else}
 					<Grid minimum="card"
-						>{#each visible as name (name)}<Field {name} />{/each}</Grid
+						>{#each visible as name (name)}<Field {ctx} {name} />{/each}</Grid
 					>
 				{/if}
 				{#if form.notice}
@@ -236,10 +238,10 @@
 						{bolt.t(form.notice.text)}
 					</Alert>
 				{/if}
-				{#if form.run !== null}<RunStatus
+				{#if form.run !== null}<RunStatus {ctx}
 						automation={form.run.automation}
 						run={form.run}
-					/>{:else if form.notice?.run !== undefined}<RunStatus
+					/>{:else if form.notice?.run !== undefined}<RunStatus {ctx}
 						automation={spec.callable}
 						run={form.notice.run}
 					/>{/if}

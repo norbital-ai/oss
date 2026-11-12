@@ -1,7 +1,7 @@
 // Explicit create/update acts and scalar-union inputs retain the authored behavior without an upsert alias.
 import { describe, expect, it } from '@effect/vitest';
 import { Context, Effect, Layer, Option, Result, Schema } from 'effect';
-import { act_failure } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
 import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { program } from '../../bolt-cli/src/test/guest.ts';
@@ -33,7 +33,7 @@ const manifest = Result.getOrThrow(
 				description: 'Rep',
 				capabilities: { automations: ['put'] },
 				grants: {
-					rates: { outputs: { default: true }, create: true, update: true }
+					rates: { outputs: { default: {} }, create: {}, update: {} }
 				}
 			}
 		},

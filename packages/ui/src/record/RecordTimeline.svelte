@@ -5,14 +5,15 @@ representation; an invalid one (its schema or values no longer fit) shows its ca
 revision returns to the live record.
 -->
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import type { UiContext } from '../client/contract.js';
 	import { recordText } from '../kinds/kind.js';
 	import { Effect } from 'effect';
 	import { observe_once } from '../effect/index.js';
 	import ReadOnce from '../read/ReadOnce.svelte';
 	import { format } from '../kinds/kind.js';
-	import { useKinds } from '../kinds/context.js';
 	import type { RecordHistoryConfig } from './history.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import * as Popover from '../primitives/popover/index.js';
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import Badge from '../primitives/badge/badge.svelte';
@@ -22,6 +23,7 @@ revision returns to the live record.
 	import { label_read } from '../relations/select.js';
 
 	let {
+		ctx,
 		of,
 		latest,
 		viewing,
@@ -30,6 +32,7 @@ revision returns to the live record.
 		onload,
 		onpick
 	}: {
+		ctx: UiContext;
 		of: string;
 		config?: RecordHistoryConfig;
 		/** The live record's revision. */
@@ -43,10 +46,10 @@ revision returns to the live record.
 		 * returns to the live record. */
 		onpick: (revision: number | null, at: string | null) => void;
 	} = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
-	const clock = bolt.clock('minute');
-	const relative = new Intl.RelativeTimeFormat(bolt.locale, { numeric: 'auto' });
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
+	const clock = untrack(() => bolt.clock('minute'));
+	const relative = $derived(new Intl.RelativeTimeFormat(bolt.locale, { numeric: 'auto' }));
 	const stamp = (at: Checkpoint['at']) =>
 		format({ kind: 'instant' }, at, { locale: bolt.locale, zone: kinds.zone });
 	/** How long before the page's current instant a revision was written, in its largest whole unit. */

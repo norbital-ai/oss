@@ -1,8 +1,8 @@
 // WeCom (企业微信), through a self-built app's API: no WeCom SDK is installed. A person writes to the app, so every thread
 // is one person, in direct. The callback is the same safe mode as WeChat's. WeCom offers no history, typing, edit or
 // delete event, and its duplicate check compares content rather than a key, so a send is not idempotent.
-import { tokenCache } from '../token.ts';
-import { Schema } from 'effect';
+import { loadToken, tokenCache } from '../token.ts';
+import { Effect, Schema } from 'effect';
 import type { ChatConnection, ChatPlatform } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { signed } from '../verify.ts';
@@ -59,20 +59,25 @@ export const wecom: ChatPlatform = {
 			const raw: unknown = await response.json();
 			const answer = await Schema.decodeUnknownPromise(Answer)(raw);
 			if (answer.errcode === 0) return Schema.decodeUnknownPromise(schema)(raw);
-			tokens.invalidate();
+			Effect.runSync(tokens.invalidate);
 			throw new PlatformError(`WeCom ${answer.errcode}: ${answer.errmsg ?? 'refused'}`, 502);
 		};
-		const tokens = tokenCache(async () => {
-			const { access_token, expires_in } = await answered(
-				Schema.Struct({
-					access_token: Schema.String,
-					expires_in: Schema.optionalKey(Schema.Number)
-				}),
-				await host.fetch(url('/cgi-bin/gettoken', { corpid: corpId, corpsecret: corpSecret }))
-			);
-			return { token: access_token, ttl: (expires_in ?? TOKEN_LIFE_S) * 1000 - TOKEN_EARLY_MS };
-		});
-		await tokens.get();
+		const tokens = await Effect.runPromise(
+			tokenCache(() =>
+				loadToken(async () => {
+					const { access_token, expires_in } = await answered(
+						Schema.Struct({
+							access_token: Schema.String,
+							expires_in: Schema.optionalKey(Schema.Number)
+						}),
+						await host.fetch(url('/cgi-bin/gettoken', { corpid: corpId, corpsecret: corpSecret }))
+					);
+					return { token: access_token, ttl: (expires_in ?? TOKEN_LIFE_S) * 1000 - TOKEN_EARLY_MS };
+				})
+			)
+		);
+		const accessToken = () => Effect.runPromise(tokens.get());
+		await accessToken();
 		const verified = (query: URLSearchParams, encrypted: string) => {
 			signed(
 				query.get('msg_signature'),
@@ -86,7 +91,7 @@ export const wecom: ChatPlatform = {
 		};
 		const media = async (id: string) => {
 			const response = await host.fetch(
-				url('/cgi-bin/media/get', { access_token: await tokens.get(), media_id: id })
+				url('/cgi-bin/media/get', { access_token: await accessToken(), media_id: id })
 			);
 			// a refusal is JSON, however it is carried
 			if (!response.ok || response.headers.get('content-type')?.includes('json') === true)
@@ -137,7 +142,7 @@ export const wecom: ChatPlatform = {
 					Schema.Struct({
 						msgid: Schema.optionalKey(Schema.String)
 					}),
-					await host.fetch(url('/cgi-bin/message/send', { access_token: await tokens.get() }), {
+					await host.fetch(url('/cgi-bin/message/send', { access_token: await accessToken() }), {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
 						body: JSON.stringify({

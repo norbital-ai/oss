@@ -2,7 +2,7 @@
 // terminal failure wins over anything after it; an auto-reply is recorded and never moves the status.
 import type { DeliveryKind } from '../../decl/runtime/integration.ts';
 import type { Json } from '../../decl/values.ts';
-import { Schema } from 'effect';
+import { Predicate, Schema } from 'effect';
 
 export type { DeliveryKind };
 /** A provider-chosen id persisted before I/O; registration alone is no delivery acknowledgement. */
@@ -67,7 +67,8 @@ export const sendRefusal = (
 	e: unknown
 ): { message: string; code?: string; permanent: boolean } | null => {
 	if (!(e instanceof Error) || e.name !== 'SendRefused') return null;
-	const { code, permanent } = e as Partial<SendRefused>;
+	const code = Predicate.hasProperty(e, 'code') ? e.code : undefined;
+	const permanent = Predicate.hasProperty(e, 'permanent') ? e.permanent : undefined;
 	return {
 		message: e.message,
 		permanent: permanent !== false,

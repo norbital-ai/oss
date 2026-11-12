@@ -8,14 +8,8 @@
 import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
 import { Predicate, Schema } from 'effect';
-import {
-	LIMITS,
-	GuestTakenSchema,
-	type GuestIsolatesPort,
-	type GuestProgram,
-	type GuestSessionOptions
-} from '@norbital-ai/bolt/engine';
-import type { HostFailure } from '@norbital-ai/bolt/host-api';
+import { LIMITS, GuestTaken, type GuestProgram } from '@norbital-ai/bolt/engine';
+import type { HostFailure, HostPorts } from '@norbital-ai/bolt/host-api';
 import {
 	asset_hook,
 	digest,
@@ -23,7 +17,10 @@ import {
 	random_stream,
 	type GuestHooks,
 	type ImportDeclaration
-} from '@norbital-ai/bolt/guest-hooks';
+} from '@norbital-ai/bolt/node';
+
+type GuestIsolatesPort = HostPorts['guests'];
+type GuestSessionOptions = Parameters<GuestIsolatesPort['open']>[1];
 
 type Prelude = {
 	readonly start: (...args: readonly unknown[]) => void;
@@ -174,7 +171,7 @@ export const node_guests = (options: NodeGuestsOptions = {}): GuestIsolatesPort 
 		};
 		if (work !== undefined) run(id, signal, (session) => work(api(session), session.copy));
 		try {
-			const taken = Schema.decodeUnknownSync(GuestTakenSchema)(
+			const taken = await Schema.decodeUnknownPromise(GuestTaken)(
 				structuredClone(run(id, signal, (session) => api(session).take()))
 			);
 			const session = sessions.get(id);

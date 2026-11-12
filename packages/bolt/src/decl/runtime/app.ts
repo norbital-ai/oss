@@ -107,10 +107,6 @@ export function workspace<const S extends WorkspaceBase>(
 	return spec;
 }
 
-/**
- * An HTTPS origin allowed to frame this app. Session cookies stay partitioned by the embedding site.
- */
-export type EmbedOrigin = `https://${string}`;
 const appContent = {
 	title: Schema.String,
 	description: Schema.String,

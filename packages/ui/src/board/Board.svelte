@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Snippet } from 'svelte';
 	import type {
 		ModelKey,
@@ -18,6 +19,8 @@
 		| { value: import('@norbital-ai/std/kind').Value; label: string; where?: Json };
 	/** The props of `Board`, typed by the model `of`. */
 	export type BoardProps<C = ModelKey, F = FieldOf<C>, K = RecordFieldOf<C>> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: C;
 		/** The lane field: a `state`, an `enum` or a relation. */
 		by: F;
@@ -62,12 +65,11 @@
 	// Each lane loads infinitely: live keyset pages read by its lane condition, the next one as the lane scrolls near its end
 	// (final-ui rule 9); lane counts are one aggregate. A drop is one generated `update` of `by`,
 	// painted optimistically and rolled back by a refusal, which shows on the board.
-	import { useKinds } from '../kinds/context.js';
 	import { Debounced, watch } from 'runed';
 	import { onDestroy } from 'svelte';
 	import { tone } from '../kinds/kind.js';
 	import { provide_model, use_enum_text } from '../model/context.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { orderOf, sortable } from '../filter/order.js';
 	import { actOutcome, notify } from '../actions/outcome.js';
 	import { toast } from '../toast/toast.svelte.js';
@@ -88,6 +90,7 @@
 	import { open_record } from '../record/navigation.js';
 
 	let {
+		ctx,
 		of,
 		by,
 		card,
@@ -100,10 +103,10 @@
 		toolbar = {},
 		key
 	}: BoardProps<C> = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	provide_model(() => of);
-	const words = use_enum_text();
+	const words = use_enum_text(() => ctx);
 	// a lane of an enum or state value is named in its words
 	const laneText = (v: import('@norbital-ai/std/kind').Value) =>
 		typeof v === 'string' && ['enum', 'state'].includes(kinds.catalog?.[of]?.fields[by]?.kind ?? '')
@@ -111,7 +114,7 @@
 			: show(v, bolt.locale);
 	const catalog = $derived(kinds.catalog ?? {});
 	const selectable = $derived(selectionEnabled(toolbar, catalog[of]));
-	const view = viewState(bolt, {
+	const view = viewState(() => ctx, {
 		key: () => key ?? of,
 		model: () => of,
 		catalog: () => catalog,
@@ -384,7 +387,8 @@
 	let over = $state<string | null>(null);
 	function dragStart(e: DragEvent) {
 		if (e.defaultPrevented) return;
-		const el = (e.target as Element).closest<HTMLElement>('[draggable=true]'),
+		if (!(e.target instanceof Element)) return;
+		const el = e.target.closest<HTMLElement>('[draggable=true]'),
 			from = el?.closest<HTMLElement>('[data-lane]')?.dataset['lane'];
 		if (!el || from === undefined) return;
 		dragged = { card: el, from };
@@ -400,7 +404,8 @@
 	}
 	const placeholder = (host: HTMLElement) => {
 		if (!dragged) return;
-		const copy = dragged.card.cloneNode(true) as HTMLElement;
+		const copy = dragged.card.cloneNode(true);
+		if (!(copy instanceof HTMLElement)) return;
 		copy.removeAttribute('draggable');
 		copy.removeAttribute('tabindex');
 		copy.removeAttribute('role');
@@ -443,8 +448,9 @@
 	let snapped = 0;
 	function edgeScroll(e: DragEvent) {
 		e.preventDefault();
-		const el = e.currentTarget as HTMLElement,
-			r = el.getBoundingClientRect(),
+		const el = e.currentTarget;
+		if (!(el instanceof HTMLElement)) return;
+		const r = el.getBoundingClientRect(),
 			EDGE = 80;
 		const dir = e.clientX < r.left + EDGE ? -1 : e.clientX > r.right - EDGE ? 1 : 0;
 		if (dir === 0 || e.timeStamp - snapped < 450) return;
@@ -458,7 +464,7 @@
 
 <!-- like Table: fills a bounded parent; each lane scrolls inside itself, the board never grows its parent -->
 <section class="@container flex h-full min-w-0 flex-1 flex-col gap-2" data-view="board">
-	<ViewToolbar
+	<ViewToolbar {ctx}
 		config={toolbar}
 		model={of}
 		{view}
@@ -502,7 +508,7 @@
 			</p>{/if}
 	{/if}
 	{#key selectionScope}
-		<ReadGate state={found} what={label(bolt, of)}>
+		<ReadGate {ctx} state={found} what={label(bolt, of)}>
 			{#snippet skeleton()}
 				<div class="flex gap-3 overflow-hidden pb-2">
 					{#each [3, 2, 4] as n, i (i)}
@@ -609,7 +615,7 @@
 											data-drop-placeholder
 											{@attach placeholder}
 										></div>{/if}
-									<BoardLane
+									<BoardLane {ctx}
 										{of}
 										{card}
 										{selectable}
@@ -658,7 +664,7 @@
 			data-lane-dialog={expanded}
 		>
 			{#if expandedLane !== undefined}
-				<BoardLaneDialog
+				<BoardLaneDialog {ctx}
 					{of}
 					{card}
 					label={expandedLane.label}

@@ -52,8 +52,8 @@ const manifest = Result.getOrThrow(
 		},
 		integrations: {},
 		policies: {
-			desk: { description: 'Desk', grants: { jobs: { outputs: { default: true } } } },
-			contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: true } } } }
+			desk: { description: 'Desk', grants: { jobs: { outputs: { default: {} } } } },
+			contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: {} } } } }
 		},
 		teams: { 't-con': { name: 'Contractors', policies: ['contractor'] } },
 		automations: {},

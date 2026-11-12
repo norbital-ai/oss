@@ -28,7 +28,7 @@ type Fake = {
 };
 /** A fake port service: what it was asked to connect, and how many sessions it closed. */
 const fakeMcp = (fake: Fake = {}) => {
-	const seen = { connects: [] as McpServer[], closes: 0 };
+	const seen = { connects: new Array<McpServer>(), closes: 0 };
 	const service: Mcp['Service'] = {
 		connect: (server) =>
 			Effect.acquireRelease(

@@ -9,9 +9,10 @@ import {
 	NAME,
 	ROLES,
 	file_re,
-	match_dir,
-	type Role
+	match_dir
 } from '@norbital-ai/bolt/tooling';
+
+type Role = (typeof ROLES)[number]['role'];
 
 /**
  * A discovered role file. `name` is the path-derived name: the folder's (`orders`, `hr/kiosk`) or the file's

@@ -24,7 +24,6 @@ import {
 	Predicate,
 	PubSub,
 	Result,
-	Schedule,
 	Schema,
 	type SchemaAST
 } from 'effect';
@@ -64,6 +63,7 @@ import {
 } from '../../protocol/read-request.ts';
 import type { AgentEngine as Engine } from './index.ts';
 import { lower_read } from '../query/engine.ts';
+import type { ReadIR } from '../../protocol/reads.ts';
 import { materializeEach } from '../runs/time.ts';
 import {
 	BOUNDS,
@@ -103,10 +103,9 @@ import { InvitationInput, inviteMany } from '../identity/members.ts';
 export { ToolAnswer } from './ai.ts';
 import { REFERENCE, ReferenceIndex, RUN_JS, runFile, runJs } from './run-js.ts';
 import { layered, layers, SKILL_FILE, type EngineManifest, type SkillSpec } from '../manifest.ts';
-import type { InputKind } from '../../decl/fields.ts';
 import { row as systemRow } from '../system/rows.ts';
 import { SYSTEM } from '../../system/index.ts';
-import { isObj } from './draft.ts';
+import { isList, isObj } from './draft.ts';
 import type { McpSessions, McpTool } from './mcp.ts';
 import {
 	ambient,
@@ -206,9 +205,7 @@ export const TEXT_FIRST_BYTES = 16 * 1024 * 1024;
 export const JOBS = { inlineMs: 30000, hostMs: 60000, waitMs: 120000, ingestMs: 600000 } as const;
 type Jobs = Effect.Success<ReturnType<typeof jobs>>;
 const jobFailed = (result: Json): string | undefined =>
-	Predicate.isObject(result) && !Array.isArray(result) && typeof result['error'] === 'string'
-		? result['error']
-		: undefined;
+	isObj(result) && typeof result['error'] === 'string' ? result['error'] : undefined;
 /**
  * A turn's jobs. Each finished job leaves one steering line, taken once at the start of the turn's next step (`take`)
  * unless `wait` collected it first. A turn job is a child of the turn scope; a `detach`ed one (an ingest) runs on
@@ -473,7 +470,7 @@ const defineTool = <S extends Schema.Top & { readonly DecodingServices: never; r
 	name,
 	description: spec.description,
 	behavior: spec.behavior ?? {},
-	input: Schema.decodeUnknownSync(Schema.Json)(model_schema(spec.parameters)),
+	input: model_schema(spec.parameters),
 	decode: Schema.decodeUnknownEffect(spec.parameters, CLOSED)
 });
 /** One write `{ callable, input }`: a generated verb's input is its array of rows. */
@@ -513,6 +510,7 @@ const Scripted = Context.Reference<boolean>('bolt/Scripted', { defaultValue: () 
 const GENERATED = /^migrations\/(?:snapshot|migrations\.lock|physical)\.json$/;
 /** A search hit's line: enough to place it; workspace_read shows the rest. */
 const HIT_CHARS = 240;
+const PACKAGES = ': installed packages are outside the workspace: workspace_lang reads their types.';
 const GENERATED_NOTE =
 	'The build writes this. Never read or edit it: the schema is in each +model.ts and every step in migrations/*.sql.';
 const documentAnswer = (answer: { readonly [key: string]: Json }, key: string): ToolAnswer => {
@@ -662,7 +660,6 @@ const err = (
 	result: Json;
 } => ({ result: { error: message } });
 const VERBS = ['create', 'update', 'delete', 'import'] as const;
-const json_list = (value: Json | undefined): value is readonly Json[] => Array.isArray(value);
 /** `act`'s callable for a decision on an approval request (`bolt.approvals.decide`). */
 const APPROVE = 'approvals.decide';
 const Decide = Schema.Struct({
@@ -775,31 +772,37 @@ export function turnFacts(e: Engine, a: Authority, b: Bindings, tz?: string): st
 			: '')
 	);
 }
-function receipt(callable: string, o: Outcome): Receipt | null {
-	if (o.kind === 'committed')
-		return {
-			outcome: 'committed',
-			callable,
-			records: o.records.map(({ model, id }) => ({ model, id }))
-		};
-	if (o.kind === 'pending_approval')
-		return {
-			outcome: 'pending_approval',
-			callable,
-			request_id: o.request_id,
-			records: o.records.map(({ model, id }) => ({ model, id }))
-		};
-	return null;
+/** A committed or held write joins the turn's receipts. */
+function receipt(receipts: Receipt[], callable: string, o: Outcome): void {
+	if (o.kind !== 'committed' && o.kind !== 'pending_approval') return;
+	const records = o.records.map(({ model, id }) => ({ model, id }));
+	receipts.push(
+		o.kind === 'committed'
+			? { outcome: 'committed', callable, records }
+			: { outcome: 'pending_approval', callable, request_id: o.request_id, records }
+	);
 }
+/** The queued or running run of `automation` over `input` (and by `actor`, when named), oldest first. */
+const activeRun = (e: Engine, automation: string, input: Json, actor?: string) =>
+	e.db
+		.read([
+			{
+				text: `SELECT id FROM sys_run WHERE automation = $1 AND input = $2::jsonb AND state IN ('queued', 'running')
+					AND ($3::text IS NULL OR actor = $3) ORDER BY due_at LIMIT 1`,
+				params: [automation, JSON.stringify(input), actor ?? null]
+			}
+		])
+		.pipe(Effect.map(([active]) => {
+			const id = active?.rows[0]?.['id'];
+			return typeof id === 'string' ? id : undefined;
+		}));
 /** A run's end, read once the ledger says it ended (`RunEnds`, never a poll): its result, or why it did not succeed. */
 const runEnd = (e: Engine, a: Authority, run: string) =>
 	Effect.scoped(
 		Effect.gen(function* () {
 			const ends = e.runEnds;
 			if (ends === undefined)
-				return yield* Effect.fail(
-					BoltError.make('unavailable', 'facility', 'this host does not follow runs')
-				);
+				return yield* BoltError.make('unavailable', 'facility', 'this host does not follow runs');
 			const subscription = yield* PubSub.subscribe(ends);
 			for (;;) {
 				const row = yield* e.db.one(RunViewRow, {
@@ -807,9 +810,7 @@ const runEnd = (e: Engine, a: Authority, run: string) =>
 					params: [run]
 				});
 				if (Option.isNone(row))
-					return yield* Effect.fail(
-						BoltError.make('invalid_input', 'admission', `run ${run} is gone`)
-					);
+					return yield* BoltError.make('invalid_input', 'admission', `run ${run} is gone`);
 				const state = row.value.state;
 				if (state === 'succeeded' || state === 'skipped') {
 					const view = run_view(a, row.value);
@@ -843,31 +844,23 @@ export const runJob = Effect.fn('AgentTool.runJob')(function* (
 	callable: string,
 	answer: Json
 ) {
-	if (!Predicate.isObject(answer) || Array.isArray(answer) || typeof answer['run'] !== 'string')
-		return answer;
+	if (!isObj(answer) || typeof answer['run'] !== 'string') return answer;
 	const run = answer['run'],
 		outcome = answer['outcome'],
-		kind = Predicate.isObject(outcome) && !Array.isArray(outcome) ? outcome['kind'] : undefined;
+		kind = isObj(outcome) ? outcome['kind'] : undefined;
 	if (kind !== undefined && kind !== 'committed' && kind !== 'pending_approval') return answer;
-	const name = callable.startsWith(`${AUTOMATION}.`)
-		? callable.slice(AUTOMATION.length + 1)
-		: callable;
+	const name = callable.startsWith(`${AUTOMATION}.`) ? callable.slice(AUTOMATION.length + 1) : callable;
 	const sync_at = name.indexOf('.sync.');
 	const label = sync_at < 0 ? `automation ${name}` : `sync ${name.slice(0, sync_at)}.${name.slice(sync_at + 6)}`;
-	const held =
-		kind === 'pending_approval' && Predicate.isObject(outcome) && !Array.isArray(outcome)
-			? String(outcome['request_id'] ?? '')
-			: undefined;
+	const held = kind === 'pending_approval' && isObj(outcome) ? String(outcome['request_id'] ?? '') : undefined;
 	const job = yield* jobs.add(
 		label,
-		held === undefined
-			? runEnd(e, a, run)
-			: Effect.succeed<Json>({ status: 'held', request: held }),
+		held === undefined ? runEnd(e, a, run) : Effect.succeed<Json>({ status: 'held', request: held }),
 		{
 			detach: true,
 			alias: run,
 			done: (id, result) => {
-				const r = Predicate.isObject(result) && !Array.isArray(result) ? result : {};
+				const r = isObj(result) ? result : {};
 				const said =
 					r['status'] === 'held'
 						? `held for approval (request ${String(r['request'])})`
@@ -928,39 +921,28 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 			})
 		);
 	}
-	const started = callable.startsWith(`${AUTOMATION}.`) ? callable.slice(AUTOMATION.length + 1) : null;
-	if (started !== null) {
-		const automation = started,
-			args = input ?? {};
-		if (
-			callable.startsWith(`${AUTOMATION}.`) &&
-			x.engine.manifest.automations[automation]?.agent === 'never'
-		)
+	if (callable.startsWith(`${AUTOMATION}.`)) {
+		const automation = callable.slice(AUTOMATION.length + 1),
+			args = input ?? {},
+			agent = x.agent === undefined ? {} : { agent: x.agent };
+		if (x.engine.manifest.automations[automation]?.agent === 'never')
 			return { error: `You may not run '${callable}'.` };
 		if (x.engine.manifest.automations[automation]?.mode === 'call')
-			return encode_wire(yield* x.engine.automations.call({ automation, input: args, authority: x.authority, bindings: x.bindings, ...(x.agent === undefined ? {} : { agent: x.agent }) }));
+			return encode_wire(yield* x.engine.automations.call({ automation, input: args, authority: x.authority, bindings: x.bindings, ...agent }));
 		// the same automation over the same input, queued or running, is that run: a model asking again must not queue a
 		// second one (a local probe started one review three times while the first placed 426 photos)
-		const [active] = yield* x.engine.db.read([
-			{
-				text: `SELECT id FROM sys_run WHERE automation = $1 AND state IN ('queued', 'running')
-			AND input = $2::jsonb ORDER BY due_at LIMIT 1`,
-				params: [automation, JSON.stringify(args)]
-			}
-		]);
-		const existing = active?.rows[0]?.['id'];
-		if (typeof existing === 'string') return { run: existing, already_active: true };
+		const existing = yield* activeRun(x.engine, automation, args);
+		if (existing !== undefined) return { run: existing, already_active: true };
 		const run = globalThis.crypto.randomUUID();
 		const outcome = yield* x.engine.calls.start({
 			automation,
 			runs: [{ id: run, input: args }],
 			authority: x.authority,
 			bindings: x.bindings,
-			...(x.agent === undefined ? {} : { agent: x.agent })
+			...agent
 		});
 		// This receipt commits the queue admission; the run records its business result after execution.
-		const rc = receipt(callable, outcome);
-		if (rc !== null) x.receipts.push(rc);
+		receipt(x.receipts, callable, outcome);
 		return { run, outcome: encode_wire(outcome) };
 	}
 	const dot = callable.lastIndexOf('.');
@@ -984,8 +966,7 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 		acts: decoded.acts,
 		outputs: decoded.outputs
 	});
-	const rc = receipt(callable, r.outcome);
-	if (rc !== null) x.receipts.push(rc);
+	receipt(x.receipts, callable, r.outcome);
 	if (r.outcome.kind !== 'committed' || name === 'delete') return encode_wire(r.outcome);
 	// the stored rows, as the actor reads them: one read request, a root per written model (at most 20 rows each) with its
 	// first-level layers (child lines, linked records), so the answer is the read-back
@@ -997,26 +978,16 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 	);
 	// what the write supplied, per root: its own columns and the child lists it wrote, each with their columns
 	const supplied = name === 'import' && Predicate.isObject(input) ? input['rows'] : input;
-	const rowsIn = json_list(supplied) ? supplied : [];
+	const rowsIn = isList(supplied) ? supplied : [];
 	const written = (rows: readonly Json[]) => {
 		const own = new Set<string>(),
 			lists = new Map<string, Set<string>>();
 		for (const row of rows) {
-			const fields =
-				Predicate.isObject(row) && !Array.isArray(row)
-					? Predicate.isObject(row['set']) && !Array.isArray(row['set'])
-						? row['set']
-						: row
-					: {};
+			const fields = isObj(row) ? (isObj(row['set']) ? row['set'] : row) : {};
 			for (const [key, value] of Object.entries(fields)) {
-				if (
-					Array.isArray(value) &&
-					value.every((v) => Predicate.isObject(v) && !Array.isArray(v))
-				) {
+				if (isList(value) && value.every(isObj)) {
 					const cols = lists.get(key) ?? new Set<string>();
-					for (const v of value)
-						if (Predicate.isObject(v) && !Array.isArray(v))
-							for (const k of Object.keys(v)) cols.add(k);
+					for (const v of value) if (isObj(v)) for (const k of Object.keys(v)) cols.add(k);
 					lists.set(key, cols);
 				} else if (key !== 'target') own.add(key);
 			}
@@ -1089,10 +1060,8 @@ export const perform = Effect.fn('AgentTool.perform')(function* (
 					Effect.mapError((cause) =>
 						BoltError.make('internal', 'decode', 'Could not decode this read.', cause)
 					),
-					Effect.flatMap((ir) =>
-						x.engine.read([ir], { as: 'caller', authority: x.authority }, x.bindings)
-					),
-					Effect.flatMap(([got]) => Schema.decodeUnknownEffect(StoredReadBack)(got)),
+					Effect.flatMap(readAs(x)),
+					Effect.flatMap(Schema.decodeUnknownEffect(StoredReadBack)),
 					Effect.tapCause(Effect.logWarning),
 					Effect.result
 				);
@@ -1201,6 +1170,9 @@ export type ReadToolContext = {
 	authority: Authority;
 	bindings: Bindings;
 };
+/** `read`'s request path once lowered: one engine read as the actor. A write's read-back reads through it too. */
+const readAs = (x: ReadToolContext) => (ir: ReadIR) =>
+	x.engine.read([ir], { as: 'caller', authority: x.authority }, x.bindings).pipe(Effect.map(([got]) => got ?? null));
 /** The stored rows a committed write returns. Omit the pages' cursors. */
 const StoredReadBack = Schema.Record(
 	Schema.String,
@@ -1387,7 +1359,7 @@ export function describeWorkspace(
 	const automations = a.automations.filter((name) => m.automations[name] !== undefined);
 	const app = (name: string) => {
 		const spec = m.apps[name];
-		if (spec === undefined) throw BoltError.make('corrupt', 'decode', `The app catalogue has no '${name}'.`);
+		if (spec === undefined) return name;
 		const group = name.includes('/') ? name.slice(0, name.indexOf('/')) : undefined,
 			label = group === undefined ? undefined : m.groups?.[group]?.title;
 		return [
@@ -1400,7 +1372,7 @@ export function describeWorkspace(
 	};
 	const model = (name: string) => {
 		const spec = all.models[name], ex = all.exposures[name];
-		if (spec === undefined) throw BoltError.make('corrupt', 'decode', `The model catalogue has no '${name}'.`);
+		if (spec === undefined) return name;
 		const links = Object.entries(all.relationships).flatMap(([key, r]) => [
 			...(key.startsWith(`${name}.`)
 				? [`${key.slice(name.length + 1)} → ${[r.to].flat().join(' | ')}`]
@@ -1434,7 +1406,7 @@ export function describeWorkspace(
 	};
 	const automation = (name: string) => {
 		const spec = m.automations[name];
-		if (spec === undefined) throw BoltError.make('corrupt', 'decode', `The automation catalogue has no '${name}'.`);
+		if (spec === undefined) return name;
 		const on = (spec.on ?? []).map((x) => `cron ${x.cron}`);
 		return `${automationSignature(m, name)} "${spec.description}"${on.length === 0 ? '' : ` · ${on.join(', ')}`}${spec.agent === undefined ? '' : ` · agent ${spec.agent}`}`;
 	};
@@ -1540,16 +1512,12 @@ export function readTool(x: ReadToolContext) {
 					: BoltError.make('internal', 'decode', 'Could not decode this read.', cause)
 		}).pipe(
 			Effect.flatMap((materialized) => lower_read(e.manifest, 'query', [materialized])),
-			Effect.flatMap((ir) => e.read([ir], { as: 'caller', authority: a }, x.bindings)),
-			Effect.map(([got]) => got ?? null)
+			Effect.flatMap(readAs(x))
 		);
 	const run = Effect.fn('AgentTool.read')(function* (request: ReadRequestJson) {
 		const named = Object.keys(request).filter((path) => !path.includes('.'));
 		const single = named.length === 1 ? named[0] : undefined;
-		const pageOf = (v: Json): Json =>
-			single !== undefined && Predicate.isObject(v) && !EffectArray.isArray<typeof v>(v)
-				? (v[single] ?? null)
-				: v;
+		const pageOf = (v: Json): Json => (single !== undefined && isObj(v) ? (v[single] ?? null) : v);
 		const wrap = (v: Json): Json => (single === undefined ? v : { [single]: v });
 		return yield* Effect.gen(function* () {
 			const full = yield* answer(request),
@@ -1643,128 +1611,88 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	const e = x.engine,
 		a = x.authority,
 		acts = callablesFor(e.manifest, a, x.inApp && !x.child && e.identity !== undefined),
-		paths = readPaths(e.manifest, a),
 		agent = x.mode === 'agent',
 		hosted = x.host_tools;
 	const entries = new Map<string, BoundTool>(), hostEntries = new Map<string, BoundTool>();
+	/** Binds a definition's handler under this step's actor: a refused input or a failure is the model's answer. */
 	const add = <A>(
 		definition: ToolDefinition<A>,
-		handler: (input: A, context: { readonly toolCallId: string }) => Effect.Effect<ToolAnswer, EngineError | PortFailure>,
+		handler: (input: A, callId: string) => Effect.gen.Return<ToolAnswer, EngineError | PortFailure>,
 		meta: Pick<AgentTool, 'studio'> = {},
 		destination = entries
-	) =>
-		Effect.sync(() => {
-			const { name, description, input, behavior } = definition;
-			destination.set(name, {
-				tool: { name, description, input, behavior, ...meta },
-				run: (input, callId) => definition.decode(input, { ...CLOSED, errors: 'all' }).pipe(
-					Effect.mapError((error) => new Error(`Invalid parameters for tool '${name}': ${error.message}`)),
-					Effect.tap((decoded) => Effect.annotateCurrentSpan({ tool: name, parameters: decoded })),
-					Effect.flatMap((decoded) => guard(handler(decoded, { toolCallId: callId })))
-				)
-			});
+	) => {
+		const { name, description, input, behavior } = definition;
+		destination.set(name, {
+			tool: { name, description, input, behavior, ...meta },
+			run: (input, callId) => definition.decode(input, { ...CLOSED, errors: 'all' }).pipe(
+				Effect.mapError((error) => new Error(`Invalid parameters for tool '${name}': ${error.message}`)),
+				Effect.tap((decoded) => Effect.annotateCurrentSpan({ tool: name, parameters: decoded })),
+				Effect.flatMap((decoded) => guard(Effect.gen(() => handler(decoded, callId))))
+			)
 		});
+	};
 	const read = readTool(x);
-	if (read !== undefined)
-		yield* add(
-			read.tool,
-			(request) => read.run(request)
-		);
-	yield* add(
-		describeTool,
-		(i) =>
-			Effect.gen(function* () {
-				const names = i.names ?? [];
-				if (names.includes('system')) {
-					if (!x.inApp || x.child || !a.admin || a.actor.kind !== 'member' || a.actor.external)
-						return ok({ capabilities: [] });
-					const [connected] = yield* x.engine.db.read([
-						{
-							text: 'SELECT id, name, integration, envoy FROM sys_integration ORDER BY name',
-							params: []
-						}
-					]);
-					return ok({
-						capabilities: Object.entries(SYSTEM_UI).map(([capability, ui]) => ({
-							capability,
-							...ui
-						})),
-						connections: connected?.rows ?? [],
-						secret_names: Object.keys(e.manifest.workspace.secrets ?? {}),
-						mcp: Object.keys(e.manifest.mcp),
-						note: "An envoy and a connection of a declared integration are records, with no source change: act sys_envoy.create, then sys_integration.create { integration, name, envoy: <its id> } with no owner. page { path, configure } opens a native form for what stays the person's (pairing, secrets); it never submits. A new integration or MCP server is declared in source first."
-					});
-				}
-				const workspace = x.workspace;
-				const source =
-					workspace === undefined
-						? null
-						: yield* Port.attempt('workspace', () =>
-								workspace.read('src/i18n/+messages.ts')
-							).pipe(Effect.orElseSucceed(() => null));
-				return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), names));
-			})
-	);
+	if (read !== undefined) add(read.tool, function* (request) { return yield* read.run(request); });
+	add(describeTool, function* (i) {
+		const names = i.names ?? [];
+		if (names.includes('system')) {
+			if (!x.inApp || x.child || !a.admin || a.actor.kind !== 'member' || a.actor.external)
+				return ok({ capabilities: [] });
+			const [connected] = yield* x.engine.db.read([
+				{ text: 'SELECT id, name, integration, envoy FROM sys_integration ORDER BY name', params: [] }
+			]);
+			return ok({
+				capabilities: Object.entries(SYSTEM_UI).map(([capability, ui]) => ({ capability, ...ui })),
+				connections: connected?.rows ?? [],
+				secret_names: Object.keys(e.manifest.workspace.secrets ?? {}),
+				mcp: Object.keys(e.manifest.mcp),
+				note: "An envoy and a connection of a declared integration are records, with no source change: act sys_envoy.create, then sys_integration.create { integration, name, envoy: <its id> } with no owner. page { path, configure } opens a native form for what stays the person's (pairing, secrets); it never submits. A new integration or MCP server is declared in source first."
+			});
+		}
+		const workspace = x.workspace;
+		const source =
+			workspace === undefined
+				? null
+				: yield* Port.attempt('workspace', () => workspace.read('src/i18n/+messages.ts')).pipe(
+						Effect.orElseSucceed(() => null)
+					);
+		return ok(describeWorkspace(e.manifest, a, messageCatalogue(source), names));
+	});
 	if (agent && x.inApp && !x.child && x.conv.owner !== null && x.conv.integration === null && x.conv.envoy === null && x.conv.run == null && a.actor.kind === 'member' && !a.actor.external) {
 		const allowed = navigation_paths(nav(e.manifest, a), a.admin);
-		yield* add(
-			pageTool,
-			({ path, configure: asked, click, type, scroll, go, highlight, preview }) => {
-				if (preview !== undefined)
-					return Effect.succeed(
-						/^https?:\/\//.test(preview) && URL.canParse(preview)
-							? ok({ preview })
-							: err('preview is a preview URL (https://…)')
-					);
-				if (path !== undefined) {
-					if (!allowed.includes(path))
-						return Effect.succeed(err(`No page ${path}. Pages: ${allowed.join(', ')}`));
-					const setup = Schema.decodeUnknownOption(SystemUiRequest)(asked);
-					if (asked !== undefined && Option.isNone(setup))
-						return Effect.succeed(
-							err("configure is a capability from describe_workspace { names: ['system'] }")
-						);
-					const configure = Option.getOrUndefined(setup);
-					if (
-						configure?.capability === 'secret.set' &&
-						e.manifest.workspace.secrets?.[configure.record] === undefined
-					)
-						return Effect.succeed(err('That secret is not declared in this workspace.'));
-					if (
-						configure?.capability === 'mcp.configure' &&
-						e.manifest.mcp[configure.record] === undefined
-					)
-						return Effect.succeed(err('That MCP server is not declared in this workspace.'));
-					const target =
-						configure === undefined ? path : a.admin ? systemUiPath(path, configure) : null;
-					return Effect.succeed(
-						target === null
-							? err('This configuration does not belong to that page or your authority.')
-							: ok({ navigation: target, requested: true })
-					);
-				}
-				if (
-					click === undefined &&
-					scroll === undefined &&
-					go === undefined &&
-					type === undefined &&
-					highlight === undefined
-				)
-					return Effect.succeed(err('give path, click, type, scroll, go, highlight or preview'));
-				return Effect.succeed(
-					ok({
-						page: {
-							...(click === undefined ? {} : { click }),
-							...(scroll === undefined ? {} : { scroll }),
-							...(go === undefined ? {} : { go }),
-							...(type === undefined ? {} : { type }),
-							...(highlight === undefined ? {} : { highlight })
-						},
-						requested: true
-					})
-				);
+		add(pageTool, function* ({ path, configure: asked, click, type, scroll, go, highlight, preview }) {
+			if (preview !== undefined)
+				return /^https?:\/\//.test(preview) && URL.canParse(preview)
+					? ok({ preview })
+					: err('preview is a preview URL (https://…)');
+			if (path !== undefined) {
+				if (!allowed.includes(path)) return err(`No page ${path}. Pages: ${allowed.join(', ')}`);
+				const setup = Schema.decodeUnknownOption(SystemUiRequest)(asked);
+				if (asked !== undefined && Option.isNone(setup))
+					return err("configure is a capability from describe_workspace { names: ['system'] }");
+				const configure = Option.getOrUndefined(setup);
+				if (configure?.capability === 'secret.set' && e.manifest.workspace.secrets?.[configure.record] === undefined)
+					return err('That secret is not declared in this workspace.');
+				if (configure?.capability === 'mcp.configure' && e.manifest.mcp[configure.record] === undefined)
+					return err('That MCP server is not declared in this workspace.');
+				const target = configure === undefined ? path : a.admin ? systemUiPath(path, configure) : null;
+				return target === null
+					? err('This configuration does not belong to that page or your authority.')
+					: ok({ navigation: target, requested: true });
 			}
-		);
+			if ([click, scroll, go, type, highlight].every((v) => v === undefined))
+				return err('give path, click, type, scroll, go, highlight or preview');
+			return ok({
+				page: {
+					...(click === undefined ? {} : { click }),
+					...(scroll === undefined ? {} : { scroll }),
+					...(go === undefined ? {} : { go }),
+					...(type === undefined ? {} : { type }),
+					...(highlight === undefined ? {} : { highlight })
+				},
+				requested: true
+			});
+		});
 	}
 	// Manual sync is its own native operation, with file grants or an explicit remote refresh capability.
 	const sync_controls = a.actor.kind !== 'member' ? [] : Object.entries(e.manifest.exposures).flatMap(([model, spec]) =>
@@ -1781,39 +1709,24 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				? [{ model, sync, kind: 'remote', modes: ['read'] }] : [];
 		})
 	);
-	/** An `input_file`: a JSON file of this member's (a `sys_file` they created), at most 8 MiB. */
-	const inputOfFile = Effect.fn('AgentTool.work6')(function* (fileId: string) {
+	/** An `input_file`: a JSON file of this member's (a `sys_file` they created), at most `MODEL_FILES.fileBytes`. */
+	const inputOfFile = Effect.fn('AgentTool.inputOfFile')(function* (fileId: string) {
 		const member = a.actor.kind === 'member' ? a.actor.id : null, files = e.files;
-		if (files === undefined || member === null)
-			return { error: 'This host stores no files; give input.' };
-		const [rows] = yield* e.db.read([
-			{
-				text: 'SELECT key, size FROM sys_file WHERE id = $1 AND created_by = $2',
-				params: [fileId, member]
-			}
-		]);
-		if (rows === undefined)
-			return yield* BoltError.make('corrupt', 'decode', 'The input file query returned no result.');
-		const raw = rows.rows[0];
-		if (raw === undefined)
-			return {
-				error: `No file ${fileId} of yours; give the id of a file you uploaded or a tool stored for you.`
-			};
-		const f = yield* Schema.decodeUnknownEffect(ReferenceFile)(raw).pipe(
-			Effect.mapError((error) => BoltError.make('corrupt', 'decode', error.message, error))
-		);
-		if (f.size > 8 * 1024 * 1024)
-			return { error: 'That file is over 8 MiB; split the input.' };
-		return yield* Effect.gen(function* () {
-			const text = new TextDecoder().decode(
-				yield* files.get(f.key, 8 * 1024 * 1024).pipe(Port.call('files', 30000))
-			);
-			return {
-				input: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
-					Effect.mapError((error) => BoltError.make('invalid_input', 'decode', error.message, error))
-				)
-			};
-		}).pipe(
+		if (files === undefined || member === null) return { error: 'This host stores no files; give input.' };
+		const [f] = yield* e.db.rows(ReferenceFile, {
+			text: 'SELECT key, size FROM sys_file WHERE id = $1 AND created_by = $2',
+			params: [fileId, member]
+		});
+		if (f === undefined)
+			return { error: `No file ${fileId} of yours; give the id of a file you uploaded or a tool stored for you.` };
+		if (f.size > MODEL_FILES.fileBytes)
+			return { error: `That file is over ${MODEL_FILES.fileBytes / 1024 / 1024} MiB; split the input.` };
+		return yield* files.get(f.key, MODEL_FILES.fileBytes).pipe(
+			Port.call('files', 30000),
+			Effect.flatMap((bytes) =>
+				Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(new TextDecoder().decode(bytes))
+			),
+			Effect.map((input) => ({ input })),
 			Effect.catch((error) => Effect.succeed({ error: `That file is not JSON: ${error.message}` }))
 		);
 	});
@@ -1821,209 +1734,180 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		(n) => e.manifest.automations[n] !== undefined && e.manifest.automations[n]?.agent !== 'never'
 	);
 	const mayStart = (c: string) => c.startsWith(`${AUTOMATION}.`) && automations.includes(c.slice(AUTOMATION.length + 1));
-	if (agent && (acts.size > 0 || automations.length > 0)) {
-		yield* add(
-			actTool,
-			(i, { toolCallId: id = '' }) =>
-				Effect.gen(function* () {
-					if (typeof i.input_file === 'string') {
-						const read = yield* inputOfFile(i.input_file);
-						if ('error' in read) return err(read.error);
-						i = { ...i, input: read.input };
-					}
-					if (!acts.has(i.callable) && !mayStart(i.callable))
-						return err(
-							`You may not run '${i.callable}'. Yours: ${[...acts.keys(), ...automations.map((n) => `${AUTOMATION}.${n}`)].slice(0, 60).join(', ')}`
-						);
-					if (Array.isArray(i.input) && i.input.length === 0)
-						return err(`'${i.callable}' was given no rows: there is nothing to write.`);
-					if (
-						x.inApp &&
-						(acts.get(i.callable)?.confirm === true ||
-							(i.callable.startsWith(`${AUTOMATION}.`) &&
-								e.manifest.automations[i.callable.slice(AUTOMATION.length + 1)]?.agent ===
-									'confirm'))
-					)
-						return { confirm: true } as const;
-					const answer = yield* perform(
-						// the in-app agent starts for its member; an envoy's turn is the envoy's own start
-						x.inApp ? { ...x, agent: { conversation: x.conv.id } } : x,
-						i.callable,
-						i.input ?? null,
-						id
-					);
-					return ok(yield* runJob(x.jobs, e, a, i.callable, answer));
-				})
-		);
-	}
-	if (agent && sync_controls.length > 0) {
-		yield* add(syncTool, (i) => Effect.gen(function* () {
+	if (agent && (acts.size > 0 || automations.length > 0))
+		add(actTool, function* (i, id) {
+			if (typeof i.input_file === 'string') {
+				const read = yield* inputOfFile(i.input_file);
+				if ('error' in read) return err(read.error);
+				i = { ...i, input: read.input };
+			}
+			if (!acts.has(i.callable) && !mayStart(i.callable))
+				return err(
+					`You may not run '${i.callable}'. Yours: ${[...acts.keys(), ...automations.map((n) => `${AUTOMATION}.${n}`)].slice(0, 60).join(', ')}`
+				);
+			if (Array.isArray(i.input) && i.input.length === 0)
+				return err(`'${i.callable}' was given no rows: there is nothing to write.`);
+			if (
+				x.inApp &&
+				(acts.get(i.callable)?.confirm === true ||
+					(i.callable.startsWith(`${AUTOMATION}.`) &&
+						e.manifest.automations[i.callable.slice(AUTOMATION.length + 1)]?.agent === 'confirm'))
+			)
+				return { confirm: true } as const;
+			const answer = yield* perform(
+				// the in-app agent starts for its member; an envoy's turn is the envoy's own start
+				x.inApp ? { ...x, agent: { conversation: x.conv.id } } : x,
+				i.callable,
+				i.input ?? null,
+				id
+			);
+			return ok(yield* runJob(x.jobs, e, a, i.callable, answer));
+		});
+	if (agent && sync_controls.length > 0)
+		add(syncTool, function* (i) {
 			if (!sync_controls.some((entry) => entry.model === i.model && entry.sync === i.sync))
 				return err('You may not use this sync. Read describe_workspace for your native sync controls.');
 			const automation = `${i.model}.sync.${i.sync}`, input = i.input ?? {};
-			const [active] = yield* e.db.read([{
-				text: `SELECT id FROM sys_run WHERE automation = $1 AND input = $2::jsonb
-					AND actor = $3 AND state IN ('queued', 'running') ORDER BY due_at LIMIT 1`,
-				params: [automation, JSON.stringify(input), actor_ref(a.actor)]
-			}]);
-			const existing = active?.rows[0]?.['id'];
-			if (typeof existing === 'string') return ok(yield* runJob(x.jobs, e, a, automation, { run: existing, already_active: true }));
+			const existing = yield* activeRun(e, automation, input, actor_ref(a.actor));
+			if (existing !== undefined) return ok(yield* runJob(x.jobs, e, a, automation, { run: existing, already_active: true }));
 			const run = globalThis.crypto.randomUUID();
 			const outcome = yield* e.calls.sync_control({
 				model: i.model, sync: i.sync, id: run, input, authority: a, bindings: x.bindings,
 				...(x.inApp ? { agent: { conversation: x.conv.id } } : {})
 			});
-			const rc = receipt(automation, outcome);
-			if (rc !== null) x.receipts.push(rc);
+			receipt(x.receipts, automation, outcome);
 			return ok(yield* runJob(x.jobs, e, a, automation, { run, outcome: encode_wire(outcome) }));
-		}));
-	}
+		});
 
 	if (x.mode === 'plan' && !x.child) {
-		yield* add(
-			updatePlanTool,
-			(i) =>
-				Effect.gen(function* () {
-					const plan = x.conv.plan,
-						rev = plan?.revision ?? 0;
-					if (i.expected_revision !== undefined && i.expected_revision !== rev)
-						return err(`The plan is at revision ${rev}; read it again before editing.`);
-					if (typeof i.body === 'string') {
-						yield* x.setPlan(i.body);
-						return ok({ saved: true, revision: rev + 1 });
-					}
-					const p = i.patch;
-					if (p?.old === undefined || plan === null)
-						return err('Give body, or a patch against an existing plan.');
-					const count = plan.body.split(p.old).length - 1;
-					if (count !== 1)
-						return err(
-							count === 0
-								? 'That passage is not in the plan.'
-								: 'That passage occurs more than once; quote more of it.'
-						);
-					yield* x.setPlan(plan.body.replace(p.old, p.new ?? ''));
-					return ok({ saved: true, revision: rev + 1 });
-				})
-		);
+		add(updatePlanTool, function* (i) {
+			const plan = x.conv.plan,
+				rev = plan?.revision ?? 0;
+			if (i.expected_revision !== undefined && i.expected_revision !== rev)
+				return err(`The plan is at revision ${rev}; read it again before editing.`);
+			if (typeof i.body === 'string') {
+				yield* x.setPlan(i.body);
+				return ok({ saved: true, revision: rev + 1 });
+			}
+			const p = i.patch;
+			if (p?.old === undefined || plan === null)
+				return err('Give body, or a patch against an existing plan.');
+			const count = plan.body.split(p.old).length - 1;
+			if (count !== 1)
+				return err(
+					count === 0
+						? 'That passage is not in the plan.'
+						: 'That passage occurs more than once; quote more of it.'
+				);
+			yield* x.setPlan(plan.body.replace(p.old, p.new ?? ''));
+			return ok({ saved: true, revision: rev + 1 });
+		});
 	}
 	{
-		yield* add(
-			goalsTool,
-			(i) =>
-				Effect.gen(function* () {
-					const items = i.items.map((g) => ({ ...g }));
-					if (items.length > 100) return err('At most 100 goals.');
-					if (new Set(items.map((g) => g.id)).size !== items.length)
-						return err('Goal ids must be unique.');
-					if (items.filter((g) => g.status === 'doing').length > 1)
-						return err('At most one goal is doing.');
-					// a done goal is history: resending the live list without it keeps it rather than refusing
-					for (const old of x.conv.goals ?? [])
-						if (old.status === 'done') {
-							const now = items.find((g) => g.id === old.id);
-							if (now === undefined) items.push({ ...old });
-							else if (now.status !== 'done' || now.text !== old.text) {
-								now.status = 'done';
-								now.text = old.text;
-							}
-						}
-					yield* x.setGoals(items);
-					return ok({ saved: true, goals: items });
-				})
-		);
+		add(goalsTool, function* (i) {
+			const items = i.items.map((g) => ({ ...g }));
+			if (items.length > 100) return err('At most 100 goals.');
+			if (new Set(items.map((g) => g.id)).size !== items.length)
+				return err('Goal ids must be unique.');
+			if (items.filter((g) => g.status === 'doing').length > 1)
+				return err('At most one goal is doing.');
+			// a done goal is history: resending the live list without it keeps it rather than refusing
+			for (const old of x.conv.goals ?? [])
+				if (old.status === 'done') {
+					const now = items.find((g) => g.id === old.id);
+					if (now === undefined) items.push({ ...old });
+					else if (now.status !== 'done' || now.text !== old.text) {
+						now.status = 'done';
+						now.text = old.text;
+					}
+				}
+			yield* x.setGoals(items);
+			return ok({ saved: true, goals: items });
+		});
 	}
 	// every skill is readable by every actor: a skill is procedure, never authority
 	const skills = Object.entries(x.skills);
 	if (skills.length > 0) {
-		yield* add(
-			skillTool,
-			(i) =>
-				Effect.gen(function* () {
-					const t = skills.find(([n]) => n === i.name)?.[1];
-					if (t === undefined)
-						return err(`No skill '${i.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
-					if (i.file !== undefined && i.section !== undefined)
-						return err('Read a section or a file, not both.');
-					const key = `${i.name}#${i.section ?? ''}#${i.file ?? ''}`;
-					if (x.read.has(key))
-						return ok({ note: `You read ${i.name} earlier in this turn; its text is above.` });
-					const remember = () => x.read.set(
-						key,
-						`skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}${i.file === undefined ? '' : ` file ${i.file}`}`
+		add(skillTool, function* (i) {
+			const t = skills.find(([n]) => n === i.name)?.[1];
+			if (t === undefined)
+				return err(`No skill '${i.name}'. Skills: ${skills.map(([n]) => n).join(', ')}`);
+			if (i.file !== undefined && i.section !== undefined)
+				return err('Read a section or a file, not both.');
+			const key = `${i.name}#${i.section ?? ''}#${i.file ?? ''}`;
+			if (x.read.has(key))
+				return ok({ note: `You read ${i.name} earlier in this turn; its text is above.` });
+			const remember = () => x.read.set(
+				key,
+				`skill ${i.name}${i.section === undefined ? '' : ` (${i.section})`}${i.file === undefined ? '' : ` file ${i.file}`}`
+			);
+			const s = skillOf(t.text);
+			if (i.file !== undefined && i.file !== SKILL_FILE) {
+				if (!t.files.includes(i.file))
+					return err(
+						`No file '${i.file}' in ${i.name}. Files: ${t.files
+							.filter((f) => f !== SKILL_FILE)
+							.slice(0, 50)
+							.join(', ')}`
 					);
-					const s = skillOf(t.text);
-					if (i.file !== undefined && i.file !== SKILL_FILE) {
-						if (!t.files.includes(i.file))
-							return err(
-								`No file '${i.file}' in ${i.name}. Files: ${t.files
-									.filter((f) => f !== SKILL_FILE)
-									.slice(0, 50)
-									.join(', ')}`
-							);
-						const bytes = yield* t.read(i.file);
-						remember();
-						return documentAnswer(
-							{ file: i.file, text: new TextDecoder().decode(bytes) },
-							'text'
-						);
-					}
-					// its own files, never the packages it vendors
-					const own = t.files.filter(
-						(f) => f !== SKILL_FILE && !f.split('/').includes('node_modules')
-					);
-					const files = own.length === 0 ? {} : { files: own.slice(0, 50) };
-					if (i.section === undefined) {
-						// whole sections that fit the result bound, then the names of the rest: a section is read by name,
-						// never through a clipped body
-						const parts = s.body.split(/^(?=##\s)/m);
-						let body = '',
-							shown = 0;
-						for (const part of parts) {
-							if (shown > 0 && size(body + part) > BOUNDS.resultBytes - 2000) break;
-							body += part;
-							shown++;
-						}
-						const rest = parts
-							.slice(shown)
-							.map((p) => /^##\s+(.+)$/m.exec(p)?.[1]?.trim())
-							.filter((name): name is string => name !== undefined);
-						remember();
-						return documentAnswer(
-							{
-								description: s.description,
-								sections: s.sections,
-								body,
-								...files,
-								...(rest.length === 0
-									? {}
-									: { more: `read each with section: ${rest.join(', ')}` })
-							},
-							'body'
-						);
-					}
-					const part = section(s.body, i.section);
-					if (part !== undefined) remember();
-					return part === undefined
-						? ok({ error: `No section '${i.section}'.`, sections: s.sections })
-						: textAnswer(part);
-				})
-		);
+				const bytes = yield* t.read(i.file);
+				remember();
+				return documentAnswer(
+					{ file: i.file, text: new TextDecoder().decode(bytes) },
+					'text'
+				);
+			}
+			// its own files, never the packages it vendors
+			const own = t.files.filter(
+				(f) => f !== SKILL_FILE && !f.split('/').includes('node_modules')
+			);
+			const files = own.length === 0 ? {} : { files: own.slice(0, 50) };
+			if (i.section === undefined) {
+				// whole sections that fit the result bound, then the names of the rest: a section is read by name,
+				// never through a clipped body
+				const parts = s.body.split(/^(?=##\s)/m);
+				let body = '',
+					shown = 0;
+				for (const part of parts) {
+					if (shown > 0 && size(body + part) > BOUNDS.resultBytes - 2000) break;
+					body += part;
+					shown++;
+				}
+				const rest = parts
+					.slice(shown)
+					.map((p) => /^##\s+(.+)$/m.exec(p)?.[1]?.trim())
+					.filter((name): name is string => name !== undefined);
+				remember();
+				return documentAnswer(
+					{
+						description: s.description,
+						sections: s.sections,
+						body,
+						...files,
+						...(rest.length === 0
+							? {}
+							: { more: `read each with section: ${rest.join(', ')}` })
+					},
+					'body'
+				);
+			}
+			const part = section(s.body, i.section);
+			if (part !== undefined) remember();
+			return part === undefined
+				? ok({ error: `No section '${i.section}'.`, sections: s.sections })
+				: textAnswer(part);
+		});
 	}
 	{
-		yield* add(
-			historyTool,
-			(i) =>
-				Effect.gen(function* () {
-					return ok(
-						yield* x.history(
-							i.query,
-							i.scope === 'mine' ? 'mine' : 'this',
-							Math.max(1, Math.min(i.limit ?? 20, 50))
-						)
-					);
-				})
-		);
+		add(historyTool, function* (i) {
+			return ok(
+				yield* x.history(
+					i.query,
+					i.scope === 'mine' ? 'mine' : 'this',
+					Math.max(1, Math.min(i.limit ?? 20, 50))
+				)
+			);
+		});
 	}
 	/** More of a clipped result: the call its clip note names (none for the latest) from a character offset. */
 	const readOutput = Effect.fn('AgentTool.readOutput')(function* (call: string, offset: number) {
@@ -2056,33 +1940,29 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		};
 	});
 	if (x.conv.integration !== null) {
-		yield* add(
-			readMessagesTool,
-			(i, { toolCallId: id = '' }) =>
-				Effect.gen(function* () {
-					const rows = yield* x.messages({
-						unread: i.all !== true && i.before === undefined,
-						limit: Math.max(1, Math.min(i.limit ?? 50, 50)),
-						...(i.before === undefined ? {} : { before: i.before }),
-						key: `${x.turn}:${id}`
-					});
-					return ok({
-						messages: rows.map((r) => ({
-							seq: r.seq,
-							from: r.role === 'assistant' ? 'you' : authorOf(r),
-							sender: r.sender ?? null,
-							message: r.provider_id ?? null,
-							status: r.status ?? null,
-							sent: r.direction === 'outbound' && !confirmed_send(r.status) ? null : r.sent_at ?? null,
-							created: r.created_at ?? null,
-							text: r.text,
-							files: encode_wire(filesOf(r)),
-							addressed: !ambient(r)
-						})),
-						note: 'Only messages since this account was connected are here; senders may have edited or deleted some since. Open a file with read_file { id }; read further back with before: the oldest seq here.'
-					});
-				})
-		);
+		add(readMessagesTool, function* (i, id) {
+			const rows = yield* x.messages({
+				unread: i.all !== true && i.before === undefined,
+				limit: Math.max(1, Math.min(i.limit ?? 50, 50)),
+				...(i.before === undefined ? {} : { before: i.before }),
+				key: `${x.turn}:${id}`
+			});
+			return ok({
+				messages: rows.map((r) => ({
+					seq: r.seq,
+					from: r.role === 'assistant' ? 'you' : authorOf(r),
+					sender: r.sender ?? null,
+					message: r.provider_id ?? null,
+					status: r.status ?? null,
+					sent: r.direction === 'outbound' && !confirmed_send(r.status) ? null : r.sent_at ?? null,
+					created: r.created_at ?? null,
+					text: r.text,
+					files: encode_wire(filesOf(r)),
+					addressed: !ambient(r)
+				})),
+				note: 'Only messages since this account was connected are here; senders may have edited or deleted some since. Open a file with read_file { id }; read further back with before: the oldest seq here.'
+			});
+		});
 	}
 	/** A page's four quarters, shown beside it. */
 	const tiled = Effect.fn('AgentTool.tiled')(function* (bytes: Uint8Array, id: string) {
@@ -2101,32 +1981,18 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			attach(x.files, { mime: 'image/jpeg', bytes: tile, id: `${id}#tile:${n}` });
 	});
 	/** A stored file as an image (shown from the next step) or its text; every other file is parsed first. */
-	const readStored = Effect.fn('AgentTool.work15')(function* (
+	const readStored = Effect.fn('AgentTool.readStored')(function* (
 		port: NonNullable<typeof x.attachments>,
 		file: Json
 	) {
-		const fileId =
-				Predicate.isObject(file) && typeof file['id'] === 'string' ? file['id'] : undefined,
-			fileName =
-				Predicate.isObject(file) && typeof file['name'] === 'string'
-					? file['name']
-					: (fileId ?? 'the file');
+		const fileId = isObj(file) && typeof file['id'] === 'string' ? file['id'] : undefined,
+			fileName = isObj(file) && typeof file['name'] === 'string' ? file['name'] : (fileId ?? 'the file');
 		const seen = (yield* Scripted) || fileId === undefined ? undefined : `file:${fileId}`;
 		if (seen !== undefined && x.read.has(seen))
 			return ok({ note: `You read ${fileName} earlier in this turn; its answer is above.` });
 		const got = yield* port.read(file).pipe(Port.call('files', 30000));
-		if (
-			Predicate.isObject(got) &&
-			'bytes' in got &&
-			got.bytes instanceof Uint8Array &&
-			'mime' in got &&
-			typeof got.mime === 'string'
-		) {
-			const seen = attach(x.files, {
-				mime: got.mime,
-				bytes: got.bytes,
-				...(fileId === undefined ? {} : { id: fileId })
-			});
+		if (Predicate.isObject(got) && 'bytes' in got && got.bytes instanceof Uint8Array && 'mime' in got && typeof got.mime === 'string') {
+			const seen = attach(x.files, { mime: got.mime, bytes: got.bytes, ...(fileId === undefined ? {} : { id: fileId }) });
 			if (seen === 'shown') yield* tiled(got.bytes, fileId ?? got.mime);
 			return ok({ attached: ATTACHED[seen] });
 		}
@@ -2135,13 +2001,10 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		);
 		if (seen !== undefined) x.read.set(seen, `file ${fileName}`);
 		// a text file is one long value: whole up to the bound
-		const record = Option.getOrUndefined(
-			Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(answer)
-		);
-		return record !== undefined && typeof record['text'] === 'string'
-			? documentAnswer(record, 'text')
-			: ok(answer);
+		return isObj(answer) && typeof answer['text'] === 'string' ? documentAnswer(answer, 'text') : ok(answer);
 	});
+	const sourceFile = (id: string) =>
+		x.engine.db.rows(SourceFile, { text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1', params: [id] });
 	/** Whether the actor may read stored file `id`: this conversation's input or output, their own upload, or a record's file they read. */
 	const canRead = Effect.fn('AgentTool.canRead')(function* (id: string) {
 		const [r] = yield* x.engine.db.read([
@@ -2156,28 +2019,17 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 				params: [id, x.conv.id]
 			}
 		]);
-		const field = r?.rows[0]?.['field'],
+		const row = r?.rows[0],
+			field = row?.['field'],
 			member = x.authority.actor.kind === 'member' ? x.authority.actor.id : undefined;
 		// an output of this conversation is the person's own file, including one just downloaded
-		if (r?.rows[0]?.['own'] === true || r?.rows[0]?.['here'] === true) return true;
-		if (
-			field === 'sys_conversation.inputs' &&
-			(x.authority.admin || (member !== undefined && r?.rows[0]?.['created_by'] === member))
-		)
+		if (row?.['own'] === true || row?.['here'] === true) return true;
+		if (field === 'sys_conversation.inputs' && (x.authority.admin || (member !== undefined && row?.['created_by'] === member)))
 			return true;
 		if (typeof field !== 'string' || !field.includes('.') || field.startsWith('sys_conversation.'))
 			return false;
-		return yield* readableFile(
-			{
-				manifest: x.engine.manifest,
-				db: x.engine.db,
-				read: x.engine.read,
-				authority: x.authority,
-				bindings: x.bindings
-			},
-			id,
-			field
-		);
+		const { manifest, db, read } = x.engine;
+		return yield* readableFile({ manifest, db, read, authority: x.authority, bindings: x.bindings }, id, field);
 	});
 	/** This conversation's ingests (plan 12): one output entry per source file, oldest first. */
 	const readingKey = (output: string) => `${x.conv.id}/${output}`;
@@ -2252,10 +2104,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			}
 		});
 		if (i.page !== undefined) {
-			const [source] = yield* x.engine.db.rows(SourceFile, {
-				text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
-				params: [entry.ingest.source]
-			});
+			const [source] = yield* sourceFile(entry.ingest.source);
 			if (source === undefined || x.ingest === undefined)
 				return err('The file is no longer stored.');
 			const got = yield* x.ingest(source, {
@@ -2403,9 +2252,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		})).rows;
 		const output = typeof added?.['output'] === 'string' ? added['output'] : undefined;
 		if (output === undefined)
-			return yield* Effect.fail(
-				BoltError.make('invalid_input', 'admission', 'This conversation is gone.')
-			);
+			return yield* BoltError.make('invalid_input', 'admission', 'This conversation is gone.');
 		const member = x.authority.actor.kind === 'member' ? x.authority.actor.id : null,
 			base = file.name.replace(/\.[^./]*$/, '').replaceAll('/', '_') || 'file';
 		const record = (event: string, attributes: { readonly [key: string]: Json }) =>
@@ -2457,9 +2304,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 									)
 								: { unsupported: 'This host cannot ingest files.' };
 				if ('unsupported' in got)
-					return yield* Effect.fail(
-						BoltError.make('invalid_input', 'decode', unparsed(file.name, file.mime))
-					);
+					return yield* BoltError.make('invalid_input', 'decode', unparsed(file.name, file.mime));
 				// the model calls Convert made (a transcription), attributed here; the host bills each call id
 				const usage = got.meta.usage;
 				if (usage !== undefined)
@@ -2544,7 +2389,7 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 			{
 				detach: true,
 				done: (id, result) => {
-					const said = Predicate.isObject(result) && !Array.isArray(result) ? result : {};
+					const said = isObj(result) ? result : {};
 					const title = typeof said['title'] === 'string' ? said['title'] : file.name;
 					const lines = Array.isArray(said['lines'])
 						? said['lines'].filter((l) => typeof l === 'string')
@@ -2559,121 +2404,110 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		yield* patchEntry(output, {}, { job });
 		return { job, output };
 	});
-	yield* add(
-		readFileTool,
-		(i) =>
-			Effect.gen(function* () {
-				if (i.id === undefined && i.call === undefined)
-					return err('read_file needs the id of a file, or call for a clipped result.');
-				if (i.id === undefined) return yield* readOutput(i.call ?? '', i.offset ?? 0);
-				if (i.id.includes('@')) return yield* readReference(x, i.id, i);
-				const id = yield* wholeId(x, i.id);
-				let found = (yield* ingests()).findLast(
-					(o) => o.ingest.output === id || o.ingest.source === id || o.id === id
-				);
-				// a job dies with its generation: a read it left unfinished starts over, never waits for good
-				if (
-					found?.ingest.status === 'ingesting' &&
-					!READING.has(readingKey(found.ingest.output))
-				) {
-					yield* patchEntry(
-						found.ingest.output,
-						{},
-						{ status: 'failed', error: 'a restart cut it short' }
-					);
-					found = undefined;
-				}
-				// a failed parse is retried by its file's id and explained by its output's
-				if (
-					found !== undefined &&
-					(found.ingest.status !== 'failed' || found.ingest.output === id)
-				)
-					return yield* readIngest(found, i);
-				const attachments = x.attachments;
-				if (attachments === undefined) return err('This host reads no files.');
-				// a file attached to this conversation's messages is this conversation's to read, by its own type
-				const [attached] = yield* x.engine.db.read([
-					{
-						text: `SELECT i - 'message' AS file FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1 AND i->>'id' = $2 LIMIT 1`,
-						params: [x.conv.id, id]
-					}
-				]);
-				const input = attached?.rows[0]?.['file'];
-				if (input === undefined && !(yield* canRead(id))) {
-					// a wrong id's answer names the right ones, so the next call needs no look around
-					const [held] = yield* x.engine.db.read([
-						{
-							text: `SELECT i->>'id' AS id, i->>'name' AS name FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1`,
-							params: [x.conv.id]
-						}
-					]);
-					const files = (held?.rows ?? [])
-						.slice(-20)
-						.map((row) => `${String(row['name'])} ${shortId(String(row['id']))}`);
-					return err(
-						`No file you can read has this id; a truncated result is read with call, not id.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
-					);
-				}
-				const [file] = yield* x.engine.db.rows(SourceFile, {
-					text: 'SELECT id, name, mime, size, key, sha256 FROM sys_file WHERE id = $1',
-					params: [id]
-				});
-				if (file === undefined) return yield* readStored(attachments, input ?? { id });
-				const how = route(file.mime, file.name);
-				if (how === 'unsupported') return err(unparsed(file.name, file.mime));
-				const detail =
-					i.from !== undefined ||
-					i.to !== undefined ||
-					i.text !== undefined ||
-					i.image !== undefined ||
-					i.page !== undefined ||
-					i.crops !== undefined;
-				if (how !== 'convert' && how !== 'audio' && !detail)
-					return yield* readStored(attachments, input ?? { id });
-				if (e.files === undefined) return err('This host cannot parse files.');
-				if ((how === 'convert' || how === 'audio') && x.ingest === undefined)
-					return err('This host cannot parse files.');
-				const started = yield* ingestFile(e.files, file, how, i.password);
-				const settled = yield* x.jobs.wait([started.job], x.inlineMs ?? JOBS.inlineMs);
-				if (settled === null)
-					return ok({
-						reading: file.name,
-						job: started.job,
-						note: `Still being read. wait { jobs: ['${started.job}'] } returns when it ends.`
-					});
-				const failed = jobFailed(settled.result);
-				if (failed !== undefined) return err(failed);
-				const ready = (yield* ingests()).findLast((o) => o.ingest.output === started.output);
-				if (ready === undefined) return err('This conversation is gone.');
-				const answer = yield* readIngest(ready, i),
-					said = Schema.decodeUnknownOption(Schema.Array(Schema.Json))(
-						Predicate.isObject(settled.result) ? settled.result['lines'] : undefined
-					);
-				return 'result' in answer && Predicate.isObject(answer.result) && Option.isSome(said)
-					? { ...answer, result: { ...answer.result, about: said.value } }
-					: answer;
-			})
-	);
-	if (x.geocoder !== undefined) {
-		yield* add(
-			geocodeTool,
-			(i) =>
-				Effect.gen(function* () {
-					const geo = x.geocoder;
-					if (geo === undefined) return err('The geocoder is not available here.');
-					const r =
-						i.reverse === undefined
-							? yield* geo.search(i.query ?? '')
-							: yield* geo
-									.reverse(i.reverse)
-									.pipe(Effect.map((hit) => (hit === null ? [] : [hit])));
-					return ok(
-						r
-							.slice(0, 8)
-							.map((hit) => ({ label: hit.label, address: hit.address, location: hit.point }))
-					);
-				})
+	add(readFileTool, function* (i) {
+		if (i.id === undefined && i.call === undefined)
+			return err('read_file needs the id of a file, or call for a clipped result.');
+		if (i.id === undefined) return yield* readOutput(i.call ?? '', i.offset ?? 0);
+		if (i.id.includes('@')) return yield* readReference(x, i.id, i);
+		const id = yield* wholeId(x, i.id);
+		let found = (yield* ingests()).findLast(
+			(o) => o.ingest.output === id || o.ingest.source === id || o.id === id
 		);
+		// a job dies with its generation: a read it left unfinished starts over, never waits for good
+		if (
+			found?.ingest.status === 'ingesting' &&
+			!READING.has(readingKey(found.ingest.output))
+		) {
+			yield* patchEntry(
+				found.ingest.output,
+				{},
+				{ status: 'failed', error: 'a restart cut it short' }
+			);
+			found = undefined;
+		}
+		// a failed parse is retried by its file's id and explained by its output's
+		if (
+			found !== undefined &&
+			(found.ingest.status !== 'failed' || found.ingest.output === id)
+		)
+			return yield* readIngest(found, i);
+		const attachments = x.attachments;
+		if (attachments === undefined) return err('This host reads no files.');
+		// a file attached to this conversation's messages is this conversation's to read, by its own type
+		const [attached] = yield* x.engine.db.read([
+			{
+				text: `SELECT i - 'message' AS file FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1 AND i->>'id' = $2 LIMIT 1`,
+				params: [x.conv.id, id]
+			}
+		]);
+		const input = attached?.rows[0]?.['file'];
+		if (input === undefined && !(yield* canRead(id))) {
+			// a wrong id's answer names the right ones, so the next call needs no look around
+			const [held] = yield* x.engine.db.read([
+				{
+					text: `SELECT i->>'id' AS id, i->>'name' AS name FROM sys_conversation c, jsonb_array_elements(c.inputs) i WHERE c.id = $1`,
+					params: [x.conv.id]
+				}
+			]);
+			const files = (held?.rows ?? [])
+				.slice(-20)
+				.map((row) => `${String(row['name'])} ${shortId(String(row['id']))}`);
+			return err(
+				`No file you can read has this id; a truncated result is read with call, not id.${files.length === 0 ? '' : ` This conversation's files: ${files.join(', ')}`}`
+			);
+		}
+		const [file] = yield* sourceFile(id);
+		if (file === undefined) return yield* readStored(attachments, input ?? { id });
+		const how = route(file.mime, file.name);
+		if (how === 'unsupported') return err(unparsed(file.name, file.mime));
+		const detail =
+			i.from !== undefined ||
+			i.to !== undefined ||
+			i.text !== undefined ||
+			i.image !== undefined ||
+			i.page !== undefined ||
+			i.crops !== undefined;
+		if (how !== 'convert' && how !== 'audio' && !detail)
+			return yield* readStored(attachments, input ?? { id });
+		if (e.files === undefined) return err('This host cannot parse files.');
+		if ((how === 'convert' || how === 'audio') && x.ingest === undefined)
+			return err('This host cannot parse files.');
+		const started = yield* ingestFile(e.files, file, how, i.password);
+		const settled = yield* x.jobs.wait([started.job], x.inlineMs ?? JOBS.inlineMs);
+		if (settled === null)
+			return ok({
+				reading: file.name,
+				job: started.job,
+				note: `Still being read. wait { jobs: ['${started.job}'] } returns when it ends.`
+			});
+		const failed = jobFailed(settled.result);
+		if (failed !== undefined) return err(failed);
+		const ready = (yield* ingests()).findLast((o) => o.ingest.output === started.output);
+		if (ready === undefined) return err('This conversation is gone.');
+		const answer = yield* readIngest(ready, i),
+			said = Schema.decodeUnknownOption(Schema.Array(Schema.Json))(
+				Predicate.isObject(settled.result) ? settled.result['lines'] : undefined
+			);
+		return 'result' in answer && Predicate.isObject(answer.result) && Option.isSome(said)
+			? { ...answer, result: { ...answer.result, about: said.value } }
+			: answer;
+	});
+	if (x.geocoder !== undefined) {
+		add(geocodeTool, function* (i) {
+			const geo = x.geocoder;
+			if (geo === undefined) return err('The geocoder is not available here.');
+			const r =
+				i.reverse === undefined
+					? yield* geo.search(i.query ?? '')
+					: yield* geo
+							.reverse(i.reverse)
+							.pipe(Effect.map((hit) => (hit === null ? [] : [hit])));
+			return ok(
+				r
+					.slice(0, 8)
+					.map((hit) => ({ label: hit.label, address: hit.address, location: hit.point }))
+			);
+		});
 	}
 	const staff = a.actor.kind === 'member' && !a.actor.external;
 	// a member reads the source of the models they may read, and every file that is no model's: an administrator all of it
@@ -2691,176 +2525,147 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 	// An author's current Studio tree; without authoring, the workspace's released source.
 	const source = visible(x.draft ?? x.workspace);
 	if (source !== undefined && !(a.actor.kind === 'member' && a.actor.external)) {
-		yield* add(
-			readSource,
-			(i) =>
-				Effect.gen(function* () {
-					const files = yield* Port.attempt('workspace.files', () => source.files());
-					const offset = Math.max(1, i.offset ?? 1),
-						limit = Math.min(Math.max(1, i.limit ?? READ_LINES), READ_LINES);
-					const one = Effect.fn('AgentTool.readSource')(function* (asked: string) {
-						// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
-						const path = sourcePath(asked);
-						if (path.startsWith('node_modules/') || path === 'node_modules')
-							return {
-								error: `${asked}: installed packages are outside the workspace: workspace_lang reads their types.`
-							};
-						if (!files.includes(path))
-							return {
-								error: files.some((file) => file.startsWith(`${path}/`))
-									? `${asked} is a directory: workspace_list_dir lists it.`
-									: `${asked}: no such file: workspace_list_dir shows the source.`
-							};
-						const text = yield* Port.attempt('workspace.read', () => source.read(path));
-						if (text === null)
-							return { error: `${asked}: no such file: workspace_list_dir shows the source.` };
-						if (GENERATED.test(path) && !text.includes('<<<<<<<'))
-							return { text: `Read file ${path}: ${GENERATED_NOTE}` };
-						return filePage(path, text, offset, limit);
-					});
-					if (i.paths !== undefined && i.paths.length > 0)
-						return textAnswer(
-							(yield* Effect.forEach(i.paths.slice(0, 20), one))
-								.map((answer) => ('error' in answer ? answer.error : answer.text))
-								.join('\n\n')
+		add(readSource, function* (i) {
+			const files = yield* Port.attempt('workspace.files', () => source.files());
+			const offset = Math.max(1, i.offset ?? 1),
+				limit = Math.min(Math.max(1, i.limit ?? READ_LINES), READ_LINES);
+			const one = Effect.fn('AgentTool.readSource')(function* (asked: string) {
+				// the same normalisation workspace_search uses: `./src/a.ts` is `src/a.ts`
+				const path = sourcePath(asked);
+				if (path.startsWith('node_modules/') || path === 'node_modules') return { error: `${asked}${PACKAGES}` };
+				if (!files.includes(path))
+					return {
+						error: files.some((file) => file.startsWith(`${path}/`))
+							? `${asked} is a directory: workspace_list_dir lists it.`
+							: `${asked}: no such file: workspace_list_dir shows the source.`
+					};
+				const text = yield* Port.attempt('workspace.read', () => source.read(path));
+				if (text === null)
+					return { error: `${asked}: no such file: workspace_list_dir shows the source.` };
+				if (GENERATED.test(path) && !text.includes('<<<<<<<'))
+					return { text: `Read file ${path}: ${GENERATED_NOTE}` };
+				return filePage(path, text, offset, limit);
+			});
+			if (i.paths !== undefined && i.paths.length > 0)
+				return textAnswer(
+					(yield* Effect.forEach(i.paths.slice(0, 20), one))
+						.map((answer) => ('error' in answer ? answer.error : answer.text))
+						.join('\n\n')
+				);
+			if (i.path === undefined) return err('give path or paths');
+			const answer = yield* one(i.path);
+			return 'error' in answer ? err(answer.error) : textAnswer(answer.text);
+		});
+		add(searchSource, function* (i) {
+			const within = sourcePath(i.path ?? '');
+			if (within === 'node_modules' || within.startsWith('node_modules/'))
+				return err(`${i.path}${PACKAGES}`);
+			// ripgrep over an administrator's checkout; a member reads only what `visible` lets through
+			const search = x.search?.bind(x);
+			const found =
+				a.admin && search !== undefined
+					? yield* Port.attempt('workspace.search', () => search(i))
+					: undefined;
+			if (found !== undefined)
+				return 'error' in found
+					? err(found.error)
+					: textAnswer(
+							grepAnswer(
+								found.hits.filter((hit) => !GENERATED.test(hit.path)),
+								found.truncated,
+								i.files === true
+							)
 						);
-					if (i.path === undefined) return err('give path or paths');
-					const answer = yield* one(i.path);
-					return 'error' in answer ? err(answer.error) : textAnswer(answer.text);
-				})
-		);
-		yield* add(
-			searchSource,
-			(i) =>
-				Effect.gen(function* () {
-					const within = sourcePath(i.path ?? '');
-					if (within === 'node_modules' || within.startsWith('node_modules/'))
-						return err(
-							`${i.path}: installed packages are outside the workspace: workspace_lang reads their types.`
-						);
-					// ripgrep over an administrator's checkout; a member reads only what `visible` lets through
-					const search = x.search?.bind(x);
-					const found =
-						a.admin && search !== undefined
-							? yield* Port.attempt('workspace.search', () => search(i))
-							: undefined;
-					if (found !== undefined)
-						return 'error' in found
-							? err(found.error)
-							: textAnswer(
-									grepAnswer(
-										found.hits.filter((hit) => !GENERATED.test(hit.path)),
-										found.truncated,
-										i.files === true
-									)
-								);
-					const regex =
-						i.literal === true
-							? null
-							: yield* Effect.try({
-									try: () => new RegExp(i.pattern, i.case_sensitive === false ? 'i' : ''),
-									catch: () =>
-										BoltError.make(
-											'invalid_input',
-											'decode',
-											'Invalid regular expression; fix pattern or use literal:true.'
-										)
-								});
-					const wanted = i.case_sensitive === false ? i.pattern.toLowerCase() : i.pattern;
-					const included = i.include === undefined ? undefined : globRegExp(i.include);
-					const files = (yield* Port.attempt('workspace.files', () => source.files())).filter(
-						(file) =>
-							(within === '' || file === within || file.startsWith(`${within}/`)) &&
-							(included === undefined || included.test(file)) &&
-							!GENERATED.test(file) &&
-							file !== 'bun.lock'
-					);
-					const limit = i.limit ?? 100,
-						hits: { path: string; line: number; text: string }[] = [];
-					for (const path of files) {
-						const text = (yield* Port.attempt('workspace.read', () => source.read(path))) ?? '';
-						for (const [line, value] of text.split('\n').entries()) {
-							if (
-								regex === null
-									? (i.case_sensitive === false ? value.toLowerCase() : value).includes(wanted)
-									: regex.test(value)
-							) {
-								if (hits.length === limit)
-									return textAnswer(grepAnswer(hits, true, i.files === true));
-								hits.push({ path, line: line + 1, text: value.slice(0, HIT_CHARS) });
-								if (i.files === true) break;
-							}
-						}
-					}
-					return textAnswer(grepAnswer(hits, false, i.files === true));
-				})
-		);
-		yield* add(
-			listSource,
-			(i) =>
-				Port.attempt('workspace.files', () => source.files()).pipe(
-					Effect.map((files) => {
-						const under = sourcePath(i.path ?? '');
-						const shown = files.filter((file) => under === '' || file.startsWith(`${under}/`));
-						return shown.length === 0
-							? err(
-									`${i.path}: no such directory: workspace_list_dir with no path shows the source.`
+			const regex =
+				i.literal === true
+					? null
+					: yield* Effect.try({
+							try: () => new RegExp(i.pattern, i.case_sensitive === false ? 'i' : ''),
+							catch: () =>
+								BoltError.make(
+									'invalid_input',
+									'decode',
+									'Invalid regular expression; fix pattern or use literal:true.'
 								)
-							: textAnswer(sourceTree(shown));
-					})
-				)
-		);
+						});
+			const wanted = i.case_sensitive === false ? i.pattern.toLowerCase() : i.pattern;
+			const included = i.include === undefined ? undefined : globRegExp(i.include);
+			const files = (yield* Port.attempt('workspace.files', () => source.files())).filter(
+				(file) =>
+					(within === '' || file === within || file.startsWith(`${within}/`)) &&
+					(included === undefined || included.test(file)) &&
+					!GENERATED.test(file) &&
+					file !== 'bun.lock'
+			);
+			const limit = i.limit ?? 100,
+				hits: { path: string; line: number; text: string }[] = [];
+			for (const path of files) {
+				const text = (yield* Port.attempt('workspace.read', () => source.read(path))) ?? '';
+				for (const [line, value] of text.split('\n').entries()) {
+					if (
+						regex === null
+							? (i.case_sensitive === false ? value.toLowerCase() : value).includes(wanted)
+							: regex.test(value)
+					) {
+						if (hits.length === limit)
+							return textAnswer(grepAnswer(hits, true, i.files === true));
+						hits.push({ path, line: line + 1, text: value.slice(0, HIT_CHARS) });
+						if (i.files === true) break;
+					}
+				}
+			}
+			return textAnswer(grepAnswer(hits, false, i.files === true));
+		});
+		add(listSource, function* (i) {
+			const under = sourcePath(i.path ?? '');
+			const shown = (yield* Port.attempt('workspace.files', () => source.files())).filter(
+				(file) => under === '' || file.startsWith(`${under}/`)
+			);
+			return shown.length === 0
+				? err(`${i.path}: no such directory: workspace_list_dir with no path shows the source.`)
+				: textAnswer(sourceTree(shown));
+		});
 	}
 	if (agent && x.delegation) {
-		{
-			yield* add(
-				subagentTool,
-				(i) =>
-					Effect.gen(function* () {
-						const conv = i.conversation ?? '';
-						switch (i.action) {
-							case 'spawn': {
-								const which = i.agent ?? null;
-								if (which !== null && !x.agents.includes(which))
-									return err(`No agent '${which}'. Agents: ${x.agents.join(', ')}`);
-								return ok(yield* x.subagent.spawn(i.task ?? '', which, i.done, i.format));
-							}
-							case 'list':
-								return ok(yield* x.subagent.list());
-							case 'read':
-								return ok(yield* x.subagent.read(conv));
-							case 'message':
-								return ok(yield* x.subagent.message(conv, i.text ?? ''));
-							case 'stop':
-								return ok(yield* x.subagent.stop(conv));
-							default:
-								return err('Unknown action.');
-						}
-					})
-			);
-		}
+		add(subagentTool, function* (i) {
+			const conv = i.conversation ?? '';
+			switch (i.action) {
+				case 'spawn': {
+					const which = i.agent ?? null;
+					if (which !== null && !x.agents.includes(which))
+						return err(`No agent '${which}'. Agents: ${x.agents.join(', ')}`);
+					return ok(yield* x.subagent.spawn(i.task ?? '', which, i.done, i.format));
+				}
+				case 'list':
+					return ok(yield* x.subagent.list());
+				case 'read':
+					return ok(yield* x.subagent.read(conv));
+				case 'message':
+					return ok(yield* x.subagent.message(conv, i.text ?? ''));
+				case 'stop':
+					return ok(yield* x.subagent.stop(conv));
+				default:
+					return err('Unknown action.');
+			}
+		});
 	}
 	const convert = e.convert,
 		store = e.files;
 	if (agent && convert !== undefined && store !== undefined && convert.targets.length > 0) {
-		yield* add(
-			documentTool,
-			(i) =>
-				Effect.gen(function* () {
-					if (!convert.targets.includes(i.to))
-						return err(`This host converts to ${convert.targets.join(', ')}; choose one of those targets.`);
-					if (i.markdown.trim() === '') return err('Write the document out in markdown.');
-					const bytes = yield* convert.convert({ markdown: i.markdown }, i.to, {
-						...(i.page === undefined ? {} : { page: i.page }),
-						...(i.landscape === undefined ? {} : { landscape: i.landscape })
-					});
-					return ok({
-						files: [
-							yield* storeFile(x, store, { name: i.name, mime: CONVERT_MIME[i.to], bytes })
-						]
-					});
-				})
-		);
+		add(documentTool, function* (i) {
+			if (!convert.targets.includes(i.to))
+				return err(`This host converts to ${convert.targets.join(', ')}; choose one of those targets.`);
+			if (i.markdown.trim() === '') return err('Write the document out in markdown.');
+			const bytes = yield* convert.convert({ markdown: i.markdown }, i.to, {
+				...(i.page === undefined ? {} : { page: i.page }),
+				...(i.landscape === undefined ? {} : { landscape: i.landscape })
+			});
+			return ok({
+				files: [
+					yield* storeFile(x, store, { name: i.name, mime: CONVERT_MIME[i.to], bytes })
+				]
+			});
+		});
 	}
 	// the person's own media from the web: the host fetches and stores it, so no bytes enter the engine (the browser's
 	// download does the same with its sign-ins, so a turn with a browser has that one)
@@ -2871,19 +2676,15 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		store !== undefined &&
 		!x.host_tools.some((tool) => tool.behavior.downloads === true)
 	) {
-		yield* add(
-			downloadTool,
-			(i) =>
-				Effect.gen(function* () {
-					const file = yield* store.download(i.url);
-					return ok({
-						saved: file.name,
-						mime: file.mime,
-						bytes: file.bytes,
-						file: yield* recordFile(x, file)
-					});
-				})
-		);
+		add(downloadTool, function* (i) {
+			const file = yield* store.download(i.url);
+			return ok({
+				saved: file.name,
+				mime: file.mime,
+				bytes: file.bytes,
+				file: yield* recordFile(x, file)
+			});
+		});
 	}
 	// JavaScript in a fresh guest isolate, never the cell: inline code, or a skill's script run as written where the host
 	// bundles files; its HTTP is granted as a host tool is
@@ -2903,254 +2704,221 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 					: self(name, input, `${call}:${used}`).pipe(Effect.provideService(Scripted, true));
 	};
 	if (agent && guest !== undefined) {
-		yield* add(
-			runJsTool,
-			(i, { toolCallId: callId = '' }) =>
-				Effect.gen(function* () {
-					if (i.http === true && http === undefined)
-						return err('Your policies do not grant scripts HTTP: run it without http.');
-					const keep =
-						store === undefined
-							? undefined
-							: (file: { name: string; mime: string; bytes: Uint8Array }) =>
-									storeFile(x, store, file);
-					const granted = i.http === true ? http : undefined;
-					if (i.file === undefined) {
-						if (i.code === undefined) return err('Give code, or a file to run.');
-						const named = yield* conversationFiles(x, i.files ?? []);
-						if (typeof named === 'string') return err(named);
-						const given = i.input ?? null;
-						if (named.length > 0 && given !== null && !Predicate.isObject(given))
-							return err('With files, input is an object: the files join it as input.files.');
-						return ok(
-							yield* runJs({
-								code: i.code,
-								input:
-									named.length === 0
-										? given
-										: {
-												...(Predicate.isObject(given) ? given : {}),
-												files: Object.fromEntries(
-													named.map(([name, bytes]) => [name, fileContent(bytes)])
-												)
-											},
-								guest,
-								http: granted,
-								tool: inner(callId),
-								invocation: callId,
-								keep
-							})
-						);
-					}
-					if (i.code !== undefined) return err('Give code or file, not both.');
-					if (bundler === undefined) return err('This workspace runs no files: give code.');
-					const slash = i.file.indexOf('/'),
-						name = i.file.slice(0, Math.max(slash, 0)),
-						entry = i.file.slice(slash + 1);
-					// a reference's name holds its commit (`<repository>@<commit>`); a skill's never has an @
-					const reference = name.includes('@');
-					if (reference && granted !== undefined)
-						return err(
-							"A repository reference's file runs without fetch: run it without http."
-						);
-					const skill = reference ? undefined : skills.find(([n]) => n === name)?.[1];
-					if (!reference && skill === undefined)
-						return err(`No skill '${name}' is available: file is '<skill>/<path>'.`);
-					if (skill !== undefined && !skill.files.includes(entry))
-						return err(`The skill ${name} has no file '${entry}'.`);
-					const inputs = yield* conversationFiles(x, i.files ?? []);
-					if (typeof inputs === 'string') return err(inputs);
-					const source =
-						skill === undefined
-							? yield* referenceTree(x, name, entry)
-							: {
-									digest: skill.digest,
-									tree: yield* Effect.forEach(
-										skill.files,
-										(path) =>
-											Effect.map(skill.read(path), (bytes): readonly [string, Uint8Array] => [
-												path,
-												bytes
-											]),
-										{ concurrency: 8 }
-									)
-								};
-					if (typeof source === 'string') return err(source);
-					return ok(
-						yield* runFile({
-							entry,
-							digest: source.digest,
-							tree: source.tree,
-							args: i.args ?? [],
-							inputs,
-							guest,
-							bundler,
-							http: granted,
-							invocation: callId,
-							keep
-						})
-					);
-				})
-		);
-	}
-	if (x.child) {
-		yield* add(
-			askParentTool,
-			(i) =>
-				Effect.gen(function* () {
-					if (i.question.trim() === '') return err('Ask a question.');
-					if (!x.ask({ question: i.question.trim(), options: [] })) return err('One question is already waiting in this step.');
-					return ok({
-						asked: true,
-						note: 'Stop here: your question goes to the delegating agent.'
-					});
-				})
-		);
-	}
-	if (!x.child) {
-		yield* add(
-			askTool,
-			(i) =>
-				Effect.sync(() => {
-					const question = i.question.trim();
-					if (question === '') return err('Ask a question.');
-					const options = (i.options ?? [])
-						.map((option) => option.trim())
-						.filter((option) => option !== '');
-					if (!x.ask({ question, options: [...new Set(options)] })) return err('One question is already waiting in this step.');
-					return ok({
-						asked: true,
-						note: 'Stop here: your question goes to the person.'
-					});
-				})
-		);
-	}
-	{
-		yield* add(
-			waitTool,
-			(i) =>
-				Effect.raceFirst(
-					x.heard.pipe(
-						Effect.map(() =>
-							ok({
-								settled: null,
-								pending: encode_wire(x.jobs.pending()),
-								note: 'New input arrived: it is your next message. What you waited for keeps running.'
-							})
-						)
-					),
-					Effect.gen(function* () {
-						const ids = i.jobs ?? [];
-						const ms = Math.min(Math.max(1, i.seconds ?? 120), 120) * 1000;
-						// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
-						// statutory research run for ten minutes and never heard it finish)
-						if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
-							const read = x.engine.db
-								.rows(RunViewRow, {
-									text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))`,
-									params: [JSON.stringify(ids)]
-								})
-								.pipe(
-									Effect.map((rows) =>
-										rows.flatMap((row) => {
-											const view = run_view(a, row);
-											return view === null ? [] : [view];
-										})
-									)
-								);
-							return yield* Effect.scoped(
-								Effect.gen(function* () {
-									const { runEnds } = x.engine;
-									const subscription =
-										runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
-									const views = yield* read;
-									if (views.length === 0)
-										return err(`No job or automation run ${ids.join(', ')}.`);
-									const isSettled = (view: (typeof views)[number]) =>
-										view.status !== 'queued' && view.status !== 'running';
-									const settled = views.find(isSettled);
-									if (settled !== undefined) return ok({ settled: encode_wire(settled) });
-									const visible = new Set(views.map((view) => view.id));
-									const heard =
-										subscription === null
-											? Effect.never
-											: PubSub.take(subscription).pipe(
-													Effect.repeat({
-														until: (ended) => ended.some((id) => visible.has(id))
-													})
-												);
-									const ended = yield* heard.pipe(Effect.timeoutOption(ms));
-									if (Option.isNone(ended))
-										return ok({ settled: null, running: encode_wire(views) });
-									const current = yield* read;
-									const answer = current.find(isSettled);
-									return answer === undefined
-										? ok({ settled: null, running: encode_wire(current) })
-										: ok({ settled: encode_wire(answer) });
-								})
-							);
-						}
-						// with no ids and nothing of this turn running there is nothing to wait for: say so, never answer as if time passed
-						// (a probe's agent read `{ settled: null }` as thirty seconds and polled a background run in a loop)
-						// sub-agents run detached: with nothing of this turn running, wait for one's report instead
-						if (
-							ids.length === 0 &&
-							x.jobs.pending().length === 0 &&
-							(yield* x.subagent.running()) > 0
-						)
-							return ok(
-								(yield* x.subagent.report(ms))
-									? {
-											report: 'arrived',
-											note: 'A sub-agent report arrived: it is your next message.'
-										}
-									: { report: null, running: yield* x.subagent.running() }
-							);
-						if (ids.length === 0 && x.jobs.pending().length === 0)
-							return ok({
-								settled: null,
-								pending: [],
-								waited: 0,
-								note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).'
-							});
-						const got = yield* x.jobs.wait(ids, ms);
-						return ok(
-							got === null
-								? { settled: null, pending: encode_wire(x.jobs.pending()) }
-								: { settled: got, pending: encode_wire(x.jobs.pending()) }
-						);
+		add(runJsTool, function* (i, callId) {
+			if (i.http === true && http === undefined)
+				return err('Your policies do not grant scripts HTTP: run it without http.');
+			const keep =
+				store === undefined
+					? undefined
+					: (file: { name: string; mime: string; bytes: Uint8Array }) =>
+							storeFile(x, store, file);
+			const granted = i.http === true ? http : undefined;
+			if (i.file === undefined) {
+				if (i.code === undefined) return err('Give code, or a file to run.');
+				const named = yield* conversationFiles(x, i.files ?? []);
+				if (typeof named === 'string') return err(named);
+				const given = i.input ?? null;
+				if (named.length > 0 && given !== null && !Predicate.isObject(given))
+					return err('With files, input is an object: the files join it as input.files.');
+				return ok(
+					yield* runJs({
+						code: i.code,
+						input:
+							named.length === 0
+								? given
+								: {
+										...(Predicate.isObject(given) ? given : {}),
+										files: Object.fromEntries(
+											named.map(([name, bytes]) => [name, fileContent(bytes)])
+										)
+									},
+						guest,
+						http: granted,
+						tool: inner(callId),
+						invocation: callId,
+						keep
 					})
-				)
-		);
+				);
+			}
+			if (i.code !== undefined) return err('Give code or file, not both.');
+			if (bundler === undefined) return err('This workspace runs no files: give code.');
+			const slash = i.file.indexOf('/'),
+				name = i.file.slice(0, Math.max(slash, 0)),
+				entry = i.file.slice(slash + 1);
+			// a reference's name holds its commit (`<repository>@<commit>`); a skill's never has an @
+			const reference = name.includes('@');
+			if (reference && granted !== undefined)
+				return err(
+					"A repository reference's file runs without fetch: run it without http."
+				);
+			const skill = reference ? undefined : skills.find(([n]) => n === name)?.[1];
+			if (!reference && skill === undefined)
+				return err(`No skill '${name}' is available: file is '<skill>/<path>'.`);
+			if (skill !== undefined && !skill.files.includes(entry))
+				return err(`The skill ${name} has no file '${entry}'.`);
+			const inputs = yield* conversationFiles(x, i.files ?? []);
+			if (typeof inputs === 'string') return err(inputs);
+			const source =
+				skill === undefined
+					? yield* referenceTree(x, name, entry)
+					: {
+							digest: skill.digest,
+							tree: yield* Effect.forEach(
+								skill.files,
+								(path) =>
+									Effect.map(skill.read(path), (bytes): readonly [string, Uint8Array] => [
+										path,
+										bytes
+									]),
+								{ concurrency: 8 }
+							)
+						};
+			if (typeof source === 'string') return err(source);
+			return ok(
+				yield* runFile({
+					entry,
+					digest: source.digest,
+					tree: source.tree,
+					args: i.args ?? [],
+					inputs,
+					guest,
+					bundler,
+					http: granted,
+					invocation: callId,
+					keep
+				})
+			);
+		});
 	}
+	const asking = (to: string) =>
+		function* (i: { readonly question: string; readonly options?: readonly string[] }): Effect.gen.Return<ToolAnswer> {
+			const question = i.question.trim();
+			if (question === '') return err('Ask a question.');
+			const options = (i.options ?? []).map((option) => option.trim()).filter((option) => option !== '');
+			if (!x.ask({ question, options: [...new Set(options)] })) return err('One question is already waiting in this step.');
+			return ok({ asked: true, note: `Stop here: your question goes to ${to}.` });
+		};
+	if (x.child) add(askParentTool, asking('the delegating agent'));
+	else add(askTool, asking('the person'));
+	add(waitTool, function* (i) {
+		const heard = x.heard.pipe(
+			Effect.map(() =>
+				ok({
+					settled: null,
+					pending: encode_wire(x.jobs.pending()),
+					note: 'New input arrived: it is your next message. What you waited for keeps running.'
+				})
+			)
+		);
+		return yield* Effect.raceFirst(heard, Effect.gen(function* () {
+			const ids = i.jobs ?? [];
+			const ms = Math.min(Math.max(1000, (i.seconds ?? Infinity) * 1000), JOBS.waitMs);
+			// automation runs are sys_run rows, not this turn's jobs: follow them until one ends (a probe waited on a
+			// statutory research run for ten minutes and never heard it finish)
+			if (ids.length > 0 && ids.every((id) => !x.jobs.has(id))) {
+				const read = x.engine.db
+					.rows(RunViewRow, {
+						text: `SELECT ${RUN_VIEW_COLUMNS} FROM sys_run WHERE id = ANY(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))`,
+						params: [JSON.stringify(ids)]
+					})
+					.pipe(
+						Effect.map((rows) =>
+							rows.flatMap((row) => {
+								const view = run_view(a, row);
+								return view === null ? [] : [view];
+							})
+						)
+					);
+				return yield* Effect.scoped(
+					Effect.gen(function* () {
+						const { runEnds } = x.engine;
+						const subscription =
+							runEnds === undefined ? null : yield* PubSub.subscribe(runEnds);
+						const views = yield* read;
+						if (views.length === 0)
+							return err(`No job or automation run ${ids.join(', ')}.`);
+						const isSettled = (view: (typeof views)[number]) =>
+							view.status !== 'queued' && view.status !== 'running';
+						const settled = views.find(isSettled);
+						if (settled !== undefined) return ok({ settled: encode_wire(settled) });
+						const visible = new Set(views.map((view) => view.id));
+						const heard =
+							subscription === null
+								? Effect.never
+								: PubSub.take(subscription).pipe(
+										Effect.repeat({
+											until: (ended) => ended.some((id) => visible.has(id))
+										})
+									);
+						const ended = yield* heard.pipe(Effect.timeoutOption(ms));
+						if (Option.isNone(ended))
+							return ok({ settled: null, running: encode_wire(views) });
+						const current = yield* read;
+						const answer = current.find(isSettled);
+						return answer === undefined
+							? ok({ settled: null, running: encode_wire(current) })
+							: ok({ settled: encode_wire(answer) });
+					})
+				);
+			}
+			// with no ids and nothing of this turn running there is nothing to wait for: say so, never answer as if time passed
+			// (a probe's agent read `{ settled: null }` as thirty seconds and polled a background run in a loop)
+			// sub-agents run detached: with nothing of this turn running, wait for one's report instead
+			if (
+				ids.length === 0 &&
+				x.jobs.pending().length === 0 &&
+				(yield* x.subagent.running()) > 0
+			)
+				return ok(
+					(yield* x.subagent.report(ms))
+						? {
+								report: 'arrived',
+								note: 'A sub-agent report arrived: it is your next message.'
+							}
+						: { report: null, running: yield* x.subagent.running() }
+				);
+			if (ids.length === 0 && x.jobs.pending().length === 0)
+				return ok({
+					settled: null,
+					pending: [],
+					waited: 0,
+					note: 'Nothing of this turn is running. To wait for an automation, pass its run id (a write answers the runs it started).'
+				});
+			const got = yield* x.jobs.wait(ids, ms);
+			return ok({ settled: got, pending: encode_wire(x.jobs.pending()) });
+		}));
+	});
 	if (a.actor.kind === 'member') {
 		const member = a.actor;
-		const RunList = Schema.Struct({
-			...RunViewRow.fields,
-			finished: Schema.NullOr(Schema.String)
+		const RunList = Schema.Struct({ ...RunViewRow.fields, finished: Schema.NullOr(Schema.String) });
+		const head = (row: typeof RunList.Type, view: NonNullable<ReturnType<typeof run_view>>) => ({
+			id: view.id,
+			automation: view.automation,
+			status: view.status === 'stopped' ? 'cancelled' : view.status,
+			cause: view.cause,
+			due: view.due_at,
+			started: view.started,
+			finished: row.finished,
+			attempt_count: view.attempt_count
 		});
-		{
-			yield* add(
-				runsTool,
-				(i, { toolCallId: call = '' }) =>
-					Effect.gen(function* () {
-						const bad = [i.since, i.until].find(
-							(v) => v !== undefined && Number.isNaN(Date.parse(v))
-						);
-						if (bad !== undefined) return err(`'${bad}' is not an instant.`);
-						const after = Option.getOrNull(
-							Schema.decodeUnknownOption(
-								Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String]))
-							)(i.cursor ?? '')
-						);
-						if (i.cursor !== undefined && after === null)
-							return err('That cursor is not one a page answered.');
-						const limit = Math.min(Math.max(1, i.limit ?? 20), 100),
-							detail = i.id !== undefined;
-						const name = i.automation;
-						// the visible runs (rule 56); one run in detail also reads its log lines from the host's log store
-						const rows = yield* e.db.rows(RunList, {
-							text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished
+		add(runsTool, function* (i, call) {
+		const bad = [i.since, i.until].find(
+			(v) => v !== undefined && Number.isNaN(Date.parse(v))
+		);
+		if (bad !== undefined) return err(`'${bad}' is not an instant.`);
+		const after = Option.getOrNull(
+			Schema.decodeUnknownOption(
+				Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String]))
+			)(i.cursor ?? '')
+		);
+		if (i.cursor !== undefined && after === null)
+			return err('That cursor is not one a page answered.');
+		const limit = Math.min(Math.max(1, i.limit ?? 20), 100),
+			detail = i.id !== undefined;
+		const name = i.automation;
+		// the visible runs (rule 56); one run in detail also reads its log lines from the host's log store
+		const rows = yield* e.db.rows(RunList, {
+			text: `SELECT ${RUN_VIEW_COLUMNS}, finished_at::text AS finished
 	FROM sys_run
 	WHERE ($1 OR actor = $2 OR automation IN (SELECT jsonb_array_elements_text($3::jsonb)))
 		AND ($4::text IS NULL OR id = $4)
@@ -3159,159 +2927,115 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		AND ($9::timestamptz IS NULL OR due_at >= $9::timestamptz) AND ($10::timestamptz IS NULL OR due_at < $10::timestamptz)
 		AND ($11::timestamptz IS NULL OR (due_at, id) < ($11::timestamptz, $12::text))
 	ORDER BY due_at DESC, id DESC LIMIT ${limit + 1}`,
-							params: [
-								a.admin,
-								actor_ref(member),
-								JSON.stringify(visible_run_names(a)),
-								i.id ?? null,
-								name === undefined || name.endsWith('*') ? null : name,
-								name !== undefined && name.endsWith('*') ? name.slice(0, -1) : null,
-								i.status === 'cancelled' ? 'stopped' : (i.status ?? null),
-								i.cause ?? null,
-								i.since ?? null,
-								i.until ?? null,
-								after?.[0] ?? null,
-								after?.[1] ?? null
-							]
-						});
-						const shown = rows.slice(0, limit).flatMap((row) => {
-							const view = run_view(a, row);
-							return view === null ? [] : [{ row, view }];
-						});
-						if (detail) {
-							const one = shown[0];
-							if (one === undefined) return err(`No automation run ${i.id} you may read.`);
-							const { row, view } = one;
-							// a store that cannot answer says so in place of the lines, never as an empty log
-							const lines =
-								view.input === undefined
-									? []
-									: yield* runLog(x.logs, view.id).pipe(
-											Effect.map((lines) =>
-												typeof lines === 'string'
-													? lines
-													: lines.map(({ id, at, severity, event, attributes }): Json => ({
-															id,
-															at,
-															severity,
-															event,
-															attributes
-														}))
-											)
-										);
-							return clippedView((clip) => {
-								const logs =
-									typeof lines === 'string' ? lines : lines.map((line) => clip(line, 1024));
-								return encode_wire({
-									id: view.id,
-									automation: view.automation,
-									status: view.status === 'stopped' ? 'cancelled' : view.status,
-									cause: view.cause,
-									due: view.due_at,
-									started: view.started,
-									finished: row.finished,
-									attempt_count: view.attempt_count,
-									progress: clip(view.progress, 2048),
-									error: clip(encode_wire(view.error), 4096),
-									...(view.input === undefined
-										? {}
-										: {
-												input: clip(view.input, 4096),
-												result: clip(view.result ?? null, 4096),
-												attempts: EffectArray.isArray<typeof view.attempts>(view.attempts)
-													? view.attempts.map((attempt) => clip(attempt, 1024))
-													: clip(view.attempts ?? null, 4096),
-												logs
-											})
-								});
-							}, call);
-						}
-						const last = rows.length > limit ? rows[limit - 1] : undefined;
-						return clippedView(
-							(clip) =>
-								encode_wire({
-									runs: shown.map(({ row, view }) => ({
-										id: view.id,
-										automation: view.automation,
-										status: view.status === 'stopped' ? 'cancelled' : view.status,
-										cause: view.cause,
-										due: view.due_at,
-										started: view.started,
-										finished: row.finished,
-										attempt_count: view.attempt_count,
-										error:
-											view.error === null
-												? null
-												: {
-														code: view.error.code,
-														...(view.error.message === undefined
-															? {}
-															: { message: clip(view.error.message, 200) })
-													},
-										progress: clip(view.progress, 512)
-									})),
-									...(last === undefined
-										? {}
-										: { next: JSON.stringify([last.due_at, last.id]) })
-								}),
-							call
+			params: [
+				a.admin,
+				actor_ref(member),
+				JSON.stringify(visible_run_names(a)),
+				i.id ?? null,
+				name === undefined || name.endsWith('*') ? null : name,
+				name !== undefined && name.endsWith('*') ? name.slice(0, -1) : null,
+				i.status === 'cancelled' ? 'stopped' : (i.status ?? null),
+				i.cause ?? null,
+				i.since ?? null,
+				i.until ?? null,
+				after?.[0] ?? null,
+				after?.[1] ?? null
+			]
+		});
+		const shown = rows.slice(0, limit).flatMap((row) => {
+			const view = run_view(a, row);
+			return view === null ? [] : [{ row, view }];
+		});
+		if (detail) {
+			const one = shown[0];
+			if (one === undefined) return err(`No automation run ${i.id} you may read.`);
+			const { row, view } = one;
+			// a store that cannot answer says so in place of the lines, never as an empty log
+			const lines =
+				view.input === undefined
+					? []
+					: yield* runLog(x.logs, view.id).pipe(
+							Effect.map((lines) =>
+								typeof lines === 'string'
+									? lines
+									: lines.map(({ id, at, severity, event, attributes }): Json => ({ id, at, severity, event, attributes }))
+							)
 						);
-					})
-			);
+			return clippedView((clip) => {
+				const logs =
+					typeof lines === 'string' ? lines : lines.map((line) => clip(line, 1024));
+				return encode_wire({
+					...head(row, view),
+					progress: clip(view.progress, 2048),
+					error: clip(encode_wire(view.error), 4096),
+					...(view.input === undefined
+						? {}
+						: {
+								input: clip(view.input, 4096),
+								result: clip(view.result ?? null, 4096),
+								attempts: EffectArray.isArray<typeof view.attempts>(view.attempts)
+									? view.attempts.map((attempt) => clip(attempt, 1024))
+									: clip(view.attempts ?? null, 4096),
+								logs
+							})
+				});
+			}, call);
 		}
+		const last = rows.length > limit ? rows[limit - 1] : undefined;
+		return clippedView(
+			(clip) =>
+				encode_wire({
+					runs: shown.map(({ row, view }) => ({
+						...head(row, view),
+						error:
+							view.error === null
+								? null
+								: {
+										code: view.error.code,
+										...(view.error.message === undefined
+											? {}
+											: { message: clip(view.error.message, 200) })
+									},
+						progress: clip(view.progress, 512)
+					})),
+					...(last === undefined
+						? {}
+						: { next: JSON.stringify([last.due_at, last.id]) })
+				}),
+			call
+		);
+		});
 	}
 	if (a.admin && a.actor.kind === 'member') {
-		yield* add(
-			logsTool,
-			(i, { toolCallId: call = '' }) =>
-				Effect.gen(function* () {
-					const limit = Math.min(Math.max(1, i.limit ?? 50), 200);
-					const { level, cursor, limit: _limit, ...rest } = i;
-					const rows = yield* readLog(x.logs, {
-						...rest,
-						...(level === undefined ? {} : { min: level }),
-						...(cursor === undefined ? {} : { before: cursor }),
-						limit
-					});
-					const last = rows.length === limit ? rows.at(-1) : undefined;
-					return clippedView(
-						(clip) => ({
-							lines: rows.map((row) => ({
-								id: row.id,
-								at: row.at,
-								level: row.severity,
-								event: row.event,
-								invocation: row.invocation,
-								run: row.run,
-								conversation: row.conversation,
-								attributes: clip(row.attributes, 1024)
-							})),
-							...(last === undefined ? {} : { next: last.id })
-						}),
-						call
-					);
-				})
-		);
-	}
-	// Host tools keep their raw JSON Schema; MCP discovery is data returned by the fixed MCP tool below.
-	const dynamic = (host: HostTool, call: (input: Json, callId: string) => Effect.Effect<ToolAnswer, EngineError | PortFailure>) =>
-		Effect.gen(function* () {
-			const { name, description, input, behavior } = host;
-			if (!Predicate.isObject(input)) return;
-			const valid = validatorFor(input);
-			yield* add(
-				{ name, description, input, behavior, decode: Effect.succeed },
-				(given, { toolCallId }) => {
-					const checked = valid(given);
-					return typeof checked === 'string'
-						? Effect.succeed(err(checked))
-						: call(checked, toolCallId);
-				},
-				host.studio === undefined ? {} : { studio: host.studio },
-				hostEntries
+		add(logsTool, function* (i, call) {
+			const limit = Math.min(Math.max(1, i.limit ?? 50), 200);
+			const { level, cursor, limit: _limit, ...rest } = i;
+			const rows = yield* readLog(x.logs, {
+				...rest,
+				...(level === undefined ? {} : { min: level }),
+				...(cursor === undefined ? {} : { before: cursor }),
+				limit
+			});
+			const last = rows.length === limit ? rows.at(-1) : undefined;
+			return clippedView(
+				(clip) => ({
+					lines: rows.map((row) => ({
+						id: row.id,
+						at: row.at,
+						level: row.severity,
+						event: row.event,
+						invocation: row.invocation,
+						run: row.run,
+						conversation: row.conversation,
+						attributes: clip(row.attributes, 1024)
+					})),
+					...(last === undefined ? {} : { next: last.id })
+				}),
+				call
 			);
 		});
-	yield* add(mcpTool, (i) => Effect.gen(function* () {
+	}
+	add(mcpTool, function* (i) {
 		if (i.op === 'list')
 			return ok({ tools: x.mcpTools.filter((tool) => i.server === undefined || tool.server === i.server) });
 		if (!agent) return err('External MCP tools cannot run while planning.');
@@ -3325,89 +3049,78 @@ export const catalogue = Effect.fn('AgentTool.catalogue')(function* (x: ToolCont
 		return typeof checked === 'string'
 			? err(checked)
 			: ok(yield* x.mcp.call(tool.server, tool.name, checked));
-	}));
-	yield* add(hostTool, (i, { toolCallId }) => {
-		if (i.op === 'list')
-			return Effect.succeed(ok({ tools: [...hostEntries.values()]
-				.map((entry) => entry.tool).filter((tool) => i.tool === undefined || tool.name === i.tool) }));
-		return i.tool === undefined
-			? Effect.succeed(err('Give tool from host { op: "list" }.'))
-			: runHost(i.tool, i.input === undefined ? {} : i.input, toolCallId);
 	});
-	// the workspace's own search wins: an MCP tool named like a host search tool hides the host's
+	add(hostTool, function* (i, callId) {
+		if (i.op === 'list')
+			return ok({ tools: [...hostEntries.values()]
+				.map((entry) => entry.tool).filter((tool) => i.tool === undefined || tool.name === i.tool) });
+		return i.tool === undefined
+			? err('Give tool from host { op: "list" }.')
+			: yield* runHost(i.tool, i.input === undefined ? {} : i.input, callId);
+	});
+	// Host tools keep their raw JSON Schema, checked by its validator; the workspace's own search wins: an MCP tool named
+	// like a host search tool hides the host's
 	const own = new Set(x.mcpTools.map((t) => t.name));
-		for (const host of [...x.browser_tools, ...(x.inApp && staff ? hosted : [])])
-			if (
-				!(WORKSPACE_OVERRIDES.has(host.name) && own.has(host.name)) &&
-				(agent || host.read_only === true) &&
-				(a.admin ||
-					a.capabilities.tools.includes(host.name) ||
-					(host.source === true && host.read_only === true))
-			)
-				yield* dynamic(
-					host,
-					(input, id) =>
-						Effect.gen(function* () {
-							const files =
-								host.files === true ? yield* conversationFiles(x, namedFiles(input)) : [];
-							if (typeof files === 'string') return err(files);
-							const context: HostToolContext = {
-								actor: a.actor,
-								conversation: x.conv.id,
-								...(a.agent === undefined ? {} : { agent: a.agent }),
-								turn: x.turn,
-								call_id: id,
-								...(x.question === undefined ? {} : { question: x.question }),
-								attach: (file) => {
-									attach(x.files, file);
-									if (host.studio === 'view')
-										shown.push({
-											name: `${host.name}-${shown.length + 1}.${file.mime.split('/')[1] ?? 'png'}`,
-											...file
-										});
-								},
-								keep: (file) => kept.push(file),
-								files
-							};
-							const shown: { name: string; mime: string; bytes: Uint8Array }[] = [],
-								kept: Downloaded[] = [];
-							// a screenshot the person sees too (stored now), or a download (stored by the host): their file, offered on
-							// the step. Inside the job, so a tool past the inline wall still records what it kept
-							const offered = (result: Json) =>
-								Effect.gen(function* () {
-									if (
-										!Predicate.isObject(result) ||
-										(kept.length === 0 && (shown.length === 0 || e.files === undefined))
-									)
-										return result;
-									const files: Json[] = [];
-									if (e.files !== undefined)
-										for (const f of shown) files.push(yield* storeFile(x, e.files, f));
-									for (const f of kept) files.push(yield* recordFile(x, f));
-									return { ...result, files };
-								});
-							const job = yield* x.jobs.add(
-								host.name,
-								Port.attempt(host.name, (signal) => host.call(input, context, signal)).pipe(
-									Port.call(host.name, host.wall_ms ?? JOBS.hostMs),
-									Effect.flatMap(offered)
-								),
-								{
-									behavior: host.behavior,
-									...(host.studio === undefined ? {} : { studio: host.studio }),
-									alert: (id: string, result: Json) =>
-										`[job ${id} finished] ${host.name}: ${JSON.stringify(bounded(result).value)}`
-								}
-							);
-							const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
-							return ok(
-								inline?.result ?? {
-									job,
-									note: 'Still running; keep working. Its result arrives by itself, or wait returns it.'
-								}
-							);
-						})
-				);
+	for (const host of [...x.browser_tools, ...(x.inApp && staff ? hosted : [])]) {
+		const { name, description, input: schema, behavior } = host;
+		if (
+			!Predicate.isObject(schema) ||
+			(WORKSPACE_OVERRIDES.has(name) && own.has(name)) ||
+			!(agent || host.read_only === true) ||
+			!(a.admin || a.capabilities.tools.includes(name) || (host.source === true && host.read_only === true))
+		)
+			continue;
+		const valid = validatorFor(schema);
+		add({ name, description, input: schema, behavior, decode: Effect.succeed }, function* (given, id) {
+			const input = valid(given);
+			if (typeof input === 'string') return err(input);
+			const files = host.files === true ? yield* conversationFiles(x, namedFiles(input)) : [];
+			if (typeof files === 'string') return err(files);
+			const shown: { name: string; mime: string; bytes: Uint8Array }[] = [],
+				kept: Downloaded[] = [];
+			const context: HostToolContext = {
+				actor: a.actor,
+				conversation: x.conv.id,
+				...(a.agent === undefined ? {} : { agent: a.agent }),
+				turn: x.turn,
+				call_id: id,
+				...(x.question === undefined ? {} : { question: x.question }),
+				attach: (file) => {
+					attach(x.files, file);
+					if (host.studio === 'view')
+						shown.push({ name: `${name}-${shown.length + 1}.${file.mime.split('/')[1] ?? 'png'}`, ...file });
+				},
+				keep: (file) => kept.push(file),
+				files
+			};
+			// a screenshot the person sees too (stored now), or a download (stored by the host): their file, offered on
+			// the step. Inside the job, so a tool past the inline wall still records what it kept
+			const offered = Effect.fnUntraced(function* (result: Json) {
+				if (!Predicate.isObject(result) || (kept.length === 0 && (shown.length === 0 || e.files === undefined)))
+					return result;
+				const files: Json[] = [];
+				if (e.files !== undefined) for (const f of shown) files.push(yield* storeFile(x, e.files, f));
+				for (const f of kept) files.push(yield* recordFile(x, f));
+				return { ...result, files };
+			});
+			const job = yield* x.jobs.add(
+				name,
+				Port.attempt(name, (signal) => host.call(input, context, signal)).pipe(
+					Port.call(name, host.wall_ms ?? JOBS.hostMs),
+					Effect.flatMap(offered)
+				),
+				{
+					behavior,
+					...(host.studio === undefined ? {} : { studio: host.studio }),
+					alert: (id: string, result: Json) => `[job ${id} finished] ${name}: ${JSON.stringify(bounded(result).value)}`
+				}
+			);
+			const inline = yield* x.jobs.wait([job], x.inlineMs ?? JOBS.inlineMs);
+			return ok(
+				inline?.result ?? { job, note: 'Still running; keep working. Its result arrives by itself, or wait returns it.' }
+			);
+		}, host.studio === undefined ? {} : { studio: host.studio }, hostEntries);
+	}
 	const encodeAnswer = Schema.encodeUnknownEffect(ToolAnswer);
 	const execute = (registry: ReadonlyMap<string, BoundTool>, name: string, input: unknown, callId: string) => {
 		const entry = registry.get(name);
@@ -3688,18 +3401,16 @@ const recordsTool = defineTool('read', {
 where: { <field>: { eq|ne|lt|lte|gt|gte|in|is_null|like: value } }, and/or/not; on a relation { is|some|none|every: where } or { count|sum|avg|min|max: … }; a value may be { var: CEL over requestor, today, now }.
 search: words, { <index>: input } or { semantic: text }. aggregate: { count, sum|avg|min|max: [field], by: field | { day|week|month|quarter|year: field } }.
 Answers each model's { rows, next, total } (total counts every match), or with aggregate its measures. Long values are clipped.`,
-	parameters: ReadInput,
+	parameters: ReadInput
 });
 const describeTool = defineTool('describe_workspace', {
 	behavior: { data: true },
-	description:
-		"The workspace as you may use it: apps, pages, models, automations. names answers each in full, 'system' the native setup pages, secrets and MCP servers.",
+	description: "The workspace as you may use it: apps, pages, models, automations. names answers each in full, 'system' the native setup pages, secrets and MCP servers.",
 	parameters: Schema.Struct({ names: Schema.optionalKey(Schema.Array(Schema.String)) }),
 });
 const pageTool = defineTool('page', {
 	behavior: { page: true },
-	description:
-		"Drive the person's visible tab: open path (configure: a native setup form), click or highlight visible text, type into a labelled field, scroll, go back|forward, preview a URL beside the chat. Buttons, external links and typed values await their confirmation; approvals, passwords and files are theirs alone. The resulting page arrives at your next step.",
+	description: "Drive the person's visible tab: open path (configure: a native setup form), click or highlight visible text, type into a labelled field, scroll, go back|forward, preview a URL beside the chat. Buttons, external links and typed values await their confirmation; approvals, passwords and files are theirs alone. The resulting page arrives at your next step.",
 	parameters: Schema.Struct({
 		path: Schema.optionalKey(Schema.String),
 		configure: Schema.optionalKey(
@@ -3717,7 +3428,7 @@ const pageTool = defineTool('page', {
 		go: Schema.optionalKey(Schema.Literals(['back', 'forward'])),
 		highlight: Schema.optionalKey(Schema.NonEmptyString),
 		preview: Schema.optionalKey(Schema.String)
-	}),
+	})
 });
 const actTool = defineTool('act', {
 	behavior: { data: true },
@@ -3733,17 +3444,15 @@ const syncTool = defineTool('sync', {
 	parameters: Schema.Struct({ model: Schema.String, sync: Schema.String, input: Schema.optionalKey(ToolJson) })
 });
 const updatePlanTool = defineTool('update_plan', {
-	description:
-		'Write the draft plan: body replaces it, patch { old, new } changes one exact passage.',
+	description: 'Write the draft plan: body replaces it, patch { old, new } changes one exact passage.',
 	parameters: Schema.Struct({
 		body: Schema.optionalKey(Schema.String),
 		patch: Schema.optionalKey(Schema.Struct({ old: Schema.String, new: Schema.String })),
 		expected_revision: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
-	}),
+	})
 });
 const goalsTool = defineTool('goals', {
-	description:
-		"Set this conversation's checklist, the whole list; at most one doing, done items stay.",
+	description: "Set this conversation's checklist, the whole list; at most one doing, done items stay.",
 	parameters: Schema.Struct({
 		items: Schema.Array(
 			Schema.Struct({
@@ -3752,30 +3461,27 @@ const goalsTool = defineTool('goals', {
 				status: Schema.Literals(['pending', 'doing', 'done'])
 			})
 		)
-	}),
+	})
 });
 const skillTool = defineTool('skill', {
 	behavior: { data: true },
-	description:
-		"Read one of your skills whole, one ## section, or one of its files.",
+	description: "Read one of your skills whole, one ## section, or one of its files.",
 	parameters: Schema.Struct({
 		name: Schema.String,
 		section: Schema.optionalKey(Schema.String),
 		file: Schema.optionalKey(Schema.String)
-	}),
+	})
 });
 const historyTool = defineTool('history', {
-	description:
-		"Search earlier messages in this conversation, or scope mine for all of this person's.",
+	description: "Search earlier messages in this conversation, or scope mine for all of this person's.",
 	parameters: Schema.Struct({
 		query: Schema.String,
 		scope: Schema.optionalKey(Schema.Literals(['this', 'mine'])),
 		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
-	}),
+	})
 });
 const readMessagesTool = defineTool('read_messages', {
-	description:
-		"Read this chat's unread messages not addressed to you, oldest first, and mark them read. before: seq (or all: true) reads the history back from there, newest first.",
+	description: "Read this chat's unread messages not addressed to you, oldest first, and mark them read. before: seq (or all: true) reads the history back from there, newest first.",
 	parameters: Schema.Struct({
 		all: Schema.optionalKey(Schema.Boolean),
 		limit: Schema.optionalKey(
@@ -3786,12 +3492,11 @@ const readMessagesTool = defineTool('read_messages', {
 				description: 'a message seq'
 			})
 		)
-	}),
+	})
 });
 const readFileTool = defineTool('read_file', {
 	behavior: { data: true, resume: { argument: 'offset' } },
-	description:
-		"Read a file by id (conversation, record or tool output); documents, scans, sheets and recordings are parsed. A reference lists its paths; read '<reference>/<path>'. A document answers numbered lines and page images (from, to: pages), a sheet columns and first rows. text greps (a|b for either; hits name their page). image: n shows one image; crops up to 8 regions of it. call reads more of a clipped result. password opens a locked PDF or Office file.",
+	description: "Read a file by id (conversation, record or tool output); documents, scans, sheets and recordings are parsed. A reference lists its paths; read '<reference>/<path>'. A document answers numbered lines and page images (from, to: pages), a sheet columns and first rows. text greps (a|b for either; hits name their page). image: n shows one image; crops up to 8 regions of it. call reads more of a clipped result. password opens a locked PDF or Office file.",
 	parameters: Schema.Struct({
 		id: Schema.optionalKey(Schema.String),
 		from: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
@@ -3811,31 +3516,28 @@ const readFileTool = defineTool('read_file', {
 		password: Schema.optionalKey(Schema.String).annotate({
 			description: 'the password the person gave for this file'
 		})
-	}),
+	})
 });
 const geocodeTool = defineTool('geocode', {
-	description:
-		'Places for an address or name (query), or at a point (reverse), each with the point a geolocation field takes.',
+	description: 'Places for an address or name (query), or at a point (reverse), each with the point a geolocation field takes.',
 	parameters: Schema.Struct({
 		query: Schema.optionalKey(Schema.String),
 		reverse: Schema.optionalKey(Schema.Struct({ lat: Schema.Number, lng: Schema.Number }))
-	}),
+	})
 });
 const readSource = defineTool('workspace_read', {
 	behavior: { pure: true, data: true },
-	description:
-		'Read source files (path, or paths) as numbered <line>: <content> lines. offset: 1-based start line; limit ≤ 2000.',
+	description: 'Read source files (path, or paths) as numbered <line>: <content> lines. offset: 1-based start line; limit ≤ 2000.',
 	parameters: Schema.Struct({
 		path: Schema.optionalKey(Schema.NonEmptyString),
 		paths: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 		offset: Schema.optionalKey(Schema.Int),
 		limit: Schema.optionalKey(Schema.Int)
-	}),
+	})
 });
 const searchSource = defineTool('workspace_search', {
 	behavior: { pure: true, data: true },
-	description:
-		'ripgrep the source: pattern is a regex, or exact text with literal. Answers matching lines, or with files the files only. path: a file or directory; include: a file glob (*.{ts,svelte}). Case-sensitive by default.',
+	description: 'ripgrep the source: pattern is a regex, or exact text with literal. Answers matching lines, or with files the files only. path: a file or directory; include: a file glob (*.{ts,svelte}). Case-sensitive by default.',
 	parameters: Schema.Struct({
 		pattern: Schema.NonEmptyString,
 		path: Schema.optionalKey(Schema.String),
@@ -3846,17 +3548,15 @@ const searchSource = defineTool('workspace_search', {
 		limit: Schema.optionalKey(
 			Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))
 		)
-	}),
+	})
 });
 const listSource = defineTool('workspace_list_dir', {
 	behavior: { pure: true, data: true },
-	description:
-		'The source tree under path, the whole workspace by default, with what each folder and role is for.',
+	description: 'The source tree under path, the whole workspace by default, with what each folder and role is for.',
 	parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) }),
 });
 const subagentTool = defineTool('subagent', {
-	description:
-		'Background sub-agents with your authority, ≤ 4: spawn { task, done?, format?, agent? }, list, read { conversation }, message { conversation, text }, stop { conversation }. A report arrives as a message and wakes you.',
+	description: 'Background sub-agents with your authority, ≤ 4: spawn { task, done?, format?, agent? }, list, read { conversation }, message { conversation, text }, stop { conversation }. A report arrives as a message and wakes you.',
 	parameters: Schema.Struct({
 		action: Schema.Literals(['spawn', 'list', 'read', 'message', 'stop']),
 		task: Schema.optionalKey(Schema.String),
@@ -3865,17 +3565,15 @@ const subagentTool = defineTool('subagent', {
 		agent: Schema.optionalKey(Schema.String),
 		conversation: Schema.optionalKey(Schema.String),
 		text: Schema.optionalKey(Schema.String)
-	}),
+	})
 });
 const downloadTool = defineTool('download', {
-	description:
-		"Save a public http(s) file as the person's: media, a PDF, HTML or CAD, at most 100 MiB.",
+	description: "Save a public http(s) file as the person's: media, a PDF, HTML or CAD, at most 100 MiB.",
 	parameters: Schema.Struct({ url: Schema.String }),
 });
 const runJsTool = defineTool('run_js', {
 	behavior: { data: true },
-	description:
-		"Run JavaScript in a fresh billed isolate; only its return value and prints come back. code: an async function body of input, without require, process, fetch or timers. await tool(name, input) calls read, act, browser, web_search, describe_workspace, read_file or workspace_read as you, ≤ 200 calls. files: [{ id }] arrive as input.files { name: text | { base64 } }. http: true adds await http({ method?, url, headers?, body? }) answering { status, headers, text }, public https only. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead of code. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
+	description: "Run JavaScript in a fresh billed isolate; only its return value and prints come back. code: an async function body of input, without require, process, fetch or timers. await tool(name, input) calls read, act, browser, web_search, describe_workspace, read_file or workspace_read as you, ≤ 200 calls. files: [{ id }] arrive as input.files { name: text | { base64 } }. http: true adds await http({ method?, url, headers?, body? }) answering { status, headers, text }, public https only. Return { files: [{ name, text | base64 }] } to give the person files. file runs '<skill>/<path>' or '<reference>/<path>' with args, /in and /out instead of code. Walls: 3 s CPU, 256 MiB, 60 s, 4 MiB answer.",
 	parameters: Schema.Struct({
 		code: Schema.optionalKey(Schema.String),
 		input: Schema.optionalKey(ToolJson),
@@ -3883,33 +3581,29 @@ const runJsTool = defineTool('run_js', {
 		args: Schema.optionalKey(Schema.Array(Schema.String)),
 		files: Schema.optionalKey(Schema.Array(Schema.Struct({ id: Schema.String }))),
 		http: Schema.optionalKey(Schema.Boolean)
-	}),
+	})
 });
 const askParentTool = defineTool('ask_parent', {
-	description:
-		'Ask the agent that delegated this task. Your turn ends; its answer is your next message.',
+	description: 'Ask the agent that delegated this task. Your turn ends; its answer is your next message.',
 	parameters: Schema.Struct({ question: Schema.String }),
 });
 const askTool = defineTool('ask', {
-	description:
-		'Sends the person one question with optional answer choices, then ends the turn.',
+	description: 'Sends the person one question with optional answer choices, then ends the turn.',
 	parameters: Schema.Struct({
 		question: Schema.String,
 		options: Schema.optionalKey(Schema.Array(Schema.String))
-	}),
+	})
 });
 const waitTool = defineTool('wait', {
-	description:
-		'Wait up to 120 s for the first of jobs (default: any of this turn) to end. A finished job also arrives at your next step.',
+	description: `Wait up to ${JOBS.waitMs / 1000} s for the first of jobs (default: any of this turn) to end. A finished job also arrives at your next step.`,
 	parameters: Schema.Struct({
 		jobs: Schema.optionalKey(Schema.Array(Schema.String)),
 		seconds: Schema.optionalKey(Schema.Number.check(Schema.isInt()))
-	}),
+	})
 });
 const runsTool = defineTool('runs', {
 	behavior: { data: true, resume: { argument: 'cursor' } },
-	description:
-		'Automation runs, newest first, filtered by the given fields (automation: a name or prefix*); id answers one with input, result, error, attempts and log.',
+	description: 'Automation runs, newest first, filtered by the given fields (automation: a name or prefix*); id answers one with input, result, error, attempts and log.',
 	parameters: Schema.Struct({
 		id: Schema.optionalKey(Schema.String),
 		automation: Schema.optionalKey(Schema.String),
@@ -3921,12 +3615,11 @@ const runsTool = defineTool('runs', {
 		until: Schema.optionalKey(Schema.String),
 		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		cursor: Schema.optionalKey(Schema.String)
-	}),
+	})
 });
 const logsTool = defineTool('logs', {
 	behavior: { data: true, resume: { argument: 'cursor' } },
-	description:
-		"Live's runtime log, newest first: engine events and console lines, filtered by the given fields (level: that or worse).",
+	description: "Live's runtime log, newest first: engine events and console lines, filtered by the given fields (level: that or worse).",
 	parameters: Schema.Struct({
 		level: Schema.optionalKey(Schema.Literals(['info', 'warn', 'error'])),
 		text: Schema.optionalKey(Schema.String),
@@ -3937,7 +3630,7 @@ const logsTool = defineTool('logs', {
 		until: Schema.optionalKey(Schema.String),
 		limit: Schema.optionalKey(Schema.Number.check(Schema.isInt())),
 		cursor: Schema.optionalKey(Schema.String)
-	}),
+	})
 });
 const hostTool = defineTool('host', {
 	description: 'Host tools. op "list": their descriptions and input schemas; tool narrows it. op "call": tool, input, run with your current authority. Read the listed schema before calling.',
@@ -3948,8 +3641,7 @@ const hostTool = defineTool('host', {
 	})
 });
 const documentTool = defineTool('document', {
-	description:
-		'Make a file from markdown (tables and inline HTML allowed) and offer it to the person; a file field takes its reference. In pptx each ## starts a slide.',
+	description: 'Make a file from markdown (tables and inline HTML allowed) and offer it to the person; a file field takes its reference. In pptx each ## starts a slide.',
 	parameters: Schema.Struct({
 		to: Schema.Literals(CONVERT_TARGETS),
 		name: Schema.String,

@@ -3,13 +3,14 @@
 The built-in `money` custom field's renderer: the amount box with its currency affix, grouped tabular figures when shown.
 -->
 <script lang="ts">
+	import type { UiContext } from '../../client/contract.js';
 	import CopyText from '../../primitives/copy-text/copy-text.svelte';
-	import { useKinds, type KindView } from '../context.js';
+	import { type KindView } from '../context.js';
 	import { currencyOf, format, type KindOf } from '../kind.js';
 	import MoneyInput from '../money-input.svelte';
 
-	let { view }: { view: KindView } = $props();
-	const host = useKinds();
+	let { ctx, view }: { ctx: UiContext; view: KindView } = $props();
+	const host = $derived(ctx.ui.kinds);
 	const kind = $derived<KindOf<'money'>>(
 		view.kind?.kind === 'money' ? view.kind : { kind: 'money' }
 	);
@@ -23,7 +24,7 @@ The built-in `money` custom field's renderer: the amount box with its currency a
 </script>
 
 {#if view.mode === 'edit'}
-	<MoneyInput
+	<MoneyInput {ctx}
 		value={view.value}
 		on_change={view.on_change}
 		{currency}

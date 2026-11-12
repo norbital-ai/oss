@@ -3,18 +3,11 @@ import { Schema } from 'effect';
 // Type corpus for access (§3.3.7, §3.9, rules 33–38c, spec §8). Each `@ts-expect-error` line is a planted mistake; a
 // clean tsc proves every valid literal compiles and every mistake is refused at its literal.
 import { policy } from '../../src/index.ts';
-import type {
-	Actor,
-	CreateVerdict,
-	Edge,
-	Grant,
-	Id,
-	LimitKey,
-	TeamName,
-	UpdateVerdict,
-	WriteField
-} from '../../src/index.ts';
+import type { Actor } from '../../src/index.ts';
 import './registry.ts';
+import type { CreateVerdict, UpdateVerdict } from '../../src/decl/ctx.ts';
+import type { Edge, Grant, LimitKey, WriteField } from '../../src/decl/access/policy.ts';
+import type { TeamName } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -45,7 +38,7 @@ export const salesRep = policy({
 						customers: { where: { id: { in: rows.map((r) => r.after.customer) } }, fields: ['tier'] }
 					});
 					if (customers.rows.some((c) => c.tier !== 'gold'))
-						return yield* ctx.refuse('Gold customers only.', { field: 'customer' });
+						return yield* ctx.refuse('errors.refused', { field: 'customer' });
 					return ctx.approve({
 						steps: [
 							{ name: 'Sales review', teams: ['sales'] },
@@ -63,7 +56,7 @@ export const salesRep = policy({
 				// the pre-image check `previous` was; the owner's team reviews a status change
 				verdict: function* (changes, ctx) {
 					if (changes.some((c) => c.before.status === 'ordered'))
-						return yield* ctx.refuse('An ordered order stays.', { field: 'status' });
+						return yield* ctx.refuse('errors.refused', { field: 'status' });
 					if (changes.every((c) => c.set.status === undefined)) return ctx.allow();
 					const owner = changes[0]?.before.owner ?? null;
 					const finance = { name: 'Finance', teams: ['finance'] } as const;
@@ -75,7 +68,7 @@ export const salesRep = policy({
 			delete: {
 				verdict: function* (rows, ctx) {
 					if (rows.some((r) => r.before.status !== 'draft'))
-						return yield* ctx.refuse('Only drafts are deleted.', { row: 0 });
+						return yield* ctx.refuse('errors.refused', { row: 0 });
 					return ctx.actor.kind === 'member' && ctx.actor.teams.includes('finance')
 						? ctx.allow()
 						: ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
@@ -85,9 +78,9 @@ export const salesRep = policy({
 		// a narrow named output: the shape is the model's, the grant only filters rows
 		customers: {
 			outputs: { directory: { where: { orders: { some: ownOrders } } } },
-			update: true
+			update: {}
 		},
-		notices: { outputs: { default: true } },
+		notices: { outputs: { default: {} } },
 		sites: {
 			outputs: { summary: { where: { customer: { in: { var: 'requestor.scopes.sales_rep' } } } } }
 		},
@@ -134,7 +127,7 @@ export const clerk = policy({
 				verdict: function* (changes, ctx) {
 					return changes.every((c) => c.before.placed_at === null && c.set.placed_at != null)
 						? ctx.allow()
-						: yield* ctx.refuse('Place an unplaced order.', { field: 'placed_at' });
+						: yield* ctx.refuse('errors.refused', { field: 'placed_at' });
 				}
 			}
 		}
@@ -147,10 +140,10 @@ export const updateCheck: UpdateVerdict<'orders'> = salesRep.grants.orders.updat
 // ── grants ──
 // @ts-expect-error A1 an unknown model
 // prettier-ignore
-policy({ description: 'x', grants: { oders: { outputs: { default: true } } } });
+policy({ description: 'x', grants: { oders: { outputs: { default: {} } } } });
 // @ts-expect-error A1 teams are source declarations, never a grantable model
 // prettier-ignore
-policy({ description: 'x', grants: { sys_team: { outputs: { default: true } } } });
+policy({ description: 'x', grants: { sys_team: { outputs: { default: {} } } } });
 // @ts-expect-error A2 a read grant never names fields: the output's shape is the model's
 // prettier-ignore
 policy({ description: 'x', grants: { sites: { outputs: { default: { sites: { fields: ['name'] } } } } } });
@@ -159,10 +152,10 @@ policy({ description: 'x', grants: { sites: { outputs: { default: { sites: { fie
 policy({ description: 'x', grants: { sites: { outputs: { summary: { sites: { fields: ['name'] } } } } } });
 // @ts-expect-error A2c an output the model does not declare
 // prettier-ignore
-policy({ description: 'x', grants: { sites: { outputs: { full: true } } } });
+policy({ description: 'x', grants: { sites: { outputs: { full: {} } } } });
 // The default output uses the same grant form as named outputs.
 // prettier-ignore
-policy({ description: 'x', grants: { sites: { outputs: { default: true } } } });
+policy({ description: 'x', grants: { sites: { outputs: { default: {} } } } });
 // @ts-expect-error A2e a grant path outside its output (logistics has no orders.customer layer)
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { outputs: { logistics: { customer: { where: { tier: { eq: 'gold' } } } } } } } });
@@ -171,7 +164,7 @@ policy({ description: 'x', grants: { orders: { outputs: { logistics: { customer:
 policy({ description: 'x', grants: { orders: { outputs: { default: { history: true, where: { note: { is_null: true } }, fields: ['note'] } } } } });
 // @ts-expect-error A2g an identity grant names no fields beside its read
 // prettier-ignore
-policy({ description: 'x', grants: { sys_user: { outputs: { default: true }, fields: ['name'] } } });
+policy({ description: 'x', grants: { sys_user: { outputs: { default: {} }, fields: ['name'] } } });
 // a named output's layer filter names that output's paths
 policy({
 	description: 'x',
@@ -188,7 +181,7 @@ policy({ description: 'x', grants: { orders: { outputs: { default: { owner: { eq
 policy({ description: 'x', grants: { orders: { create: { columns: { fields: ['status'] } } } } });
 // @ts-expect-error A5 the `'read'` write shorthand is gone
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { outputs: { default: true }, update: 'read' } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: {} }, update: 'read' } } });
 // @ts-expect-error A6 `previous` is gone: the update check judges `before`
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { previous: { status: { eq: 'draft' } } } } } });
@@ -218,16 +211,16 @@ policy({ description: 'x', grants: {}, capabilities: { automations: ['orders_shi
 policy({ description: 'x', grants: { orders: { erase: true } } });
 // @ts-expect-error A14 a create grant on a model that declares no create
 // prettier-ignore
-policy({ description: 'x', grants: { products: { outputs: { default: true }, create: true } } });
+policy({ description: 'x', grants: { products: { outputs: { default: {} }, create: {} } } });
 // @ts-expect-error A15 a sync-owned model without a declared create takes no create grant
 // prettier-ignore
-policy({ description: 'x', grants: { notices: { outputs: { default: true }, create: true } } });
+policy({ description: 'x', grants: { notices: { outputs: { default: {} }, create: {} } } });
 // @ts-expect-error A16 identity-field-write: sys_user grants read only
 // prettier-ignore
-policy({ description: 'x', grants: { sys_user: { outputs: { default: true }, update: true } } });
+policy({ description: 'x', grants: { sys_user: { outputs: { default: {} }, update: {} } } });
 // @ts-expect-error A17 `'read'` is not a delete scope
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { outputs: { default: true }, delete: 'read' } } });
+policy({ description: 'x', grants: { orders: { outputs: { default: {} }, delete: 'read' } } });
 // @ts-expect-error A18 an unknown grant key
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { mutate: true } } });
@@ -242,7 +235,7 @@ policy({
 				verdict: function* (changes, ctx) {
 					return changes[0]?.before.status === 'draft'
 						? ctx.approve({ steps: [{ name: 'Sales', teams: ['sales'] }] })
-						: yield* ctx.refuse('Only a draft changes under approval.');
+						: yield* ctx.refuse('errors.refused');
 				}
 			}
 		}
@@ -253,8 +246,8 @@ policy({
 	grants: {
 		orders: {
 			outputs: {
-				// @ts-expect-error AP1 a verdict on an output grant
 				default: {
+					// @ts-expect-error AP1 a verdict on an output grant
 					verdict: function* (_: unknown, ctx: { allow(): unknown }) {
 						return ctx.allow();
 					}
@@ -274,7 +267,7 @@ policy({ description: 'x', grants: { orders: { update: { verdict: function* () {
 policy({ description: 'x', grants: { orders: { update: { verdict: function* () { return { kind: 'allow' }; } } } } });
 // @ts-expect-error AP5 `set` names the declared update columns
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { update: { verdict: function* (changes, ctx) { return changes[0]?.set.nte === undefined ? ctx.allow() : yield* ctx.refuse('x'); } } } } });
+policy({ description: 'x', grants: { orders: { update: { verdict: function* (changes, ctx) { return changes[0]?.set.nte === undefined ? ctx.allow() : yield* ctx.refuse('errors.refused'); } } } } });
 // @ts-expect-error AP6 a superseder is a declared team
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'x', teams: ['sales'] }], superseded_by: ['board'] }); } } } } });
@@ -286,10 +279,16 @@ policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, 
 policy({ description: 'x', grants: { orders: { update: { verdict: function* (_, ctx) { return ctx.approve({ steps: [{ name: 'x', users: ['bob'] }] }); } } } } });
 // @ts-expect-error AP11 a row field the model lacks
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { verdict: function* (rows, ctx) { return rows[0]?.after.amount === null ? ctx.allow() : yield* ctx.refuse('x'); } } } } });
-// @ts-expect-error AP12 `deny`'s path is a declared write path
+policy({ description: 'x', grants: { orders: { create: { verdict: function* (rows, ctx) { return rows[0]?.after.amount === null ? ctx.allow() : yield* ctx.refuse('errors.refused'); } } } } });
+// @ts-expect-error AP12 a refusal names a row and a root column, never a write path
 // prettier-ignore
-policy({ description: 'x', grants: { orders: { create: { verdict: function* (_, ctx) { return yield* ctx.refuse('x', { path: 'orders.customer' }); } } } } });
+policy({ description: 'x', grants: { orders: { create: { verdict: function* (_, ctx) { return yield* ctx.refuse('errors.refused', { path: 'orders.lines' }); } } } } });
+// @ts-expect-error AP12b a refusal message is a catalogue key, never free text
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { create: { verdict: function* (_, ctx) { return yield* ctx.refuse('Only drafts.'); } } } } });
+// @ts-expect-error AP12c a grant is an object: `{}` grants every row or column
+// prettier-ignore
+policy({ description: 'x', grants: { orders: { outputs: { default: true }, update: true } } });
 // @ts-expect-error AP13 a check's ctx holds no `act`
 // prettier-ignore
 policy({ description: 'x', grants: { orders: { delete: { verdict: function* (_, ctx) { yield* ctx.act({ 'orders.delete': [] }); return ctx.allow(); } } } } });
@@ -335,9 +334,12 @@ policy({ description: 'x', grants: {}, limits: { 'envoys.receive': { rate: '1/s'
 policy({ description: 'x', grants: {}, limits: { read: { rate: '1/s', per: 'surface' } } });
 
 // ── Actor (§3.9) ──
+const user_id = Schema.decodeUnknownSync(id_of('sys_user'))('0199a000-0000-7000-8000-0000000000a1');
+const run_id = Schema.decodeUnknownSync(id_of('sys_run'))('0199a000-0000-7000-8000-0000000000b1');
+const instance_id = Schema.decodeUnknownSync(id_of('sys_integration'))('0199a000-0000-7000-8000-0000000000c1');
 const member: Actor = {
 	kind: 'member',
-	id: '' as Id<'sys_user'>,
+	id: user_id,
 	email: null,
 	phone: null,
 	external: false,
@@ -349,30 +351,30 @@ const member: Actor = {
 const envoy: Actor = {
 	kind: 'envoy',
 	envoy: Schema.decodeUnknownSync(id_of('sys_envoy'))('0199a000-0000-7000-8000-0000000000e1'),
-	instance: 'whatsapp' as Id<'sys_integration'>,
+	instance: instance_id,
 	sender: '+6590000000',
 	member: null
 };
 const run: Actor = {
 	kind: 'system',
-	run: '' as Id<'sys_run'>,
+	run: run_id,
 	by: { platform: 'notifications.deliver' }
 };
 // a sync's own writes run as the sync for one instance (never sent back through it)
 const synced: Actor = {
 	kind: 'system',
-	run: '' as Id<'sys_run'>,
-	by: { sync: 'products.sync.ledger', instance: '' as Id<'sys_integration'> }
+	run: run_id,
+	by: { sync: 'products.sync.ledger', instance: instance_id }
 };
 // an automation run: the system identity; who started it is the run's trigger, never its actor
 const automationRun: Actor = {
 	kind: 'system',
-	run: '' as Id<'sys_run'>,
+	run: run_id,
 	by: { automation: 'orders_submit' }
 };
 // @ts-expect-error A40a a run's actor carries no requestor
 // prettier-ignore
-const startedRun: Actor = { kind: 'system', run: '' as Id<'sys_run'>, by: { automation: 'orders_submit' }, requestor: member };
+const startedRun: Actor = { kind: 'system', run: run_id, by: { automation: 'orders_submit' }, requestor: member };
 void startedRun;
 void member;
 void envoy;
@@ -381,10 +383,10 @@ void synced;
 void automationRun;
 // @ts-expect-error A41 a non-string team display path
 // prettier-ignore
-const a1: Actor = { kind: 'member', id: '' as Id<'sys_user'>, email: null, phone: null, external: false, teams: [], team_path: [42], admin: false, party: null };
+const a1: Actor = { kind: 'member', id: user_id, email: null, phone: null, external: false, teams: [], team_path: [42], admin: false, party: null };
 // @ts-expect-error A42 an undeclared envoy
 // prettier-ignore
-const a2: Actor = { kind: 'envoy', envoy: 'dsk', instance: 'whatsapp' as Id<'sys_integration'>, sender: 'x', member: null };
+const a2: Actor = { kind: 'envoy', envoy: 'dsk', instance: instance_id, sender: 'x', member: null };
 // @ts-expect-error A43 a visitor of an unknown app
 // prettier-ignore
 const a3: Actor = { kind: 'visitor', app: 'careers', visitor: 'v' };

@@ -4,7 +4,9 @@
 import { Schema } from 'effect';
 import type { Address, Email, Mailbox } from 'postal-mime';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
+import { json } from '../http.ts';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 // a watch lapses after seven days, and only a watch makes Gmail push
@@ -136,9 +138,9 @@ export const gmail: ChatPlatform = {
 				throw new PlatformError(
 					`Gmail answered ${response.status}`,
 					response.status,
-					Number(response.headers.get('retry-after') ?? Number.NaN) * 1000 || undefined
+					retry_after_ms(response.headers.get('retry-after'))
 				);
-			return Schema.decodeUnknownSync(schema)(await response.json());
+			return json(schema, response);
 		};
 		const read = (id: string) => api(Message, `messages/${id}?format=raw`);
 		const parsed = (message: typeof Message.Type) =>

@@ -2,7 +2,17 @@
 // `serving` parts around it, from typed settings. The example `norbital.host.ts` (`../example/`) reads those settings
 // from its environment; nothing here reads env. Nothing is guessed: an unconfigured member is `off`, and `activate`'s
 // needs check refuses a bundle that needs it.
-import { Effect, FiberSet, FileSystem, Option, Result, Schema } from 'effect';
+import {
+	Crypto,
+	Effect,
+	FiberSet,
+	FileSystem,
+	Option,
+	PlatformError,
+	Result,
+	Schema,
+	Scope
+} from 'effect';
 import { HttpClient } from 'effect/http';
 import { ai_modality_refusals } from '@norbital-ai/providers/openrouter';
 import { to_drivers } from '@norbital-ai/providers';
@@ -12,11 +22,10 @@ import {
 	document_ingester,
 	Port,
 	type FilesPort,
-	type LogPort,
 	type LogRow
 } from '@norbital-ai/bolt/engine';
 import { off, type Challenge, type Facilities, type Serving } from '@norbital-ai/bolt/facilities';
-import { http_port, keys_port, local_audit, local_files, tcp_port } from '@norbital-ai/bolt/node';
+import { default_facilities } from '@norbital-ai/bolt/node';
 import { drivers } from './drivers.ts';
 import { messaging } from './mail.ts';
 import { nominatim, openAi, s3Files } from './ports.ts';
@@ -31,7 +40,7 @@ export type Facility = 'AI_SYS_1' | 'AI_SYS_2' | 'AI_EMBED' | 'GEO' | 'CONVERT' 
  * The host's transactional messaging, every part explicit: `email` is mandatory (`resend`, or `log`: each message is a
  * log line); `phone` is `twilio`, `log` (codes printed to the log) or absent (off).
  */
-export type Transactional = {
+type Transactional = {
 	email: { provider: 'resend'; key: string; from: string } | { provider: 'log' };
 	phone: { provider: 'twilio'; account_sid: string; auth_token: string } | { provider: 'log' } | null;
 };
@@ -91,7 +100,7 @@ const cloudflare = (site_key: string, secret: string): Challenge => ({
 const RANK = { info: 0, warn: 1, error: 2 } as const;
 /** The runtime log in this process's memory (the last 10,000 events), each also one line through `log`. */
 // ponytail: memory only, gone with the process; a durable store is the next host's
-const memoryLog = (log: (line: string) => void): LogPort => {
+const memoryLog = (log: (line: string) => void): Facilities['logs']['runtime'] => {
 	const rows: LogRow[] = [];
 	let next = 0;
 	return {
@@ -140,7 +149,15 @@ const PushBody = Schema.Struct({
  * This host's facilities over `database` and the parts it serves around them, alive while the scope is. `database` is
  * the tenant database the caller opened; `pglite` names its directory, which the audit database must not share.
  */
-export const host = Effect.fn('server.host')(function* (
+export const host: (
+	config: HostSettings,
+	database: Facilities['storage']['database'],
+	options: { readonly pglite?: string; readonly log: (line: string) => void }
+) => Effect.Effect<
+	{ facilities: Facilities; serving: Serving },
+	BoltError | PlatformError.PlatformError,
+	Scope.Scope | HttpClient.HttpClient | Crypto.Crypto | FileSystem.FileSystem
+> = Effect.fn('server.host')(function* (
 	config: HostSettings,
 	database: Facilities['storage']['database'],
 	options: { readonly pglite?: string; readonly log: (line: string) => void }
@@ -179,9 +196,14 @@ export const host = Effect.fn('server.host')(function* (
 		effect: Effect.Effect<A, E, HttpClient.HttpClient>,
 		options?: { readonly signal?: AbortSignal | undefined }
 	) => runtime(Effect.result(effect), options).then(Result.getOrThrow);
+	const node = yield* default_facilities({
+		audit_dir: config.audit_dir,
+		master_key: config.master_key,
+		pglite: options.pglite
+	});
 	const files =
 		config.files.provider === 'local'
-			? local_files(config.files.root)
+			? node.local_files(config.files.root)
 			: yield* s3Files(config.files.endpoint, config.files.credential);
 	const filesPort: FilesPort = {
 		put: (bytes, meta, signal) => run(files.put(bytes, meta), { signal }),
@@ -205,21 +227,10 @@ export const host = Effect.fn('server.host')(function* (
 					files.get,
 					run
 				);
-	const fs = yield* FileSystem.FileSystem;
-	yield* fs.makeDirectory(config.audit_dir, { recursive: true });
-	const audit_dir = yield* fs.realPath(config.audit_dir);
-	if (options.pglite !== undefined && audit_dir === (yield* fs.realPath(options.pglite)))
-		return yield* Effect.fail(
-			BoltError.make(
-				'invalid_spec',
-				'admission',
-				'The audit database must be separate from the tenant database.'
-			)
-		);
 	const vapid = config.vapid;
 	const facilities: Facilities = {
 		storage: { database, files: filesPort },
-		logs: { runtime: memoryLog(log), audit: yield* local_audit(audit_dir) },
+		logs: { runtime: memoryLog(log), audit: node.audit },
 		transactional: {
 			mail: messages.mail,
 			sms: messages.sms,
@@ -261,13 +272,10 @@ export const host = Effect.fn('server.host')(function* (
 		ports: {
 			webhooks: { public_url: config.public_url },
 			websockets: off,
-			outbound: {
-				http: http_port,
-				tcp: tcp_port
-			}
+			outbound: node.outbound
 		},
 		sandbox: off,
-		keys: keys_port(config.master_key)
+		keys: node.keys
 	};
 	const converter = config.providers.CONVERT;
 	const documents =

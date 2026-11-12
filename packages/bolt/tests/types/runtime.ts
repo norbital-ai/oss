@@ -574,6 +574,14 @@ const selected_call = automation({
 	}
 });
 is<Eq<RunInput<typeof selected_call.spec>, { readonly orders: readonly Row<'orders'>[] }>>();
+// A loaded row is the write target as it is: it carries the revision the engine checks.
+automation({
+	description: 'Note selected orders', policies: ['sales_rep'],
+	input: { orders: { kind: 'rows', of: 'orders' } },
+	run: function* ({ orders }, ctx) {
+		yield* ctx.act({ 'orders.update': orders.map((order) => ({ target: order, set: { note: 'checked' } })) });
+	}
+});
 // @ts-expect-error rows inputs select readable models
 // prettier-ignore
 automation({ description: 'x', mode: 'call', policies: ['sales_rep'], input: { rows: { kind: 'rows', of: 'missing_model' } }, run: function* () {} });

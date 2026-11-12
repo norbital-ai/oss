@@ -9,7 +9,6 @@ import { FacilityFailure, Unavailable } from '../decl/errors.ts';
 import { log_statements, type Sql, type StoreError } from '@norbital-ai/store';
 import { apply_audit_migrations, read_audit_migrations } from './audit-migrations.ts';
 import { PgliteDb, Pristine } from './db/pglite.ts';
-import { PostgresDb } from './db/postgres.ts';
 import {
 	AuditEvent,
 	AuditPendingQuery,
@@ -68,67 +67,6 @@ const readCursor = (after: string, fingerprint: string) => {
 			)
 		: Effect.succeed(decoded.value);
 };
-
-/** Factory maintenance after writers stop: retire every namespace in one platform, then purge payloads in bounded batches. */
-export const purge_postgres_audit_partition = (
-	options: { readonly url: string; readonly platform: string },
-	signal?: AbortSignal
-): Promise<{ readonly retired: number; readonly removed: number }> =>
-	Effect.runPromise(
-		Effect.scoped(
-			Effect.gen(function* () {
-				const pool = yield* Effect.acquireRelease(
-					// the driver is a deployment choice, not a tooling dependency: load it only where this runs
-					Effect.tryPromise({
-						try: async () => {
-							const { default: pg } = await import('pg');
-							return new pg.Pool({
-								connectionString: options.url,
-								max: 1,
-								connectionTimeoutMillis: 5000,
-								statement_timeout: 5000,
-								lock_timeout: 5000,
-								idle_in_transaction_session_timeout: 5000
-							});
-						},
-						catch: db_error
-					}),
-					(pool) => Effect.tryPromise({ try: () => pool.end(), catch: db_error }).pipe(Effect.orDie)
-				);
-				const db = PostgresDb.make(pool);
-				const migrations = yield* read_audit_migrations(true);
-				yield* apply_audit_migrations(db, migrations);
-				const commands = yield* log_statements(migrations.spec);
-				let after: string | undefined;
-				let retired = 0,
-					removed = 0;
-				for (;;) {
-					const tenants = yield* db.rows(
-						Schema.Struct({ tenant: Schema.NonEmptyString }),
-						yield* commands.tenants(options.platform, after)
-					);
-					for (const { tenant } of tenants) {
-						const scope = [options.platform, tenant];
-						yield* db.write(yield* commands.retire(scope));
-						retired++;
-						for (;;) {
-							const rows = yield* db.returning(
-								Schema.Struct({ removed: Schema.Int }),
-								yield* commands.purge(scope)
-							);
-							const count = rows[0]?.removed ?? 0;
-							removed += count;
-							if (count < migrations.spec.retention.batch) break;
-						}
-					}
-					const last = tenants.at(-1);
-					if (last === undefined) return { retired, removed };
-					after = last.tenant;
-				}
-			})
-		),
-		{ signal }
-	);
 
 type Opened = {
 	readonly pg: PGlite;

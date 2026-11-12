@@ -4,14 +4,5 @@
 // (Bolt's sign-in, a host's workspace picker) over `NorbiusField`, the band at page scale.
 export { default as AccessFrame } from './access-frame.svelte';
 export { default as AccretionDisc } from './accretion-disc.svelte';
-export { accretion_disc_geometry } from './accretion-geometry.js';
-export {
-	attach_dot_field,
-	type DotFieldOptions,
-	type DotGeometry,
-	type DotPoint
-} from './dot-field.js';
-export { FEATURE_COLORS, type FeatureColorKey, type FeatureColorStyles } from './feature-colors.js';
+export { FEATURE_COLORS, type FeatureColorKey } from './feature-colors.js';
 export { default as NorbiusStrip } from './norbius-strip.svelte';
-export { default as NorbiusField } from './norbius-field.svelte';
-export { NORBIUS_STRIP_STATES, type NorbiusStripState } from './norbius-geometry.js';

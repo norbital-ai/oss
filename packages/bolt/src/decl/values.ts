@@ -40,10 +40,6 @@ export type Msg = string;
 export type IconName = string;
 /** An IANA time zone name (`Asia/Singapore`). */
 export type IanaZone = string;
-/** A BCP 47 locale tag (`en`, `zh-CN`). */
-export type LocaleTag = string;
-/** A path under the workspace `assets/` directory (an app `banner`). */
-export type AssetPath = string;
 /** An approval request's id (`PendingApproval.request_id`, `ApprovalHeld`). */
 export type RequestId = string;
 /** A MIME type or wildcard a `file` field accepts (`image/*`, `application/pdf`). */

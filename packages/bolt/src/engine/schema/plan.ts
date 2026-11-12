@@ -28,7 +28,7 @@ export const SchemaSliceSchema = Schema.Struct({
 	currency: Schema.NullOr(Schema.String)
 });
 export type SchemaSlice = typeof SchemaSliceSchema.Type;
-export type AppliedSchemaSlice = SchemaSnapshot;
+type AppliedSchemaSlice = SchemaSnapshot;
 
 /**
  * What the database holds for a workspace: its models and relationships beside the built-in layer's (`src/system`) as

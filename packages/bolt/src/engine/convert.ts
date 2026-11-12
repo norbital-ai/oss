@@ -13,7 +13,7 @@ import { ingest_answer } from './media.ts';
 import { fromBase64, toBase64 } from './crypto.ts';
 import { Port } from './port.ts';
 
-export type DocumentConverterConfig = {
+type DocumentConverterConfig = {
 	readonly url: string;
 	readonly key: string;
 	readonly fetch?: typeof fetch | undefined;

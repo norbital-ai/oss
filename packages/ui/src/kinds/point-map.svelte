@@ -5,23 +5,26 @@ drag sets the point; without it the map is a static view. Leaflet loads only whe
 error leaves the rest of the field working.
 -->
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import type { Map as LeafletMap, Marker } from 'leaflet';
 	import { cn, ui_text } from '../primitives/utils.js';
-	import { DEFAULT_BASEMAP, useKinds } from './context.js';
+	import { DEFAULT_BASEMAP } from './context.js';
 	import type { Point } from './kind.js';
 
 	let {
+		ctx,
 		value,
 		on_pick,
 		disabled = false,
 		class: className
 	}: {
+		ctx: UiContext;
 		value: Point | null;
 		on_pick?(p: Point): void;
 		disabled?: boolean;
 		class?: string;
 	} = $props();
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	/** Street level: where a known point is shown, and the least a value is zoomed to. */
 	const STREET = 16;

@@ -18,10 +18,11 @@ import type { GuestProgram } from '../guest/runner.ts';
 import { fingerprint, schema_slice } from '../schema/plan.ts';
 import { migration_schema, read_migrations, type MigrationBundle } from '../schema/migrations.ts';
 import { current } from '@norbital-ai/store';
+import { equal_json } from '@norbital-ai/std/json';
 import { from_store } from '../../protocol/errors.ts';
-import { drain, packLoader, type Pack, type PackSource, type SeedAsset } from '../write/pack.ts';
+import { packLoader, type Pack, type PackSource, type SeedAsset } from '../write/pack.ts';
 
-export const ArtifactJsonSchema = Schema.Struct({
+export const ArtifactJson = Schema.Struct({
 	format: Schema.Literal(1),
 	/** The engine contract this artifact was built against (§2.3 decision 5); a host refuses one it does not implement. */
 	contract: Schema.String,
@@ -51,7 +52,7 @@ export const ArtifactJsonSchema = Schema.Struct({
 	snapshot: Schema.optionalKey(Schema.Struct({ key: Schema.String, sha: Schema.String })),
 	hash: Schema.String
 });
-export type ArtifactJson = typeof ArtifactJsonSchema.Type;
+export type ArtifactJson = typeof ArtifactJson.Type;
 export type Artifact = {
 	dir: string;
 	artifact: ArtifactJson;
@@ -82,11 +83,9 @@ export function public_page_keys(m: EngineManifest): readonly string[] {
 		.sort();
 }
 
-const Release = Schema.Struct({ name: Schema.String, version: Schema.String });
-const PKG = Schema.decodeUnknownSync(Release)(release);
 // ponytail: the digest is of the package release, not yet of the C1 JSON Schema + C2 ABI descriptor (§2.3 decision 5);
 // switch when those descriptors exist as files. A host implements a set of these.
-export const CONTRACT = sha256_hex(`${PKG.name}@${PKG.version}`);
+export const CONTRACT = sha256_hex(`${release.name}@${release.version}`);
 
 export const tree = Effect.fn('bolt.artifactTree')(function* (dir: string) {
 	const fs = yield* FileSystem.FileSystem;
@@ -131,7 +130,7 @@ export const artifact_hash = Effect.fn('bolt.artifactHash')(function* (
 });
 
 // `hash` covers the body as written: a decoded struct takes its schema's key order, the order `bolt build` writes
-const decodeArtifactJson = Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactJsonSchema));
+const decodeArtifactJson = Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactJson));
 /** A file of the artifact, whole; one that cannot be read refuses activation. */
 const file = (path: string) =>
 	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFile(path)).pipe(
@@ -231,7 +230,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 				})
 	};
 	const bad =
-		(Object.keys(actual) as (keyof typeof actual)[]).find((k) => hashes[k] !== actual[k]) ??
+		Object.entries(actual).find(([k, v]) => new Map(Object.entries(hashes)).get(k) !== v)?.[0] ??
 		(digests === 'executed' ||
 		(yield* artifact_hash(dir, {
 			format,
@@ -253,7 +252,7 @@ export const read_artifact = Effect.fn('bolt.readArtifact')(function* (
 			`the artifact's ${bad} does not match its recorded digest; rebuild it`
 		);
 	const expectedPages = public_page_keys(manifest);
-	if (JSON.stringify(Object.keys(pages).sort()) !== JSON.stringify(expectedPages))
+	if (!equal_json(Object.keys(pages).sort(), expectedPages))
 		return yield* BoltError.make(
 			'artifact_digest',
 			'admission',
@@ -518,17 +517,6 @@ export const pack_asset_loader = Effect.fn('bolt.packAssetLoader')(function* (
 	});
 	return { step };
 });
-/** `pack_asset_loader` whole: `false` when the database had rows and nothing changed. */
-export const load_pack_with_assets = Effect.fn('bolt.loadPackWithAssets')(function* (
-	db: TenantDbShape,
-	m: EngineManifest,
-	pack: PackSource,
-	files: Files['Service'],
-	now: string
-) {
-	return (yield* drain((yield* pack_asset_loader(db, m, pack, files, now)).step)) === 'loaded';
-});
-
 /** Facilities and declaration refusals a host checks before activating the verified artifact. */
 export function activation_requirements(m: EngineManifest): {
 	files: true;

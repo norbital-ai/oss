@@ -275,8 +275,6 @@ export const WriteOutcome = Schema.Union([
 		code: Schema.Literals(REFUSAL_CODES),
 		message: Schema.String,
 		field: Schema.optionalKey(Schema.String),
-		/** The write path a refused field belongs to (`'orders.lines'`); absent on the root. */
-		path: Schema.optionalKey(Schema.String),
 		row: Schema.optionalKey(Schema.Number),
 		rows: Schema.optionalKey(Schema.Array(Schema.Number)),
 		/** The tenant code that refused — `'<model>.transform'` or `'<model>.<action>'`. */

@@ -13,7 +13,8 @@
 		Combobox,
 		Form,
 		Table,
-		toast
+		toast,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import type { ShellApi } from '../api-types.ts';
 	import type { ShellBolt } from '../runtime.ts';
@@ -22,6 +23,7 @@
 	import { driverLabel, instanceMade, statusLabel } from './setup.ts';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		settings,
@@ -31,6 +33,7 @@
 		reload,
 		configuration = null
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		settings: Settings;
@@ -139,7 +142,7 @@
 
 {#if offers.error !== undefined}<p class="mb-3 text-sm text-destructive" role="alert">{offers.error.message}</p>{/if}
 {#if !creating && editing_envoy === undefined}
-<Table
+<Table {ctx}
 	of={rows}
 	columns={[
 		{ field: 'name', label: t('Name'), cell: nameCell },
@@ -201,7 +204,7 @@
 			<div><h3 class="text-sm font-medium">{t('New envoy')}</h3><p class="mt-1 text-xs text-muted-foreground">{t('Choose who it helps and the channel it will answer on.')}</p></div>
 			<Button variant="ghost" onclick={() => { creating = false; }}>{t('Cancel')}</Button>
 		</div>
-			<Form
+			<Form {ctx}
 				of="sys_envoy"
 				mode="create"
 				submit={t('Create envoy')}
@@ -233,7 +236,7 @@
 							on_change={(next) => (chosenProvider = next)}
 						/>
 					</div>
-					<EnvoyFields policies={settings.policies} {t} on_name_change={(name) => { newName = name; }} />
+					<EnvoyFields {ctx} policies={settings.policies} {t} on_name_change={(name) => { newName = name; }} />
 				{/snippet}
 			</Form>
 	</section>
@@ -255,8 +258,8 @@
 				</div>
 			{/if}
 		{/if}
-		<Form of="sys_envoy" mode="update" id={editing_envoy.id} submit={t('Save')} on_outcome={() => fork(reload())}>
-			<EnvoyFields policies={settings.policies} {t} active />
+		<Form {ctx} of="sys_envoy" mode="update" id={editing_envoy.id} submit={t('Save')} on_outcome={() => fork(reload())}>
+			<EnvoyFields {ctx} policies={settings.policies} {t} active />
 		</Form>
 	</section>
 {/if}

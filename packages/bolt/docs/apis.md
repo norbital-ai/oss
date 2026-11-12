@@ -164,7 +164,7 @@ acceptance. Queued messages have no sent timestamp; an uncertain send must not b
 provider guarantees idempotency.
 
 `ctx.browser` owns one tab for the run and carries no person's cookies. `navigate` and `snapshot`
-answer `BrowserSnapshot`; `act` takes typed `BrowserStep` refs from that snapshot, `evaluate`
+answer a typed snapshot; `act` takes typed `BrowserStep` refs from that snapshot, `evaluate`
 answers JSON, and `download(url, { for })` stores supported media. The tab closes when the run's
 scope ends, including failure or interruption; `close` ends it early. Use `ctx.web.read(url)` for
 page text that needs no interaction. The host must provide the browser facility; no fake or

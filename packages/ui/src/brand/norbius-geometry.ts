@@ -72,9 +72,6 @@ const CENTRE_RADIUS = 0.78;
 /** The band's reach in shape units at rest, used to turn px pitches into counts. */
 const REACH = 1.15;
 
-/** The seed grid, ring-major: index = ring · across + column. `faces` needs the shape back. */
-type BandLayout = BandSeed[] & { readonly around: number; readonly across: number };
-
 /**
  * Rows of dots along the band, as many as the pixel pitch allows.
  *
@@ -82,7 +79,8 @@ type BandLayout = BandSeed[] & { readonly around: number; readonly across: numbe
  * read at that size: a third wider, seen a touch more from above so the loop closes visibly, and
  * with only a few rows so each one resolves.
  */
-function bandLayout(size: number): BandLayout {
+/** The seed grid is ring-major: index = ring · across + column. */
+function bandLayout(size: number): BandSeed[] {
 	const ribbon = size < RIBBON_BELOW;
 	const wide = ribbon ? 1.35 : 1;
 	const lift = ribbon ? 0.12 : 0;
@@ -94,7 +92,7 @@ function bandLayout(size: number): BandLayout {
 		? clamp(Math.round(bandPx / (pitchAcross(size) * 1.6)) + 1, 3, 5)
 		: clamp(Math.round(bandPx / pitchAcross(size)) + 1, 3, 9);
 	const step = TAU / around;
-	const seeds = Object.assign([] as BandSeed[], { around, across });
+	const seeds: BandSeed[] = [];
 	for (let ring = 0; ring < around; ring += 1) {
 		for (let column = 0; column < across; column += 1) {
 			const v = (column / (across - 1)) * 2 - 1;
@@ -121,7 +119,10 @@ function bandFaces(
 	seeds: BandSeed[],
 	state: NorbiusStripState
 ): ReadonlyArray<readonly [number, number, number, number]> {
-	const { around, across } = seeds as BandLayout;
+	// each ring starts at the edge v = -1
+	const across = seeds.findIndex((seed, i) => i > 0 && seed.v === -1);
+	if (across <= 0) return [];
+	const around = seeds.length / across;
 	const mirror = BAND[state].twist > 0.5;
 	const faces: Array<readonly [number, number, number, number]> = [];
 	for (let ring = 0; ring < around; ring += 1) {

@@ -9,7 +9,6 @@ import { BoltError } from '../../protocol/errors.ts';
 
 export const DatabaseRequest = SqlServerRequest;
 export type DatabaseRequest = typeof DatabaseRequest.Type;
-export type { SqlServerProjection as DatabaseProjection } from '@norbital-ai/store/sqlserver';
 export const DatabaseResult = Schema.Struct({
 	rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
 });

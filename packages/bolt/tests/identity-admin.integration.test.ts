@@ -30,7 +30,7 @@ import {
 	verify_code
 } from '../src/engine/identity/session.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { memory_audit_layer } from '../../bolt-cli/src/test/index.ts';
+import { memory_audit_layer } from './support/audit.ts';
 
 const m: EngineManifest = {
 	needs: [],

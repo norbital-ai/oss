@@ -533,3 +533,37 @@ export function public_fetch(
 		return run(exchange, { signal: init.signal ?? original?.signal });
 	};
 }
+
+const request_page = make_request_page();
+const unreadable = (message: string) => new FacilityFailure({ kind: 'upstream', message });
+/** A host's web reader: one public page's bytes, every redirect hop re-checked, at most `WEB_PAGE_BYTE_LIMIT`. */
+export const read_public_page = Effect.fn('Network.read_public_page')(function* (
+	url: string,
+	options: { readonly resolve?: Resolve; readonly request?: RequestPage } = {}
+) {
+	if (url === '') return yield* Effect.fail(unreadable('A public page needs a URL.'));
+	let target = yield* Effect.try({
+		try: () => new URL(url),
+		catch: () => unreadable('A public page needs a valid URL.')
+	});
+	for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+		const addresses = yield* public_addresses(target, options.resolve);
+		const response = yield* (options.request ?? request_page)(target, addresses);
+		if (response.status >= 300 && response.status < 400 && response.location) {
+			const location = response.location;
+			target = yield* Effect.try({
+				try: () => new URL(location, target),
+				catch: () => unreadable('The public page returned an invalid redirect URL.')
+			});
+			continue;
+		}
+		if (response.status < 200 || response.status >= 300)
+			return yield* Effect.fail(unreadable(`Public page returned HTTP ${response.status}.`));
+		const bytes =
+			typeof response.body === 'string' ? new TextEncoder().encode(response.body) : response.body;
+		if (bytes.byteLength > WEB_PAGE_BYTE_LIMIT)
+			return yield* Effect.fail(unreadable('Public page exceeds the 2 MiB limit.'));
+		return { url: target.toString(), contentType: response.contentType, bytes };
+	}
+	return yield* Effect.fail(unreadable('Public page exceeded five redirects.'));
+});

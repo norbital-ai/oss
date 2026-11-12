@@ -1,14 +1,7 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import {
-	catalog_of,
-	compile,
-	is_operand,
-	semantic,
-	similar,
-	where,
-	type Scope
-} from '../src/index.ts';
+import { catalog_of, compile, semantic, similar, where, type Scope } from '../src/index.ts';
+import { is_operand } from '../src/decode.ts';
 
 const cat = catalog_of({
 	tables: {

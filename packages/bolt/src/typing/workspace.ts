@@ -8,12 +8,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-	API,
-	DiagnosticCategory,
-	type Diagnostic,
-	type Project
-} from '@typescript/native/unstable/async';
+import type { Diagnostic, DiagnosticCategory, Project } from '@typescript/native/unstable/async';
 import type { SourceFile } from '@typescript/native/unstable/ast';
 import { Duration, Effect, Hash, Schema } from 'effect';
 import { componentOf, redirectOf, redirectText, shadow, shims, type Shadow } from './svelte.ts';
@@ -322,12 +317,18 @@ const lineColumn = (text: string, offset: number) => {
 	const before = text.slice(0, offset).split('\n');
 	return { line: before.length, column: (before.at(-1) ?? '').length + 1 };
 };
-const categoryOf = (c: DiagnosticCategory): LangDiagnostic['category'] =>
-	c === DiagnosticCategory.Error
+// The checker loads on first use: importing `@norbital-ai/bolt/node` must not start TypeScript.
+let native: Promise<typeof import('@typescript/native/unstable/async')> | undefined;
+const typescript = () => (native ??= import('@typescript/native/unstable/async'));
+const categoryOf = (
+	categories: typeof DiagnosticCategory,
+	c: DiagnosticCategory
+): LangDiagnostic['category'] =>
+	c === categories.Error
 		? 'error'
-		: c === DiagnosticCategory.Warning
+		: c === categories.Warning
 			? 'warning'
-			: c === DiagnosticCategory.Suggestion
+			: c === categories.Suggestion
 				? 'suggestion'
 				: 'message';
 const messageOf = (d: Diagnostic, depth = 0): string =>
@@ -385,6 +386,7 @@ export function view(project: Project, held: Held) {
 				...(await project.program.getGlobalDiagnostics())
 			);
 		const out: LangDiagnostic[] = [];
+		const { DiagnosticCategory: categories } = await typescript();
 		for (const d of found) {
 			const at =
 				d.fileName === undefined
@@ -392,7 +394,7 @@ export function view(project: Project, held: Held) {
 					: await position(d.fileName, d.pos);
 			// outside the workspace (a dependency, with skipLibCheck off) or in generated markup
 			if (at === undefined || at.path.startsWith('node_modules/')) continue;
-			out.push({ ...at, code: d.code, category: categoryOf(d.category), message: messageOf(d) });
+			out.push({ ...at, code: d.code, category: categoryOf(categories, d.category), message: messageOf(d) });
 		}
 		for (const [path, sh] of held.shadows)
 			if (sh.error !== undefined && (files.includes(undefined) || files.includes(sh.path)))
@@ -408,7 +410,7 @@ export function view(project: Project, held: Held) {
 	return { project, held, position, diagnostics, source };
 }
 
-export class TypeCheckError extends Schema.TaggedError<TypeCheckError>()('TypeCheckError', {
+class TypeCheckError extends Schema.TaggedError<TypeCheckError>()('TypeCheckError', {
 	message: Schema.String
 }) {}
 
@@ -421,14 +423,15 @@ export const check_workspace = Effect.fn('bolt.check_workspace')(function* (
 	const timeoutMs = options.timeout_ms ?? 600_000;
 	const held = holder('check', 'check');
 	return yield* Effect.acquireUseRelease(
-		Effect.sync(
-			() =>
-				new API({
+		Effect.tryPromise({
+			try: async () =>
+				new (await typescript()).API({
 					cwd: '/',
 					fs: filesystem(new Map([[held.root, held]])),
 					...(options.tsserver_path === undefined ? {} : { tsserverPath: options.tsserver_path })
-				})
-		),
+				}),
+			catch: (cause) => new TypeCheckError({ message: String(cause) })
+		}),
 		(api) =>
 			Effect.tryPromise({
 				try: async () => {
@@ -455,3 +458,19 @@ export const check_workspace = Effect.fn('bolt.check_workspace')(function* (
 			)
 	);
 });
+
+/**
+ * A host's language service over these workspaces: `holder` a workspace, `refresh` it, serve it through `filesystem`,
+ * read it through `view`; `check_workspace` checks a whole program in a process of its own. Positions, diagnostics and
+ * holders derive from these (`Parameters<typeof type_service.offset_in>[1]`, `ReturnType<typeof type_service.holder>`).
+ */
+export const type_service = {
+	PROBE,
+	root_of,
+	refresh,
+	filesystem,
+	holder,
+	offset_in,
+	view,
+	check_workspace
+};

@@ -82,7 +82,7 @@ export function next_due(c: Chain): string {
 		: `(SELECT min(due_at) FROM (${selects.join(' UNION ALL ')}) queued_due)`;
 }
 
-export type Triggers = {
+type Triggers = {
 	crons: readonly CronEntry[];
 	/** How long each cron that declares `rest` may rest, in ms. */
 	rests: ReadonlyMap<string, number>;
@@ -126,7 +126,7 @@ export const holderOf = (a: Authority): Holder =>
 export const writerOf = (a: Authority): Writer => {
 	const holder = holderOf(a);
 	return {
-		starter: Schema.encodeSync(Schema.Json)(holder),
+		starter: holder,
 		actor: actor_ref(holder.actor),
 		depth: a.run === undefined ? 0 : a.run.depth + 1
 	};

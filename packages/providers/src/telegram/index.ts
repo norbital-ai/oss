@@ -4,7 +4,7 @@ import { Effect, Option, Predicate, Schema } from 'effect';
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { answerFailure, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import {
 	blobOf,
 	field,
@@ -190,7 +190,7 @@ export function telegram(o: { readonly api?: string } = {}): ProviderDef {
 				);
 			const need = () =>
 				token === null
-					? Effect.fail(new ProviderUnavailable({ message: 'the Telegram bot is not connected' }))
+					? Effect.fail(notConnected('the Telegram bot'))
 					: Effect.succeed(token);
 			return {
 				pair: Effect.fn('Telegram.pair')(function* (input: Json) {

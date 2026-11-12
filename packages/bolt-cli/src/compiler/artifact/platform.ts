@@ -30,9 +30,8 @@ const ENTRIES = [
 ];
 /** Bare specifiers the layer exposes, resolved as the shell resolves them, else as ui does; one a release lacks is left out. */
 const SPECIFIERS = [
-	...['', '/layout', '/brand', '/capture', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
+	...['', '/layout', '/brand', '/effect'].map((sub) => `@norbital-ai/ui${sub}`),
 	...[
-		'calendar',
 		'csv',
 		'date',
 		'decimal',
@@ -159,7 +158,7 @@ export const cachedPlatformLayer = Effect.fn('bolt.cachedPlatformLayer')(functio
 	const temporary = `${metadata}.${process.pid}`;
 	yield* fs.writeFileString(
 		temporary,
-		Schema.encodeSync(CachedPlatform)({
+		yield* Schema.encodeEffect(CachedPlatform)({
 			key,
 			modules: [...layer.modules],
 			chunks: [...layer.chunks.values()],

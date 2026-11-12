@@ -4,8 +4,9 @@ An example untethered host (plan 01): one Bolt workspace's built release served 
 workspace's host file. `bolt-server [workspace]` serves `<workspace>/.norbital/bundle` (or `--artifact=<dir>`) with
 `<workspace>/norbital.host.ts` (or `--host=<file>`); a workspace without a host file is Colony's to serve. Flags:
 `--listen` (default `127.0.0.1`), `--port` (default `3100`), `--trust-proxy=<cidrs>`, `--founder=<address>`,
-`--seed=<pack>`. `bolt dev` loads the same host file the same way and serves through the same engine path
-(`serve_release` in `@norbital-ai/bolt/node`): integration links, activation, deadline wakes and the cron clock.
+`--seed=<pack>`. It serves through `serve` (`@norbital-ai/bolt/node`); `bolt dev` loads the same host file the same way
+and serves through the same engine path: integration links, activation, deadline wakes and the cron clock. The example's
+own audit store, keys, outbound network and local files are `default_facilities` from the same entry.
 
 A host file default-exports its `Facilities` (`@norbital-ai/bolt/facilities`, `satisfies Facilities`) and may export
 `serving` (`Serving`: integration providers, OAuth app, converter, geocoder, web reader, shell badge and push key, and

@@ -1,13 +1,12 @@
 <script lang="ts">
+	import type { UiContext } from '../src/client/contract.js';
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	import Table from '../src/table/Table.svelte';
-	import { provide_bolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 	import { type Row } from '../src/model/types.js';
-	import { provide_kinds } from '../src/kinds/context.js';
 	type LocalRow = Row & { name: string; amount: number };
 	let {
 		initial,
@@ -37,11 +36,10 @@
 		locale: 'en',
 		t: (key) => key
 	};
-	provide_bolt(() => client);
-	provide_kinds({});
+	const ctx: UiContext = { ui: { bolt: client, kinds: {} } };
 </script>
 
-<Table
+<Table {ctx}
 	of={rows}
 	key="local-edit"
 	columns={[

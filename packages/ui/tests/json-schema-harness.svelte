@@ -1,9 +1,10 @@
 <script lang="ts">
+	import type { UiContext } from '../src/client/contract.js';
+	import type { KindsHost } from '../src/kinds/context.js';
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
-	import { provide_kinds } from '../src/kinds/context.js';
 	import StructuredData from '../src/kinds/structured-data.svelte';
 	import Editor from '../src/kinds/editor.svelte';
 	import type { JsonSchema } from '../src/kinds/json-schema.js';
@@ -31,7 +32,7 @@
 		cell?: boolean;
 		link?: boolean;
 		initial: Value;
-		host?: Parameters<typeof provide_kinds>[0];
+		host?: KindsHost;
 		errors?: ReadonlyMap<string, string>;
 		readonly?: boolean;
 		editor?: boolean;
@@ -41,7 +42,7 @@
 	} = $props();
 	// Each test mount owns the initial host and draft, which subsequent edits replace locally.
 	// svelte-ignore state_referenced_locally
-	provide_kinds(host);
+	const ctx: UiContext = { ui: { kinds: host } };
 	// svelte-ignore state_referenced_locally
 	let value = $state(initial);
 	function update(next: Value) {
@@ -50,9 +51,9 @@
 	}
 </script>
 
-{#if cell}<CellValue {kind} {value} name="input" dense {link} />
-{:else if kind !== undefined && view}<Show readonly {kind} {value} name="input" />
-{:else if kind !== undefined}<Editor
+{#if cell}<CellValue {ctx} {kind} {value} name="input" dense {link} />
+{:else if kind !== undefined && view}<Show {ctx} readonly {kind} {value} name="input" />
+{:else if kind !== undefined}<Editor {ctx}
 		{kind}
 		{value}
 		on_change={update}
@@ -61,7 +62,7 @@
 		{errors}
 		raw_json={rawJson}
 	/>
-{:else if editor}<Editor
+{:else if editor}<Editor {ctx}
 		kind={{ kind: 'json' }}
 		json_schema={schema}
 		{value}
@@ -71,7 +72,7 @@
 		{errors}
 		raw_json={rawJson}
 	/>
-{:else if schema !== undefined}<StructuredData
+{:else if schema !== undefined}<StructuredData {ctx}
 		mode="edit"
 		{schema}
 		{value}

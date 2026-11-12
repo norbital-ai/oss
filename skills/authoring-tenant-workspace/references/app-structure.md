@@ -90,7 +90,7 @@ Rows are one line; a click opens the record; headers do not sort; each header's 
 | `readonly` | no field chrome, value as text by kind, copy on hover | a record the viewer may see, not change |
 | `disabled` | editor stays, muted, submit disabled | editable in principle, not right now |
 
-- Set the mode once; it reaches every control. A `Field` or `Fieldset` may override. A `Form` never inherits an outer mode.
+- Set the mode once; it reaches every control. A `Field` may override. A `Form` never inherits an outer mode.
 - Use the shared record controller for view, edit and create. Never `readonly={!admin}` or a parallel policy matcher. An update contract is not permission.
 - A readonly `Field` renders its kind, not its `editor` snippet.
 

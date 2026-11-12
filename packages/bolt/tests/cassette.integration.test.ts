@@ -12,7 +12,7 @@ import { Ai } from '../src/engine/ports.ts';
 import { off } from '../src/facilities/index.ts';
 import { Agents } from '../src/engine/services.ts';
 import { decode_projected_manifest } from '../src/engine/manifest.ts';
-import type { AiPortResponse } from '../src/engine/contracts.ts';
+import type { AiResponse } from '../src/engine/contracts.ts';
 import { TestWorkspace, type TestOptions } from '../../bolt-cli/src/test/index.ts';
 
 const manifest = Result.getOrThrow(
@@ -36,7 +36,7 @@ const manifest = Result.getOrThrow(
 		custom_fields: {}
 	})
 );
-const reply = (content: string): AiPortResponse => ({
+const reply = (content: string): AiResponse => ({
 	content,
 	tool_calls: [],
 	finish: 'stop',
@@ -119,7 +119,7 @@ describe('Fakes.ai.cassette', () => {
 						TestWorkspace.layer({ manifest, fakes: { ai: { cassette: { default: file } } } })
 					)
 				);
-				expect(malformed.message).toMatch(/'default' turn 0 is not an AiPortResponse/);
+				expect(malformed.message).toMatch(/'default' turn 0 is not an AiResponse/);
 				const ambiguous = yield* Effect.flip(
 					Layer.build(
 						TestWorkspace.layer({

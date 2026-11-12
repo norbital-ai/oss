@@ -62,7 +62,7 @@ export const load = Effect.fn('bolt.load')(function* (root: string, files: reado
 	const path = yield* Path.Path;
 	if (files.some((file) => file.role === 'model' || file.role === 'integration_definition'))
 		yield* writeDeclarations(root, files);
-	const manifest: Manifest = Schema.decodeUnknownSync(
+	const manifest: Manifest = yield* Schema.decodeUnknownEffect(
 		Schema.Record(
 			Schema.Literals(ROLES.map((r) => r.role)),
 			Schema.Record(Schema.String, Schema.Unknown)

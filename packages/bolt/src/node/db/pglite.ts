@@ -32,7 +32,7 @@ export type PgliteClient = {
 	transaction<A>(body: (tx: Pick<PgliteClient, 'query' | 'exec'>) => Promise<A>): Promise<A>;
 } & Pick<PGlite, 'execProtocol' | 'parsers'>;
 /** A native data directory may be initialized from a dump; reopening uses that same directory. */
-export type PgliteSource =
+type PgliteSource =
 	string | Blob | { readonly dataDir: string; readonly loadDataDir?: Blob };
 type Querier = Pick<PgliteClient, 'query' | 'exec'>;
 const parsers = Object.fromEntries(PARSED_OIDS.map((oid) => [oid, (s: string) => parse(oid, s)]));
@@ -44,7 +44,7 @@ class Pglite extends PGlite {
 	override async _initArrayTypes(): Promise<void> {}
 }
 const extensions = { vector, btree_gist };
-const rowsOf = Schema.decodeUnknownSync(Schema.Array(Schema.Record(Schema.String, Schema.Json)));
+const rowsOf = Schema.decodeUnknownEffect(Schema.Array(Schema.Record(Schema.String, Schema.Json)));
 
 type NativeSql = { readonly text: string; readonly params: (string | null)[] };
 type NativeRows = { readonly rows: readonly unknown[]; readonly affected: number | undefined };
@@ -317,14 +317,12 @@ export const PgliteDb = {
 					)
 				),
 				Effect.flatMap((results) =>
-					Effect.try({
-						try: () =>
-							results.map((result) => {
-								const rows = rowsOf(result.rows);
-								return { rows, affected: result.affected ?? rows.length };
-							}),
-						catch: db_error
-					})
+					Effect.forEach(results, (result) =>
+						rowsOf(result.rows).pipe(
+							Effect.map((rows) => ({ rows, affected: result.affected ?? rows.length })),
+							Effect.mapError(db_error)
+						)
+					)
 				)
 			);
 		return TenantDb.typed({

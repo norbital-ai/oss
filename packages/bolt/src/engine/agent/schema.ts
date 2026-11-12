@@ -423,20 +423,24 @@ const Outcome = Schema.Struct({
 const outcomeOf = Schema.decodeUnknownOption(Outcome);
 const NO_OUTCOME: typeof Outcome.Type = {};
 
-/** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
-const reparsed = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
 /**
  * A value as PostgreSQL holds it, before anything sees it: text and jsonb have no NUL, and a tool's text can carry one (a
- * binary file read as text), which would otherwise end the turn. Only a real escape is replaced, never an escaped `\\u0000`.
+ * binary file read as text), which would otherwise end the turn. Every NUL in a string or key becomes U+FFFD.
  */
 export function storable(value: string): string;
 export function storable(value: Json): Json;
 export function storable(value: Json): Json {
-	const text = JSON.stringify(value);
-	return text.includes('\\u0000')
-		? reparsed(text.replace(/(?<!\\)((?:\\\\)*)\\u0000/g, '$1\\ufffd'))
-		: value;
+	return JSON.stringify(value).includes('\\u0000') ? scrub(value) : value;
 }
+const scrub = (value: Json): Json =>
+	typeof value === 'string'
+		? value.replaceAll('\0', '\ufffd')
+		: value === null || typeof value !== 'object'
+			? value
+			: Array.isArray(value)
+				? value.map(scrub)
+				: Object.fromEntries(Object.entries(value).map(([k, v]) => [k.replaceAll('\0', '\ufffd'), scrub(v)]));
+/** Staff read a failed turn's reason (rule 59) and every instance's thread (§5.9). */
 export const isStaff = (a: Authority) =>
 	a.admin || (a.actor.kind === 'member' && !a.actor.external);
 /**

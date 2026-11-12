@@ -1,23 +1,24 @@
 // Type corpus for Effect-native bodies (D8): generator bodies over the ctx Effects and their tagged failures. Each
 // `@ts-expect-error` line is a planted mistake; a clean tsc proves every valid line compiles.
 import { Context, Effect } from 'effect';
-import { Refusal } from '../../src/decl/errors.ts';
+import { Refusal } from '../../src/decl/errors/refusal.ts';
 import { attached, attached_verdict, type GeneratorBody } from '../../src/decl/body.ts';
 import { Verdict, type VerdictData } from '../../src/decl/access/policy.ts';
 import { automation, browser_start } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import type { Actor, AutomationCtx, BrowserSnapshot, EffectCtx, Id, WriteCtx } from '../../src/index.ts';
+import type { Actor, AutomationCtx, EffectCtx, Id, WriteCtx } from '../../src/index.ts';
 import type {
 	ActConflict,
 	ActRefused,
-	ActUnknown,
 	FacilityFailure,
 	ReadFailed,
 	Unavailable
 } from '../../src/decl/errors.ts';
+import type { ActUnknown } from '../../src/decl/errors/act.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
+import type { BrowserSnapshot } from '../../src/decl/runtime/facilities.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};
@@ -76,7 +77,7 @@ bind_model('orders')({
 	create: {
 		...m.orders.spec.create,
 		transform: function* (rows, ctx) {
-			if (rows.length === 0) return yield* ctx.refuse('no rows', { field: 'note' });
+			if (rows.length === 0) return yield* ctx.refuse('errors.refused', { field: 'note' });
 			return rows.map(({ set }) => set);
 		}
 	}
@@ -88,7 +89,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		transform: function* (rows, ctx) {
 			// @ts-expect-error E3 refuse used as `never`
-			const none: readonly never[] = ctx.refuse('no rows');
+			const none: readonly never[] = ctx.refuse('errors.refused');
 			return rows.map(({ set }) => none.length === 0 ? set : set);
 		}
 	}
@@ -101,7 +102,7 @@ automation({
 		const target =
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
-		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		if (target === null) return yield* ctx.refuse('errors.refused');
 		const submit = ctx.act({ 'orders.update': [
 			{
 				target,
@@ -122,7 +123,7 @@ automation({
 		const target =
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
-		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		if (target === null) return yield* ctx.refuse('errors.refused');
 		yield* ctx.act({ 'orders.update': [{ target, set: {} }] }).pipe(
 			// @ts-expect-error E4 a tag act never fails with
 			Effect.catchTag('Refusal', () => Effect.void)

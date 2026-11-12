@@ -1,4 +1,4 @@
-// The window math of every long list (Table, Board, Matrix, Combobox, CommandMenu, LogView, the agent transcript): pure,
+// The window math of every long list (Table, Board, Combobox, CommandMenu, LogView, the agent transcript): pure,
 // over measured row heights, so it is tested without a DOM.
 
 /** Prefix sums: `offsets[i]` is row i's top, `offsets[n]` the total height. */

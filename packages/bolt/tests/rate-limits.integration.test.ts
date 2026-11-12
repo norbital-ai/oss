@@ -31,17 +31,17 @@ const manifest = Result.getOrThrow(
 		policies: {
 			writer: {
 				description: 'Writes notes, two a minute',
-				grants: { notes: { outputs: { default: true }, create: true } },
+				grants: { notes: { outputs: { default: {} }, create: {} } },
 				limits: { act: '2/min', read: '2/min' }
 			},
 			chatter: {
 				description: 'Two agent posts a minute',
-				grants: { notes: { outputs: { default: true } } },
+				grants: { notes: { outputs: { default: {} } } },
 				limits: { agent: [{ rate: '2/min', per: 'actor' }] }
 			},
 			reader: {
 				description: 'Public reads, two a minute per IP',
-				grants: { notes: { outputs: { default: true } } },
+				grants: { notes: { outputs: { default: {} } } },
 				limits: { read: { rate: '2/min', per: 'ip' } }
 			}
 		},
@@ -339,8 +339,8 @@ const runs = Result.getOrThrow(
 			worker: {
 				description: 'Writes notes and logs, starts the manual automation',
 				grants: {
-					notes: { outputs: { default: true }, create: true },
-					logs: { outputs: { default: true }, create: true }
+					notes: { outputs: { default: {} }, create: {} },
+					logs: { outputs: { default: {} }, create: {} }
 				},
 				capabilities: { automations: ['manual'] },
 				limits: { act: '1000/min' }

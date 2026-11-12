@@ -1,5 +1,5 @@
 // A complete process-local audit facility for tests. Production hosts must supply a durable separate store.
-import { Schema } from 'effect';
+import { Result, Schema } from 'effect';
 import { canonical, sha256_hex } from '@norbital-ai/store';
 import { FacilityFailure } from '@norbital-ai/bolt/errors';
 import {
@@ -19,14 +19,14 @@ export const memory_audit = () => {
 	const cursor = (after: string | undefined, query: unknown) => {
 		const hash = sha256_hex(canonical(query));
 		if (after === undefined) return { hash, id: undefined };
-		try {
-			const [bound, id] = Schema.decodeUnknownSync(Schema.fromJsonString(Cursor))(
-				decodeURIComponent(after)
-			);
+		const decoded = Result.try(() => decodeURIComponent(after)).pipe(
+			Result.flatMap(Schema.decodeUnknownResult(Schema.fromJsonString(Cursor)))
+		);
+		if (Result.isSuccess(decoded)) {
+			const [bound, id] = decoded.success;
 			if (bound === hash) return { hash, id };
-		} catch {
-			// Malformed and changed-filter cursors are both caller errors.
 		}
+		// Malformed and changed-filter cursors are both caller errors.
 		throw new FacilityFailure({
 			kind: 'invalid',
 			message: 'The audit cursor is invalid or belongs to different filters.'
@@ -62,8 +62,8 @@ export const memory_audit = () => {
 		mode: 'durable',
 		append: async (events, signal) => {
 			abort(signal);
-			const prepared = events.map((event) =>
-				Schema.decodeUnknownSync(AuditEvent)(structuredClone(event))
+			const prepared = await Promise.all(
+				events.map((event) => Schema.decodeUnknownPromise(AuditEvent)(structuredClone(event)))
 			);
 			for (const event of prepared) {
 				const previous = records.get(event.id);

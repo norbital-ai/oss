@@ -1,20 +1,11 @@
 // The strictness the type-cost work keeps (F28, compute model §5 "Cheaper types, strictness kept"): a cheaper Bolt type
 // must answer the same types and refuse the same mistakes. Each `@ts-expect-error` line is a planted mistake.
-import type {
-	CallerQuery,
-	Cursor,
-	Id,
-	PlainDate,
-	ReadAnswer,
-	ReadRequest,
-	ReadRequestBase,
-	Where,
-	WorkspaceQuery
-} from '../../src/index.ts';
+import type { Cursor, Id, PlainDate, ReadAnswer, ReadRequest, ReadRequestBase, Where, WorkspaceQuery } from '../../src/index.ts';
 import type { ReadableName } from '../../src/decl/names.ts';
 import type { ModelWhere } from '../../src/decl/where.ts';
 import type { Eff } from '../../src/decl/ctx.ts';
 import './registry.ts';
+import type { CallerQuery } from '../../src/decl/ctx.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(value: T): T => value;

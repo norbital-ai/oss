@@ -5,17 +5,19 @@
 -->
 <script lang="ts">
 	import { SvelteSet } from 'svelte/reactivity';
-	import { CodeEditor, Icon } from '@norbital-ai/ui';
+	import { CodeEditor, Icon, type UiContext } from '@norbital-ai/ui';
 	import type { AgentRow } from '../../protocol/wire.ts';
 	import ToolBody from './ToolBody.svelte';
 	import { checkOf, failureOf, reportView, stepArgs, stepView, type StepView } from './view.ts';
 
 	let {
+		ctx,
 		steps,
 		t,
 		activity = false,
 		opened = new SvelteSet<string>()
 	}: {
+		ctx: UiContext;
 		steps: readonly AgentRow[];
 		t: (key: string) => string;
 		activity?: boolean;
@@ -121,7 +123,7 @@
 								{s.reasoning}
 							</p>
 						{:else}
-							<ToolBody {tool} view={v} {t} />
+							<ToolBody {ctx} {tool} view={v} {t} />
 						{/if}
 					</div>
 				{/if}

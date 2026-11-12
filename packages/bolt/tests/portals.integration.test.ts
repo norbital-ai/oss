@@ -69,14 +69,14 @@ const source = {
 		site_visitor: {
 			description: 'The public site: service names, and an enquiry',
 			grants: {
-				services: { outputs: { listing: true } },
+				services: { outputs: { listing: {} } },
 				enquiries: { create: { columns: { enquiries: ['name'] } } }
 			}
 		},
 		account_holder: {
 			description: 'The customer portal: service names, and their own bookings',
 			grants: {
-				services: { outputs: { listing: true } },
+				services: { outputs: { listing: {} } },
 				bookings: {
 					outputs: { own: { scopes: { bookings: { customer: { eq: { var: 'requestor.id' } } } } } },
 					create: { columns: { bookings: ['note', 'customer'] } }
@@ -106,7 +106,7 @@ const source = {
 		staff: {
 			description: 'Staff',
 			capabilities: { apps: ['desk'] },
-			grants: { services: { outputs: { default: true } }, bookings: { outputs: { default: true } } }
+			grants: { services: { outputs: { default: {} } }, bookings: { outputs: { default: {} } } }
 		}
 	},
 	apps: {

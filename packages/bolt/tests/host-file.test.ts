@@ -4,7 +4,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Effect, Exit, FileSystem, Path } from 'effect';
 import { load_host } from '../src/node/host.ts';
 import { hostModule } from '../src/node/host-module.ts';
-import { off, type Facilities, type Sandbox, type SandboxLimits } from '../src/facilities/index.ts';
+import { off, type Facilities, type SandboxLimits } from '../src/facilities/index.ts';
 import { memory_audit } from '../../bolt-cli/src/test/audit.ts';
 
 const facilities = (): Facilities => ({
@@ -69,7 +69,7 @@ describe('host module boundary', () => {
 
 	it('retains sandbox limits and decodes the canonical process result', async () => {
 		const calls: SandboxLimits[] = [];
-		const sandbox: Sandbox = {
+		const sandbox: Exclude<Facilities['sandbox'], typeof off> = {
 			exec: async (_command, files, limits) => {
 				calls.push(limits);
 				return { exit_code: 7, stdout: 'out', stderr: 'err', files };

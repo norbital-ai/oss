@@ -24,7 +24,7 @@ import type {
 	DocParam,
 	DocSkill,
 	DocSymbol
-} from '../src/docs/index.ts';
+} from '../src/engine/docs-corpus.ts';
 
 class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 	message: Schema.String,
@@ -34,77 +34,36 @@ class DocsFailed extends Schema.TaggedError<DocsFailed>()('DocsFailed', {
 const PACKAGES = ['bolt', 'ui', 'std'];
 /** The reference a workspace author reads (§7.3): bolt's root and `/page`, bolt-cli's test kit, ui's authoring entries and std. */
 const REFERENCE = (ns: string) =>
-	['bolt', 'bolt/page', 'bolt/page/integrations', 'bolt-cli/test', 'ui', 'ui/layout', 'ui/capture'].includes(ns) ||
+	['bolt', 'bolt/page', 'bolt-cli/test', 'ui', 'ui/layout'].includes(ns) ||
 	ns.startsWith('std/');
 /** What an author reads for each role: these symbols' shapes, generated into `bolt-contract` so a card cannot drift. */
 const CONTRACT: { readonly [role: string]: { readonly [namespace: string]: readonly string[] } } = {
 	model: {
-		bolt: [
-			'ModelDeclaration',
-			'FieldCommon',
-			'StoredArm',
-			'RefField',
-			'ReadLayers',
-			'LayerColumns'
-		]
+		bolt: ['CreateInput', 'UpdateInput', 'WriteCtx', 'CarriedWrites'],
+		'bolt/declarations': ['ModelDeclaration', 'ModelLiteral'],
+		'std/kind': ['Kind']
 	},
-	access: {
-		bolt: [
-			'team',
-			'policy',
-			'Grant',
-			'ReadGrant',
-			'WriteGrant',
-			'CreateVerdict',
-			'UpdateVerdict',
-			'DeleteVerdict',
-			'PolicyCtx',
-			'Expr',
-			'ApprovalFlow'
-		]
-	},
+	access: { bolt: ['team', 'policy', 'PolicyCtx', 'StoredTree', 'ApprovalFlow', 'Verdict'] },
 	automation: {
-		bolt: [
-			'automation',
-			'Trigger',
-			'AutomationCtx',
-			'Browser',
-			'BrowserSnapshot',
-			'BrowserStep',
-			'ReadRequestBase',
-			'OutputKind',
-			'Act',
-			'Verdict'
-		],
+		bolt: ['automation', 'AutomationCtx', 'browser_start', 'ReadRequestBase', 'Outcome'],
 		'bolt/errors': ['Refusal']
 	},
-	sync: {
-		bolt: ['IntegrationDeclaration', 'RemoteSync', 'FileSync', 'SyncCtx', 'RemoteReadInput', 'SyncChange', 'FileSyncInput', 'SyncControlInput']
-	},
+	sync: { bolt: ['RemoteSync', 'SyncCtx', 'SyncRow', 'Health', 'FileSyncCtx'] },
 	integration: {
-		bolt: ['IntegrationDeclaration', 'IntegrationSpec', 'ConfigurationOf', 'InstanceId', 'SendInput', 'Send', 'Request', 'RequestOf', 'RequestResult', 'instance_id', 'is_instance'],
-		'bolt/page/integrations': ['IntegrationCard', 'IntegrationSetup', 'IntegrationClient', 'integration_client', 'integration_offers']
+		bolt: ['InstanceId', 'instance_id', 'is_instance'],
+		'bolt/declarations': ['IntegrationDeclaration', 'IntegrationLiteral', 'Integration'],
+		'bolt/page': ['IntegrationSetup']
 	},
 	page: {
 		bolt: ['app', 'Page', 'group'],
 		'bolt/page': ['PageBolt', 'PageSnapshotHost'],
-		ui: [
-			'Table',
-			'Col',
-			'Toolbar',
-			'RowAction',
-			'Form',
-			'Field',
-			'Section',
-			'RecordShell',
-			'Board',
-			'Chart'
-		]
+		ui: ['Table', 'Col', 'Form', 'Field', 'Section', 'RecordShell', 'Board', 'Chart']
 	},
-	test: { 'bolt-cli/test': [
-		'TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'KitQuery', 'KitAct', 'JobResult', 'NativeReadRow',
-		'NativeReadAnswer', 'NativeHistory', 'NativeActAnswer', 'NativeJobAnswer', 'layer'
-	] }
+	test: {
+		'bolt-cli/test': [
+			'TestWorkspace', 'Kit', 'Caller', 'TestOptions', 'JobResult', 'NativeReadRow', 'NativeReadAnswer', 'NativeActAnswer'
+		]
+	}
 };
 /** What the symbols alone leave out: a role's first file, so no conversation goes looking for it. */
 const CONTRACT_HEAD: { readonly [role: string]: string } = {
@@ -170,7 +129,7 @@ import { policy } from '@norbital-ai/bolt';
 
 export default policy({
 	description: '<what holders may do>',
-	grants: { <model>: { outputs: { default: true }, create: true, update: true } }
+	grants: { <model>: { outputs: { default: {} }, create: {}, update: {} } }
 });
 
 // src/access_control/team/+team.ts

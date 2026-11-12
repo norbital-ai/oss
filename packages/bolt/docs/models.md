@@ -52,15 +52,16 @@ export default model({
 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
 			const at = changes.findIndex((c) => blocked.has(c.after.customer));
 			if (at >= 0)
-				return yield* ctx.refuse('This customer is blocked.', { field: 'customer', row: at });
+				return yield* ctx.refuse('errors.customer_blocked', { field: 'customer', row: at });
 			return changes.map((c) => c.set);
 		}
 	},
 	update: {
 		columns: { fields: ['status', 'notes'], lines: { fields: ['product', 'quantity', 'net'] } },
 		transform: function* (changes, ctx) {
-			return changes.map(({ before, set }) =>
-				set.status === 'placed' && before.status === 'draft' ? { ...set, placed_at: ctx.now } : set
+			// `after` is the row as this write leaves it: the stored values with `set` applied
+			return changes.map((c) =>
+				c.changed('status') && c.after.status === 'placed' ? { ...c.set, placed_at: ctx.now } : c.set
 			);
 		}
 	},
@@ -139,7 +140,7 @@ An output that hides a dependency uses the record id, while another output may e
   many-relation (the child rows); it never lists the key that ties a child to its parent.
   `create.filled` names columns the transform fills when the writer omits them.
 - A write payload stays a tree. A create row is `{ customer, notes, lines: [{ product, quantity, net }] }`
-  (a non-owned child may also be an existing row's id, which links it). An update `set` names the
+  (a non-owned child may also be an existing row, `{ id, revision }`, which links it). An update `set` names the
   root columns and, per child layer, `{ create?, update?: [{ target, set }], delete?, link?, unlink? }`.
 - `.norbital/names.ts` generates the path unions (`ReadPath<'orders'>`, `WritePath<'orders', 'create'>`)
   and the model behind each path, so every layer value types against the right model.
@@ -186,23 +187,17 @@ import { automation } from '@norbital-ai/bolt';
 
 export default automation({
 	description: 'Copy an order as a new draft.',
-	input: { order: { kind: 'ref', to: 'orders' } },
+	// the caller sends ids; the body receives the rows, read under the run's policies (an unreadable id refuses the start)
+	input: { orders: { kind: 'rows', of: 'orders' } },
 	policies: ['order_duplicating'],
-	run: function* ({ order: id }, ctx) {
-		const { orders } = yield* ctx.query({ orders: { where: { id: { eq: id } }, limit: 1 } });
-		const order = orders.rows[0];
+	run: function* ({ orders }, ctx) {
 		const by = ctx.run.trigger;
 		// only the starter's own orders: the run's authority is its policies, so the body checks the starter
-		if (
-			order === undefined ||
-			by.kind !== 'person' ||
-			by.actor.kind !== 'member' ||
-			order.owner !== by.actor.id
-		)
-			return yield* ctx.refuse('This order is unavailable.');
-		yield* ctx.act({ 'orders.create': [
-			{ customer: order.customer, notes: order.notes, owner: order.owner }
-		] });
+		const row = orders.findIndex((order) =>
+			by.kind !== 'person' || by.actor.kind !== 'member' || order.owner !== by.actor.id);
+		if (row >= 0) return yield* ctx.refuse('errors.order_unavailable', { row });
+		yield* ctx.act({ 'orders.create': orders.map((order) =>
+			({ customer: order.customer, notes: order.notes, owner: order.owner })) });
 	}
 });
 ```
@@ -210,7 +205,7 @@ export default automation({
 `order_duplicating` grants the order read and create the run uses. Its `requestor.*` operands name
 the system identity, so a rule about the starter is code over `ctx.run.trigger`, and a ref the run
 writes is set explicitly (a `requestor.id` default does not apply). A person or the agent starts it by hand
-only through a held policy's `capabilities.automations`; code that schedules it needs none. A page starts it with `ctx.run('orders_duplicate', { order: id })` and
+only through a held policy's `capabilities.automations`; code that schedules it needs none. A page starts it with `ctx.run('orders_duplicate', { orders: [id] })` and
 shows its run status. Several independent writes belong in one `ctx.act({ ... })` map when
 they must commit atomically; dependent parent/child creates nest the child rows in the parent's
 write layers. A transform can carry other rows into the same commit. A whole automation is durable work and may contain several independent commits.
@@ -241,8 +236,21 @@ and does not acquire application policy checks merely by reaching the same table
 
 Every generated write's input is an array of rows (`[{ … }]`, `[{ target, set }]`, `[{ target }]`);
 there is no single-row form. Create and update transforms receive `{ before, set, after, changed }`
-changes and return sets in order. A create's `after` carries its future id. Delete has no transform;
+changes and return sets in order. `after` is the row as the write leaves it: the stored values with
+`set` applied, so read a value from `c.after.x`, never `c.set.x ?? c.before.x`, and test a change with
+`c.changed('x')`. A create's `after` carries its future id. Delete has no transform;
 policies and native constraints judge deletion. Shared logic is an ordinary helper called by both verbs.
+
+`target` is a row: pass the row you read or received (it carries its `id` and `revision`, and a newer
+stored revision is a conflict). An automation that acts on records takes them as
+`{ kind: 'rows', of: '<model>' }`: a caller sends ids, and the body receives the rows read under the
+run's policies, so `ctx.act({ 'orders.update': orders.map((order) => ({ target: order, set })) })`
+needs no read of its own.
+
+A body says no with `return yield* ctx.refuse('<message key>', { row?, field? })`. The message is a
+key of the workspace catalogue (`src/i18n/+messages.ts`); `row` is the offending row's index in the
+batch or list the body received, and `field` one of its root columns. The failure is a `Refusal`;
+bodies never construct one.
 
 A transform may instead return `{ sets, with, on_approved }`,
 each carried map `{ [model]: { create?: [row], update?: [{ target, set }] } }`: rows of other models the

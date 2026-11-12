@@ -6,8 +6,8 @@
 import { Effect, Schema } from 'effect';
 import { untrack } from 'svelte';
 import { watch } from 'runed';
-import { useKinds } from '../kinds/context.js';
-import type { Json, ViewBolt } from '../client/contract.js';
+import type { Json, UiContext, ViewBolt } from '../client/contract.js';
+import { optional_bolt_of } from '../client/context.js';
 import { clauses, fromWhere, rowsWhere, toWhere } from './where.js';
 import { complete, type FilterClock, type Node } from './node.js';
 import { localFilterFields } from './local.js';
@@ -47,7 +47,7 @@ function writeViewUrl(
 export type ViewState = ReturnType<typeof viewState>;
 
 export function viewState(
-	bolt: ViewBolt | undefined,
+	ctx: () => UiContext,
 	o: {
 		key: () => string;
 		model: () => string;
@@ -57,11 +57,12 @@ export function viewState(
 		enabled?: () => boolean;
 	}
 ) {
+	const bolt = optional_bolt_of(ctx());
 	const words: Pick<ViewBolt, 't'> = bolt ?? { t: (key) => key };
 	const DROPPED = () =>
 		msg(words, 'view.dropped');
 	const day = $derived(o.enabled?.() === false ? undefined : bolt?.clock('day'));
-	const zone = useKinds().zone ?? 'UTC';
+	const zone = ctx().ui.kinds.zone ?? 'UTC';
 	const clock = (): FilterClock => {
 		if (day === undefined) throw new Error('A filtered view needs the shell clock.');
 		return { today: day.today, now: day.now, zone };

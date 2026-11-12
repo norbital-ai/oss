@@ -3,30 +3,23 @@ import { Effect } from 'effect';
 import { expectTypeOf } from '@effect/vitest';
 import { instance_id, is_instance, policy, workspace } from '../../src/index.ts';
 import { bind_integration, bind_model } from '../../src/declarations.ts';
-import type {
-	AutomationCtx,
-	CalendarEvent,
-	ConfigurationOf,
-	ConversationOf,
-	DriverOf,
-	Id,
-	InputOf,
-	InstanceId,
-	IntegrationName,
-	IntegrationOf,
-	RequestOf,
-	RequestResult,
-	SendInput,
-	StartInput,
-	SyncRow,
-	Where
-} from '../../src/index.ts';
+import type { IntegrationName } from '../../src/decl/names.ts';
+import type { AutomationCtx, CalendarEvent, Id, InputOf, InstanceId, StartInput, SyncRow, Where } from '../../src/index.ts';
 import type { SyncKey } from '../../src/decl/names.ts';
 import type { IntegrationSpecOf, StoredRow } from '../../src/decl/names.ts';
 import type { DatabaseResult } from '../../src/engine/integrations/database.ts';
 import * as m from './fixture/models.ts';
 import * as rt from './fixture/runtime.ts';
 import './registry.ts';
+import type {
+	ConfigurationOf,
+	ConversationOf,
+	DriverOf,
+	RequestOf,
+	RequestResult,
+	SendInput
+} from '../../src/decl/runtime/integration.ts';
+import type { IntegrationOf } from '../../src/decl/runtime/names.ts';
 
 expectTypeOf<IntegrationName>().toEqualTypeOf<
 	| 'erp'

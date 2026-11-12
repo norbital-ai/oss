@@ -40,7 +40,7 @@ const manifest: EngineManifest = {
 			description: 'Sales',
 			grants: {
 				orders: {
-					outputs: { default: true },
+					outputs: { default: {} },
 					update: { columns: { orders: ['title'] } }
 				}
 			}
@@ -49,13 +49,13 @@ const manifest: EngineManifest = {
 			description: 'Sales approval',
 			grants: {
 				orders: {
-					outputs: { default: true },
+					outputs: { default: {} },
 					create: { verdict: true },
 					update: { columns: { orders: ['title', 'note'] }, verdict: true }
 				}
 			}
 		},
-		finance: { description: 'Finance', grants: { orders: { outputs: { default: true } } } }
+		finance: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } }
 	},
 	integrations: {},
 	teams: { sales: { policies: ['sales', 'sales_approval'] }, finance: { policies: ['finance'] }, ops: { policies: [] } },

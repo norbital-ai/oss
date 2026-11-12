@@ -66,8 +66,6 @@ export type FieldCommon = {
 	optional?: true;
 	/** The value a create that omits the field stores. */
 	default?: Json;
-	/** No two rows hold the same value: a native constraint, so a duplicate write is refused. */
-	unique?: true;
 	/** Left out of generated forms; the value is still stored and read. */
 	hidden?: true;
 };
@@ -318,10 +316,9 @@ type Common<D> = {
 	was?: string;
 	optional?: true;
 	default?: D;
-	unique?: true;
 	hidden?: true;
 };
-type DerivedCommon = { unique?: true; hidden?: true };
+type DerivedCommon = { hidden?: true };
 // one table built once: `Extract` over the arms re-distributes for every literal
 type Arms = { [A in StoredArm | InputArm as A['kind']]: A };
 type ArmOf<K> = K extends keyof Arms ? Arms[K] : never;

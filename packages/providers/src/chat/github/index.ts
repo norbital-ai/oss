@@ -4,6 +4,7 @@
 import { parse as parseJson } from '../http.ts';
 import { Schema } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { hmac, signed } from '../verify.ts';
 
@@ -49,10 +50,10 @@ const parts = (thread: string) => {
 /** A refusal naming when to return is a rate limit, whatever its status says: GitHub answers 403 to some. */
 const refused = (error: Failed): never => {
 	if (error.status === undefined) throw error;
-	const wait = error.response?.headers['retry-after'];
+	const wait = retry_after_ms(error.response?.headers['retry-after']);
 	throw wait === undefined
 		? new PlatformError(error.message, error.status)
-		: new PlatformError(error.message, 429, Number(wait) * 1000);
+		: new PlatformError(error.message, 429, wait);
 };
 /** What a person wrote themselves: a mention in code or a quote invokes nobody. */
 const prose = (text: string) => text.replace(/```[\s\S]*?```|`[^`\n]*`|^>.*$/gm, '');

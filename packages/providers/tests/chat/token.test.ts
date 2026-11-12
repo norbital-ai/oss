@@ -1,73 +1,80 @@
 import { describe, expect, it } from '@effect/vitest';
-import { afterEach, vi } from 'vitest';
+import { Deferred, Effect, Fiber } from 'effect';
+import { TestClock } from 'effect/testing';
 import { PlatformError } from '../../src/chat/adapter.ts';
-import { tokenCache } from '../../src/chat/token.ts';
-
-afterEach(() => vi.restoreAllMocks());
+import { loadToken, tokenCache } from '../../src/chat/token.ts';
 
 describe('app token cache', () => {
-	it('shares a refresh and expires at the provider deadline', async () => {
-		let now = 1000;
-		vi.spyOn(Date, 'now').mockImplementation(() => now);
-		let calls = 0;
-		const tokens = tokenCache(async () => ({ token: `token-${++calls}`, ttl: 100 }));
-		const first = tokens.get();
-		const second = tokens.get();
-		expect(first).toBe(second);
-		expect(await Promise.all([first, second])).toEqual(['token-1', 'token-1']);
-		now = 1099;
-		expect(await tokens.get()).toBe('token-1');
-		now = 1100;
-		expect(await tokens.get()).toBe('token-2');
-		expect(calls).toBe(2);
-	});
-
-	it('preserves a rejected lookup and allows the next lookup', async () => {
-		const refused = new PlatformError('credentials refused', 401);
-		let calls = 0;
-		const tokens = tokenCache(async () => {
-			if (++calls === 1) throw refused;
-			return { token: 'renewed', ttl: 1000 };
-		});
-		const first = tokens.get();
-		expect(tokens.get()).toBe(first);
-		await expect(first).rejects.toBe(refused);
-		expect(await tokens.get()).toBe('renewed');
-		expect(calls).toBe(2);
-	});
-
-	it('keeps an invalidated lookup from replacing or clearing its successor', async () => {
-		for (const oldFinishesFirst of [true, false]) {
-			const old = Promise.withResolvers<{ token: string; ttl: number }>();
-			const renewed = Promise.withResolvers<{ token: string; ttl: number }>();
+	it.effect('shares a refresh and expires at the provider deadline', () =>
+		Effect.gen(function* () {
 			let calls = 0;
-			const tokens = tokenCache(() => (++calls === 1 ? old.promise : renewed.promise));
-			const stale = tokens.get();
-			tokens.invalidate();
-			const current = tokens.get();
-			if (oldFinishesFirst) {
-				old.resolve({ token: 'old', ttl: 1000 });
-				expect(await stale).toBe('old');
-				expect(tokens.get()).toBe(current);
-			}
-			renewed.resolve({ token: 'new', ttl: 1000 });
-			expect(await current).toBe('new');
-			if (!oldFinishesFirst) {
-				old.resolve({ token: 'old', ttl: 1000 });
-				expect(await stale).toBe('old');
-			}
-			expect(await tokens.get()).toBe('new');
+			const tokens = yield* tokenCache(() =>
+				Effect.suspend(() => {
+					calls++;
+					return Effect.as(Effect.yieldNow, { token: `token-${calls}`, ttl: 100 });
+				})
+			);
+			expect(yield* Effect.all([tokens.get(), tokens.get()], { concurrency: 2 })).toEqual([
+				'token-1',
+				'token-1'
+			]);
+			yield* TestClock.adjust(99);
+			expect(yield* tokens.get()).toBe('token-1');
+			yield* TestClock.adjust(1);
+			expect(yield* tokens.get()).toBe('token-2');
 			expect(calls).toBe(2);
-		}
-	});
+		})
+	);
 
-	it('returns tokens with unusable expiry and refreshes on the next lookup', async () => {
-		for (const ttl of [0, -1, Number.NaN]) {
+	it.effect('fails a refused lookup with its PlatformError and asks again next time', () =>
+		Effect.gen(function* () {
+			const refused = new PlatformError('credentials refused', 401);
 			let calls = 0;
-			const tokens = tokenCache(async () => ({ token: `token-${++calls}`, ttl }));
-			expect(await tokens.get()).toBe('token-1');
-			expect(await tokens.get()).toBe('token-2');
+			const tokens = yield* tokenCache(() =>
+				loadToken(async () => {
+					if (++calls === 1) throw refused;
+					return { token: 'renewed', ttl: 1000 };
+				})
+			);
+			expect(yield* Effect.flip(tokens.get())).toBe(refused);
+			expect(yield* tokens.get()).toBe('renewed');
 			expect(calls).toBe(2);
-		}
-	});
+		})
+	);
+
+	it.effect('keeps an invalidated lookup from replacing its successor', () =>
+		Effect.gen(function* () {
+			const old = yield* Deferred.make<void>();
+			let calls = 0;
+			const tokens = yield* tokenCache(() =>
+				Effect.suspend(() =>
+					++calls === 1
+						? Effect.as(Deferred.await(old), { token: 'old', ttl: 1000 })
+						: Effect.succeed({ token: 'new', ttl: 1000 })
+				)
+			);
+			const stale = yield* Effect.forkChild(tokens.get());
+			yield* Effect.yieldNow;
+			yield* tokens.invalidate;
+			expect(yield* tokens.get()).toBe('new');
+			yield* Deferred.succeed(old, undefined);
+			expect(yield* Fiber.join(stale)).toBe('old');
+			expect(yield* tokens.get()).toBe('new');
+			expect(calls).toBe(2);
+		})
+	);
+
+	it.effect('returns tokens with unusable expiry and refreshes on the next lookup', () =>
+		Effect.gen(function* () {
+			for (const ttl of [0, -1, Number.NaN]) {
+				let calls = 0;
+				const tokens = yield* tokenCache(() =>
+					Effect.sync(() => ({ token: `token-${++calls}`, ttl }))
+				);
+				expect(yield* tokens.get()).toBe('token-1');
+				expect(yield* tokens.get()).toBe('token-2');
+				expect(calls).toBe(2);
+			}
+		})
+	);
 });

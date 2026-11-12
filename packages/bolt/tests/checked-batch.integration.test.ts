@@ -44,24 +44,24 @@ const manifest: EngineManifest = {
 			description: 'Writes both models',
 			capabilities: { automations: ['followup'] },
 			grants: {
-				customers: { outputs: { default: true }, create: true, update: true },
-				orders: { outputs: { default: true }, create: true }
+				customers: { outputs: { default: {} }, create: {}, update: {} },
+				orders: { outputs: { default: {} }, create: {} }
 			}
 		},
 		restricted: {
 			description: 'Writes customers only',
 			grants: {
-				customers: { outputs: { default: true }, create: true, update: true },
-				orders: { outputs: { default: true } }
+				customers: { outputs: { default: {} }, create: {}, update: {} },
+				orders: { outputs: { default: {} } }
 			}
 		},
 		requester: {
 			description: 'Requests customer creation',
-			grants: { customers: { outputs: { default: true }, create: { verdict: true } } }
+			grants: { customers: { outputs: { default: {} }, create: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews requests',
-			grants: { customers: { outputs: { default: true } } }
+			grants: { customers: { outputs: { default: {} } } }
 		}
 	},
 	teams: { Requesters: { policies: ['requester'] }, Reviewers: { policies: ['reviewer'] } },

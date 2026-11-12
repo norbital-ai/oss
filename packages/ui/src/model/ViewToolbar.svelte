@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import type { Json } from '../client/contract.js';
@@ -59,7 +60,7 @@
 		disabled?: (selected: IdIn<R>[]) => string | null;
 	};
 	/**
-	 * A view's whole chrome, one shape on `Table`, `Board`, `Map` and `Pivot`. Every key defaults from the model's
+	 * A view's whole chrome, one shape on `Table`, `Board` and `Map`. Every key defaults from the model's
 	 * declaration and the viewer's grants; `toolbar={false}` renders none. A model with a declared file sync gets
 	 * Import, Export and Template automatically (the sync's parsers and `context`); do not wire file buttons again.
 	 */
@@ -142,14 +143,13 @@
 	import { confirm_action } from '../primitives/dialog/confirm.js';
 	import Checkbox from '../primitives/checkbox/checkbox.svelte';
 	import * as Popover from '../primitives/popover/index.js';
-	import { useKinds } from '../kinds/context.js';
 	import BulkRelation, { childFields, NO_LINKS, type Links } from './BulkRelation.svelte';
 	import { getAllContexts, tick, untrack, onDestroy } from 'svelte';
 	import Editor from '../kinds/editor.svelte';
 	import { enum_text, initial, likeWhere, problems } from '../kinds/kind.js';
 	import { cn, ui_text, stepActive } from '../primitives/utils.js';
 	import { offerContexts, open_record } from '../record/navigation.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { type Outcome, type ProtocolFailure, type RunHandle } from '../client/contract.js';
 	import { complete } from '../filter/node.js';
 	import { nodeParts, pathLabel, sortText } from '../filter/text.js';
@@ -176,6 +176,7 @@
 	import { watch } from 'runed';
 
 	let {
+		ctx,
 		config = {},
 		model,
 		view,
@@ -192,6 +193,7 @@
 		on_add,
 		on_probe
 	}: {
+		ctx: UiContext;
 		config?: Toolbar<R> | undefined;
 		/** The model the defaults come from; `''` for a source without one. */
 		model: string;
@@ -215,8 +217,8 @@
 		/** A search index's search (`/<index>` and its input, `/semantic` and its text), or `null` back to the box's text; absent: the view shows no ranked rows. */
 		on_probe?: (probe: { index: string; input: Json } | null) => void;
 	} = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const cfg = $derived(config === false ? null : (config ?? {}));
 	const x = $derived(catalog[model] ?? kinds.catalog?.[model]);
 	const title = $derived(
@@ -988,7 +990,7 @@
 			download_text_files([{ name: `${model || 'rows'}.csv`, content: text }]);
 		});
 	}
-	const named = record_labels(bolt, () => kinds.catalog ?? catalog);
+	const named = record_labels(() => bolt, () => kinds.catalog ?? catalog);
 	/** The catalogue's words for an operator on a path (the fallback is the machine operator). */
 	const opWords = (op: string, path: string) =>
 		view?.offers.find((o) => o.op === op && pathOf(o.path).endsWith(path))?.opLabel ?? op;
@@ -1181,7 +1183,7 @@
 										data-similar-field={f}
 									>
 										<span class="text-muted-foreground">{k.label ?? humanize(f)}</span>
-										<Editor
+										<Editor {ctx}
 											kind={k}
 											value={values[f] ?? null}
 											on_change={(v) => (values = { ...values, [f]: v })}
@@ -1294,7 +1296,7 @@
 					{/if}
 				</ToolbarSearch>
 			{/if}
-			{#if canFilter && view !== undefined}<ViewPopover
+			{#if canFilter && view !== undefined}<ViewPopover {ctx}
 					{view}
 					{catalog}
 					model={source}
@@ -1379,7 +1381,7 @@
 															>{field.kind.label ??
 																pathLabel(catalog, model, field.name, humanize)}</label
 														>
-														<Editor
+														<Editor {ctx}
 															kind={field.kind}
 															value={editValues[field.name] ?? null}
 															on_change={(value) =>
@@ -1432,7 +1434,7 @@
 														</label>
 													</div>
 													{#if chosen}
-														<BulkRelation
+														<BulkRelation {ctx}
 															{name}
 															{child}
 															parent_id={editParent}
@@ -1525,6 +1527,6 @@
 		{#if view?.notice}<p role="status" class="text-muted-foreground text-xs" data-view-notice>
 				{view.notice}
 			</p>{/if}
-		{#each runs as r (r.id)}<RunStatus automation={r.automation} run={r.id} download />{/each}
+		{#each runs as r (r.id)}<RunStatus {ctx} automation={r.automation} run={r.id} download />{/each}
 	</div>
 {/if}

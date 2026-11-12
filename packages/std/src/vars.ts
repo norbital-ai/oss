@@ -39,7 +39,7 @@ export type Requestor = {
 	readonly scopes: { readonly [policy: string]: readonly string[] };
 };
 /** The values an expression reads: the clock, and the requestor where it is known. */
-export type VarValues = {
+type VarValues = {
 	readonly today?: string;
 	readonly now?: string;
 	readonly requestor?: Requestor;
@@ -47,7 +47,7 @@ export type VarValues = {
 /** The kind of value a filter position takes. */
 export type VarResult = 'text' | 'date' | 'instant' | 'list';
 /** What a filter position's field is, as the admission of requestor members reads it. */
-export type VarField = {
+type VarField = {
 	readonly kind: string;
 	readonly of?: string | undefined;
 	readonly email?: boolean | undefined;
@@ -114,25 +114,25 @@ const env = new Environment({ homogeneousAggregateLiterals: false })
 	.registerFunction('weeks(int): Span', (x) => new Span(0, 7 * n(x), 0))
 	.registerFunction('months(int): Span', (x) => new Span(n(x), 0, 0))
 	.registerFunction('years(int): Span', (x) => new Span(12 * n(x), 0, 0))
-	.registerFunction('start_of_week(Date): Date', (d) => {
-		const iso = (d as Day).iso;
+	.registerFunction('start_of_week(Date): Date', (d: Day) => {
+		const iso = d.iso;
 		return new Day(add_days(iso, -((new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7)));
 	})
-	.registerFunction('start_of_month(Date): Date', (d) => new Day(`${(d as Day).iso.slice(0, 7)}-01`))
-	.registerFunction('start_of_quarter(Date): Date', (d) => {
-		const iso = (d as Day).iso,
+	.registerFunction('start_of_month(Date): Date', (d: Day) => new Day(`${d.iso.slice(0, 7)}-01`))
+	.registerFunction('start_of_quarter(Date): Date', (d: Day) => {
+		const iso = d.iso,
 			m = Number(iso.slice(5, 7));
 		return new Day(`${iso.slice(0, 4)}-${String(m - ((m - 1) % 3)).padStart(2, '0')}-01`);
 	})
 	.registerFunction(
 		'start_of_year(Date): Date',
-		(d) => new Day(`${(d as Day).iso.slice(0, 4)}-01-01`)
+		(d: Day) => new Day(`${d.iso.slice(0, 4)}-01-01`)
 	)
-	.registerOperator('Date + Span', (d, s) => shift(d as Day, s as Span, 1))
-	.registerOperator('Date - Span', (d, s) => shift(d as Day, s as Span, -1))
-	.registerOperator('google.protobuf.Timestamp + Span', (t, s) => instant(t as Date, s as Span, 1))
-	.registerOperator('google.protobuf.Timestamp - Span', (t, s) =>
-		instant(t as Date, s as Span, -1)
+	.registerOperator('Date + Span', (d: Day, s: Span) => shift(d, s, 1))
+	.registerOperator('Date - Span', (d: Day, s: Span) => shift(d, s, -1))
+	.registerOperator('google.protobuf.Timestamp + Span', (t: Date, s: Span) => instant(t, s, 1))
+	.registerOperator('google.protobuf.Timestamp - Span', (t: Date, s: Span) =>
+		instant(t, s, -1)
 	);
 
 const CEL: { readonly [R in VarResult]: string } = {
@@ -142,7 +142,7 @@ const CEL: { readonly [R in VarResult]: string } = {
 	list: 'list<string>'
 };
 /** A checked expression: its program, its type and what it reads. */
-export type CompiledVar = {
+type CompiledVar = {
 	readonly text: string;
 	readonly program: ParseResult;
 	/** It reads `today` or `now`: the edge evaluates it before a read. */

@@ -12,7 +12,8 @@ import { Agents } from '../src/engine/services.ts';
 import { Ai, type AiEvent } from '../src/engine/ports.ts';
 import { Port } from '../src/engine/port.ts';
 import { ActReply, AgentRow, WireError } from '../src/protocol/schema.ts';
-import { ActRefused, act_failure } from '../src/decl/errors.ts';
+import { ActRefused } from '../src/decl/errors.ts';
+import { act_failure } from '../src/decl/errors/act.ts';
 import type { Json } from '../src/decl/values.ts';
 import type { AiResponse } from '../src/engine/contracts.ts';
 import { transcriptRow } from '../src/engine/agent/schema.ts';
@@ -41,7 +42,7 @@ const manifest = Result.getOrThrow(
 				create: { columns: { quotes: ['title'] } }
 			}
 		},
-		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: true } } } } },
+		policies: { rep: { description: 'Rep', grants: { quotes: { outputs: { default: {} } } } } },
 
 		
 		agent: { internal: 'Staff brief.', external: 'Customer brief.', skills: {} },

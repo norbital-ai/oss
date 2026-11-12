@@ -178,6 +178,22 @@ export type StudioState = {
 	/** The viewer's own held requests: what the agent asked to change on live, awaiting their `approval.decide`. */
 	approvals?: readonly StudioApproval[];
 };
+const nonempty = Schema.NonEmptyString;
+/** Room for a whole change set in a sentence or two. */
+export const MERGE_SUMMARY = 500;
+const truncated = (max: number) =>
+	nonempty.pipe(
+		Schema.decodeTo(
+			Schema.String,
+			SchemaTransformation.transform({
+				decode: (s: string) => s.slice(0, max),
+				encode: (s: string) => s
+			})
+		)
+	);
+const safePath = Schema.NonEmptyString.check(
+	Schema.makeFilter((p: string) => !p.startsWith('/') && !p.split(/[/\\]/).includes('..'))
+);
 /**
  * `change.open` works on an existing change (`id`): a person has one active change at a time, and their first edit starts
  * it, a branch from live and a copy-on-write fork of live's data as its preview. `draft` writes one path of
@@ -197,25 +213,8 @@ export type StudioState = {
  * `rollback` brings a Version back, source and data together, recording the state it leaves as an Undo Version first;
  * a schema change refuses it unless `discard_data_since` names the instant whose later writes it discards. It is neither
  * the operator's database restore nor a record's restore. `approval.decide` approves (it runs as the viewer) or rejects
- * one of the viewer's held requests (`StudioState.approvals`).
+ * one of the viewer's held requests (`StudioState.approvals`). Every op is decoded at the shell boundary.
  */
-const nonempty = Schema.NonEmptyString;
-/** Room for a whole change set in a sentence or two. */
-export const MERGE_SUMMARY = 500;
-const truncated = (max: number) =>
-	nonempty.pipe(
-		Schema.decodeTo(
-			Schema.String,
-			SchemaTransformation.transform({
-				decode: (s: string) => s.slice(0, max),
-				encode: (s: string) => s
-			})
-		)
-	);
-const safePath = Schema.NonEmptyString.check(
-	Schema.makeFilter((p: string) => !p.startsWith('/') && !p.split(/[/\\]/).includes('..'))
-);
-/** Every browser op is decoded at the shell boundary. */
 export const StudioOp = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('save'),
@@ -328,9 +327,9 @@ export type StudioFrame =
 	| { kind: 'change'; id: string }
 	| { kind: 'phase'; phase: StudioPhase; state: PhaseState };
 /** A commit as `StudioPort.log` answers it: its id, who made it, when, and its message's first line. */
-export type StudioCommit = { commit: string; author: string; at: string; message: string };
+type StudioCommit = { commit: string; author: string; at: string; message: string };
 /** A changed file between two points: its kind and its lines added and removed (`null`: not text). */
-export type StudioDiffFile = {
+type StudioDiffFile = {
 	path: string;
 	change: 'added' | 'modified' | 'deleted';
 	added: number | null;
@@ -424,12 +423,4 @@ export function suggest_message(
 		return `${text === null ? 'Remove' : path in files ? 'Update' : 'Add'} ${name}`;
 	});
 	return words.length <= 2 ? words.join(', ') : `${words[0]} and ${words.length - 1} more files`;
-}
-/** L-BOLT-528: the CodeEditor language a path is edited in. */
-export function language_of(path: string): 'javascript' | 'json' | 'plaintext' {
-	return /\.(?:[cm]?[jt]s|svelte)$/.test(path)
-		? 'javascript'
-		: path.endsWith('.json')
-			? 'json'
-			: 'plaintext';
 }

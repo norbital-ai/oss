@@ -57,13 +57,13 @@ const manifest: EngineManifest = {
 	policies: {
 		requester: {
 			description: 'Requests',
-			grants: { leaves: { outputs: { default: true }, create: { verdict: true } } }
+			grants: { leaves: { outputs: { default: {} }, create: { verdict: true } } }
 		},
 		reviewer: {
 			description: 'Reviews',
 			grants: {
-				leaves: { outputs: { default: true }, update: {} },
-				approval_request: { outputs: { default: true } }
+				leaves: { outputs: { default: {} }, update: {} },
+				approval_request: { outputs: { default: {} } }
 			}
 		}
 	},

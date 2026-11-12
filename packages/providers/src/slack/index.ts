@@ -3,7 +3,7 @@ import { Clock, Effect, Option, Predicate, Schema } from 'effect';
 import { HttpClient, HttpClientRequest } from 'effect/http';
 import type { DriverOpen, Json, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { answerFailure, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import { field, hostCall, same, str, storedCredential, withFetch, type Obj } from '../util.ts';
 
 const API = 'https://slack.com/api';
@@ -210,9 +210,7 @@ export function slack(): ProviderDef {
 					files: readonly OutboundAttachment[] = []
 				) {
 					if (cred === null)
-						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the Slack app is not connected' })
-						);
+						return yield* Effect.fail(notConnected('the Slack app'));
 					const value = cred;
 					const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
 						Effect.mapError(() => answerFailure('a Slack message needs `to` and `text`', 400))
@@ -302,9 +300,7 @@ export function slack(): ProviderDef {
 				}),
 				reconcile: Effect.fn('Slack.reconcile')(function* (thread: string, since: string) {
 					if (cred === null)
-						return yield* Effect.fail(
-							new ProviderUnavailable({ message: 'the Slack app is not connected' })
-						);
+						return yield* Effect.fail(notConnected('the Slack app'));
 					const { botToken, botUser } = cred,
 						[channel = '', parent] = thread.split(':'),
 						oldest = String(Date.parse(since) / 1000);

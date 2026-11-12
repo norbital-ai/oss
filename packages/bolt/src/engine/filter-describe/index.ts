@@ -19,8 +19,8 @@
 //
 // No fallback (owner): a System 1 failure, or nothing chosen, applies nothing. The whole answers within
 // `FILTER_DEADLINE_MS`. Sorting is by an own sortable field or, one hop through an exposed one-relation, a target field.
-import { Array as EffectArray, Effect, Equal, Predicate, Result, Schema } from 'effect';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { Array as EffectArray, Effect, Predicate, Result, Schema } from 'effect';
+import { equal_json } from '@norbital-ai/std/json';
 import { label_paths } from '@norbital-ai/std/label';
 import { KIND, type Kind } from '@norbital-ai/std/kind';
 import type { ViewBolt } from '@norbital-ai/ui';
@@ -37,6 +37,7 @@ import { BoltError, from_store } from '../../protocol/errors.ts';
 import {
 	choiceOf,
 	noulOf,
+	type DecisionEntry,
 	type DecisionQuestion,
 	type DecisionRequest
 } from '../decision.ts';
@@ -90,67 +91,27 @@ const DAY_KINDS = new Set(['date', 'instant']);
 type CatalogueOffer = Effect.Success<ReturnType<NonNullable<ViewBolt['options']>>>['fields'][number];
 type FilterStep = CatalogueOffer['path'][number];
 /** A value offered for an operator: a literal, a list, a span (`[lo, hi)`) or a requestor variable. */
+type Requestor = 'requestor.id' | 'requestor.email' | 'requestor.party' | 'requestor.teams';
+type Point = { lat: number; lng: number };
 type FilterArg = { echoed?: true } & (
-	| {
-			lit: Json;
-	  }
-	| {
-			list: readonly Json[];
-	  }
-	| {
-			range: readonly [Json, Json];
-	  }
-	| {
-			var: 'requestor.id' | 'requestor.email' | 'requestor.party' | 'requestor.teams';
-	  }
+	| { lit: Json }
+	| { list: readonly Json[] }
+	| { range: readonly [Json, Json] }
+	| { var: Requestor }
 	/** A one-relation's records whose text field holds a phrase (the description's words a found record holds). */
-	| {
-			match: {
-				field: string;
-				phrase: string;
-			};
-	  }
+	| { match: { field: string; phrase: string } }
 	/** Within `metres` of a point (a found record's own location). */
-	| {
-			near: readonly [
-				{
-					lat: number;
-					lng: number;
-				},
-				number
-			];
-	  }
+	| { near: readonly [Point, number] }
 );
-
-type FilterValue = {
-	label: string;
-	arg: FilterArg;
-};
-type LiteralValue = {
-	label: string;
-	arg: Extract<FilterArg, { lit: Json }>;
-};
+type FilterValue = { label: string; arg: FilterArg };
+type LiteralValue = { label: string; arg: Extract<FilterArg, { lit: Json }> };
 /** One offered (field, operator) pair: a row the builder renders. Plain data. */
-type FilterOffer = Omit<CatalogueOffer, 'values'> & {
-	values?: readonly FilterValue[];
-};
+type FilterOffer = Omit<CatalogueOffer, 'values'> & { values?: readonly FilterValue[] };
 type FilterCatalogue = readonly FilterOffer[];
-type Described =
-	| {
-			ok: true;
-			where?: Json;
-			order_by?: Json;
-	  }
-	| {
-			ok: false;
-			code: string;
-			message: string;
-	  };
-type FilterOptions = Extract<Described, { ok: false }> | { ok: true; fields: FilterCatalogue };
-type Op = {
-	op: CatalogueOffer['op'];
-	label: string;
-};
+type Failed = { ok: false; code: string; message: string };
+type Described = { ok: true; where?: Json; order_by?: Json } | Failed;
+type FilterOptions = Failed | { ok: true; fields: FilterCatalogue };
+type Op = { op: CatalogueOffer['op']; label: string };
 /** One field: its operators and values. */
 type Field = {
 	label: string;
@@ -178,68 +139,19 @@ type Cond = {
 type Order = {
 	label: string;
 	key: string;
-	dir:
-		| 'asc'
-		| 'desc'
-		| {
-				near: {
-					lat: number;
-					lng: number;
-				};
-		  };
+	dir: 'asc' | 'desc' | { near: Point };
 };
 const NUMERIC = new Set(
 	Object.entries(KIND).filter(([, kind]) => kind.traits.numeric).map(([name]) => name)
 );
-const STOP = new Set([
-	'the',
-	'and',
-	'that',
-	'this',
-	'with',
-	'for',
-	'from',
-	'are',
-	'aren',
-	'not',
-	'isn',
-	'all',
-	'any',
-	'show',
-	'only',
-	'first',
-	'last',
-	'next',
-	'newest',
-	'oldest',
-	'week',
-	'month',
-	'year',
-	'quarter',
-	'today',
-	'yesterday',
-	'days',
-	'done',
-	'open',
-	'what',
-	'which',
-	'who',
-	'whose',
-	// the sort's own words are never a value
-	'sort',
-	'sorted',
-	'order',
-	'ordered',
-	'ascending',
-	'descending',
-	'alphabetical',
-	'alphabetically',
-	'reverse',
-	'highest',
-	'lowest',
-	'latest',
-	'earliest'
-]);
+const STOP = new Set(
+	// from `sort` on: the sort's own words are never a value
+	(
+		'the and that this with for from are aren not isn all any show only first last next newest oldest week month ' +
+		'year quarter today yesterday days done open what which who whose sort sorted order ordered ascending descending ' +
+		'alphabetical alphabetically reverse highest lowest latest earliest'
+	).split(' ')
+);
 const human = (s: string) => s.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
 /**
  * Rule 16a's spans from `today`: day bounds on `date` fields as `{ var: 'today' }` variables, calendar bounds
@@ -271,20 +183,7 @@ function spans(kind: 'date' | 'instant', today: string, tz: string): FilterValue
 	}
 	return out;
 }
-const MONTHS = [
-	'january',
-	'february',
-	'march',
-	'april',
-	'may',
-	'june',
-	'july',
-	'august',
-	'september',
-	'october',
-	'november',
-	'december'
-];
+const MONTHS = 'january february march april may june july august september october november december'.split(' ');
 const MONTH = String.raw`(${MONTHS.join('|')}|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\.?`,
 	DAY = String.raw`(\d{1,2})(?:st|nd|rd|th)?`;
 /** "3rd October", "3 oct 2026", "the 3rd of October"; "October 3", "Oct 3rd, 2026". */
@@ -298,27 +197,9 @@ function literals(
 	text: string,
 	locale: string,
 	today: string
-): {
-	strings: string[];
-	numbers: number[];
-	dates: string[];
-} {
+): { strings: string[]; numbers: number[]; dates: string[] } {
 	// Normalize numeral tokens, not surrounding words: the AI still sees the original description.
-	const digits: Readonly<Record<string, number>> = {
-		零: 0,
-		〇: 0,
-		一: 1,
-		二: 2,
-		两: 2,
-		兩: 2,
-		三: 3,
-		四: 4,
-		五: 5,
-		六: 6,
-		七: 7,
-		八: 8,
-		九: 9
-	};
+	const digits: Readonly<Record<string, number>> = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 	text = text.replace(/[零〇一二两兩三四五六七八九十百千万萬]+/g, (token) => {
 		if (![...token].some((ch) => digits[ch] === undefined))
 			return [...token].map((ch) => digits[ch]).join('');
@@ -428,75 +309,13 @@ function held(text: string, label: string, least = 2): string {
 /** Words that frame a topic rather than name it ("about", "after", "with"), and the calendar's own words. */
 const FRAME = new Set([
 	...STOP,
-	'about',
-	'regarding',
-	'related',
-	'relating',
-	'similar',
-	'like',
-	'mention',
-	'mentions',
-	'mentioning',
-	'involving',
-	'concerning',
-	'to',
-	'of',
-	'in',
-	'on',
-	'at',
-	'by',
-	'a',
-	'an',
-	'is',
-	'was',
-	'be',
-	'has',
-	'have',
-	'had',
-	'without',
-	'after',
-	'before',
-	'since',
-	'until',
-	'between',
-	'than',
-	'more',
-	'less',
-	'over',
-	'under',
-	'me',
-	'my',
-	'our',
-	'their',
-	'his',
-	'her',
-	'its',
-	'records',
-	'record',
-	'ones',
-	'items',
-	'entries',
-	'or',
-	'nor',
-	'not',
-	'no',
-	'st',
-	'nd',
-	'rd',
-	'th',
+	...(
+		'about regarding related relating similar like mention mentions mentioning involving concerning to of in on at by a an is was be ' +
+		'has have had without after before since until between than more less over under me my our their his her its records ' +
+		'record ones items entries or nor not no st nd rd th'
+	).split(' '),
 	...MONTHS,
-	'jan',
-	'feb',
-	'mar',
-	'apr',
-	'jun',
-	'jul',
-	'aug',
-	'sep',
-	'sept',
-	'oct',
-	'nov',
-	'dec'
+	...'jan feb mar apr jun jul aug sep sept oct nov dec'.split(' ')
 ]);
 /** The runs of the description's own words a search or a meaning could be about ("water leaks" in "jobs about water leaks
  * after 3rd October"): framing words, numbers and the model's and fields' names split them; quoted strings as given. */
@@ -539,32 +358,13 @@ const loose = (s: string) => `%${s.trim().split(/\s+/).map(esc).join('%')}%`;
 const echoed = (x: Json): FilterArg => ({ lit: x, echoed: true });
 const fieldOps = (items: readonly (readonly [Op['op'], string])[]): readonly Op[] =>
 	items.map(([op, label]) => ({ op, label }));
-const EQUALITY_OPS = fieldOps([
-	['eq', 'is'],
-	['ne', 'is not'],
-	['in', 'is any of'],
-	['not_in', 'is none of']
-]);
-const NUMBER_OPS = fieldOps([
-	['eq', 'is'],
-	['ne', 'is not'],
-	['gt', 'more than'],
-	['gte', 'at least'],
-	['lt', 'less than'],
-	['lte', 'at most'],
-	['in', 'is any of'],
-	['not_in', 'is none of']
-]);
-const CMP_OPS = NUMBER_OPS.slice(0, 6);
-const DATE_OPS = fieldOps([
-	['during', 'is within'],
-	['eq', 'is'],
-	['ne', 'is not'],
-	['gt', 'after'],
-	['gte', 'on or after'],
-	['lt', 'before'],
-	['lte', 'on or before']
-]);
+const CMP_OPS = fieldOps([['eq', 'is'], ['ne', 'is not'], ['gt', 'more than'], ['gte', 'at least'], ['lt', 'less than'], ['lte', 'at most']]);
+const LIST = fieldOps([['in', 'is any of'], ['not_in', 'is none of']]);
+const EQUALITY_OPS = [...CMP_OPS.slice(0, 2), ...LIST];
+const NUMBER_OPS = [...CMP_OPS, ...LIST];
+const DATE_OPS = fieldOps([['during', 'is within'], ['eq', 'is'], ['ne', 'is not'], ['gt', 'after'], ['gte', 'on or after'], ['lt', 'before'], ['lte', 'on or before']]);
+const NULL_OPS = fieldOps([['is_null', 'is empty'], ['not_null', 'is not empty']]);
+const YES_NO: readonly FilterValue[] = [{ label: 'yes', arg: { lit: true } }, { label: 'no', arg: { lit: false } }];
 const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 	enum: EQUALITY_OPS,
 	state: EQUALITY_OPS,
@@ -581,13 +381,7 @@ const OPS_BY_KIND: Readonly<Record<string, readonly Op[]>> = {
 	date: DATE_OPS,
 	instant: DATE_OPS,
 	time: CMP_OPS,
-	period: fieldOps([
-		['contains', 'in force on'],
-		['overlaps', 'overlaps'],
-		['contained_by', 'is within'],
-		['starts_within', 'starts within'],
-		['ends_within', 'ends within']
-	]),
+	period: fieldOps([['contains', 'in force on'], ['overlaps', 'overlaps'], ['contained_by', 'is within'], ['starts_within', 'starts within'], ['ends_within', 'ends within']]),
 	json: fieldOps([['contains', 'contains']]),
 	point: [],
 	file: [],
@@ -603,12 +397,7 @@ function options(
 	ws: readonly string[],
 	tz: string,
 	today: string
-):
-	| {
-			ops: Op[];
-			values: FilterValue[];
-	  }
-	| undefined {
+): { ops: Op[]; values: FilterValue[] } | undefined {
 	const values: FilterValue[] = [];
 	const add = (label: string, arg: FilterArg) => {
 		let l = label,
@@ -616,7 +405,6 @@ function options(
 		while (values.some((v) => v.label === l)) l = `${label} (${n++})`;
 		values.push({ label: l, arg });
 	};
-	const op = (name: Op['op'], label: string): Op => ({ op: name, label });
 	const k = f.kind;
 	let ops: Op[] = [...(OPS_BY_KIND[k] ?? [])];
 	if (f.many) {
@@ -625,18 +413,9 @@ function options(
 		else if (k === 'text') for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
 		else if (NUMERIC.has(k)) for (const x of lit.numbers) add(String(x), echoed(x));
 		else if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
-		else if (k === 'bool') {
-			add('yes', { lit: true });
-			add('no', { lit: false });
-		}
+		else if (k === 'bool') for (const v of YES_NO) add(v.label, v.arg);
 		return {
-			ops: [
-				op('has', 'has'),
-				op('has_any', 'has any of'),
-				op('has_all', 'has all of'),
-				op('is_empty', 'is empty'),
-				op('not_empty', 'is not empty')
-			],
+			ops: [...fieldOps([['has', 'has'], ['has_any', 'has any of'], ['has_all', 'has all of'], ['is_empty', 'is empty'], ['not_empty', 'is not empty']])],
 			values
 		};
 	}
@@ -651,10 +430,8 @@ function options(
 					.filter(([, state]) => (state.to ?? []).length === 0)
 					.map(([name]) => name)
 			});
-	} else if (k === 'bool') {
-		add('yes', { lit: true });
-		add('no', { lit: false });
-	} else if (k === 'text') {
+	} else if (k === 'bool') for (const v of YES_NO) add(v.label, v.arg);
+	else if (k === 'text') {
 		for (const x of [...lit.strings, ...ws]) add(x, echoed(x));
 		if (f.team) add('my team', { var: 'requestor.teams' });
 		if (f.email) add('my email', { var: 'requestor.email' });
@@ -666,30 +443,17 @@ function options(
 		if (k === 'date') for (const d of lit.dates) add(d, echoed(d));
 		// a day on an instant is that day in the workspace zone: [00:00, next 00:00)
 		if (k === 'instant')
-			for (const d of lit.dates) {
-				const arg: FilterArg = {
-					range: [
-						midnight(d, tz),
-						midnight(
-							new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10),
-							tz
-						)
-					]
-				};
-				arg.echoed = true;
-				add(d, arg);
-			}
+			for (const d of lit.dates) add(d, { range: dayOf(d, tz), echoed: true });
 	} else if (k === 'period' && f.period_of === 'date') {
 		// a date period (an employment's effective_range): in force on a day, or overlapping / inside a span
 		add('today', { lit: { var: 'today' } });
 		for (const v of spans('date', today, tz)) add(v.label, v.arg);
 		for (const d of lit.dates) add(d, echoed(d));
-	} else if (k === 'json') {
-	} else if (k === 'id' || k === 'currency') {
+	} else if (k === 'json' || k === 'id' || k === 'currency') {
 	} else if (k === 'point' || k === 'file' || k === 'vector' || k === 'custom' || k === 'ref') {
 		ops = [];
 	} else return undefined;
-	if (optional) ops.push(op('is_null', 'is empty'), op('not_null', 'is not empty'));
+	if (optional) ops.push(...NULL_OPS);
 	return ops.length === 0 && k !== 'point' ? undefined : { ops, values }; // a point is kept: a found record's location offers "within … of it"
 }
 /** The operator object an op and its argument make; `undefined` when the pair means nothing. */
@@ -705,13 +469,12 @@ const SCALAR_OPERATORS: Readonly<Record<string, (value: Json) => Json | undefine
 	during: (value) => ({ eq: value }),
 	has: (value) => ({ has: value }),
 	in: (value) => ({ in: [value] }),
-	...Object.fromEntries(
-		CMP_OPS.map(({ op }) => [
-			op,
-			(value: Json): Json => ({ [op]: value })
-		])
-	)
+	...Object.fromEntries(CMP_OPS.map(({ op }) => [op, (value: Json): Json => ({ [op]: value })]))
 };
+const nextDay = (d: string) =>
+	new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+/** A day on an instant: that day in the workspace zone, [00:00, next 00:00). */
+const dayOf = (d: string, tz: string): readonly [Json, Json] => [midnight(d, tz), midnight(nextDay(d), tz)];
 /** The last day of a half-open span ending at `hi`: a date's day before, a time variable's `- days(1)`. */
 const dayBefore = (hi: Json): Json =>
 	typeof hi === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(hi)
@@ -740,16 +503,13 @@ const ARGUMENT_OPERATORS = {
 		};
 		return operators[op];
 	},
-	var: (
-		op: string,
-		name: 'requestor.id' | 'requestor.email' | 'requestor.party' | 'requestor.teams'
-	): Json | undefined =>
+	var: (op: string, name: Requestor): Json | undefined =>
 		op === 'eq' || op === 'ne' || (op === 'in' && name === 'requestor.teams')
 			? { [op]: { var: name } }
 			: undefined,
 	match: (op: string, value: { field: string; phrase: string }): Json | undefined =>
 		op === 'eq' ? { is: { [value.field]: { like: loose(value.phrase) } } } : undefined,
-	near: (op: string, value: readonly [{ lat: number; lng: number }, number]): Json | undefined =>
+	near: (op: string, value: readonly [Point, number]): Json | undefined =>
 		op === 'near' ? { near: value } : undefined
 };
 function operator(op: string, arg: FilterArg | undefined): Json | undefined {
@@ -786,14 +546,7 @@ function instantiate(
 				return { [s.rel]: { count: inner } };
 			case 'agg':
 				if (inner === null || typeof inner !== 'object' || EffectArray.isArray(inner)) return undefined;
-				return {
-					[s.rel]: {
-						[s.fn]: {
-							of: s.of,
-							...inner
-						}
-					}
-				};
+				return { [s.rel]: { [s.fn]: { of: s.of, ...inner } } };
 		}
 	}, ops);
 }
@@ -841,18 +594,10 @@ type FilterDescribeConfig = {
 };
 /** Dates cross the wire as ISO strings. */
 const day = (v: Json | undefined) => String(v);
-const nextDay = (d: string) =>
-	new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-const AGGS = [
-	['total', 'sum'],
-	['average', 'avg'],
-	['lowest', 'min'],
-	['highest', 'max']
-] as const;
+const AGGS = [['total', 'sum'], ['average', 'avg'], ['lowest', 'min'], ['highest', 'max']] as const;
 /** Kinds whose value is words: shown quoted in a condition ("Title contains “pump”"). */
 const QUOTED = new Set(['text', 'search', 'semantic']);
-const same = (a: readonly FilterStep[], b: readonly FilterStep[]) =>
-	Equal.equals(encode_wire(a), encode_wire(b));
+const same = (a: readonly FilterStep[], b: readonly FilterStep[]) => equal_json(a, b);
 /** The level a hop from `x` through `rel` into `target` reads: its declared layer, or the target's root where `x` declares every relation (a plain schema). */
 const levelOf = (cat: Catalog, x: ExposureInfo, rel: string, target: string) => {
 	const layer = cat.layers.get(`${x.path}.${rel}`);
@@ -973,15 +718,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 							...steps,
 							arm === undefined ? { k: 'field', name: f.name } : { k: 'arm', rel: f.name, arm }
 						],
-						ops: [
-							...EQUALITY_OPS,
-							...(optional
-								? ([
-										{ op: 'is_null', label: 'is empty' },
-										{ op: 'not_null', label: 'is not empty' }
-									] as const)
-								: [])
-						],
+						ops: [...EQUALITY_OPS, ...(optional ? NULL_OPS : [])],
 						values: []
 					};
 					if (at === 'sys_user') field.values.push({ label: 'me', arg: { var: 'requestor.id' } });
@@ -1017,15 +754,8 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 						continue;
 					const rl = prefix + human(r);
 					for (const [q, word] of steps.length === 0
-						? ([
-								['some', 'any'],
-								['every', 'all'],
-								['none', 'none']
-							] as const)
-						: ([
-								['some', 'any'],
-								['none', 'none']
-							] as const))
+						? ([['some', 'any'], ['every', 'all'], ['none', 'none']] as const)
+						: ([['some', 'any'], ['none', 'none']] as const))
 						walk(child, [...steps, { k: q, rel: r }], `${rl} (${word}) › `, undefined, 0);
 					// how many: 0 and 1 always ("with no invoices", "with an unpaid one"), then the text's own numbers
 					out.push({
@@ -1033,13 +763,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 						path: [...steps, { k: 'count', rel: r }],
 						kind: 'count',
 						ops: CMP_OPS,
-						values:
-							lit.numbers.length > 0
-								? numbers()
-								: [
-										{ label: '0', arg: { lit: 0 } },
-										{ label: '1', arg: { lit: 1 } }
-									]
+						values: lit.numbers.length > 0 ? numbers() : [{ label: '0', arg: { lit: 0 } }, { label: '1', arg: { lit: 1 } }]
 					});
 					for (const f of child.model.fields.values()) {
 						const s = spec(rel.child, f.name);
@@ -1060,12 +784,9 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			// the search index and the embedding, to a caller who reads every field they cover (rule 14)
 			const whole = (fs: readonly string[]) => fs.every((x) => exposed_field(tc, x));
 			const about = () =>
-				topics(text, [
-					target,
-					human(target),
-					...[...tc.model.fields.keys()].map(human),
-					prefix
-				], lit.strings).map((x) => ({ label: x, arg: echoed(x) }));
+				topics(text, [target, human(target), ...[...tc.model.fields.keys()].map(human), prefix], lit.strings).map(
+					(x) => ({ label: x, arg: echoed(x) })
+				);
 			if (tc.model.search.length > 0 && whole(tc.model.search))
 				out.push({
 					label: `${prefix}Search`,
@@ -1108,10 +829,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		if (c === undefined) return yield* Effect.fail(refuse(`'${model}' is not read by this caller`));
 		const radius = metresOf(text),
 			within = radius >= 1000 ? `${radius / 1000} km` : `${radius} m`;
-		const reads_: {
-			q: ir.ReadIR;
-			then: (rows: readonly RowData[]) => void;
-		}[] = [];
+		const reads_: { q: ir.ReadIR; then: (rows: readonly RowData[]) => void }[] = [];
 		const at = (path: readonly FilterStep[]) => fields.find((f) => same(f.path, path));
 		const points = fields.filter(
 			(f) =>
@@ -1145,13 +863,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 				return p.path.length === 2 && second?.k === 'field' ? [second.name] : [];
 			});
 			const select = Object.fromEntries(
-				[
-					tl,
-					...texts(target),
-					...pointFields
-				]
-					.filter((n) => exposed_field(x, n))
-					.map((n) => [n, true])
+				[tl, ...texts(target), ...pointFields].filter((n) => exposed_field(x, n)).map((n) => [n, true])
 			);
 			const then = (rows: readonly RowData[]) => {
 				for (const row of rows) {
@@ -1165,10 +877,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 						found(f, `one whose ${nameOf(target, t)} contains “${phrase}”`, {
 							match: { field: t, phrase }
 						});
-						const search = at([
-							{ k: 'is', rel: s.name },
-							{ k: 'field', name: '$search' }
-						]);
+						const search = at([{ k: 'is', rel: s.name }, { k: 'field', name: '$search' }]);
 						if (search !== undefined) found(search, phrase, { lit: phrase });
 					}
 					// "near <it>", "nearest to <it>": where the record is
@@ -1245,10 +954,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		}
 		// c) named days: a record the caller reads, with a date, whose name the description holds ("after National Day")
 		const dated = fields.filter((f) => f.kind === 'date' || f.kind === 'instant');
-		const days: {
-			name: string;
-			day: string;
-		}[] = [];
+		const days: { name: string; day: string }[] = [];
 		if (dated.length > 0 && ts.length > 0 && DAY_WORDS.test(text)) {
 			let n = 0;
 			for (const name of cat.exposures.keys()) {
@@ -1280,20 +986,10 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		}
 		if (reads_.length === 0) return orders;
 		const all = yield* cfg
-			.read(
-				reads_.map((r) => r.q),
-				{ as: 'caller', authority: a },
-				b
-			)
+			.read(reads_.map((r) => r.q), { as: 'caller', authority: a }, b)
 			.pipe(
 				Effect.flatMap(
-					Schema.decodeUnknownEffect(
-						Schema.Array(
-							Schema.Struct({
-								rows: Schema.Array(Schema.Record(Schema.String, Schema.Json))
-							})
-						)
-					)
+					Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })))
 				),
 				Effect.mapError((error) =>
 					Schema.isSchemaError(error)
@@ -1311,13 +1007,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		}
 		// one day per name, the occurrence nearest today ("National Day" in October is this August's)
 		// ponytail: nearest occurrence; a "next" / "last" in the text could pick the side
-		const near = new Map<
-			string,
-			{
-				name: string;
-				day: string;
-			}
-		>();
+		const near = new Map<string, { name: string; day: string }>();
 		const gap = (d: string) => Math.abs(Date.parse(d) - Date.parse(b.today));
 		for (const d of days) {
 			const k = d.name.toLowerCase(),
@@ -1329,9 +1019,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 				found(
 					f,
 					`${d.name} (${d.day})`,
-					f.kind === 'date'
-						? { lit: d.day }
-						: { range: [midnight(d.day, b.tz), midnight(nextDay(d.day), b.tz)] }
+					f.kind === 'date' ? { lit: d.day } : { range: dayOf(d.day, b.tz) }
 				);
 		return orders;
 	});
@@ -1388,14 +1076,10 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 					if ('list' in v.arg || 'var' in v.arg)
 						add(`${head} ${v.label}`, x.op, v.arg, { value: v.label });
 				if (listy && named.length >= 2)
-					add(
-						`${head} the ones named`,
-						x.op,
-						{
-							list: named.map((v) => v.arg.lit)
-						},
-						{ list: named, evidence: named.some((v) => v.arg.echoed !== true) }
-					);
+					add(`${head} the ones named`, x.op, { list: named.map((v) => v.arg.lit) }, {
+						list: named,
+						evidence: named.some((v) => v.arg.echoed !== true)
+					});
 				continue;
 			}
 			for (const v of f.values) {
@@ -1603,21 +1287,10 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		});
 	/** The model a caller may describe or see options on; a `$local` view carries its own fields. */
 	const subject = (
-		o: {
-			model: string;
-			authority: Authority;
-			localFields?: readonly LocalFilterField[];
-		},
+		o: { model: string; authority: Authority; localFields?: readonly LocalFilterField[] },
 		today: string,
 		values: DescriptionValues
-	): {
-		fields?: Field[];
-		fail?: {
-			ok: false;
-			code: string;
-			message: string;
-		};
-	} => {
+	): { fields?: Field[]; fail?: Failed } => {
 		if (o.model !== '$local')
 			return !cat.exposures.has(o.model) || !reads(o.authority, o.model)
 				? { fail: { ok: false, code: 'not_found', message: 'Not found or no access.' } }
@@ -1654,6 +1327,12 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		'not all of them hold': { join: 'and', not: true, because: 'not every stated condition holds' },
 		'none of them hold': { join: 'or', not: true, because: 'no stated condition holds' }
 	} satisfies Readonly<Record<string, { join: 'and' | 'or'; not: boolean; because: string }>>;
+	/** A yes-or-no question: its instructions, then what yes and no mean. */
+	const noul = (instructions: DecisionEntry, yes: DecisionEntry, no: DecisionEntry): DecisionQuestion => ({
+		type: 'noul',
+		instructions,
+		criteria: { true: yes, false: no }
+	});
 	/** A choice's criteria: each option names itself. */
 	const own = (keys: readonly string[]) => Object.fromEntries(keys.map((k) => [k, k]));
 	const describe = Effect.fn('Agents.describe')(function* (o: {
@@ -1674,14 +1353,9 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		const nears = local ? [] : yield* lookup(o.model, o.text, fields, o.authority, o.bindings, values.lit.strings);
 		const max = cfg.ai.maxChoices ?? Infinity;
 		// the fields the description most plausibly names that have a condition to offer, each with all of them
-		const asked: {
-			f: Field;
-			conds: Cond[];
-		}[] = [];
-		for (const offered of rank(fields, o.text, o.model)) {
-			const f = offered;
-			// Quantification belongs to a relation group, not to each of its fields independently.
-
+		const asked: { f: Field; conds: Cond[] }[] = [];
+		// Quantification belongs to a relation group, not to each of its fields independently.
+		for (const f of rank(fields, o.text, o.model)) {
 			const conds = yield* condsOf(f, local ? undefined : o.model, o.text, o.bindings);
 			if (conds.length > max - 1 || (conds.length > 0 && asked.length >= FILTER_MAX_FIELDS))
 				return fail(
@@ -1696,27 +1370,17 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		if (asked.length === 0 && orders.length === 0)
 			return fail('Nothing here can be filtered by a description.');
 		// 4. the one call
-		const questions: {
-			[id: string]: DecisionQuestion;
-		} = {};
-		questions['textSearch'] = {
-			type: 'noul',
-			instructions:
-				'Does the description request matching words or a topic in record CONTENT? A structured condition on count, date, status, activity, or an aggregate is NOT a text-search request. Do not search for incidental words such as zero, all, active or order.',
-			criteria: {
-				true: 'A text-content or topic match is requested.',
-				false: 'Only structured predicates are requested.'
-			}
-		};
-		questions['ownership'] = {
-			type: 'noul',
-			instructions:
-				'Does the description explicitly restrict records by caller identity: owned by me, assigned to me, my team, 我的 records? "Show me", "give me", 给我 and 给我啦 are requests to display results, NOT ownership restrictions.',
-			criteria: {
-				true: 'Caller ownership or affiliation is an explicit filter.',
-				false: 'The caller only asks to see results, or identity is not mentioned.'
-			}
-		};
+		const questions: { [id: string]: DecisionQuestion } = {};
+		questions['textSearch'] = noul(
+			'Does the description request matching words or a topic in record CONTENT? A structured condition on count, date, status, activity, or an aggregate is NOT a text-search request. Do not search for incidental words such as zero, all, active or order.',
+			'A text-content or topic match is requested.',
+			'Only structured predicates are requested.'
+		);
+		questions['ownership'] = noul(
+			'Does the description explicitly restrict records by caller identity: owned by me, assigned to me, my team, 我的 records? "Show me", "give me", 给我 and 给我啦 are requests to display results, NOT ownership restrictions.',
+			'Caller ownership or affiliation is an explicit filter.',
+			'The caller only asks to see results, or identity is not mentioned.'
+		);
 		const relations = [
 			...new Set(
 				asked.flatMap(({ f }) =>
@@ -1741,18 +1405,15 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 				'Either the related list is empty OR at least one related record satisfies the child conditions.'
 		};
 		for (const rel of relations) {
-			questions[`applicable.${rel}`] = {
-				type: 'noul',
-				instructions: {
+			questions[`applicable.${rel}`] = noul(
+				{
 					question: `Does the description explicitly constrain ${human(rel)} records, their count, or an aggregate? Do not substitute this relation for another relation that shares a status word. A shared status word alone does not name this relation.`,
 					relation: human(rel),
 					otherRelations: relations.filter((name) => name !== rel).map(human)
 				},
-				criteria: {
-					true: `This exact relation ${human(rel)} is requested.`,
-					false: 'Only another relation is mentioned, or no relation constraint is requested.'
-				}
-			};
+				`This exact relation ${human(rel)} is requested.`,
+				'Only another relation is mentioned, or no relation constraint is requested.'
+			);
 			questions[`relation.${rel}`] = {
 				type: 'choice',
 				instructions: {
@@ -1775,42 +1436,30 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 					])
 				)
 			};
-			questions[`count.${rel}`] = {
-				type: 'noul',
-				instructions: {
+			questions[`count.${rel}`] = noul(
+				{
 					question:
 						'Does the description explicitly constrain the NUMBER of related records, including zero records, that EVERY returned root must satisfy? An empty-list alternative inside OR is NOT a separate count constraint. Do not count "at least one matching record", "none before a date", or "all fulfilled" as a separate total-count constraint.',
 					relation: rel
 				},
-				criteria: {
-					true: `An explicit TOTAL number of ${rel} is requested, such as >2, 1 to 3, exactly one, or zero.`,
-					false: `No TOTAL count of ${rel} is requested. "Got one matching record", "same one", "at least one open record", and "none before a date" describe child existence, NOT a total count.`
-				}
-			};
-			questions[`exclude.${rel}`] = {
-				type: 'noul',
-				instructions: `Does the description reject roots having a ${rel} record matching its stated child status/date predicate? Examples: "no bounced emails", "email bounced dont wan", "none before a date", "不能有退信". Only answer true for this named relation. Do not apply negation about a different field or relation.`,
-				criteria: {
-					true: `Matching ${rel} records must NOT exist.`,
-					false: `Matching ${rel} records are allowed, required, or not discussed.`
-				}
-			};
-			questions[`emptyAlternative.${rel}`] = {
-				type: 'noul',
-				instructions: `Does the description allow EITHER zero ${rel} OR a condition on ${rel}, as alternatives? Include nested alternatives such as "active AND (no orders OR all fulfilled)". Do not answer true for "no records before a date" or "at least one record and all fulfilled".`,
-				criteria: {
-					true: `An empty ${rel} list is an ALTERNATIVE to a child condition.`,
-					false: 'There is no empty-list OR alternative on this relation.'
-				}
-			};
-			questions[`individual.${rel}`] = {
-				type: 'noul',
-				instructions: `Does the description constrain INDIVIDUAL ${rel} records in addition to any count/aggregate? A date/status predicate on individual records is true. An average amount, including "each repayment avg", only constrains AVG, NOT every individual amount. A total or latest date alone is false.`,
-				criteria: {
-					true: 'A separate child-record predicate is requested.',
-					false: 'Only counts or aggregates of the whole relation are requested.'
-				}
-			};
+				`An explicit TOTAL number of ${rel} is requested, such as >2, 1 to 3, exactly one, or zero.`,
+				`No TOTAL count of ${rel} is requested. "Got one matching record", "same one", "at least one open record", and "none before a date" describe child existence, NOT a total count.`
+			);
+			questions[`exclude.${rel}`] = noul(
+				`Does the description reject roots having a ${rel} record matching its stated child status/date predicate? Examples: "no bounced emails", "email bounced dont wan", "none before a date", "不能有退信". Only answer true for this named relation. Do not apply negation about a different field or relation.`,
+				`Matching ${rel} records must NOT exist.`,
+				`Matching ${rel} records are allowed, required, or not discussed.`
+			);
+			questions[`emptyAlternative.${rel}`] = noul(
+				`Does the description allow EITHER zero ${rel} OR a condition on ${rel}, as alternatives? Include nested alternatives such as "active AND (no orders OR all fulfilled)". Do not answer true for "no records before a date" or "at least one record and all fulfilled".`,
+				`An empty ${rel} list is an ALTERNATIVE to a child condition.`,
+				'There is no empty-list OR alternative on this relation.'
+			);
+			questions[`individual.${rel}`] = noul(
+				`Does the description constrain INDIVIDUAL ${rel} records in addition to any count/aggregate? A date/status predicate on individual records is true. An average amount, including "each repayment avg", only constrains AVG, NOT every individual amount. A total or latest date alone is false.`,
+				'A separate child-record predicate is requested.',
+				'Only counts or aggregates of the whole relation are requested.'
+			);
 			const aggs = asked.filter(({ f }) => f.path[0]?.k === 'agg' && f.path[0].rel === rel);
 			if (aggs.length > 0)
 				questions[`aggregate.${rel}`] = {
@@ -1836,15 +1485,11 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 		}
 		asked.forEach(({ f, conds }, n) => {
 			if (f.path.length === 1 && f.ops.some((op) => NO_VALUE.has(op.op)))
-				questions[`presence.f${n + 1}`] = {
-					type: 'noul',
-					instructions: `Does the description explicitly ask whether the root property ${f.label} is filled, empty, missing, present or absent? A predicate on RELATED records does not require this root property to be filled.`,
-					criteria: {
-						true: `Presence or absence of ${f.label} itself is requested.`,
-						false:
-							'This property is not presence-tested; a different property or related record is constrained.'
-					}
-				};
+				questions[`presence.f${n + 1}`] = noul(
+					`Does the description explicitly ask whether the root property ${f.label} is filled, empty, missing, present or absent? A predicate on RELATED records does not require this root property to be filled.`,
+					`Presence or absence of ${f.label} itself is requested.`,
+					'This property is not presence-tested; a different property or related record is constrained.'
+				);
 			const scoped = f.path[0] !== undefined && ['count', 'agg'].includes(f.path[0].k);
 			const descriptionOf = (c: Cond) =>
 				c.label
@@ -1882,11 +1527,11 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			conds
 				.find((c) => c.list !== undefined)
 				?.list?.forEach((v, k) => {
-					questions[`f${n + 1}.${k}`] = {
-						type: 'noul',
-						instructions: `Is ${v.label} one of the ${f.label} values the description names?`,
-						criteria: { true: `it names ${v.label}`, false: `it does not name ${v.label}` }
-					};
+					questions[`f${n + 1}.${k}`] = noul(
+						`Is ${v.label} one of the ${f.label} values the description names?`,
+						`it names ${v.label}`,
+						`it does not name ${v.label}`
+					);
 				});
 		});
 		questions['combine'] = {
@@ -1903,25 +1548,16 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			};
 		// admission is semantic, not a keyword guard: an exposed current flag or a related aggregate can express a selection
 		// that otherwise needs comparisons across root records
-		questions['selection.unsupported'] = {
-			type: 'noul',
-			instructions:
-				'Does satisfying the requested selection require comparing top-level records with other top-level records, selecting a ranked subset or a maximum/minimum per group, or limiting the record count, rather than testing the offered field and relation conditions? A descending sort changes order only; it does not select latest-only or one record per group. Answer false when an exposed current/latest flag or an offered related aggregate directly represents the requested selection.',
-			criteria: {
-				true: 'the requested selection requires unsupported cross-record comparisons or ranking',
-				false: 'the requested selection is represented by the offered conditions and ordering'
-			}
-		};
-		questions['selection.filteredAggregate'] = {
-			type: 'noul',
-			instructions:
-				'Does an explicitly requested count greater than one, sum or average apply ONLY to a filtered subset of related records? Examples: "count only open orders, require at least 2" or "sum only September repayments". A TOTAL count plus an independent status/date condition is false. A grand total between two bounds has NO filtered subset. "Not each payment", "bukan setiap bayaran", or "不是每笔" rejects a per-item interpretation; it does not restrict which payments contribute to the total. Only answer true when a stated child property (such as status or date) excludes some children from the aggregate. Some/every/none, one matching child, zero matching children, and same-child date/status predicates are supported and false here.',
-			criteria: {
-				true: 'A numeric aggregate of a filtered child subset is explicitly required.',
-				false:
-					'No filtered-subset aggregate: ordinary whole-list aggregates or child quantifiers suffice.'
-			}
-		};
+		questions['selection.unsupported'] = noul(
+			'Does satisfying the requested selection require comparing top-level records with other top-level records, selecting a ranked subset or a maximum/minimum per group, or limiting the record count, rather than testing the offered field and relation conditions? A descending sort changes order only; it does not select latest-only or one record per group. Answer false when an exposed current/latest flag or an offered related aggregate directly represents the requested selection.',
+			'the requested selection requires unsupported cross-record comparisons or ranking',
+			'the requested selection is represented by the offered conditions and ordering'
+		);
+		questions['selection.filteredAggregate'] = noul(
+			'Does an explicitly requested count greater than one, sum or average apply ONLY to a filtered subset of related records? Examples: "count only open orders, require at least 2" or "sum only September repayments". A TOTAL count plus an independent status/date condition is false. A grand total between two bounds has NO filtered subset. "Not each payment", "bukan setiap bayaran", or "不是每笔" rejects a per-item interpretation; it does not restrict which payments contribute to the total. Only answer true when a stated child property (such as status or date) excludes some children from the aggregate. Some/every/none, one matching child, zero matching children, and same-child date/status predicates are supported and false here.',
+			'A numeric aggregate of a filtered child subset is explicitly required.',
+			'No filtered-subset aggregate: ordinary whole-list aggregates or child quantifiers suffice.'
+		);
 		const state = {
 			description: o.text,
 			literals: values.lit,
@@ -1940,19 +1576,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			for (const [i, part] of parts.entries())
 				if (
 					['last', 'latest', 'first', 'earliest'].includes(part) &&
-					![
-						'day',
-						'days',
-						'week',
-						'weeks',
-						'month',
-						'months',
-						'quarter',
-						'quarters',
-						'year',
-						'years',
-						...MONTHS
-					].includes(parts[i + 1] ?? '') &&
+					![...'day days week weeks month months quarter quarters year years'.split(' '), ...MONTHS].includes(parts[i + 1] ?? '') &&
 					parts.slice(i + 1, i + 4).some((word) => nouns.some((noun) => alike(word, noun) >= MATCH))
 				)
 					return part === 'last' || part === 'latest' ? 'max' : 'min';
@@ -1984,12 +1608,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 					'This description requires cross-record ranking or an aggregate of a filtered subset that the natural-language planner does not offer. Use an explicit supported condition instead.'
 			};
 		// 5. the chosen conditions: past even odds a condition holds; from HEDGED when its likeliest is evidence at CLOSE
-		const picks: {
-			f: Field;
-			c: Cond;
-			p: number;
-			where: Json;
-		}[] = [];
+		const picks: { f: Field; c: Cond; p: number; where: Json }[] = [];
 		asked.forEach(({ f, conds }, n) => {
 			if ((f.kind === 'search' || f.kind === 'semantic') && noulOf(r, 'textSearch') <= 0.5) return;
 			const a = r.answers[`f${n + 1}`];
@@ -2020,30 +1639,13 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 						field.path[0].rel === first.rel &&
 						DAY_KINDS.has(field.kind)
 				).length === 1;
-			const literalAggregate =
-				first?.k === 'agg' &&
-				DAY_KINDS.has(f.kind) &&
-				statedExtremum(first.rel) === first.fn &&
-				sourceDates.length === 1
+			const literal =
+				sourceDates.length === 1 &&
+				((first?.k === 'agg' && DAY_KINDS.has(f.kind) && statedExtremum(first.rel) === first.fn) || childDate)
 					? conds.find(
-							(c) =>
-								c.op === dateComparison &&
-								c.arg !== undefined &&
-								'lit' in c.arg &&
-								c.arg.lit === sourceDates[0]
+							(c) => c.op === dateComparison && c.arg !== undefined && 'lit' in c.arg && c.arg.lit === sourceDates[0]
 						)
 					: undefined;
-			const literal =
-				literalAggregate ??
-				(childDate && sourceDates.length === 1
-					? conds.find(
-							(c) =>
-								c.op === dateComparison &&
-								c.arg !== undefined &&
-								'lit' in c.arg &&
-								c.arg.lit === sourceDates[0]
-						)
-					: undefined);
 			const pick =
 				literal === undefined
 					? (yes > 0.5 && a.choice !== NO) || explicit
@@ -2059,9 +1661,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			const where =
 				named === undefined
 					? pick.c.where
-					: condition(f.path, pick.c.op, {
-							list: named.map((v) => v.arg.lit)
-						});
+					: condition(f.path, pick.c.op, { list: named.map((v) => v.arg.lit) });
 			if (where === undefined) return;
 			picks.push({ f, c: pick.c, p: pick.p, where });
 		});
@@ -2137,20 +1737,13 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			const emptyAlternative =
 				(mode !== 'nonempty_every' || DISJUNCTION.test(o.text)) &&
 				noulOf(r, `emptyAlternative.${rel}`) > 0.5;
-			if (
-				explicitCount &&
-				!emptyAlternative &&
-				mode !== 'empty_or_some' &&
-				mode !== 'empty_or_every'
-			) {
+			if (explicitCount && !emptyAlternative && mode !== 'empty_or_some') {
 				const count = selected.find((p) => p.f.path[0]?.k === 'count');
 				if (count === undefined) return fail(`Could not resolve the requested count of ${rel}.`);
 				kept.push(count.where);
 			}
-			const aggs = asked.filter(({ f }) => f.path[0]?.k === 'agg' && f.path[0].rel === rel);
-			const aggChoice = aggregateChoice;
-			if (aggChoice !== undefined && aggChoice !== 'none') {
-				const field = aggs[Number(aggChoice.slice(1))]?.f;
+			if (aggregateChoice !== undefined && aggregateChoice !== 'none') {
+				const field = relAggs[Number(aggregateChoice.slice(1))]?.f;
 				const aggregate = selected.find((p) => p.f === field);
 				if (aggregate === undefined)
 					return fail(`Could not resolve the requested aggregate of ${rel}.`);
@@ -2160,7 +1753,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			const quantifier =
 				mode === 'none'
 					? 'none'
-					: mode === 'every' || mode === 'nonempty_every' || mode === 'empty_or_every'
+					: mode === 'every' || mode === 'nonempty_every'
 						? 'every'
 						: 'some';
 			const children = selected
@@ -2174,7 +1767,7 @@ function make_filter_describe(cfg: FilterDescribeConfig) {
 			kept.push(
 				mode === 'nonempty_every' && !emptyAlternative
 					? { and: [{ [rel]: { count: { gt: 0 } } }, group] }
-					: emptyAlternative || mode === 'empty_or_some' || mode === 'empty_or_every'
+					: emptyAlternative || mode === 'empty_or_some'
 						? { or: [{ [rel]: { count: { eq: 0 } } }, group] }
 						: group
 			);
@@ -2268,10 +1861,7 @@ const decodeDescribed = Effect.fnUntraced(function* (
 	cat: Catalog,
 	a: Authority,
 	model: string,
-	q: {
-		where?: Json;
-		order_by?: Json;
-	},
+	q: { where?: Json; order_by?: Json },
 	/** What its time variables (`{ var: 'today' | 'now' }`) are: the read's own day and instant. */
 	at: { readonly today: string; readonly now: string }
 ): Effect.fn.Return<void, BoltError> {

@@ -2,22 +2,22 @@
 // Each `@ts-expect-error` line is a planted mistake; a clean tsc proves both the passes and the rejections.
 import { messages, team } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
+import type { InstanceId } from '../../src/index.ts';
+import type { LocaleErrors } from '../../src/decl/verify.ts';
+import './registry.ts';
 import type {
 	BtreeField,
 	FileField,
-	InstanceId,
-	KeyValues,
-	OutputOf,
 	PeriodField,
 	RelPath,
 	RequiredBtreeField,
 	SearchableField,
-	State,
 	TextField,
 	VectorField
-} from '../../src/index.ts';
-import type { LocaleErrors } from '../../src/decl/verify.ts';
-import './registry.ts';
+} from '../../src/decl/names.ts';
+import type { KeyValues } from '../../src/decl/ctx.ts';
+import type { OutputOf } from '../../src/decl/body.ts';
+import type { State } from '../../src/decl/access/policy.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};

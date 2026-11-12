@@ -17,10 +17,10 @@ Entries:
 
 - `@norbital-ai/bolt` — declaration functions and types
 - `@norbital-ai/bolt/page` — page context types and device helpers
-- `@norbital-ai/bolt/engine`, `/artifact`, `/host-api`, `/protocol`, `/facilities`, `/node`, `/guest-hooks` —
+- `@norbital-ai/bolt/engine`, `/artifact`, `/host-api`, `/protocol`, `/facilities`, `/node` —
   host-side runtime contracts and Node adapters
 - `@norbital-ai/bolt/docs` — the API reference and authoring skills as data (the agent's `skill` tool reads the compiled skills)
-- `@norbital-ai/bolt/tooling`, `/tooling/browser` — internals bolt-cli builds on; not an API
+- `@norbital-ai/bolt/tooling` — internals bolt-cli builds on; not an API
 
 Read [the Bolt documentation](./docs/README.md) for terms, authoring, pages, hosts and tests. The
 generated API reference is published as `@norbital-ai/bolt/docs` and rendered at

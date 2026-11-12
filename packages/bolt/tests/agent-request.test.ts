@@ -9,7 +9,6 @@ it('fingerprints the complete port request while retaining only metadata', () =>
 	const request: AiRequest = {
 		model: 'default',
 		purpose: 'chat',
-		effort: 'medium',
 		system: 'Private instructions 世界',
 		messages: [{ role: 'user', content: 'Private message' }],
 		tools: [{ name: 'read', description: 'Private description', input: { type: 'object' } }],
@@ -45,7 +44,6 @@ it('fingerprints the complete port request while retaining only metadata', () =>
 	expect(JSON.stringify(evidence)).not.toContain('[0,128,255]');
 	const changes: AiRequest[] = [
 		{ ...request, model: 'other' },
-		{ ...request, effort: 'low' },
 		{ ...request, system: 'Changed' },
 		{ ...request, messages: [{ role: 'user', content: 'Changed' }] },
 		{ ...request, tools: [{ name: 'read', description: 'Changed', input: { type: 'object' } }] },

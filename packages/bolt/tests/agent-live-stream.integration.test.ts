@@ -34,7 +34,7 @@ const usage = { input: 1, output: 1 };
 const script = {
 	emitted: Deferred.makeUnsafe<void>(),
 	gate: Deferred.makeUnsafe<void>(),
-	rest: [] as AiEvent[]
+	rest: new Array<AiEvent>()
 };
 const ports = Layer.succeed(Ai, {
 	ask: respond_system_1,

@@ -6,7 +6,7 @@ import type { TcpSocket } from '../engine/contracts.ts';
 import type { HostTenantDb } from '../protocol/host-api.ts';
 import type { Link, Provider } from '../engine/integrations/driver.ts';
 import type { HostTool } from '../engine/agent/tools.ts';
-import { DecisionResultSchema } from '../engine/decision.ts';
+import { DecisionResult } from '../engine/decision.ts';
 import { IngestedSchema } from '../engine/media.ts';
 import { AiPortResponseSchema } from '../engine/ai-schema.ts';
 import { BrowserSnapshotSchema } from '../decl/runtime/browser.ts';
@@ -110,7 +110,7 @@ const facilities = (input: unknown): Facilities => {
 		intelligence: {
 			system1: optional(groups.intelligence.system1, (value) => {
 				const port = decode(Schema.Struct({ ask: Callback, max_choices: Schema.optionalKey(Schema.Number) }))(value);
-				return { ask: call(value, port.ask, DecisionResultSchema), ...(port.max_choices === undefined ? {} : { max_choices: port.max_choices }) };
+				return { ask: call(value, port.ask, DecisionResult), ...(port.max_choices === undefined ? {} : { max_choices: port.max_choices }) };
 			}),
 			system2: optional(groups.intelligence.system2, (value) => {
 				const port = decode(Schema.Struct({ models: Schema.Array(Schema.String), infer: Callback, catalog: Schema.optionalKey(Callback) }))(value);

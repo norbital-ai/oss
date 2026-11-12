@@ -3,9 +3,9 @@ import { afterAll, beforeAll, expect, it } from '@effect/vitest';
 import { vi } from 'vitest';
 import { Effect, Schema } from 'effect';
 import type { ShellBoot } from '../src/shell/nav.ts';
-import type { IntegrationSetupLoader } from '../src/page/integration.ts';
 import type { InstanceStatus } from '../src/protocol/instance-status.ts';
 import { shell_bolt } from '../src/shell/runtime.ts';
+import type { IntegrationSetupLoader } from '../src/shell/integration/setup.ts';
 
 // The host serves the workspace under a path; the shell reads it per request.
 const meta = document.createElement('meta');

@@ -2,18 +2,48 @@
 // route table, the instance's credentials (each write recorded and applied), emitted events, reported statuses and pairings.
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import { connect } from 'node:net';
 import { Effect, FiberSet, Semaphore } from 'effect';
-import { loopback_tcp_port } from '@norbital-ai/bolt/node';
 import { FirstSyncs, ProviderRuntime, type ProviderDef, type LinkDef } from '../src/abi.ts';
-import {
-	oauth_client_of,
-	type DriverEvent,
-	type DriverOpen,
-	type Json,
-	type LinkStatus,
-	type OAuthClient,
-	type Pairing
-} from '@norbital-ai/bolt/engine';
+import type { DriverEvent, DriverOpen, Json, LinkStatus } from '@norbital-ai/bolt/engine';
+
+type OAuthClient = NonNullable<Awaited<ReturnType<DriverOpen['oauth_client']>>>;
+type Pairing = NonNullable<Parameters<DriverOpen['pairing']>[0]>;
+
+/** Cleartext TCP to this machine's fake servers only, as the host's port would carry it; no TLS. */
+export const loopback_tcp: DriverOpen['tcp'] = {
+	connect: (endpoint, signal) =>
+		endpoint.tls || !['127.0.0.1', 'localhost'].includes(endpoint.host)
+			? Promise.reject(new Error('The test port reaches this machine in cleartext only.'))
+			: new Promise((resolve, reject) => {
+					const socket = connect({ host: '127.0.0.1', port: endpoint.port, signal });
+					socket.once('error', reject).once('connect', () => {
+						socket.off('error', reject);
+						const readable = new ReadableStream<Uint8Array>({
+							start: (out) => {
+								socket.on('data', (chunk: Buffer) => out.enqueue(chunk));
+								socket.once('end', () => out.close());
+								socket.once('error', (error) => out.error(error));
+							},
+							cancel: () => void socket.destroy()
+						});
+						// both sides by hand: Duplex.toWeb would also open an unread readable whose backpressure pauses the socket
+						const writable = new WritableStream<Uint8Array>({
+							write: (chunk) =>
+								new Promise<void>((done, failed) =>
+									socket.write(chunk, (error) => (error ? failed(error) : done()))
+								),
+							close: () => new Promise<void>((done) => socket.end(done))
+						});
+						resolve({
+							readable,
+							writable,
+							close: async () => void socket.destroy(),
+							start_tls: () => Promise.reject(new Error('The test port has no TLS.'))
+						});
+					});
+				})
+};
 
 /** `form`: a multipart body as sent; `body` is then empty. */
 export type Call = {
@@ -103,7 +133,10 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 	const firstSyncs = yield* Semaphore.make(2);
 	let status: LinkStatus | undefined,
 		pairing: Pairing | null = null;
-	const definition = o.definition ?? { description: 'Desk', driver: provider.driver };
+	const definition: DriverOpen['definition'] = o.definition ?? {
+		description: 'Desk',
+		driver: provider.driver
+	};
 	const link = yield* provider
 		.open({
 			instance: 'desk',
@@ -117,14 +150,17 @@ export const host = Effect.fn('ProviderTest.host')(function* (
 			state: async () => `${randomUUID()}.desk`,
 			signal: controller.signal,
 			fetch: f,
-			tcp: loopback_tcp_port,
-			oauth_client: async (vendor) =>
-				oauth_client_of(
-					definition,
-					o.secrets,
-					o.google === undefined ? {} : { google: o.google },
-					vendor
-				),
+			tcp: loopback_tcp,
+			// the definition's own client when both its secrets are set, else the host's
+			oauth_client: async (vendor) => {
+				const id = definition.oauth === undefined ? undefined : o.secrets?.[definition.oauth.client],
+					secret = definition.oauth === undefined ? undefined : o.secrets?.[definition.oauth.secret];
+				return id !== undefined && id !== '' && secret !== undefined && secret !== ''
+					? { id, secret }
+					: vendor === undefined
+						? undefined
+						: o.google;
+			},
 			credentials: {
 				load: () => Promise.resolve(new Map(values)),
 				write: async (changes) => {

@@ -57,15 +57,10 @@ import {
 import { Secrets } from '../src/engine/secrets.ts';
 import { IntegrationManager, integration_routes } from '../src/protocol/integrations.ts';
 import { SessionAuthority } from '../src/protocol/http.ts';
-import {
-	layer,
-	TestWorkspace,
-	type Kit,
-	type TestOptions,
-	type WorkspaceServices
-} from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, type Kit, type TestOptions, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { turn, until as untilTurned } from './support/turns.ts';
 import { seed_accounts, type RuntimeAccount } from './support/accounts.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const ACCOUNTS = [
 	{ id: 'a', integration: 'whatsapp' },
@@ -77,6 +72,7 @@ const ACCOUNTS = [
 	{ id: 'a7', integration: 'whatsapp' },
 	{ id: 'a8', integration: 'whatsapp' },
 	{ id: 'a10', integration: 'whatsapp' },
+	{ id: 'a11', integration: 'whatsapp' },
 	{ id: 'a24', integration: 'whatsapp' },
 	{ id: 'r1', integration: 'whatsapp' },
 	{ id: 'r2', integration: 'whatsapp' },
@@ -142,7 +138,7 @@ const manifest = {
 		self: {
 			description: 'Manages their own accounts',
 			grants: {
-				sys_integration: { outputs: { default: true }, update: { verdict: true } }
+				sys_integration: { outputs: { default: {} }, update: { verdict: true } }
 			}
 		}
 	},
@@ -229,8 +225,8 @@ const withHistory = (id: string, reconcile: NonNullable<Link['reconcile']>): Pro
 const key = randomBytes(32);
 /** `self` changes only the accounts they own: one check over the batch, the stored owner against the actor. */
 const OWNED = `function* own(changes, ctx) {
-	const change = changes.find((c) => c.before.owner !== ctx.actor.id);
-	return change === undefined ? ctx.allow() : yield* ctx.refuse('Only your own accounts change.', { at: change });
+	const row = changes.findIndex((c) => c.before.owner !== ctx.actor.id);
+	return row < 0 ? ctx.allow() : yield* ctx.refuse('Only your own accounts change.', { row });
 }
 export default { policy: {
 	self: { grants: { sys_integration: { update: { verdict: own } } } }
@@ -1055,6 +1051,35 @@ layer(Layer.effect(Fixture, open(manifest, calDrivers)), LIVE)('integration link
 					);
 					expect(failures).toBe(-1);
 					expect(yield* sealed('a10')).toMatchObject({ state: { cursor: 7 } });
+					yield* links.close;
+				})
+			)
+		);
+		// audit bug 36: a store that keeps failing ends the write after a bounded number of attempts
+		it.effect('gives up a credential write the store keeps refusing after five attempts', () =>
+			Effect.scoped(
+				Effect.gen(function* () {
+					const { store, host } = yield* Fixture;
+					let attempts = 0,
+						failing = false;
+					const down: Credentials = {
+						...store,
+						write: (i, e, c, rotate) =>
+							Effect.suspend(() => {
+								if (!failing) return store.write(i, e, c, rotate);
+								attempts++;
+								return Effect.fail(BoltError.make('unavailable', 'commit', 'the credential store is down'));
+							})
+					};
+					const opened: DriverOpen[] = [];
+					const links = yield* host([fake('p', opened)], { credentials: down });
+					yield* links.pair('a11', { key: 'k1' });
+					failing = true;
+					const written = yield* Effect.exit(
+						driverCall(() => present(opened[0]).credentials.write(new Map([['state', { cursor: 8 }]])))
+					);
+					expect(written._tag).toBe('Failure');
+					expect(attempts).toBe(5);
 					yield* links.close;
 				})
 			)

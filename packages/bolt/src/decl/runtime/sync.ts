@@ -3,7 +3,7 @@
 // most two adapters, `read` (theirs → model rows) and `write` (one committed change → a call to them); the engine owns
 // the inbox, id map, version guard, outbox, retries, rate, rollback and health. Bodies are typed from the generated
 // names, so `S` (the sync's name) finds the sync's own data (`with`, `schema`, `context`) in them.
-import type { BodyReturn, Clock, Eff, Loose, WorkspaceQuery } from '../ctx.ts';
+import type { BodyReturn, Clock, Eff, Loose, MessageKey, WorkspaceQuery } from '../ctx.ts';
 import type { FacilityFailure, Refusal, Unavailable } from '../errors.ts';
 import type { InputFields, InputOf } from '../fields.ts';
 import type { MediaType } from '../media-types.ts';
@@ -87,7 +87,8 @@ type SendOn<D> = [ConversationOf<D>] extends [never]
 			send(message: SendInput<D>): Eff<Id<'sys_message'>, Failure>;
 		};
 interface SyncRefusal {
-	refuse(message: string, at?: { field?: string; row?: number }): Eff<never, Refusal>;
+	/** Stops the body with a catalogue key, and the `row` and `field` it names. */
+	refuse(message: MessageKey, at?: { field?: string; row?: number }): Eff<never, Refusal>;
 }
 
 /**
@@ -114,7 +115,7 @@ export type FileSyncCtx = Clock & WorkspaceQuery & SyncRefusal;
  * record, read into the first declared column). */
 export type BuiltinParser = 'xlsx' | 'csv' | 'tsv' | 'json' | 'ics' | 'txt';
 /** One parsed record and where it came from: `$at` is its sheet row or line, so findings and refusals point at it. */
-export type FileRecord<R = { readonly [field: string]: Json }> = R & { readonly $at: number };
+type FileRecord<R = { readonly [field: string]: Json }> = R & { readonly $at: number };
 /** What a custom `parse` sees: a file sync's ctx and the uploaded file's bytes or text. */
 type ParseCtx = FileSyncCtx & { readonly files: Pick<Files, 'get'> };
 /** A file export may embed a stored image or its bytes in the document it returns. */
@@ -123,7 +124,7 @@ type FileWriteCtx = FileSyncCtx & { readonly files: Pick<Files, 'get' | 'image'>
  * A parser of the workspace's own for one registered media type: the upload must carry one of `extensions`. `parse`
  * runs in the guest under the 3 s CPU budget and returns each record with its `$at`.
  */
-export type CustomParser<R = { readonly [field: string]: Json }> = {
+type CustomParser<R = { readonly [field: string]: Json }> = {
 	type: MediaType;
 	extensions: readonly `.${string}`[];
 	parse: (file: FileRef, ctx: ParseCtx) => BodyReturn<readonly FileRecord<R>[]>;
@@ -141,7 +142,7 @@ export type Finding = {
 type RecordOf<M, X> = X extends { schema: infer F } ? InputOf<F> : SyncValues<M>;
 type ContextOf<X> = X extends { context: infer F } ? InputOf<F> : {};
 /** What a file sync's `read` receives: the parsed records (each with `$at`) and the page's context. */
-export type FileReadInput<M, X = {}> = {
+type FileReadInput<M, X = {}> = {
 	readonly records: readonly FileRecord<RecordOf<M, X>>[];
 	readonly context: ContextOf<X>;
 };
@@ -151,19 +152,19 @@ export type FileReadInput<M, X = {}> = {
  * `range`, from that group's first to its last `range` value) every stored row the file does not name is deleted in the
  * same act. `related` rows of other models are written in that act too.
  */
-export type FileReadResult<M> = {
+type FileReadResult<M> = {
 	readonly rows: readonly Omit<SyncRow<M>, '$id' | '$version'>[];
 	readonly scope?: { readonly by: NonEmpty<WritableField<M>>; readonly range?: WritableField<M> };
 	readonly findings?: readonly Finding[];
 	readonly related?: { readonly [R in AuthoredModelName]?: readonly SyncValues<R>[] };
 };
 /** What a file sync's `write` receives: the page's context. */
-export type FileWriteInput<X = {}> = { readonly context: ContextOf<X> };
+type FileWriteInput<X = {}> = { readonly context: ContextOf<X> };
 /**
  * What a file sync's `write` returns for Export and Download template: records (written as each declared parser's
  * format), or one document the Export menu converts to each target `+workspace.ts` declares under `convert.to`.
  */
-export type FileWriteResult<M, X = {}> =
+type FileWriteResult<M, X = {}> =
 	readonly RecordOf<M, X>[] | { readonly document: ConvertSource; readonly name: string };
 /**
  * A sync with a file. The view toolbar offers Import (upload), Download template and Export by itself.
@@ -218,7 +219,7 @@ export type RemoteReadInput<D = IntegrationName> = D extends unknown ? {
  * `snapshot: 'begin'` … `'end'` brackets a full listing, after which the rows it did not see are deleted; `retained:
  * false` (the source lost its history) starts a fresh snapshot; `health` sets the sync's health.
  */
-export type RemoteReadResult<M> = {
+type RemoteReadResult<M> = {
 	readonly rows: readonly SyncRow<M>[];
 	readonly cursor?: Json;
 	readonly more?: boolean;
@@ -241,7 +242,7 @@ export type SyncChange<M, D = IntegrationName> = {
 	readonly instance: InstanceId<D & string>;
 };
 /** Acknowledges a replica, optionally returning `$id` and `$version`; `null` skips a local-only edit. */
-export type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } | null;
+type RemoteWriteResult = { readonly $id?: string; readonly $version?: string } | null;
 /**
  * A sync with another system through integration `with`. `read` only is one way in, `write` only one way out, both
  * keep the two sides equal.
@@ -307,5 +308,3 @@ export type RemoteSync<M, S extends string = string, X = SyncData<M, S>, D = Def
 	read?: (input: RemoteReadInput<D>, ctx: SyncCtx<D>) => BodyReturn<RemoteReadResult<M>>;
 	write?: (change: SyncChange<M, D>, ctx: SyncCtx<D>) => BodyReturn<RemoteWriteResult>;
 };
-/** One sync of model `M` (named `S`): a file or another system. */
-export type SyncSpec<M, S extends string = string> = FileSync<M, S> | RemoteSync<M, S>;

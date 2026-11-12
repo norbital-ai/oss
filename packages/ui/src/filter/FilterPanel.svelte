@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import { Effect } from 'effect';
 	import { fork } from '../effect/index.js';
 	// The view popover of `Table` and `Board` (rule 16b, P34): one filter-and-sort toolbar icon. The main control is
@@ -10,7 +11,7 @@
 	import Combobox from '../primitives/combobox/combobox.svelte';
 	import { cn } from '../primitives/utils.js';
 	import type { Json } from '../client/contract.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { fromWhere } from './where.js';
 	import { nodeParts, pathLabel, sortText, type Part } from './text.js';
 	import { ORDER_MAX_KEYS, type SortKey } from './order.js';
@@ -22,12 +23,12 @@
 	import Glyph from '../primitives/icon/Glyph.svelte';
 	import { record_labels } from '../record/labels.svelte.js';
 	import { humanize, msg } from '../text/messages.js';
-	import { useKinds } from '../kinds/context.js';
 	import type { ViewState } from './view-state.svelte.js';
 	import type { FilterVariables } from './operators.js';
 	import { watch } from 'runed';
 
 	let {
+		ctx,
 		view,
 		catalog,
 		model,
@@ -38,6 +39,7 @@
 		readonly = false,
 		variables
 	}: {
+		ctx: UiContext;
 		view: Pick<
 			ViewState,
 			| 'rows'
@@ -61,9 +63,9 @@
 		readonly?: boolean;
 		variables?: FilterVariables;
 	} = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
-	const named = record_labels(bolt, () => kinds.catalog ?? catalog);
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
+	const named = record_labels(() => bolt, () => kinds.catalog ?? catalog);
 	let text = $state(''),
 		busy = $state(false),
 		applied = $state(false),
@@ -218,7 +220,7 @@
 							class="whitespace-normal break-words overflow-visible text-xs text-muted-foreground [&_[data-part=field]]:font-normal [&_[data-part=value]]:text-muted-foreground"
 						/>
 					{:else}
-						<FilterNode
+						<FilterNode {ctx}
 							node={n}
 							{catalog}
 							{model}
@@ -231,7 +233,7 @@
 					{/if}
 				{/each}
 				{#if !readonly}
-					<AddFilter
+					<AddFilter {ctx}
 						on_condition={() => view.setRows([...view.rows, blank])}
 						on_group={() => view.setRows([...view.rows, { t: 'group', join: 'or', of: [blank] }])}
 					/>

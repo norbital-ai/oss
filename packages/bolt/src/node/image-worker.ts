@@ -335,9 +335,9 @@ const facts = Effect.fn('Image.facts')(function* (bytes: Uint8Array) {
 	const r = yield* decode(bytes);
 	yield* Effect.tryPromise({ try: async () => { await pdqInit.call(PDQ); }, catch: failed });
 	const pdq = yield* Effect.try({
-		try: () => Schema.decodeUnknownSync(PdqHash)(pdqHash.call(PDQ, { ...shrink(r, PDQ_MAX_SIDE, 3), channels: 3 })),
+		try: (): unknown => pdqHash.call(PDQ, { ...shrink(r, PDQ_MAX_SIDE, 3), channels: 3 }),
 		catch: failed
-	});
+	}).pipe(Effect.flatMap((hash) => Schema.decodeUnknownEffect(PdqHash)(hash).pipe(Effect.mapError(failed))));
 	// EXIF is third-party and often malformed: an unreadable block is simply absent
 	const raw: unknown = yield* Effect.tryPromise({
 		try: (): Promise<unknown> =>
@@ -621,18 +621,21 @@ const Job = Schema.Struct({
 	crop: Schema.optionalKey(ImageCrop),
 	preview: Schema.optionalKey(Schema.Struct({ maxEdge: ImagePreviewSize, mime: ImagePreviewMimeSchema }))
 });
-const job = Schema.decodeUnknownSync(Job)(workerData);
-const outcome: Exit.Exit<
-	Effect.Success<ReturnType<typeof facts>> | Uint8Array | ImagePreview,
-	ImageError
-> =
-	job.crop !== undefined
-		? await Effect.runPromiseExit(crop(job.bytes, job.crop))
-		: job.preview !== undefined
-			? await Effect.runPromiseExit(preview(job.bytes, job.preview.mime, job.preview.maxEdge))
-			: job.maxEdge === undefined
-				? await Effect.runPromiseExit(facts(job.bytes))
-				: await Effect.runPromiseExit(derive(job.bytes, job.maxEdge));
+type Outcome = Effect.Success<ReturnType<typeof facts>> | Uint8Array | ImagePreview;
+const outcome: Exit.Exit<Outcome, ImageError> = await Effect.runPromiseExit(
+	Schema.decodeUnknownEffect(Job)(workerData).pipe(
+		Effect.mapError(failed),
+		Effect.flatMap((job): Effect.Effect<Outcome, ImageError> =>
+			job.crop !== undefined
+				? crop(job.bytes, job.crop)
+				: job.preview !== undefined
+					? preview(job.bytes, job.preview.mime, job.preview.maxEdge)
+					: job.maxEdge === undefined
+						? facts(job.bytes)
+						: derive(job.bytes, job.maxEdge)
+		)
+	)
+);
 if (Exit.isFailure(outcome)) {
 	const error = Cause.squash(outcome.cause);
 	throw new Error(error instanceof Error ? error.message : Cause.pretty(outcome.cause));

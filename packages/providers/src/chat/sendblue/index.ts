@@ -4,6 +4,7 @@
 import { Schema } from 'effect';
 import { parse as parseJson, fileOf } from '../http.ts';
 import type { ChatConnection, ChatHost, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { signed } from '../verify.ts';
 
@@ -72,7 +73,7 @@ export const sendblue: ChatPlatform = {
 				throw new PlatformError(
 					error.message,
 					error.status,
-					Number(error.headers?.get('retry-after')) * 1000 || undefined
+					retry_after_ms(error.headers?.get('retry-after'))
 				);
 			throw error;
 		};

@@ -15,7 +15,8 @@
 		Input,
 		PhoneInput,
 		Table,
-		Tabs
+		Tabs,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import type { Json } from '../../decl/values.ts';
 	import { based } from '../nav.ts';
@@ -26,11 +27,13 @@
 	import type { SystemUiIntent } from '../../protocol/system-ui.ts';
 
 	let {
+		ctx,
 		api,
 		t,
 		locale,
 		configuration = null
 	}: {
+		ctx: UiContext;
 		api: Pick<ShellApi, 'settings' | 'settings_op' | 'preview'>;
 		t: (key: string) => string;
 		locale: string;
@@ -154,7 +157,12 @@
 	let inviting = $state(false);
 	let inviteTab = $state<'one' | 'bulk'>('one');
 	let submitting = $state(false);
-	let form = $state({ email: '', phone: null as string | null, team: '', external: false });
+	let form = $state<{ email: string; phone: string | null; team: string; external: boolean }>({
+		email: '',
+		phone: null,
+		team: '',
+		external: false
+	});
 	let configured = $state<string | null>(null);
 	watch([() => configuration, () => s], ([intent, settings]) => {
 		if (intent === null || settings === null || configured === intent.key) return;
@@ -295,7 +303,7 @@
 
 {#snippet membersTab()}
 	{#key s}
-		<Table
+		<Table {ctx}
 			of="sys_user"
 			key="members"
 			on_open={(row) => {
@@ -335,7 +343,7 @@
 			>
 		</Cluster>
 	{/if}
-	<Table
+	<Table {ctx}
 		of={invitations}
 		key="invitations"
 		on_open={(row) => (open = { kind: 'invitation', id: row.id })}
@@ -431,7 +439,7 @@
 					>
 				{/if}
 			{/snippet}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={u.name || u.email}
 				on_close={close}
 				footer={memberFoot}
@@ -475,7 +483,7 @@
 						>
 						<label class="flex flex-col gap-1"
 							><span class="text-meta">{t('Mobile number')}</span>
-							<PhoneInput
+							<PhoneInput {ctx}
 								value={draft.phone}
 								on_change={(v) => {
 									if (draft !== null) draft.phone = typeof v === 'string' ? v : null;
@@ -498,7 +506,7 @@
 	{:else}
 		{@const i = invitations.find((x) => x.id === open?.id)}
 		{#if i !== undefined}
-			<DetailSheet
+			<DetailSheet {ctx}
 				title={i.email}
 				acts={invitationActs(i)}
 				on_close={close}
@@ -522,7 +530,7 @@
 			aria-label={t('Email')}
 			bind:value={form.email}
 		/>
-		<PhoneInput
+		<PhoneInput {ctx}
 			value={form.phone}
 			on_change={(v) => (form.phone = typeof v === 'string' ? v : null)}
 		/>

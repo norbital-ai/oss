@@ -111,30 +111,25 @@ it.live('a disabled Form keeps its editors, muted and inert, with the submit dis
 );
 
 it.live(
-	"the form mode reaches every Field by context; a Field's readonly={false} never lifts it; a Fieldset reaches a bare input",
+	"the form mode reaches every Field by context; a Field's readonly={false} never lifts it",
 	() =>
 		browser(async () => {
 			const v = await show({
 				part: 'controls',
-				props: { record: JOB, readonly: true, override: false, group: 'readonly' }
+				props: { record: JOB, readonly: true, override: false }
 			});
 			assert.ok(v.target.querySelector('[data-field=title][data-readonly]'));
 			assert.ok(v.target.querySelector('[data-field=crew][data-readonly]'));
 			assert.equal(v.target.querySelectorAll('[data-field=crew] input').length, 0);
-			assert.equal(v.target.querySelectorAll('[data-bare] input').length, 0);
-			assert.ok(
-				v.target.querySelector('[data-bare] [data-readonly]')?.textContent?.includes('bare')
-			);
 			await v.done();
 			const off = await show({
 				part: 'controls',
-				props: { record: JOB, disabled: true, group: 'disabled' }
+				props: { record: JOB, disabled: true }
 			});
 			assert.equal(
 				off.target.querySelector<HTMLInputElement>('[data-field=title] input')?.disabled,
 				true
 			);
-			assert.equal(off.target.querySelector<HTMLInputElement>('[data-bare] input')?.disabled, true);
 			await off.done();
 		})
 );

@@ -1,18 +1,19 @@
 // The shell's browser half (§3.5, §5.10): the page context (the data client plus `href` and `agent`), the
 // shell's own routes, and the visitor fetch that names the page's app and spends one Turnstile token per request that
 // needs one.
-import { Clock, Context, Effect, Equal, Layer, Option, Queue, Schema, Stream } from 'effect';
+import { Clock, Context, Effect, Layer, Option, Queue, Schema, Stream } from 'effect';
 import { encode_wire, type Wired } from '@norbital-ai/std/wire';
+import { equal_json } from '@norbital-ai/std/json';
 import type { Json } from '../decl/values.ts';
 import type { InputKind, ValueOf } from '../decl/fields.ts';
 import type { ModelName, CustomFieldName, CustomShape, Row as RowOf } from '../decl/names.ts';
 import { create_bolt, page_live_mode, type BoltConfig } from '../page/bolt.ts';
 import { file_ref } from '../page/file-ref.ts';
-import { toast } from '@norbital-ai/ui';
+import { toast, type UiContext } from '@norbital-ai/ui';
 import { run } from '@norbital-ai/ui/effect';
 import type { ShellMountConfig } from './mount.ts';
 import { integration_clients, integration_offers } from '../page/integrations.ts';
-import type { IntegrationSetupEntry } from '../page/integration.ts';
+import type { IntegrationSetupEntry } from './integration/setup.ts';
 import { resolve_device, type DeviceApi } from '../page/device.ts';
 import type { ActOutcome } from '../engine/contracts.ts';
 import { BOLT, HEADERS, PATHS, RATE_LIMITED, uuidv7, type PushBody } from '../protocol/wire.ts';
@@ -43,7 +44,7 @@ import {
 	type ShellApi
 } from './api-types.ts';
 import { browserTransport } from '../protocol/client.ts';
-import { ProtocolFailed, TransportFailed } from '../decl/errors.ts';
+import { ProtocolFailed, TransportFailed } from '../decl/errors/browser.ts';
 import { ActReply, WireError, type PageResult } from '../protocol/schema.ts';
 import { AuditPage, AuditRecord } from '../protocol/audit.ts';
 import { based, base, href, SHELL, VISITOR_APP, type ShellBoot } from './nav.ts';
@@ -419,6 +420,15 @@ export const challenge_queue = (reset: () => void = () => {}) =>
 		};
 	});
 export type ChallengeQueue = Effect.Success<ReturnType<typeof challenge_queue>>;
+declare global {
+	interface Window {
+		/** Cloudflare's Turnstile API, once its script has loaded. */
+		turnstile?: {
+			render(el: HTMLElement, o: { sitekey: string; callback(token: string): void }): string;
+			reset(id: string): void;
+		};
+	}
+}
 
 /** A kiosk page's fetch: every `/__bolt` request names the kiosk, whose assigned policies it runs as. */
 export function kiosk_fetch(
@@ -641,7 +651,7 @@ export function shell_bolt(
 									rows: answer.rows.filter((row) => {
 										const values: Readonly<Record<string, Wired>> = row;
 										return Object.entries(conditions).every(([field, condition]) =>
-											Equal.equals(encode_wire(values[field] ?? null), encode_wire(condition.eq))
+											equal_json(values[field] ?? null, condition.eq)
 										);
 									}),
 									next: null
@@ -661,10 +671,12 @@ export function shell_bolt(
 	});
 }
 export type ShellBolt = Effect.Success<ReturnType<typeof shell_bolt>>;
-/** What a mounted page receives: the shell client without its native transport members. */
-export type ShellPageContext = Omit<ShellBolt, 'native_query' | 'observe' | 'closed' | 'sync'>;
-export const page_context = ({ native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored }: ShellBolt): ShellPageContext =>
-	authored;
+/** What a mounted page receives: the shell client without its native transport members, and the `ui` its views take. */
+export type ShellPageContext = Omit<ShellBolt, 'native_query' | 'observe' | 'closed' | 'sync'> & UiContext;
+export const page_context = (
+	{ native_query: _native, observe: _observe, closed: _closed, sync: _sync, ...authored }: ShellBolt,
+	ui: UiContext['ui']
+): ShellPageContext => ({ ...authored, ui });
 
 /** Each shell mount owns its configured runtime and every child resource. */
 class ShellConfiguration extends Context.Service<ShellConfiguration, ShellMountConfig>()(

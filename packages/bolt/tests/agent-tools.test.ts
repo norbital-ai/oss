@@ -767,7 +767,7 @@ describe('fewer calls for the common paths', () => {
 			}
 		},
 		policies: {
-			viewer: { description: '', grants: { tasks: { outputs: { brief: true } } } }
+			viewer: { description: '', grants: { tasks: { outputs: { brief: {} } } } }
 		}
 	};
 	const viewer = Effect.runSync(
@@ -841,7 +841,7 @@ describe('fewer calls for the common paths', () => {
 					clerk: {
 						description: '',
 						grants: {
-							tasks: { outputs: { default: true }, create: { columns: { tasks: ['title'] } } }
+							tasks: { outputs: { default: {} }, create: { columns: { tasks: ['title'] } } }
 						}
 					}
 				}
@@ -868,7 +868,7 @@ describe('fewer calls for the common paths', () => {
 							description: '',
 							grants: {
 								tasks: {
-									outputs: { default: true },
+									outputs: { default: {} },
 									create: { columns: { tasks: ['title'] }, verdict: true }
 								}
 							}
@@ -1383,7 +1383,7 @@ describe('reading the source is every staff member’s; changing it is an admini
 		compile_authority(
 			{
 				...manifest,
-				policies: { staff: { description: '', grants: { tasks: { outputs: { default: true } } } } }
+				policies: { staff: { description: '', grants: { tasks: { outputs: { default: {} } } } } }
 			},
 			{ actor: member().actor, policies: ['staff'], admin: false },
 			'reader'
@@ -1498,7 +1498,7 @@ describe('describe_workspace', () => {
 		policies: {
 			matcher: {
 				description: '',
-				grants: { trial: { outputs: { default: true }, create: true } },
+				grants: { trial: { outputs: { default: {} }, create: {} } },
 				capabilities: { apps: ['lab/trials'], automations: ['close_month'] }
 			}
 		},

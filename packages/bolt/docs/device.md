@@ -67,7 +67,7 @@ rides the live lane: no polling, a `: ping` every 25 s, and it ends on a release
 'production', team_id } }`;
 - `{ endpoint, remove: true }` forgets it.
 
-Each inbox notice's `bolt.push` run hands the host one `Push` message per device, carrying the subscription's `kind`
+Each inbox notice's `bolt.push` run hands the host one push message per device, carrying the subscription's `kind`
 and the notice's `id` and `path`; the host routes it (web push, APNs) and deletes a device its service reports gone. The
 browser waits for its workspace service worker to activate before subscribing. The worker suppresses system alerts
 only while a visible, focused window in that workspace can show its own toast. An unrelated tab or workspace does not

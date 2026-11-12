@@ -7,9 +7,9 @@ One cell of a `Grid` or `Columns` spanning `span` columns (or `all`); it throws 
 	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
 	/** How many columns a `Column` spans. */
-	export type ColumnSpan = 1 | 2 | 3 | 4 | 5 | 6 | 'all';
+	type ColumnSpan = 1 | 2 | 3 | 4 | 5 | 6 | 'all';
 	/** The props of `Column`. */
-	export interface ColumnProps extends LayoutAttributes {
+	interface ColumnProps extends LayoutAttributes {
 		as?: LayoutElement;
 		span?: ColumnSpan;
 		children: Snippet;

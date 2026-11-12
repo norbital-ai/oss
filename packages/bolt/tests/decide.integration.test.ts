@@ -66,7 +66,7 @@ const manifest = {
 	policies: {
 		desk: {
 			description: 'Desk',
-			grants: { tickets: { outputs: { default: true }, create: true, update: true } }
+			grants: { tickets: { outputs: { default: {} }, create: {}, update: {} } }
 		}
 	},
 	automations: {},

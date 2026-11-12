@@ -47,14 +47,14 @@ is refused at once. The engine derives a document's index (lines, page and slide
 ranges — headings, then page, slide and speaker sections —, table count, image names) and a recording's transcript
 (speakers, segments, `duration_ms` from the last end) from the HTML.
 
-- **Port.** `HostPorts.agent.ingest` (`IngestPort['ingest']` at the Host API boundary): `(file, options, signal)` answering
-  `Promise<Ingested | { unsupported }>` for `file: { sha256, name, mime, bytes }` and
+- **Port.** `HostPorts.agent.ingest` (at the Host API boundary): `(file, options, signal)` answering
+  the ingested result or `{ unsupported }` for `file: { sha256, name, mime, bytes }` and
   `options: { password?, diarize?, language?, speakers?, prompt? }`, decoded once on the engine side (`Convert.ingest`).
   `password` opens a locked PDF or Office file (xlsx, xls, docx, doc, pptx, ppt) for that read: Convert decrypts a copy
   (MuPDF for a PDF, officecrypto-tool for Office) and reads it as usual; it travels as the `x-ingest-password` header,
   never the URL, and is stored nowhere. Without it a locked file fails `<name> is password-protected`, with a wrong one
   `the password does not open <name>`. The agent's `read_file { id, password }` and `ctx.convert.ingest` both take it.
-  `Ingested` is `{ kind: 'document', html, images, meta } | { kind: 'data', json, images, meta }`; `meta.stats` is the
+  The ingested result is `{ kind: 'document', html, images, meta } | { kind: 'data', json, images, meta }`; `meta.stats` is the
   conversion's compute (`pages`, `bytes`, `cpuMs`, `wallMs`) and audio's `meta.usage` its model calls (`calls`, `model`,
   `input`, `output`, `cost`): the agent records it as an `ai.call` observation and the host bills each call id once.
   `document_ingester({ url, key })` implements it over Norbital Convert's `POST /v1/ingest` (SSE job events, then the

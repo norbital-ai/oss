@@ -1,7 +1,7 @@
 // Engine failures (D3, rule 72a). `BoltError` carries a literal `code`; a separate tag exists only where code branches
 // on it. `CODE` is the one table of each code's wire status and retry class (rule 54); `is_transient` reads it.
 import { Match, Option, Schema } from 'effect';
-import { FACILITY_KINDS } from '../decl/errors.ts';
+import { FACILITY_KINDS } from '../decl/errors/facility.ts';
 import type { AgentRefusal } from './agent/schema.ts';
 export type { AgentRefusal } from './agent/schema.ts';
 

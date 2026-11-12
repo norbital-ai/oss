@@ -112,9 +112,6 @@ import { embedQueued, embedWrites } from '../integrations/embed.ts'; // hook:int
 import { instanceTransform } from '../integrations/instances.ts';
 import { SYSTEM } from '../../system/index.ts';
 /** The generated verbs (X-24): `import` (rule 30) and `erase` (rule 38e) included. */
-type Obj = {
-	readonly [k: string]: Json;
-};
 export type Verb = 'create' | 'update' | 'delete' | 'upsert' | 'import' | 'erase';
 /** The snapshot that opens or resumes a request. */
 export type StepsSnapshot = Extract<ApprovalSnapshot, { kind: 'steps' }>;
@@ -406,8 +403,8 @@ const pipeline = Effect.fn('Bolt.pipeline')(function* (
 				on: key0,
 				on_conflict: imp.on_conflict === 'update' ? 'update' : 'keep'
 			});
-		else if (byId && r.on_conflict !== undefined) {
-			const { id, ...row } = x as Obj;
+		else if (byId && r.on_conflict !== undefined && Predicate.isReadonlyObject(x) && !Array.isArray(x)) {
+			const { id, ...row } = x;
 			if (typeof id !== 'string') {
 				const at = f.items.length;
 				f.create(
@@ -846,7 +843,6 @@ const VerdictSchema = Schema.Union([
 		at: Schema.optionalKey(
 			Schema.Struct({
 				row: Schema.optionalKey(Schema.Number),
-				path: Schema.optionalKey(Schema.String),
 				field: Schema.optionalKey(Schema.String)
 			})
 		)

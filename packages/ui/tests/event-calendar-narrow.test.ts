@@ -2,6 +2,7 @@ import './dom.ts';
 import { flushSync, mount, unmount } from 'svelte';
 import { expect, it, vi } from 'vitest';
 import EventCalendar from '../src/event-calendar/event-calendar.svelte';
+import { bare_ctx } from './bare-ctx.ts';
 
 const at = new Date(2026, 10, 6, 9);
 const events = [
@@ -19,7 +20,7 @@ it('a narrow month lists the chosen day in full under its dots', () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	const view = mount(EventCalendar, {
 		target,
-		props: { events, view: 'month', date: at, on_event_click }
+		props: { ctx: bare_ctx(), events, view: 'month', date: at, on_event_click }
 	});
 	flushSync();
 	expect(target.querySelector('[data-calendar-compact]')).not.toBeNull();
@@ -39,7 +40,7 @@ it('a narrow month lists the chosen day in full under its dots', () => {
 it('a narrow week is a strip of days over one day', () => {
 	narrow();
 	const target = document.body.appendChild(document.createElement('div'));
-	const view = mount(EventCalendar, { target, props: { events, view: 'week', date: at } });
+	const view = mount(EventCalendar, { target, props: { ctx: bare_ctx(), events, view: 'week', date: at } });
 	flushSync();
 	const days = target.querySelectorAll<HTMLButtonElement>('[data-calendar-strip] button');
 	expect(days).toHaveLength(7);

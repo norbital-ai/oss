@@ -43,7 +43,15 @@ const logged = (kind: string, log: (line: string) => void): TransportPort => ({
 	}
 });
 
-export const messaging = Effect.fn('server.messaging')(function* (
+export const messaging: (
+	config: Pick<HostSettings, 'transactional'>,
+	run: Run,
+	log: (line: string) => void
+) => Effect.Effect<
+	Pick<Facilities['transactional'], 'mail' | 'sms' | 'phone' | 'fixed_codes'>,
+	never,
+	HttpClient
+> = Effect.fn('server.messaging')(function* (
 	config: Pick<HostSettings, 'transactional'>,
 	run: Run,
 	log: (line: string) => void

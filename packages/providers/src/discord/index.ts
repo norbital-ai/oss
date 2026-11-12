@@ -18,7 +18,7 @@ import {
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import type { DriverOpen, Json, LinkStatus, OutboundAttachment } from '@norbital-ai/bolt/engine';
 import type { ProviderDef } from '../abi.ts';
-import { answerFailure, ProviderUnavailable } from '../errors.ts';
+import { answerFailure, notConnected, ProviderUnavailable } from '../errors.ts';
 import { blobOf, field, hostCall, str, storedCredential, withFetch, type Obj } from '../util.ts';
 
 const API = 'https://discord.com/api/v10';
@@ -401,9 +401,7 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 				send: (message: Json, files: readonly OutboundAttachment[] = []) =>
 					Effect.gen(function* () {
 						if (cred === null)
-							return yield* Effect.fail(
-								new ProviderUnavailable({ message: 'the Discord bot is not connected' })
-							);
+							return yield* Effect.fail(notConnected('the Discord bot'));
 						const m = yield* Schema.decodeUnknownEffect(Message)(message).pipe(
 							Effect.mapError(() => answerFailure('a Discord message needs `to` and `text`', 400))
 						);
@@ -442,9 +440,7 @@ export function discord(options: DiscordOptions = {}): ProviderDef {
 				reconcile: (thread: string, since: string) =>
 					Effect.gen(function* () {
 						if (cred === null)
-							return yield* Effect.fail(
-								new ProviderUnavailable({ message: 'the Discord bot is not connected' })
-							);
+							return yield* Effect.fail(notConnected('the Discord bot'));
 						const { botId } = cred,
 							path = `/channels/${encodeURIComponent(thread)}`,
 							now = yield* Clock.currentTimeMillis;

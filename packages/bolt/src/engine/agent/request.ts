@@ -21,7 +21,6 @@ export function requestEvidence(request: AiRequest) {
 		boundary: 'ai.port',
 		sha256: sha256_hex(JSON.stringify({ ...request, ...(files === undefined ? {} : { files }) })),
 		model: request.model,
-		effort: request.effort ?? null,
 		purpose: request.purpose ?? null,
 		system: request.system === undefined ? null : part(request.system),
 		messages: { ...part(JSON.stringify(request.messages)), count: request.messages.length },

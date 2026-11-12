@@ -741,7 +741,7 @@ it.live('filter metadata loads on opening, retries a failure on reopening, then 
 it.live('Table: initial_filter seeds clearable rows, and a cleared choice survives a reload', () =>
 	Effect.gen(function* () {
 		const s = yield* browser(() => scripted());
-		const props: import('../src/table/Table.svelte').TableProps = {
+		const props: Omit<import('../src/table/Table.svelte').TableProps, 'ctx'> = {
 			of: 'jobs',
 			columns: ['title'],
 			initial_filter: { status: { eq: 'scheduled' } }

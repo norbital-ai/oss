@@ -10,8 +10,8 @@ import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer';
 import { createServer } from 'node:http';
 import { node_guests } from '../guests.ts';
 import { clientDevServer } from '../compiler/artifact/client.ts';
+import { artifact_port } from '@norbital-ai/bolt/node';
 import {
-	artifact_port,
 	call,
 	load_host,
 	serve_release,
@@ -19,7 +19,7 @@ import {
 	response_error
 } from '@norbital-ai/bolt/tooling';
 import { HOST_API } from '@norbital-ai/bolt/host-api';
-import { client_page } from '@norbital-ai/bolt/engine';
+import { client_page } from '@norbital-ai/bolt/protocol';
 import { buildWorkspace, ToolFailure, watchWorkspace, type Built, type Log } from './build.ts';
 
 /**

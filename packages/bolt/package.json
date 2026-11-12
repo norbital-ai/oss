@@ -18,12 +18,8 @@
 		},
 		"./page": {
 			"types": "./build/page/index.d.ts",
+			"svelte": "./build/page/index.js",
 			"default": "./build/page/index.js"
-		},
-		"./page/integrations": {
-			"types": "./build/page/integration.d.ts",
-			"svelte": "./build/page/integration.js",
-			"default": "./build/page/integration.js"
 		},
 		"./page/studio": {
 			"types": "./build/page/studio.d.ts",
@@ -35,8 +31,8 @@
 			"default": "./build/engine/index.js"
 		},
 		"./artifact": {
-			"types": "./build/engine/artifact/read.d.ts",
-			"default": "./build/engine/artifact/read.js"
+			"types": "./build/engine/artifact/index.d.ts",
+			"default": "./build/engine/artifact/index.js"
 		},
 		"./protocol": {
 			"types": "./build/protocol/index.d.ts",
@@ -47,8 +43,8 @@
 			"default": "./build/facilities/index.js"
 		},
 		"./host-api": {
-			"types": "./build/protocol/host-api.d.ts",
-			"default": "./build/protocol/host-api.js"
+			"types": "./build/host-api.d.ts",
+			"default": "./build/host-api.js"
 		},
 		"./node": {
 			"types": "./build/node/index.d.ts",
@@ -58,17 +54,9 @@
 			"types": "./build/docs/index.d.ts",
 			"default": "./build/docs/index.js"
 		},
-		"./guest-hooks": {
-			"types": "./build/node/guest-hooks.d.ts",
-			"default": "./build/node/guest-hooks.js"
-		},
 		"./tooling": {
 			"types": "./build/tooling/index.d.ts",
 			"default": "./build/tooling/index.js"
-		},
-		"./tooling/browser": {
-			"types": "./build/tooling/browser.d.ts",
-			"default": "./build/tooling/browser.js"
 		},
 		"./declarations": {
 			"types": "./build/declarations.d.ts",

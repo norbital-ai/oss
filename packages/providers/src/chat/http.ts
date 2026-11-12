@@ -1,16 +1,16 @@
 import { Schema } from 'effect';
 import type { ChatHost, IncomingFile } from './adapter.ts';
 import { PlatformError } from './adapter.ts';
+import { retry_after_ms } from '../errors.ts';
 
 /** The host's guarded fetch owns cancellation and destination checks. */
 export const request = async (fetch: ChatHost['fetch'], url: string | URL, init?: RequestInit) => {
 	const response = await fetch(url, init);
 	if (response.ok) return response;
-	const wait = Number(response.headers.get('retry-after'));
 	throw new PlatformError(
 		`${response.status}: ${await response.text()}`,
 		response.status,
-		Number.isFinite(wait) && wait > 0 ? wait * 1000 : undefined
+		retry_after_ms(response.headers.get('retry-after'))
 	);
 };
 

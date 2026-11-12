@@ -4,8 +4,10 @@ import { Decimal } from './decimal.ts';
 
 /** Parse once; a valid `null` is a success, invalid text the parser's `SyntaxError` (never a throw). */
 export const parse_json_result = (text: string): Result.Result<unknown, SyntaxError> =>
-	// JSON.parse of a string throws only SyntaxError
-	Result.try({ try: (): unknown => JSON.parse(text), catch: (e) => e as SyntaxError });
+	Result.try({
+		try: (): unknown => JSON.parse(text),
+		catch: (e) => (e instanceof SyntaxError ? e : new SyntaxError(String(e)))
+	});
 
 /** The parsed value, or null for invalid JSON (never a throw). */
 export function parse_json(text: string): unknown {

@@ -15,6 +15,7 @@ node_modules/
 **/build/
 **/build.staging-*/
 # Emitted from Bolt's native declarations before compilation.
+/packages/bolt/src/system/index.ts
 /packages/bolt/src/system/names.ts
 **/.svelte-kit/
 # Generated workspace state.

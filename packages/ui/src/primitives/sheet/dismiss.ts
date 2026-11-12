@@ -49,6 +49,6 @@ export function navigates(event: Clicked): boolean {
 		event.altKey
 	)
 		return false;
-	const link = (event.target as Partial<Element> | null)?.closest?.('a[href]');
+	const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
 	return !!link && (link.getAttribute('target') ?? '_self') === '_self';
 }

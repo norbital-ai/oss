@@ -30,7 +30,7 @@ type Slice<C extends Ctx> = {
 };
 
 /** A priced line: its code, label, bucket and band, the quantity (or `null`) and the amount. */
-export type PricedLine<C extends Ctx = Ctx> = {
+type PricedLine<C extends Ctx = Ctx> = {
 	readonly code: string;
 	readonly label: string;
 	readonly bucket: string;

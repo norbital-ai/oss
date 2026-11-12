@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../src/client/contract.js';
 	import type { Outcome, ViewBolt } from '../src/client/contract.js';
 	import type { KindsHost } from '../src/kinds/context.js';
 
@@ -30,8 +31,6 @@
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy, setContext, untrack } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
-	import { provide_bolt } from '../src/client/context.js';
-	import { provide_kinds } from '../src/kinds/context.js';
 	import { provide_representations } from '../src/record/context.js';
 	import RecordShell from '../src/record/RecordShell.svelte';
 	import Sheet from '../src/primitives/sheet/sheet.svelte';
@@ -51,13 +50,12 @@
 		on_done
 	}: RecordFooterHarnessProps = $props();
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
-	provide_bolt(() => bolt);
-	provide_kinds({
+	const ctx: UiContext = { ui: { get bolt() { return bolt; }, kinds: {
 		get catalog() {
 			return catalog;
 		},
 		query: (request) => bolt.query(request)
-	});
+	} } };
 	setContext<FooterFixtureOptions>('test.record.footer', {
 		get representation() {
 			return representation;
@@ -80,7 +78,7 @@
 </script>
 
 {#snippet record()}
-	<RecordShell of="jobs" id={mode === 'create' ? undefined : id} {mode} {lock} {on_done} />
+	<RecordShell {ctx} of="jobs" id={mode === 'create' ? undefined : id} {mode} {lock} {on_done} />
 {/snippet}
 
 {#if layout === 'sheet'}

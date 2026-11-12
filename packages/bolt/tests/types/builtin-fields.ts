@@ -3,15 +3,10 @@
 // references either as `{ kind: 'custom', of }`, the value type flows from the shape, and a renderer's view is typed by
 // the name. Each `@ts-expect-error` is a planted mistake `bolt check` must refuse.
 import { bind_model } from '../../src/declarations.ts';
-import type {
-	CustomFieldName,
-	CustomFieldView,
-	Decimal,
-	FileRef,
-	Point,
-	ValueOf
-} from '../../src/index.ts';
+import type { CustomFieldView, FileRef, Point, ValueOf } from '../../src/index.ts';
+import type { Decimal } from '@norbital-ai/std/decimal';
 import './registry.ts';
+import type { CustomFieldName } from '../../src/decl/names.ts';
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const is = <T extends true>(..._proof: T extends true ? [] : never): void => {};

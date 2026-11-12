@@ -86,19 +86,12 @@ describe('canonical guest error families', () => {
 	);
 	it('the public API reexports the canonical constructors and decoders', () => {
 		for (const [publicValue, canonical] of [
-			[Errors.Refusal, Refusal],
 			[Errors.ActRefused, Act.ActRefused],
 			[Errors.ActConflict, Act.ActConflict],
-			[Errors.ActUnknown, Act.ActUnknown],
-			[Errors.act_failure, Act.act_failure],
-			[Errors.FACILITY_KINDS, Facility.FACILITY_KINDS],
 			[Errors.FacilityFailure, Facility.FacilityFailure],
 			[Errors.Unavailable, Facility.Unavailable],
-			[Errors.facility_failure, Facility.facility_failure],
 			[Errors.ReadFailed, Read.ReadFailed],
-			[Errors.TransportFailed, Browser.TransportFailed],
-			[Errors.ProtocolFailed, Browser.ProtocolFailed],
-			[Errors.DescribeTimeout, Browser.DescribeTimeout]
+			[Errors.ProtocolFailed, Browser.ProtocolFailed]
 		])
 			expect(publicValue).toBe(canonical);
 	});
@@ -116,7 +109,7 @@ describe('canonical guest error families', () => {
 			)
 		).toBeInstanceOf(Errors.ActConflict);
 		expect(Option.getOrThrow(Act.act_failure({ kind: 'unknown', invocation: 'i1' }))).toBeInstanceOf(
-			Errors.ActUnknown
+			Act.ActUnknown
 		);
 		for (const invalid of [
 			{ kind: 'refused', code: 7, message: 'taken' },

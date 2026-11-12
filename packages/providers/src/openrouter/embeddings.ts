@@ -22,7 +22,7 @@ export type EmbedInput =
 			};
 	  };
 export type Endpoint = { readonly base_url: string; readonly api_key?: string | undefined };
-export type EmbeddingsConfig<E> = Endpoint & {
+type EmbeddingsConfig<E> = Endpoint & {
 	/** The host's scoped file reader; stored media never returns through the Cell. */
 	readonly files?: (key: string, max: number) => Effect.Effect<Uint8Array, E>;
 	/** The provider model a workspace's embedding name runs and how many inputs one request may carry; `undefined`: none is mapped. */
@@ -147,7 +147,7 @@ export const open_ai_embeddings = <E>(config: EmbeddingsConfig<E>) => {
 };
 
 /** One system's models for P39: the ones to check against the provider's published metadata. */
-export type ModalityCheck = {
+type ModalityCheck = {
 	readonly system: 'sys_2' | 'embed';
 	readonly endpoint: Endpoint;
 	readonly models: readonly string[];

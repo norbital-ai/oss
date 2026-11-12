@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Json, Value } from './kind.js';
 	import type { ModelKey, FieldOf, IdOf, OrderByOf, WhereOf } from '../model/types.js';
 	import type { ReadError } from '../client/contract.js';
@@ -10,6 +11,8 @@
 	 * so `limit` is the page shown, never the rows searched; rows sort by `order_by`, else by the label.
 	 */
 	export type PickerProps<C = ModelKey> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: C;
 		/** The chosen id; any text is shown as not found, never trusted. */
 		value: string | null;
@@ -32,16 +35,16 @@
 	import Input from '../primitives/input/input.svelte';
 	import { label as title } from '@norbital-ai/std/label';
 	import { ui_text, use_controls } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
 	import { Effect } from 'effect';
 	import { observe_once as queryState } from '../effect/index.js';
-	import { ids_of } from '../form/form-state.svelte.js';
+	import { is_id } from '../form/form-state.svelte.js';
 	import { currencyOf, format, picker_read, value_object } from './kind.js';
 	import { by_id } from '../read/request.js';
 	import { label_read } from '../relations/select.js';
 	import { withOutputs } from '../client/context.js';
 
 	let {
+		ctx,
 		of,
 		value,
 		on_change,
@@ -55,7 +58,7 @@
 		invalid = false
 	}: PickerProps<C> = $props();
 	const controls = use_controls();
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const target = $derived(host.catalog?.[of]);
 	const labels = $derived(label ?? target?.label ?? []);
 	type Hit = { id: string; text: string };
@@ -172,7 +175,7 @@
 	};
 	const choose = (next: string | null) => {
 		chosen = hits.find((hit) => hit.id === next) ?? null;
-		on_change(next === null ? null : (ids_of<C>([next])[0] ?? null));
+		on_change(is_id<C>(next) ? next : null);
 	};
 </script>
 

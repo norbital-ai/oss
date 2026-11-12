@@ -13,7 +13,7 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 	} from './layout.shared.js';
 
 	/** The props of `Cover`. */
-	export interface CoverProps extends LayoutAttributes {
+	interface CoverProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		pad?: LayoutPad;
@@ -48,8 +48,9 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 		top,
 		bottom,
 		class: className,
+		style: styleProp,
 		children,
-		...restProps
+		...attributes
 	}: CoverProps = $props();
 
 	/**
@@ -65,9 +66,6 @@ A region with optional `top` and `bottom` chrome and a body between them, option
 		[top ? 'auto' : null, 'minmax(0,1fr)', bottom ? 'auto' : null]
 			.filter((row) => row !== null)
 			.join(' ')
-	);
-	const { style: styleProp, ...attributes } = $derived(
-		restProps as { style?: string } & Record<string, unknown>
 	);
 </script>
 

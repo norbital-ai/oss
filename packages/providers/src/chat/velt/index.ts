@@ -4,6 +4,7 @@
 import { Schema } from 'effect';
 import { parse as parseJson, json, download as downloadFile } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError } from '../adapter.ts';
 import { standardWebhook } from '../verify.ts';
 
@@ -125,11 +126,10 @@ export const velt: ChatPlatform = {
 				body: JSON.stringify({ data })
 			});
 			if (!response.ok) {
-				const wait = Number(response.headers.get('retry-after'));
 				throw new PlatformError(
 					`${path} answered ${response.status}`,
 					response.status,
-					wait > 0 ? wait * 1000 : undefined
+					retry_after_ms(response.headers.get('retry-after'))
 				);
 			}
 			const { result } = await json(

@@ -3,6 +3,7 @@
 import { Result, Schema } from 'effect';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
+import { json } from '../http.ts';
 
 const API = 'https://api.getdial.ai/api/v1';
 const TEXT_MAX = 1600;
@@ -62,7 +63,7 @@ export const dial: ChatPlatform = {
 				throw new PlatformError(`Dial API answered ${response.status}`, response.status);
 			return response;
 		};
-		const { numbers } = Schema.decodeUnknownSync(Numbers)(await (await request('/numbers')).json());
+		const { numbers } = await json(Numbers, await request('/numbers'));
 		const own = numbers.find((number) => number.id === fromNumberId);
 		if (own === undefined) throw new Error(`${fromNumberId} is not a number of this account`);
 		const parse = (message: typeof Message.Type): Incoming => ({
@@ -103,7 +104,7 @@ export const dial: ChatPlatform = {
 					fromNumberId,
 					...(text === '' ? {} : { body: text.slice(0, TEXT_MAX) })
 				});
-				return Schema.decodeUnknownSync(Sent)(await response.json()).message;
+				return (await json(Sent, response)).message;
 			},
 			typing: async (thread, on) => {
 				const response = await request('/typing', {
@@ -121,7 +122,7 @@ export const dial: ChatPlatform = {
 					since
 				});
 				const response = await request(`/messages?${query}`);
-				const { messages } = Schema.decodeUnknownSync(History)(await response.json());
+				const { messages } = await json(History, response);
 				return {
 					messages: messages.filter((row) => row.from === thread && !row.reaction).map(parse),
 					complete: false

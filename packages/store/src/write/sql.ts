@@ -17,7 +17,7 @@ export type WireRow = { readonly [field: string]: Json };
  * An atomic change of an inline value, sent as the field's value: `$patch` merges an object at its paths (absent
  * paths are created), `$append` adds a list's items, `$remove` drops the items equal to any it names.
  */
-export type InlineChange =
+type InlineChange =
 	| { readonly $patch: { readonly [key: string]: Json } }
 	| { readonly $append: readonly Json[] }
 	| { readonly $remove: readonly Json[] };
@@ -83,12 +83,12 @@ export type WriteIR =
 			readonly select: SelectIR;
 	  };
 /** Who writes, for an audited table's `created_by` / `updated_by`. */
-export type WriteOptions = { readonly actor?: string | undefined };
+type WriteOptions = { readonly actor?: string | undefined };
 /**
  * A compiled write: its statement answers one row `{ matched, j }`, `j` the written rows (a delete's keys) as a json
  * array and `matched` the rows its condition found before any revision check — more than were written is `stale`.
  */
-export type CompiledWrite = {
+type CompiledWrite = {
 	readonly sql: Sql;
 	readonly observed: boolean;
 	/** A non-null `refused` result indexes the admission failure; every mutation was gated off. */

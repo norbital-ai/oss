@@ -89,21 +89,21 @@ const manifest = {
 	policies: {
 		desk: {
 			description: 'What the envoys may do',
-			grants: { jobs: { outputs: { default: true } } }
+			grants: { jobs: { outputs: { default: {} } } }
 		},
-		contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: true } } } },
+		contractor: { description: 'Contractors', grants: { jobs: { outputs: { default: {} } } } },
 		staff: {
 			description: 'Staff',
 			grants: {
-				sent_emails: { outputs: { default: true }, create: true },
-				tickets: { outputs: { default: true }, create: true }
+				sent_emails: { outputs: { default: {} }, create: {} },
+				tickets: { outputs: { default: {} }, create: {} }
 			}
 		},
 		sales: {
 			description: 'Sales',
-			grants: { orders: { outputs: { default: true }, create: { verdict: true } } }
+			grants: { orders: { outputs: { default: {} }, create: { verdict: true } } }
 		},
-		finance: { description: 'Finance', grants: { orders: { outputs: { default: true } } } }
+		finance: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } }
 	},
 	teams: {
 		't-con': { name: 'Contractors', policies: ['contractor'] },

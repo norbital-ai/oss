@@ -1,6 +1,6 @@
 // std/calendar (§3.7, §5.4): pay and billing cycles (a cycle is named by the day it OPENS), working days and
 // business-hour deadlines (SLAs) over a work week and holiday rows.
-import { add_days, add_months, PlainDate, type DatePeriod, type Instant } from './date.ts';
+import { add_days, add_months, Instant, PlainDate, type DatePeriod } from './date.ts';
 import { Decimal } from './decimal.ts';
 import { DAY_MS, local_of, utc_of } from './zone.ts';
 import { Schema } from 'effect';
@@ -31,8 +31,8 @@ const minutes = (t: string) => {
 	if (m === null) throw new RangeError(`'${t}' is not HH:MM`);
 	return Number(m[1]) * 60 + Number(m[2]);
 };
-const weekday = (d: string) =>
-	(((new Date(`${d}T00:00:00Z`).getUTCDay() + 6) % 7) + 1) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
+const ISO_DAY = [7, 1, 2, 3, 4, 5, 6] as const;
+const weekday = (d: string) => ISO_DAY[new Date(`${d}T00:00:00Z`).getUTCDay()] ?? 7;
 const dayNumber = (d: string) => Date.parse(`${d}T00:00:00Z`) / DAY_MS;
 
 /** A checked work calendar: every day's hours are `start < end`, holidays are calendar dates. */
@@ -138,7 +138,7 @@ export function add_business_hours(
 			end = minutes(h.end) * 60_000;
 		if (start >= end) continue;
 		if (left <= end - start)
-			return new Date(utc_of(date, start + left, cal.zone)).toISOString() as Instant;
+			return Instant(new Date(utc_of(date, start + left, cal.zone)));
 		left -= end - start;
 	}
 	throw new RangeError('the calendar has no working hours within ten years');

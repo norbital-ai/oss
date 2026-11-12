@@ -43,7 +43,7 @@ const IDENTITY_COLUMNS = {
  */
 export function decode_identity(m: EngineManifest, rows: Pack['rows']): Pack['rows'] {
 	const unknown = Object.keys(rows).find(
-		(c) => m.models[c] === undefined && !(IDENTITY as readonly string[]).includes(c)
+		(c) => m.models[c] === undefined && !IDENTITY.some((i) => i === c)
 	);
 	if (unknown !== undefined)
 		throw BoltError.make('seed_decode', 'decode', `seed: unknown model '${unknown}'`);

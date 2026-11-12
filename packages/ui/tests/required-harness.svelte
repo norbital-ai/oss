@@ -1,12 +1,12 @@
 <script lang="ts">
+	import type { UiContext } from '../src/client/contract.js';
 	// A create form whose fields are required or not by their exposed kinds, one rendered by its own `editor` snippet.
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
-	import { provide_kinds, type KindsHost } from '../src/kinds/context.js';
+	import { type KindsHost } from '../src/kinds/context.js';
 	import Field from '../src/form/field.svelte';
 	import Form from '../src/form/form.svelte';
-	import { provide_bolt } from '../src/client/context.js';
 	import { type ViewBolt } from '../src/client/contract.js';
 
 	let {
@@ -21,8 +21,7 @@
 	} = $props();
 	onDestroy(mount_edge(ManagedRuntime.make(Layer.empty)));
 	// svelte-ignore state_referenced_locally
-	provide_bolt(() => bolt);
-	provide_kinds({
+	const ctx: UiContext = { ui: { bolt: bolt, kinds: {
 		get catalog() {
 			return catalog;
 		},
@@ -30,21 +29,22 @@
 		locale: 'en',
 		zone: 'UTC',
 		currency: 'SGD'
-	});
+	} } };
 </script>
 
 <Form
+	{ctx}
 	of="jobs"
 	{...record === undefined ? { mode: 'create' } : { mode: 'view', id: record.id, record }}
 >
-	<Field name="title" />
-	<Field name="notes" />
-	<Field name="status" />
-	<Field name="urgent" />
-	<Field name="customer_id" />
-	<Field name="owner_id" />
+	<Field {ctx} name="title" />
+	<Field {ctx} name="notes" />
+	<Field {ctx} name="status" />
+	<Field {ctx} name="urgent" />
+	<Field {ctx} name="customer_id" />
+	<Field {ctx} name="owner_id" />
 	<!-- an explicit readonly={false} (a template's "not locked yet") never lifts a viewed form's readonly -->
-	<Field name="code" readonly={false}>
+	<Field {ctx} name="code" readonly={false}>
 		{#snippet editor(field)}<input
 				id={field.id}
 				value={typeof field.value === 'string' ? field.value : ''}

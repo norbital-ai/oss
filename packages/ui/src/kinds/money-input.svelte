@@ -4,10 +4,13 @@ An exact money amount in `currency`: the currency as the box's leading affix, th
 the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Value } from './kind.js';
 
 	/** An exact amount in `currency`, typed to at most its minor digits (or `scale`). */
 	export type MoneyInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: Value;
 		on_change(next: Value): void;
 		currency?: string;
@@ -24,12 +27,12 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 	import { COUNTRY_CODES, flagOf } from '../primitives/country-picker/country-picker.svelte';
 	import { cn, use_controls } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
-	import { useKinds } from './context.js';
 	import CopyText from '../primitives/copy-text/copy-text.svelte';
 	import { Decimal } from '@norbital-ai/std/decimal';
 	import { format, minorDigits, moneyProblem } from './kind.js';
 
 	let {
+		ctx,
 		value,
 		on_change,
 		currency,
@@ -40,7 +43,7 @@ the currency's minor digits once the box loses focus. Kept as an exact Decimal.
 		invalid = false
 	}: MoneyInputProps = $props();
 	const controls = use_controls();
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const off = $derived(disabled ?? controls.disabled);
 	const minor = $derived(currency === undefined ? undefined : minorDigits(currency));
 	const digits = $derived(scale ?? minor);

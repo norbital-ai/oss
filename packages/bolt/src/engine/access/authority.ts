@@ -34,7 +34,7 @@ export type Holder = {
 const WRITES = ['create', 'update'] as const;
 /** Identity models: read by grant or the kernel directory, written only by their admin verbs (rule 38c). */
 const IDENTITY = ['sys_user', 'sys_invitation', 'sys_api_key'] as const;
-const isIdentity = (c: string) => (IDENTITY as readonly string[]).includes(c);
+const isIdentity = (c: string) => IDENTITY.some((i) => i === c);
 const KERNEL = '$directory';
 /** The `sys_user` output the kernel directory grants (rule 35a): id and name. */
 export const DIRECTORY_OUTPUT = 'directory';
@@ -80,11 +80,11 @@ const readArms = Effect.fnUntraced(function* (
 ): Effect.fn.Return<{ readonly [path: string]: Arm }, BoltError> {
 	const out: { [path: string]: Arm } = {};
 	for (const [path, model] of pathsOf(m, c, output)) {
-		const scope = read === true ? undefined : read.scopes?.[path];
+		const scope = read.scopes?.[path];
 		out[path] = {
 			policy,
 			where: scope === undefined ? TRUE : yield* toPred(m, model, scope),
-			...(path === c && read !== true && read.history === true ? { history: true } : {})
+			...(path === c && read.history === true ? { history: true } : {})
 		};
 	}
 	return out;
@@ -101,8 +101,8 @@ function writeArm(
 	const declared = layered(m).exposures[c]?.[op]?.columns ?? {};
 	return {
 		policy,
-		columns: g === true ? declared : (g.columns ?? declared),
-		check: g !== true && g.verdict === true
+		columns: g.columns ?? declared,
+		check: g.verdict === true
 	};
 }
 
@@ -231,8 +231,8 @@ export const compile_authority = Effect.fn('Bolt.compile_authority')(function* (
 					if (w) a[op].push(w);
 				}
 				if (g.delete !== undefined)
-					a.delete.push({ policy: p, check: g.delete !== true && g.delete.verdict === true });
-				const moves = g.update === true ? undefined : g.update?.moves;
+					a.delete.push({ policy: p, check: g.delete.verdict === true });
+				const moves = g.update?.moves;
 				if (moves === 'all')
 					for (const [f, k] of Object.entries(m.models[c]?.fields ?? {})) {
 						if (k.kind === 'state') a.moves[f] = 'all';
@@ -357,8 +357,6 @@ export const writable_columns = (
 		(authority.models[model]?.[verb] ?? []).flatMap((arm) => arm.columns[model] ?? [])
 	);
 };
-export const visitor_may_read = (authority: Authority, model: string): boolean =>
-	authority.actor.kind === 'visitor' && readsAny(authority, model);
 /** What the requestor variables read off an authority. */
 export function requestorOf(authority: Authority): Requestor {
 	// the system identity (an automation run) names no person: its `requestor.*` operands match nothing

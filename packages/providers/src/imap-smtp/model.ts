@@ -1,12 +1,12 @@
 import { Effect, Option, Schema } from 'effect';
-import type { TcpPort, TcpSocket } from '@norbital-ai/bolt/engine';
+import type { DriverOpen, TcpSocket } from '@norbital-ai/bolt/engine';
 import { OAuthRefused, ProviderRefused, ProviderUnavailable } from '../errors.ts';
 import { codeOf } from './reports.ts';
 
 export type Method = 'password' | 'microsoft' | 'google';
 /** How a mailbox reaches its servers: the host's TCP/TLS port, and whether TLS is off (the tests' fake servers). */
 export type MailNet = {
-	readonly tcp: TcpPort;
+	readonly tcp: DriverOpen['tcp'];
 	readonly plain: boolean;
 };
 /** A port connection as the web streams socket imapflow's streams transport drives. */

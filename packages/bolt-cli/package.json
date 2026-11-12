@@ -10,10 +10,6 @@
 			"types": "./build/test/index.d.ts",
 			"default": "./build/test/index.js"
 		},
-		"./test/browser": {
-			"types": "./build/test/browser.d.ts",
-			"default": "./build/test/browser.js"
-		},
 		"./guests": {
 			"types": "./build/guests.d.ts",
 			"default": "./build/guests.js"

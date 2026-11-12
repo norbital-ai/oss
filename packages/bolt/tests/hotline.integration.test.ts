@@ -87,7 +87,7 @@ const manifest = {
 		},
 		payroll: {
 			description: 'Payroll staff',
-			grants: { payslips: { outputs: { default: true }, update: true } }
+			grants: { payslips: { outputs: { default: {} }, update: {} } }
 		}
 	},
 	teams: { payroll: { name: 'Payroll', policies: ['payroll'] } },

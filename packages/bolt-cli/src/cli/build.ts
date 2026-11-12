@@ -235,7 +235,7 @@ const buildOnce = Effect.fn('bolt.buildWorkspace')(function* (
 	const record = path.join(norbital, 'release.json');
 	yield* fs.writeFileString(
 		`${record}.next`,
-		`${JSON.stringify(Schema.encodeSync(ReleaseJson)(release), null, '\t')}\n`
+		`${JSON.stringify(yield* Schema.encodeEffect(ReleaseJson)(release), null, '\t')}\n`
 	);
 	yield* fs.rename(`${record}.next`, record);
 	yield* fs.remove(old, { recursive: true });

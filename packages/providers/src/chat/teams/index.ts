@@ -2,8 +2,8 @@
 // network through axios and MSAL, past the host's fetch, so the token and the Connector are plain calls here. Teams has
 // no dedupe key on a send. Nothing installed names a Graph delta endpoint, and reading a chat back takes a Graph
 // permission a bot does not hold by default and per-thread ids a delivery does not leave here, so this is webhook-only.
-import { tokenCache } from '../token.ts';
-import { Schema } from 'effect';
+import { loadToken, tokenCache } from '../token.ts';
+import { Effect, Schema } from 'effect';
 import { parse as parseJson, json } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming, IncomingFile } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
@@ -88,31 +88,36 @@ export const teams: ChatPlatform = {
 		const { InboundActivityTokenValidator } =
 			await import('@microsoft/teams.apps/dist/middleware/auth/inbound-activity-token-validator.js');
 		const validator = new InboundActivityTokenValidator(appId, appTenantId || undefined);
-		const tokens = tokenCache(async () => {
-			const response = await host.fetch(
-				`https://login.microsoftonline.com/${encodeURIComponent(appTenantId || DEFAULT_TENANT)}/oauth2/v2.0/token`,
-				{
-					method: 'POST',
-					headers: { 'content-type': 'application/x-www-form-urlencoded' },
-					body: new URLSearchParams({
-						client_id: appId,
-						client_secret: appPassword,
-						grant_type: 'client_credentials',
-						scope: BOT_SCOPE
-					})
-				}
-			);
-			const answer = await Schema.decodeUnknownPromise(
-				Schema.Struct({
-					access_token: Schema.optionalKey(Schema.String),
-					expires_in: Schema.optionalKey(Schema.Number)
+		const tokens = await Effect.runPromise(
+			tokenCache(() =>
+				loadToken(async () => {
+					const response = await host.fetch(
+						`https://login.microsoftonline.com/${encodeURIComponent(appTenantId || DEFAULT_TENANT)}/oauth2/v2.0/token`,
+						{
+							method: 'POST',
+							headers: { 'content-type': 'application/x-www-form-urlencoded' },
+							body: new URLSearchParams({
+								client_id: appId,
+								client_secret: appPassword,
+								grant_type: 'client_credentials',
+								scope: BOT_SCOPE
+							})
+						}
+					);
+					const answer = await Schema.decodeUnknownPromise(
+						Schema.Struct({
+							access_token: Schema.optionalKey(Schema.String),
+							expires_in: Schema.optionalKey(Schema.Number)
+						})
+					)(await response.json().catch(() => ({})));
+					if (!response.ok || answer.access_token === undefined)
+						throw new PlatformError(`Teams token answered ${response.status}`, response.status);
+					return { token: answer.access_token, ttl: (answer.expires_in ?? 0) * 1000 - TOKEN_EARLY_MS };
 				})
-			)(await response.json().catch(() => ({})));
-			if (!response.ok || answer.access_token === undefined)
-				throw new PlatformError(`Teams token answered ${response.status}`, response.status);
-			return { token: answer.access_token, ttl: (answer.expires_in ?? 0) * 1000 - TOKEN_EARLY_MS };
-		});
-		await tokens.get();
+			)
+		);
+		const accessToken = () => Effect.runPromise(tokens.get());
+		await accessToken();
 		const connector = async <A>(
 			schema: Schema.Decoder<A>,
 			serviceUrl: string,
@@ -125,7 +130,7 @@ export const teams: ChatPlatform = {
 			const response = await host.fetch(url, {
 				method: 'POST',
 				headers: {
-					authorization: `Bearer ${await tokens.get()}`,
+					authorization: `Bearer ${await accessToken()}`,
 					'content-type': 'application/json'
 				},
 				body: JSON.stringify(body)
@@ -167,7 +172,7 @@ export const teams: ChatPlatform = {
 						const own = !download && new URL(url).origin === new URL(serviceUrl).origin;
 						const response = await host.fetch(
 							url,
-							own ? { headers: { authorization: `Bearer ${await tokens.get()}` } } : {}
+							own ? { headers: { authorization: `Bearer ${await accessToken()}` } } : {}
 						);
 						if (!response.ok)
 							throw new PlatformError(`Teams answered ${response.status}`, response.status);

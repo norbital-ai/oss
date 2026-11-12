@@ -4,25 +4,19 @@ import type { Effect } from 'effect';
 import type { Decimal } from '@norbital-ai/std/decimal';
 import type { PlainDate } from '@norbital-ai/std/date';
 import { Instant } from '@norbital-ai/std/date';
-import {
-	schema,
-	store,
-	table,
-	type AggregateQuery,
-	type ClockColumn,
-	type Id,
-	type Insert,
-	type Key,
-	type OrderBy,
-	type Patch,
-	type Row,
-	type Select,
-	type Statement,
-	type TableName,
-	type Where,
-	type With
-} from '../src/index.ts';
+import { schema, store, table, type Row, type Select, type Statement, type Where } from '../src/index.ts';
 import { shop } from './fixture.ts';
+import type {
+	AggregateQuery,
+	ClockColumn,
+	Insert,
+	Key,
+	OrderBy,
+	Patch,
+	TableName,
+	With
+} from '../src/types.ts';
+import type { Id } from '../src/values.ts';
 
 type Answer<E> = Effect.Success<E> extends Statement<infer A> ? A : never;
 type Listed<E> = Answer<E> extends { readonly rows: readonly (infer R)[] } ? R : never;

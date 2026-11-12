@@ -1,1 +1,1 @@
-export { AppConfig, AppConfigInvalid, define_app } from './config.ts';
+export { define_app } from './config.ts';

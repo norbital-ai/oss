@@ -139,7 +139,7 @@ export class Files extends Context.Service<
 
 // ── convert ──
 /** `reference` is the bytes of a styling document (docx, pptx, odt). */
-export type ConvertSettings = Parameters<ConvertPort['convert']>[2];
+type ConvertSettings = Parameters<ConvertPort['convert']>[2];
 
 const IngestAnswered = Schema.Union([
 	IngestedSchema,
@@ -222,7 +222,7 @@ export class WebRead extends Context.Service<
 	}
 }
 /** A browser tab as a scoped resource: close it when the scope ends, never leave it to an idle timer alone. */
-export type BrowserSession = {
+type BrowserSession = {
 	readonly navigate: (to: BrowserTarget, find?: string) => Effect.Effect<BrowserSnapshot, PortFailure>;
 	readonly snapshot: (options: {
 		readonly find?: string;
@@ -368,7 +368,7 @@ export class Logs extends Context.Service<Logs, LogsShape>()('bolt/Logs') {
 }
 // ── transport ──
 /** A transactional email (a sign-in code, an invitation); `link` is the invitation's. */
-export type MailMessage = {
+type MailMessage = {
 	readonly _tag: 'Mail';
 	readonly to: string;
 	readonly subject: string;
@@ -377,7 +377,7 @@ export type MailMessage = {
 	readonly link?: string;
 };
 /** A transactional text message. */
-export type SmsMessage = { readonly _tag: 'Sms'; readonly to: string; readonly text: string };
+type SmsMessage = { readonly _tag: 'Sms'; readonly to: string; readonly text: string };
 /**
  * One inbox notice to one device (`bolt.push`): the host routes it by `subscription.kind` (web push or APNs), signs it
  * and sends `{ id, title, body, path }`, `path` the workspace URL the notice opens.

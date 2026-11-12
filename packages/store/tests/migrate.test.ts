@@ -1,33 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Exit, Schema } from 'effect';
-import {
-	INTROSPECT,
-	IntrospectRow,
-	MIGRATIONS_TABLE,
-	build,
-	check_file,
-	checksum_of,
-	destructive_steps,
-	destroy_namespace,
-	executable,
-	generate,
-	lock_of,
-	migration_guard,
-	pending,
-	plan,
-	read_lock,
-	read_snapshot,
-	schema,
-	schema_snapshot,
-	snapshot_of,
-	table,
-	unaccepted,
-	verify,
-	type FieldSpec,
-	type MigrationFile,
-	type StoreError
-} from '../src/index.ts';
+import { INTROSPECT, IntrospectRow, MIGRATIONS_TABLE, build, check_file, checksum_of, destructive_steps, destroy_namespace, executable, generate, lock_of, migration_guard, pending, plan, read_lock, read_snapshot, schema, schema_snapshot, snapshot_of, table, verify, type FieldSpec, type MigrationFile, type StoreError } from '../src/index.ts';
 import { database, script } from './support.ts';
+import { unaccepted } from '../src/schema/plan.ts';
 
 const before = schema({
 	company: table({ fields: { title: { kind: 'text', default: '"company"' } } }),
@@ -61,8 +36,9 @@ describe('editable migration files', () => {
 				const first = schema({
 					entry: table({
 						key: 'text',
+						unique: [{ fields: ['name'] }],
 						fields: {
-							name: { kind: 'text', default: 'initial', unique: true },
+							name: { kind: 'text', default: 'initial' },
 							parent: { kind: 'ref', to: 'entry', optional: true },
 							score: { kind: 'int', default: 2 }
 						},

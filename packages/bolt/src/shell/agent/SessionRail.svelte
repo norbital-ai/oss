@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Effect, Stream } from 'effect';
 	import { observe as liveEdge } from '@norbital-ai/ui/effect';
-	import { Button, Icon, Progress } from '@norbital-ai/ui';
+	import { Button, Icon, Progress, type UiContext } from '@norbital-ai/ui';
 	import { tick, type Snippet } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type { TransitionConfig } from 'svelte/transition';
@@ -15,9 +15,10 @@
 	import Attachments from './Attachments.svelte';
 	import { background, callableWords, childStatus, ORB, runState } from './view.ts';
 	import { context_meter, token_count as k } from './usage.ts';
-	let { rail, rail_el = $bindable(null), focus = $bindable(null), navigating = $bindable(false), conversation, rows, inputs, outputs,
+	let { ctx, rail, rail_el = $bindable(null), focus = $bindable(null), navigating = $bindable(false), conversation, rows, inputs, outputs,
 		thread, automation, attached_count, meter, model, model_label, connectors, bolt, api,
 		control, dispatch, on_close, on_attach, on_create_file, motion, file_href, t }: {
+		ctx: UiContext;
 		rail: boolean;
 		rail_el?: HTMLElement | null;
 		focus?: string | null;
@@ -181,7 +182,7 @@
 				in:motion={{ x: 4, duration: navigating ? 120 : 0 }}
 				data-rail-view="agent"
 			>
-				{#key focus}<AgentChild
+				{#key focus}<AgentChild {ctx}
 						{bolt}
 						{t}
 						id={focus}
@@ -277,7 +278,7 @@
 									data-subagent-completed={childStates.get(child.id) === 'done' ? '' : undefined}
 									hidden={childStates.get(child.id) === 'done' && !showCompleted}
 								>
-									<AgentChild
+									<AgentChild {ctx}
 										{bolt}
 										{t}
 										id={child.id}

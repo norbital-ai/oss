@@ -7,7 +7,7 @@ A layer positioned over its `relative` parent: a scrim, a pinned badge, a bar or
 	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
 
 	/** Where an `Imposter` sits over its parent: centred, filling it, along an edge or in a corner. */
-	export type ImposterPlacement =
+	type ImposterPlacement =
 		| 'center'
 		| 'fill'
 		| 'top'
@@ -23,7 +23,7 @@ A layer positioned over its `relative` parent: a scrim, a pinned badge, a bar or
 	type ImposterOffset = 'none' | 'xs' | 'sm' | 'md';
 	type ImposterLayer = 'under' | 'raised' | 'overlay' | 'modal';
 	/** The props of `Imposter`. */
-	export interface ImposterProps extends LayoutAttributes {
+	interface ImposterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		/**
 		 * Where the layer sits over its positioned (`relative`) parent. `fill` covers it (a scrim, a

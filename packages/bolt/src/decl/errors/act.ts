@@ -10,8 +10,6 @@ export class ActRefused extends Schema.TaggedError<ActRefused>()('ActRefused', {
 	code: Schema.String,
 	message: Schema.String,
 	field: Schema.optional(Schema.String),
-	/** The write path `field` belongs to (a policy `deny`'s `at.path`); the root when absent. */
-	path: Schema.optional(Schema.String),
 	row: Schema.optional(Schema.Number),
 	rows: Schema.optional(Schema.Array(Schema.Number)),
 	rule: Schema.optional(Schema.String),

@@ -93,82 +93,58 @@ export type NullableOfExpr<X, F, C = {}, Seen = never> = Expr extends X
 					: true
 			: NullableOperation<X, F, C, Seen>;
 
-// Keep the same operator precedence as KindOfExpr and generated SQL, including structural trees with extra keys.
-type NullableOperation<X, F, C, Seen> = X extends { plus: infer Args }
-	? AnyNullable<Args, F, C, Seen>
-	: X extends { minus: infer Args }
-		? AnyNullable<Args, F, C, Seen>
-		: X extends { times: infer Args }
-			? AnyNullable<Args, F, C, Seen>
-			: X extends { div: readonly [infer A, infer B] }
-				? B extends number
-					? number extends B
-						? true
-						: 0 extends B
-							? true
-							: NullableOfExpr<A, F, C, Seen>
-					: true
-				: X extends { round: readonly [infer A, number] }
-					? NullableOfExpr<A, F, C, Seen>
-					: X extends { concat: readonly unknown[] }
-						? false
-						: X extends { plus_days: infer Args }
-							? AnyNullable<Args, F, C, Seen>
-							: X extends { start_of: readonly [infer A, Unit] }
-								? NullableOfExpr<A, F, C, Seen>
-								: X extends { text: infer A }
-									? NullableOfExpr<A, F, C, Seen>
-									: X extends { lower: infer A }
-										? NullableOfExpr<A, F, C, Seen>
-										: X extends { upper: infer A }
+/** Operator keys in nullable_of_expr's order; a structural tree with extra keys takes the first present. */
+type Operators = readonly [
+	'plus', 'minus', 'times', 'div', 'round', 'concat', 'plus_days', 'start_of', 'text', 'lower', 'upper', 'trim',
+	'substring', 'regex_replace', 'json_text', 'json_length', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'and', 'or', 'not',
+	'when', 'coalesce'
+];
+type FirstOperator<X, Ks> = Ks extends readonly [infer H, ...infer T]
+	? H extends keyof X
+		? H
+		: FirstOperator<X, T>
+	: never;
+
+type NullableOperation<X, F, C, Seen> = NullableOperator<FirstOperator<X, Operators>, X, F, C, Seen>;
+type NullableOperator<K, X, F, C, Seen> = [K] extends [never]
+	? true
+	: K extends keyof X
+		? K extends 'concat'
+			? false
+			: K extends 'json_text'
+				? true
+				: K extends 'text' | 'lower' | 'upper' | 'trim' | 'json_length' | 'not'
+					? NullableOfExpr<X[K], F, C, Seen>
+					: K extends 'round' | 'start_of' | 'regex_replace'
+						? X[K] extends readonly [infer A, ...unknown[]]
+							? NullableOfExpr<A, F, C, Seen>
+							: true
+						: K extends 'div'
+							? X[K] extends readonly [infer A, infer B]
+								? B extends number
+									? number extends B
+										? true
+										: 0 extends B
+											? true
+											: NullableOfExpr<A, F, C, Seen>
+									: true
+								: true
+							: K extends 'and' | 'or'
+								? ContainsLiteral<X[K], K extends 'and' ? false : true> extends true
+									? false
+									: AnyNullable<X[K], F, C, Seen>
+								: K extends 'when'
+									? X[K] extends readonly [infer Condition, infer A, infer B]
+										? [Condition] extends [true]
 											? NullableOfExpr<A, F, C, Seen>
-											: X extends { trim: infer A }
-												? NullableOfExpr<A, F, C, Seen>
-												: X extends { substring: infer Args }
-													? AnyNullable<Args, F, C, Seen>
-													: X extends { regex_replace: readonly [infer A, string, string] }
-														? NullableOfExpr<A, F, C, Seen>
-														: X extends { json_text: readonly unknown[] }
-															? true
-															: X extends { json_length: infer A }
-																? NullableOfExpr<A, F, C, Seen>
-																: X extends { eq: infer Args }
-																? AnyNullable<Args, F, C, Seen>
-																: X extends { ne: infer Args }
-																	? AnyNullable<Args, F, C, Seen>
-																	: X extends { gt: infer Args }
-																		? AnyNullable<Args, F, C, Seen>
-																		: X extends { gte: infer Args }
-																			? AnyNullable<Args, F, C, Seen>
-																			: X extends { lt: infer Args }
-																				? AnyNullable<Args, F, C, Seen>
-																				: X extends { lte: infer Args }
-																					? AnyNullable<Args, F, C, Seen>
-																					: X extends { and: infer Args }
-																						? ContainsLiteral<Args, false> extends true
-																							? false
-																							: AnyNullable<Args, F, C, Seen>
-																						: X extends { or: infer Args }
-																							? ContainsLiteral<Args, true> extends true
-																								? false
-																								: AnyNullable<Args, F, C, Seen>
-																							: X extends { not: infer A }
-																								? NullableOfExpr<A, F, C, Seen>
-																								: X extends {
-																											when: readonly [
-																												infer Condition,
-																												infer A,
-																												infer B
-																											];
-																									  }
-																									? [Condition] extends [true]
-																										? NullableOfExpr<A, F, C, Seen>
-																										: [Condition] extends [false]
-																											? NullableOfExpr<B, F, C, Seen>
-																											: AnyNullable<readonly [A, B], F, C, Seen>
-																									: X extends { coalesce: infer Args }
-																										? AllNullable<Args, F, C, Seen>
-																										: true;
+											: [Condition] extends [false]
+												? NullableOfExpr<B, F, C, Seen>
+												: AnyNullable<readonly [A, B], F, C, Seen>
+										: true
+									: K extends 'coalesce'
+										? AllNullable<X[K], F, C, Seen>
+										: AnyNullable<X[K], F, C, Seen>
+		: true;
 
 /** The same NULL guarantees as NullableOfExpr, over the declared expression used by generated SQL. */
 export function nullable_of_expr(
@@ -903,7 +879,7 @@ export type ExposureSpec = CatalogExposure & {
 };
 
 /** The bodies of one model as the guest calls them by path (`model.<model>.bodies.…`). */
-export type ModelBodies = {
+type ModelBodies = {
 	readonly create?: Body;
 	readonly update?: Body;
 	readonly effect: { readonly create?: Body; readonly update?: Body; readonly delete?: Body };
@@ -1014,8 +990,8 @@ function bodiesOf(m: ModelLiteral): ModelBodies {
  * 		transform: function* (changes, ctx) {
  * 			const { customers } = yield* ctx.query({ customers: { where: { id: { in: changes.map((c) => c.after.customer) } }, fields: ['id', 'blocked'], all: true } });
  * 			const blocked = new Set(customers.rows.filter((c) => c.blocked).map((c) => c.id));
- * 			const at = changes.find((c) => blocked.has(c.after.customer));
- * 			if (at !== undefined) return yield* ctx.refuse('errors.customer_blocked', { field: 'customer', at });
+ * 			const row = changes.findIndex((c) => blocked.has(c.after.customer));
+ * 			if (row >= 0) return yield* ctx.refuse('errors.customer_blocked', { row, field: 'customer' });
  * 			return changes.map((c) => c.set);
  * 		}
  * 	}

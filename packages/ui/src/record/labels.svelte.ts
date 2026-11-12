@@ -12,7 +12,7 @@ import { label_read } from '../relations/select.js';
  * while it loads. Without a label use the id; a record the viewer cannot read says so.
  */
 export function record_labels(
-	bolt: Pick<ViewBolt, 'query' | 't' | 'locale'>,
+	client: () => Pick<ViewBolt, 'query' | 't' | 'locale'>,
 	catalog: () => { readonly [c: string]: ModelExposure } | undefined
 ) {
 	const known = new SvelteMap<string, string>();
@@ -22,6 +22,7 @@ export function record_labels(
 		const hit = known.get(key);
 		if (hit !== undefined || asked.has(key)) return hit ?? '…';
 		asked.add(key);
+		const bolt = client();
 		fork(
 			bolt
 				.query(

@@ -28,10 +28,10 @@ export function revive_wire(_key: string, value: unknown): unknown {
 	const text = '$dec' in value ? value.$dec : undefined;
 	if (typeof text !== 'string') return value;
 	for (const key in value) if (key !== '$dec') return value;
-	const D = (globalThis as { readonly [k: symbol]: { of(text: string): unknown } | undefined })[
-		Symbol.for('norbital.std.Decimal')
-	];
-	return D === undefined ? text : D.of(text);
+	const D: unknown = Reflect.get(globalThis, Symbol.for('norbital.std.Decimal'));
+	if (typeof D !== 'function' || !('of' in D) || typeof D.of !== 'function') return text;
+	const decimal: unknown = D.of(text);
+	return decimal;
 }
 
 /** A value as the wire carries it: each `Decimal` as `{ $dec }`; `undefined` is null in a list and dropped as a member. */

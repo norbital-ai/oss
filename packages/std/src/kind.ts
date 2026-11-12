@@ -69,7 +69,6 @@ type Common = {
 	readonly key?: string;
 	readonly optional?: true;
 	readonly default?: Json;
-	readonly unique?: true;
 	readonly label?: string;
 	readonly help?: string;
 	readonly hidden?: true;
@@ -151,7 +150,7 @@ export type Kind = Common &
 		| { readonly kind: 'record'; readonly of: Kind }
 	);
 /** The arms an untagged union may hold: scalars, so a value's kind names its arm. */
-export type ScalarKind = Extract<
+type ScalarKind = Extract<
 	Kind,
 	{ readonly kind: 'bool' | 'int' | 'number' | 'decimal' | 'text' | 'enum' | 'date' | 'instant' | 'time' }
 >;
@@ -167,7 +166,6 @@ const descriptor_common = /* @__PURE__ */ (() => {
 		key: Str,
 		optional: Bool,
 		default: Schema.optionalKey(Schema.Json),
-		unique: Bool,
 		label: Str,
 		help: Str,
 		hidden: Bool,
@@ -323,7 +321,7 @@ export type Value =
 /** A kind's codec: decodes the wire (or an authored literal) into a `Value`, encodes back to the wire. */
 export type KindCodec = Schema.Codec<Value, Json>;
 /** What operators and views may do with a kind's values. */
-export type Traits = {
+type Traits = {
 	readonly numeric: boolean;
 	readonly ordered: boolean;
 	readonly summable: boolean;
@@ -775,7 +773,7 @@ export function input_schema(spec: Kind): KindCodec {
  * its exact JSON shape: the keys, value types (`type` and `format` of each key) and required keys a value of it has.
  * A renderer reads a schema naming one as that datatype; one matching a shape exactly, unnamed, is read as it too.
  */
-export type DatatypeShape =
+type DatatypeShape =
 	| {
 			readonly name: 'period' | 'point';
 			readonly kind: Kind;

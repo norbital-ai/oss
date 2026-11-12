@@ -21,8 +21,8 @@ import {
 	decode_seed,
 	type SeedPack
 } from '@norbital-ai/bolt/engine';
-import { PRELUDE } from '@norbital-ai/bolt/tooling';
-import { module_script, type ImportDeclaration } from '@norbital-ai/bolt/guest-hooks';
+import { PRELUDE, type CheckDiagnostic } from '@norbital-ai/bolt/tooling';
+import { module_script, type ImportDeclaration } from '@norbital-ai/bolt/node';
 import type { GuestProgram } from '@norbital-ai/bolt/engine';
 import type { EvaluateInput } from './evaluate-worker.ts';
 import { discover, type Discovered } from '../discover.ts';
@@ -31,7 +31,6 @@ import { load, manifestErrors } from '../load.ts';
 import { namesIndex, writeNames, writeTypeSetup } from '../names.ts';
 import { seedPack } from '../seed.ts';
 import { prepare_migrations } from '../migrations.ts';
-import type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 export type { CheckDiagnostic } from '@norbital-ai/bolt/tooling';
 
 export type Stage =

@@ -22,7 +22,7 @@ export type Sel =
 	| 'any'
 	| {
 			readonly columns: readonly string[];
-			readonly with?: { readonly [rel: string]: { readonly [action: string]: unknown } };
+			readonly with?: { readonly [rel: string]: { readonly [action: string]: Sel } };
 	  };
 const NONE: Sel = { columns: [] };
 /**
@@ -70,7 +70,7 @@ export const layerPath = (root: string, path: InputPath): string =>
 			const next = path[at + 1];
 			return typeof part === 'string' &&
 				typeof next === 'string' &&
-				(ACTIONS as readonly string[]).includes(next)
+				ACTIONS.includes(next)
 				? [part]
 				: [];
 		})
@@ -93,7 +93,7 @@ type Obj = { readonly [k: string]: Json };
 /** A relation's value: its explicit actions, or (a create tree) the list of children, an id among them a link. */
 type Rel = Obj | readonly Json[];
 const isList = (v: Json | undefined): v is readonly Json[] => Array.isArray(v);
-const ACTIONS = ['create', 'update', 'upsert', 'link', 'unlink', 'delete'] as const;
+const ACTIONS: readonly string[] = ['create', 'update', 'upsert', 'link', 'unlink', 'delete'];
 
 export class Flattener {
 	readonly items: Item[] = [];
@@ -248,7 +248,7 @@ export class Flattener {
 	}
 	private depth(path: InputPath): boolean {
 		if (
-			path.filter((p) => typeof p === 'string' && (ACTIONS as readonly string[]).includes(p))
+			path.filter((p) => typeof p === 'string' && ACTIONS.includes(p))
 				.length <= LIMITS.writeDepth
 		)
 			return true;
@@ -419,7 +419,7 @@ export class Flattener {
 			for (const [action, list] of groups) {
 				const at = [...path, name, action];
 				if (
-					!(ACTIONS as readonly string[]).includes(action) ||
+					!ACTIONS.includes(action) ||
 					(allowed !== undefined && allowed[action] === undefined)
 				) {
 					this.bad(at, `'${action}' is not accepted here`);
@@ -430,7 +430,7 @@ export class Flattener {
 					continue;
 				}
 				if (!this.depth(at)) continue;
-				const sub: Sel = allowed === undefined ? 'any' : (allowed[action] as Sel);
+				const sub = allowed?.[action] ?? 'any';
 				list.forEach(([v, p]) => {
 					if (action === 'create') this.create(rel.child, sub, v, p, parent);
 					else if (action === 'upsert') this.upsert(rel.child, sub, v, p, parent);

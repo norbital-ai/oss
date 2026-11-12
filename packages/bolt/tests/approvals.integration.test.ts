@@ -88,9 +88,9 @@ const manifest: EngineManifest = {
 		requester: {
 			description: 'Requests',
 			grants: {
-				sys_user: { outputs: { default: true } },
+				sys_user: { outputs: { default: {} } },
 				expenses: {
-					outputs: { default: true },
+					outputs: { default: {} },
 					create: {
 						columns: { expenses: ['name', 'amount', 'manager', 'receipt'], 'expenses.lines': ['name'] },
 						verdict: true
@@ -102,8 +102,8 @@ const manifest: EngineManifest = {
 		reviewer: {
 			description: 'Reviews',
 			grants: {
-				expenses: { outputs: { default: true } },
-				approval_request: { outputs: { default: true } }
+				expenses: { outputs: { default: {} } },
+				approval_request: { outputs: { default: {} } }
 			}
 		}
 	},

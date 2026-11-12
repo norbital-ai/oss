@@ -13,7 +13,7 @@ import { lintTests } from '../test/lint.ts';
 import { writeTypeSetup } from '../compiler/names.ts';
 import { AuthorErrors, ToolFailure } from './build.ts';
 
-/** This copy of the kit (src or build), so `/test` and `/test/browser` share one shell. */
+/** This copy of the kit (src or build). */
 const own = (path: string) => join(dirname(fileURLToPath(import.meta.url)), '..', `${path}${EXT}`);
 /** One worker per core but one: the realm runner passes its share with `--maxWorkers`. */
 export const workers = Math.max(1, availableParallelism() - 1);
@@ -113,10 +113,6 @@ const plugins = (svelte: Svelte): Plugin[] => {
 						...EDITOR_SINGLETONS
 					],
 					alias: [
-						{
-							find: /^@norbital-ai\/bolt-cli\/test\/browser$/,
-							replacement: own('test/browser')
-						},
 						{ find: /^@norbital-ai\/bolt-cli\/test$/, replacement: own('test/index') }
 					],
 					conditions: ['svelte', 'browser']

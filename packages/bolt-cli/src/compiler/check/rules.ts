@@ -15,7 +15,6 @@ import {
 	DRIVERS,
 	SYSTEM
 } from '@norbital-ai/bolt/tooling';
-import { type IntegrationSpec } from '@norbital-ai/bolt';
 import { clock_default } from '@norbital-ai/std/vars';
 import { label_expression, label_paths } from '@norbital-ai/std/label';
 
@@ -56,7 +55,7 @@ const ownRows = (
 	c: string,
 	read: NonNullable<GrantData['outputs']>[string]
 ): boolean => {
-	const where = read === true ? undefined : read.scopes?.[c];
+	const where = read.scopes?.[c];
 	return (
 		Predicate.isObject(where) &&
 		Object.entries(where).some(
@@ -70,7 +69,7 @@ const ownRows = (
 };
 /** The columns a create or update grant names on layer `path`; `undefined`: every declared one. */
 const grantColumns = (g: GrantData['create'], path: string): readonly string[] | undefined =>
-	typeof g === 'object' ? g.columns?.[path] : undefined;
+	g?.columns?.[path];
 const SYSTEM_COLUMNS = ['id', 'revision', 'created_at', 'created_by', 'updated_at', 'updated_by'];
 
 type RuleContext = {
@@ -462,7 +461,6 @@ function layerRules({ m, at }: RuleContext): void {
 					bad(`grants output '${output}', which ${c} does not declare`);
 					continue;
 				}
-				if (read === true) continue;
 				for (const path of Object.keys(read.scopes ?? {}))
 					if (layers[path] === undefined)
 						bad(
@@ -673,6 +671,7 @@ function kioskRules({ m, bodies, at }: RuleContext): void {
 	}
 }
 
+type IntegrationSpec = EngineManifest['integrations'][string];
 /** A definition by name: the workspace's, or one of bolt's conversation definitions. */
 const definition = (m: EngineManifest, name: string): IntegrationSpec | undefined =>
 	m.integrations[name] ?? SYSTEM.integrations[name];

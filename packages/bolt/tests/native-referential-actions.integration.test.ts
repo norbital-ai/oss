@@ -78,7 +78,7 @@ const manifest: EngineManifest = {
 		},
 		reviewer: {
 			description: 'Reviews changes',
-			grants: { roots: { outputs: { default: true } }, watchers: { outputs: { default: true } } }
+			grants: { roots: { outputs: { default: {} } }, watchers: { outputs: { default: {} } } }
 		}
 	},
 	teams: { requesters: { policies: ['requester'] }, reviewers: { policies: ['reviewer'] } }

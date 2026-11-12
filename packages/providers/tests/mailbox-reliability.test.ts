@@ -2,13 +2,12 @@
 // held at a time, and deletes, live under QRESYNC and by reconcile everywhere.
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Fiber, Option, Schema } from 'effect';
-import { loopback_tcp_port } from '@norbital-ai/bolt/node';
 import { ProviderUnavailable } from '../src/errors.ts';
 import { mailbox } from '../src/imap-smtp/index.ts';
 import { mailboxWatch, type Reconcile } from '../src/imap-smtp/mailbox-watch.ts';
 import { Cursor, Mailbox } from '../src/imap-smtp/model.ts';
 import { readMail } from '../src/imap-smtp/reports.ts';
-import { required, fakeFetch, host, messagesOf, until, type Host } from './kit.ts';
+import { required, fakeFetch, host, loopback_tcp, messagesOf, until, type Host } from './kit.ts';
 import { fakeImap } from './mail-servers.ts';
 
 const DAY = 86_400_000;
@@ -267,7 +266,7 @@ describe('deletes', () => {
 					mailboxWatch({
 						box: mailbox_,
 						personal: false,
-						net: { tcp: loopback_tcp_port, plain: true },
+						net: { tcp: loopback_tcp, plain: true },
 						login: () => Effect.succeed({ user: mailbox_.user, pass: 'pw' }),
 						// the cursor stays put: UID 2 is not stored yet
 						cursor: () => state,

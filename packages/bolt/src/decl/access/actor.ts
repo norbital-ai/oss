@@ -9,7 +9,7 @@ export type Handle = string;
  * A platform automation a `system` actor can run as: notification delivery,
  * membership sync, embedding and pure index backfill.
  */
-export type PlatformAutomation =
+type PlatformAutomation =
 	'notifications.deliver' | 'bolt.membership' | 'bolt.embed' | 'bolt.index';
 
 type Member = {

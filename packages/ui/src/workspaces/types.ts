@@ -48,7 +48,7 @@ type BuildLine = Readonly<{ at: string; level: 'info' | 'warn' | 'error'; messag
 export type WorkspaceOperationsData = Readonly<{
 	can_inspect: boolean;
 	as_of: string;
-	usage: readonly UsageChartProps[];
+	usage: readonly Omit<UsageChartProps, 'ctx'>[];
 	members: readonly WorkspaceMember[] | null;
 	studio: Readonly<{
 		commit: string;

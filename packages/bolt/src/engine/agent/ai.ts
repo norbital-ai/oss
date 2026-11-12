@@ -19,7 +19,6 @@ import {
 } from 'effect';
 import * as EffectArray from 'effect/Array';
 import { model_step, run_calls, type ModelCarry } from './step.ts';
-import { model_schema } from './json-schema.ts';
 import { textOf } from './schema.ts';
 import { FacilityFailure, Unavailable } from '../../decl/errors.ts';
 import type { ToolBehavior } from '../../protocol/schema.ts';
@@ -58,9 +57,10 @@ import {
 import { Validator } from '@cfworker/json-schema';
 import { compile, context, evaluate } from '@norbital-ai/std/formula';
 
-/** Rule 72: a platform budget checked before the provider's own limit. */
-export const MODEL_FILES = { count: 24, bytes: 20 * 1024 * 1024 } as const;
-/** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool; 8 files / 20 MiB a message. */
+const MiB = 1024 * 1024;
+/** Rule 72: a platform budget checked before the provider's own limit: files and bytes a call, bytes one file. */
+export const MODEL_FILES = { count: 24, bytes: 20 * MiB, fileBytes: 8 * MiB } as const;
+/** What a message may carry (envoy and panel alike): images, text, recordings and any document, parsed or read by a tool, within `MODEL_FILES`. */
 export const ATTACHMENT_MIME = /^(image|text|audio|application)\/[\w.+-]+$/;
 class ModelIdle extends FacilityFailure {
 	declare readonly cutTool?: true;
@@ -120,28 +120,15 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 	} = {}
 ) {
 	if (options.onRequest !== undefined) yield* options.onRequest(request);
-	if (ai === undefined)
-		return yield* Effect.fail(
-			new Unavailable({ facility: 'ai', reason: 'the host provides no ai' })
-		);
+	if (ai === undefined) return yield* new Unavailable({ facility: 'ai', reason: 'the host provides no ai' });
 	if (!(yield* servesModel(ai, request.model)))
-		return yield* Effect.fail(
-			new Unavailable({
-				facility: 'ai',
-				reason: `no model is mapped to the class '${request.model}'`
-			})
-		);
+		return yield* new Unavailable({ facility: 'ai', reason: `no model is mapped to the class '${request.model}'` });
 	const files = request.files ?? [];
-	if (
-		files.length > MODEL_FILES.count ||
-		files.reduce((n, f) => n + f.bytes.length, 0) > MODEL_FILES.bytes
-	)
-		return yield* Effect.fail(
-			new FacilityFailure({
-				kind: 'invalid',
-				message: `a model call takes at most ${MODEL_FILES.count} files and 20 MiB`
-			})
-		);
+	if (files.length > MODEL_FILES.count || files.reduce((n, f) => n + f.bytes.length, 0) > MODEL_FILES.bytes)
+		return yield* new FacilityFailure({
+			kind: 'invalid',
+			message: `a model call takes at most ${MODEL_FILES.count} files and ${MODEL_FILES.bytes / MiB} MiB`
+		});
 	const wallMs = options.wallMs ?? LIMITS.callMs.ai,
 		// a long prompt no provider has cached takes 20–30 s to its first byte; after that the idle wall holds
 		firstMs = options.wallMs ?? FIRST_EVENT_MS;
@@ -170,10 +157,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						return Effect.fail(
 							progressed
 								? new ModelIdle(`the model was still writing a tool call at ${wallMs} ms`, true)
-								: (cause ??
-										new ModelIdle(
-											`the model yielded nothing within ${begun ? wallMs : firstMs} ms`
-										))
+								: (cause ?? new ModelIdle(`the model yielded nothing within ${begun ? wallMs : firstMs} ms`))
 						);
 					const cut: AiResponse = {
 						content: partial,
@@ -182,21 +166,15 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 						...(reasoning === '' ? {} : { reasoning }),
 						usage: { input: 0, output: 0 }
 					};
-					const events: readonly [AiEvent] = [{ _tag: 'Response', response: cut }];
-					return Effect.succeed(events);
+					return Effect.succeed<readonly [AiEvent]>([{ _tag: 'Response', response: cut }]);
 				});
 			return Effect.succeed(
 				Effect.suspend(() =>
 					finished
 						? Cause.done()
 						: pull.pipe(
-								Effect.catchTag('FacilityFailure', (cause) =>
-									cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause)
-								),
-								Effect.timeoutOrElse({
-									duration: begun ? wallMs : firstMs,
-									orElse: () => idle()
-								})
+								Effect.catchTag('FacilityFailure', (cause) => (cause.kind === 'timeout' ? idle(cause) : Effect.fail(cause))),
+								Effect.timeoutOrElse({ duration: begun ? wallMs : firstMs, orElse: () => idle() })
 							)
 				)
 			);
@@ -238,12 +216,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 		})
 	);
 	if (response === undefined)
-		return yield* Effect.fail(
-			new FacilityFailure({
-				kind: 'upstream',
-				message: 'the model stream ended without a response'
-			})
-		);
+		return yield* new FacilityFailure({ kind: 'upstream', message: 'the model stream ended without a response' });
 	return {
 		...response,
 		usage: {
@@ -251,10 +224,7 @@ export const modelCall = Effect.fn('Ai.modelCall')(function* (
 			prompt: {
 				system: request.system?.length ?? 0,
 				messages: JSON.stringify(request.messages).length,
-				tools:
-					request.tools === undefined || request.tools.length === 0
-						? 0
-						: JSON.stringify(request.tools).length
+				tools: request.tools === undefined || request.tools.length === 0 ? 0 : JSON.stringify(request.tools).length
 			}
 		}
 	};
@@ -464,6 +434,8 @@ export const InferArgs = Schema.Struct({
 	label: Schema.optionalKey(Schema.String)
 });
 export const inferArgsOf = Schema.decodeUnknownOption(InferArgs);
+/** Keywords whose error repeats its children's. */
+const CONTAINERS = new Set(['properties', 'items', 'prefixItems', 'additionalProperties', 'allOf', '$ref', 'dependentSchemas']);
 /** A checker for a schema output: the schema's own violations as JSON Pointers into the answer. */
 function schemaChecker(
 	output: SchemaOutput
@@ -480,18 +452,7 @@ function schemaChecker(
 				validator
 					.validate(value)
 					// a container's error repeats its children's; the leaves name what to edit
-					.errors.filter(
-						(e) =>
-							![
-								'properties',
-								'items',
-								'prefixItems',
-								'additionalProperties',
-								'allOf',
-								'$ref',
-								'dependentSchemas'
-							].includes(e.keyword)
-					)
+					.errors.filter((e) => !CONTAINERS.has(e.keyword))
 					.map((e) => `${e.instanceLocation.replace(/^#/, '') || '/'}: ${e.error}`)
 			)
 		])
@@ -614,21 +575,11 @@ export function infer_facility(
 	): Effect.fn.Return<CrossAnswer, PortFailure, Scope.Scope> {
 		const signal = yield* Effect.abortSignal;
 		if (call._tag !== 'ai.sys_2.infer')
-			return {
-				ok: false,
-				error: {
-					kind: 'unavailable',
-					facility: call._tag,
-					reason: 'not an agent facility'
-				}
-			};
+			return { ok: false, error: { kind: 'unavailable', facility: call._tag, reason: 'not an agent facility' } };
 		const a = yield* Schema.decodeUnknownEffect(InferArgs)(call.args[0] ?? {}).pipe(
 			Effect.mapError((error) => new FacilityFailure({ kind: 'invalid', message: error.message }))
 		);
-		const invalid = (message: string): CrossAnswer => ({
-			ok: false,
-			error: { kind: 'invalid', message }
-		});
+		const invalid = (message: string): CrossAnswer => ({ ok: false, error: { kind: 'invalid', message } });
 		const refs = a.files ?? [];
 		if (refs.length > 0 && options.load === undefined)
 			return {
@@ -636,10 +587,7 @@ export function infer_facility(
 				error: { kind: 'unavailable', facility: 'files', reason: 'the host provides no file reads' }
 			};
 		const schemaOut = a.output !== undefined && 'json_schema' in a.output ? a.output : undefined;
-		const out =
-			a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text'
-				? a.output
-				: undefined;
+		const out = a.output !== undefined && 'kind' in a.output && a.output.kind !== 'text' ? a.output : undefined;
 		const structured = schemaOut !== undefined || out !== undefined;
 		if (a.initial !== undefined && !structured)
 			return invalid('initial requires a structured output');
@@ -647,19 +595,11 @@ export function infer_facility(
 			return invalid(
 				`a text answer reads at most ${MODEL_FILES.count} files; ask for a structured output to read more`
 			);
-		let check: ((value: Json) => string[]) | undefined;
-		if (schemaOut !== undefined)
-			check = yield* schemaChecker(schemaOut);
+		const check = schemaOut === undefined ? undefined : yield* schemaChecker(schemaOut);
 		const root = Predicate.isObject(schemaOut?.json_schema) ? schemaOut.json_schema : {};
 		const rules = [...(schemaOut?.rules ?? []), ...(a.rules ?? [])];
 		const ruled = ruleChecker(
-			Object.keys(
-				out?.kind === 'object'
-					? out.fields
-					: Predicate.isObject(root['properties'])
-						? root['properties']
-						: {}
-			),
+			Object.keys(out?.kind === 'object' ? out.fields : Predicate.isObject(root['properties']) ? root['properties'] : {}),
 			rules
 		);
 		if (typeof ruled === 'string') return invalid(ruled);
@@ -694,10 +634,7 @@ export function infer_facility(
 				: `\n\nThe answer must also hold these rules (CEL over the top-level properties):\n${rules.map((r) => `- ${r.message}: ${r.expression}`).join('\n')}`;
 		// the draft's reader yields its name to a workspace `read` tool
 		const draftRead = tools.some((t) => t.name === 'read') ? 'read_answer' : 'read';
-		const object = (
-			properties: { [name: string]: Json },
-			required: readonly string[] = []
-		): Json => ({
+		const object = (properties: { [name: string]: Json }, required: readonly string[] = []): Json => ({
 			type: 'object',
 			additionalProperties: false,
 			required: [...required],
@@ -848,13 +785,7 @@ export function infer_facility(
 				if (signal.aborted)
 					return last !== undefined && !last.ok
 						? last
-						: {
-								ok: false,
-								error: {
-									kind: 'timeout',
-									message: 'the inference was ended before it answered'
-								}
-							};
+						: { ok: false, error: { kind: 'timeout', message: 'the inference was ended before it answered' } };
 				// a silent model call stalls one turn, never the whole inference: ask again (for smaller calls when it went
 				// silent writing one); past the last try a draft that already holds is the answer
 				if (stepped instanceof ModelIdle) {
@@ -901,18 +832,12 @@ export function infer_facility(
 					});
 					const completed = yield* run_calls<CrossAnswer, PortFailure, never>(calls, Effect.fn('Ai.inferCall')(function* (c, invalid, stopped) {
 						let result: Json, submitted: CrossAnswer | undefined;
-						if (
-							!stopped && invalid === undefined && (c.name === EDIT || c.name === SUBMIT) &&
-							structured &&
-							options.onDraft !== undefined
-						)
+						if (!stopped && invalid === undefined && (c.name === EDIT || c.name === SUBMIT) && structured && options.onDraft !== undefined)
 							yield* options.onDraft(c.name, c.input);
 						if (stopped) result = { skipped: 'An earlier call submitted this step; no later operation ran.' };
 						else if (invalid !== undefined) result = invalid;
 						else if (c.name === EDIT && structured) {
-							const ops = Option.getOrUndefined(
-								Schema.decodeUnknownOption(EditInput)(c.input)
-							)?.ops;
+							const ops = Option.getOrUndefined(Schema.decodeUnknownOption(EditInput)(c.input))?.ops;
 							if (ops === undefined)
 								result = { error: `${EDIT} takes { ops: [{ path, set | remove | append }] }` };
 							else {
@@ -925,21 +850,14 @@ export function infer_facility(
 									if (Result.isSuccess(edited)) draft = edited.success;
 									else errors.push({ op: i, error: edited.failure.message });
 								}
-								result = {
-									applied: ops.length - errors.length,
-									...(errors.length === 0 ? {} : { errors })
-								};
+								result = { applied: ops.length - errors.length, ...(errors.length === 0 ? {} : { errors }) };
 							}
 						} else if (c.name === draftRead && structured) {
 							const input = Option.getOrUndefined(Schema.decodeUnknownOption(ReadInput)(c.input));
-							const at =
-								input === undefined
-									? `${draftRead} takes { path, fields? }`
-									: resolve(draft, input.path, kind);
+							const at = input === undefined ? `${draftRead} takes { path, fields? }` : resolve(draft, input.path, kind);
 							if (typeof at === 'string') result = { error: at };
 							else {
-								const value =
-									input?.fields === undefined ? at.value : project(at.value, at.kind, input.fields);
+								const value = input?.fields === undefined ? at.value : project(at.value, at.kind, input.fields);
 								const key = keyOf(at.kind);
 								// too large to return: its outline, so the model reads a narrower path
 								result =
@@ -964,25 +882,17 @@ export function infer_facility(
 							if (input === undefined) result = { error: `${FIND} takes { text, path? }` };
 							else {
 								const at = resolve(draft, input.path ?? '', kind);
-								const hits =
-									typeof at === 'string'
-										? []
-										: find(at.value, at.kind, input.path ?? '', input.text);
+								const hits = typeof at === 'string' ? [] : find(at.value, at.kind, input.path ?? '', input.text);
 								result =
 									typeof at === 'string'
 										? { error: at }
 										: {
 												matches: hits.slice(0, HITS),
-												...(hits.length > HITS
-													? {
-															more: `${hits.length - HITS} more: narrow with path or a longer text`
-														}
-													: {})
+												...(hits.length > HITS ? { more: `${hits.length - HITS} more: narrow with path or a longer text` } : {})
 											};
 							}
 						} else if (c.name === DIFF && structured) {
-							const path =
-								Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
+							const path = Option.getOrUndefined(Schema.decodeUnknownOption(DiffInput)(c.input))?.path ?? '';
 							const now = resolve(draft, path, kind),
 								then = resolve(original, path, kind);
 							if (typeof now === 'string' && typeof then === 'string') result = { error: now };
@@ -1006,9 +916,7 @@ export function infer_facility(
 										...(change.before === undefined ? {} : { before: shown(change.before) }),
 										...(change.after === undefined ? {} : { after: shown(change.after) })
 									})),
-									...(changes.length > CHANGES
-										? { more: `${changes.length - CHANGES} more: narrow with path` }
-										: {})
+									...(changes.length > CHANGES ? { more: `${changes.length - CHANGES} more: narrow with path` } : {})
 								};
 							}
 						} else if (c.name === SUBMIT && structured) {
@@ -1020,14 +928,9 @@ export function infer_facility(
 							result =
 								tool === undefined
 									? { error: `there is no tool '${c.name}'` }
-									: yield* tool
-											.call(c.input)
-											.pipe(Effect.catch((e) => Effect.succeed({ error: e.message })));
+									: yield* tool.call(c.input).pipe(Effect.catch((e) => Effect.succeed({ error: e.message })));
 						}
-						messages.push({
-							role: 'tool',
-							content: { id: c.id, name: c.name, result: bound(result) }
-						});
+						messages.push({ role: 'tool', content: { id: c.id, name: c.name, result: bound(result) } });
 						beat();
 						return submitted === undefined ? Option.none() : Option.some(submitted);
 					}));
@@ -1043,10 +946,7 @@ export function infer_facility(
 						// a model that re-edits instead of submitting: a draft that already holds is the answer
 						const held = r.tool_calls.some((c) => c.name === EDIT) ? settle(draft) : undefined;
 						if (held?.ok === true) return held;
-						if (++stalls > FAILURES)
-							return (
-								last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`)
-							);
+						if (++stalls > FAILURES) return last ?? invalid(`the model's last ${FAILURES + 1} turns left its answer unchanged`);
 					} else stalls = 0;
 					// the step budget ends the tools: one final turn answers
 					if (!spent && a.steps !== undefined && ++turns >= a.steps) {
@@ -1063,8 +963,7 @@ export function infer_facility(
 				}
 				if (typeof whole === 'string' && whole.trim() === '') {
 					// a reply of reasoning alone: ask it to go on (L-BOLT-371)
-					if (++pauses > PAUSES)
-						return invalid(`the model answered nothing ${PAUSES + 1} times running`);
+					if (++pauses > PAUSES) return invalid(`the model answered nothing ${PAUSES + 1} times running`);
 					messages.push({ role: 'user', content: 'Continue, and give your answer.' });
 					continue;
 				}
@@ -1072,11 +971,7 @@ export function infer_facility(
 				if (!structured) { messages.push({ role: 'assistant', content: textOf(r.content) }); return { ok: true, value: textOf(whole) }; }
 				// a structured answer written out as text instead: a well-formed one is taken as a submission of it
 				const parsed =
-					typeof whole === 'string'
-						? Option.getOrUndefined(
-								Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole)
-							)
-						: whole;
+					typeof whole === 'string' ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(whole)) : whole;
 				let feedback: string | undefined;
 				if (parsed !== undefined) {
 					last = settle(parsed);
@@ -1143,13 +1038,7 @@ export function infer_facility(
 			const held = structured ? decoded(draft) : undefined;
 			return held?.ok === true
 				? held
-				: {
-						ok: false,
-						error: {
-							kind: 'timeout',
-							message: `the inference made no progress for ${STALL_MS / 60_000} minutes`
-						}
-					};
+				: { ok: false, error: { kind: 'timeout', message: `the inference made no progress for ${STALL_MS / 60_000} minutes` } };
 		});
 		return yield* Effect.raceFirst(answering, stalled);
 	}, Effect.scoped);

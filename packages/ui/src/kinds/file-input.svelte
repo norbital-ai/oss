@@ -5,11 +5,14 @@ preview, Download and Remove) and a "+" while there is room. Uploads go through 
 the limits are the trigger's hint); files dropped anywhere on the field upload too.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Array as Arr } from 'effect';
 	import type { Value, KindOf } from './kind.js';
 
 	/** A `file` field: bytes go to the host first (`bolt.upload`, accept and max checked before), the draft holds refs. */
 	export type FileInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		kind: KindOf<'file'>;
 		value: Value;
 		on_change(next: Value): void;
@@ -29,12 +32,12 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 	import { watch } from 'runed';
 	import { attach, fork } from '../effect/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
 	import { use_form } from '../form/form-state.svelte.js';
 	import FileList, { type PendingFile } from './file-list.svelte';
 	import { fileProblem, isFile, MAX_FILES, type FileRef } from './kind.js';
 
 	let {
+		ctx,
 		kind,
 		value,
 		on_change,
@@ -44,7 +47,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 		disabled = false,
 		invalid = false
 	}: FileInputProps = $props();
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	// the upload target is `<model>.<field>` (§5.7); a submit of the enclosing form waits for it
 	const form = use_form();
 	const target = $derived(
@@ -182,7 +185,7 @@ the limits are the trigger's hint); files dropped anywhere on the field upload t
 			if (can) start([...(e.dataTransfer?.files ?? [])]);
 		}}
 	>
-		<FileList
+		<FileList {ctx}
 			{refs}
 			{pending}
 			on_remove={can ? remove : undefined}

@@ -5,7 +5,7 @@ import type { InputKind, InputOf, ValidInput } from '../fields.ts';
 import { FieldData } from '../field-data.ts';
 import type { ReadableName } from '../names.ts';
 
-export type RowsInput = { readonly kind: 'rows'; readonly of: string; readonly optional?: true };
+type RowsInput = { readonly kind: 'rows'; readonly of: string; readonly optional?: true };
 export type AutomationInputFields = Readonly<Record<string, InputKind | RowsInput>>;
 export type ValidAutomationInputs<F> = {
 	[K in keyof F]: F[K] extends { kind: 'rows' }

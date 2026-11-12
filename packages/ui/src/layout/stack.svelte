@@ -15,7 +15,7 @@ scroll owner scrolls when boxes do not fit) or `size="fill"` (the space left in 
 	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** The props of `Stack`. */
-	export interface StackProps extends LayoutAttributes {
+	interface StackProps extends LayoutAttributes {
 		as?: LayoutElement;
 		gap?: LayoutGap;
 		/** Cross-axis (horizontal) placement of the children. */

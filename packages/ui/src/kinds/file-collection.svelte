@@ -4,19 +4,19 @@ Stored files behind one compact trigger: up to three thumbnails and the name or 
 at a time; picking one shows its preview with Download, and Remove when `on_remove` is given.
 -->
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import Icon from '@iconify/svelte';
 	import { tick } from 'svelte';
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
 	import * as Popover from '../primitives/popover/index.js';
 	import { ui_text } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
 	import FilePreview from './file-preview.svelte';
 	import { file_icon, type FileRef } from './kind.js';
 
-	let { refs, on_remove }: { refs: readonly FileRef[]; on_remove?: (ref: FileRef) => void } =
+	let { ctx, refs, on_remove }: { ctx: UiContext; refs: readonly FileRef[]; on_remove?: (ref: FileRef) => void } =
 		$props();
-	const host = useKinds();
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const pageSize = 6;
 	let pageIndex = $state(0);
@@ -99,7 +99,7 @@ at a time; picking one shows its preview with Download, and Remove when `on_remo
 					{t('back')}
 				</Button>
 			{/if}
-			<FilePreview
+			<FilePreview {ctx}
 				file={active}
 				on_remove={on_remove
 					? () => {

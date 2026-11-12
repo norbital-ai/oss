@@ -20,7 +20,7 @@ it('a workspace_list_dir step shows the tree itself, with no tabs', async () => 
 	const host = document.body.appendChild(document.createElement('div'));
 	const view = mount(Steps, {
 		target: host,
-		props: { steps: [step], t: (key: string) => key, opened: new SvelteSet(['listed']) }
+		props: { ctx: { ui: { kinds: {} } }, steps: [step], t: (key: string) => key, opened: new SvelteSet(['listed']) }
 	});
 	await tick();
 	expect(host.querySelector('[data-step-pane="tree"]')?.textContent).toBe(tree);

@@ -1,9 +1,10 @@
 <script lang="ts">
+	import type { UiContext } from '../src/client/contract.js';
+	import type { KindsHost } from '../src/kinds/context.js';
 	import { Layer, ManagedRuntime } from 'effect';
 	import { onDestroy } from 'svelte';
 	import { mount_edge } from '../src/effect/index.js';
 	import StructuredData, { type StructuredDataProps } from '../src/kinds/structured-data.svelte';
-	import { provide_kinds } from '../src/kinds/context.js';
 	import type { Value } from '../src/kinds/kind.js';
 	import { is_json_schema } from '../src/kinds/json-schema.js';
 
@@ -16,14 +17,14 @@
 		changed,
 		mode = 'view',
 		...props
-	}: Omit<StructuredDataProps, 'value' | 'on_change'> & {
+	}: Omit<StructuredDataProps, 'ctx' | 'value' | 'on_change'> & {
 		initial?: Value;
 		author?: boolean;
-		host?: Parameters<typeof provide_kinds>[0];
+		host?: KindsHost;
 		changed(next: Value): void;
 	} = $props();
 	// svelte-ignore state_referenced_locally -- each test owns its starting host and draft.
-	provide_kinds(host);
+	const ctx: UiContext = { ui: { kinds: host } };
 	// svelte-ignore state_referenced_locally -- later edits replace the local draft.
 	let value = $state(initial);
 	// svelte-ignore state_referenced_locally -- authoring echoes the schema independently from its data.
@@ -37,7 +38,7 @@
 	}
 </script>
 
-<StructuredData
+<StructuredData {ctx}
 	{...props}
 	{value}
 	schema={schemaDocument}

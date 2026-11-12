@@ -113,7 +113,7 @@ const manifest = Result.getOrThrow(
 			staff: {
 				description: 'Staff',
 				grants: {
-					sent_emails: { outputs: { default: true }, create: true, update: { moves: 'all' } }
+					sent_emails: { outputs: { default: {} }, create: {}, update: { moves: 'all' } }
 				}
 			}
 		},
@@ -283,7 +283,7 @@ const fixture = () =>
 					subject: 'PCN 1234',
 					body: 'Your parts change.'
 				}
-			]).pipe(Effect.map((o) => ok(o).records[0]!.id));
+			]).pipe(Effect.map((o) => ok(o).records[0]?.id ?? ''));
 		const row = (id: string) =>
 			q_reply(route, adminAuthority, {
 				reads: [{ m: 'query', a: [{ sent_emails: { where: { id: { eq: id } } } }] }]
@@ -706,7 +706,7 @@ describe('inbound (§4.3)', () => {
 					);
 					yield* t.receive('desk_wa', chat({ id: 'F2', thread, text: 'second' }));
 					const rows = yield* f.history();
-					expect(rows[0]!['files']).toEqual([
+					expect(rows[0]?.['files']).toEqual([
 						{
 							id: expect.any(String),
 							name: 'form.pdf',

@@ -53,9 +53,9 @@ const manifest: EngineManifest = {
 	policies: {
 		requester: {
 			description: 'Requests item creation',
-			grants: { items: { outputs: { default: true }, create: { verdict: true } } }
+			grants: { items: { outputs: { default: {} }, create: { verdict: true } } }
 		},
-		reviewer: { description: 'Reviews', grants: { items: { outputs: { default: true } } } }
+		reviewer: { description: 'Reviews', grants: { items: { outputs: { default: {} } } } }
 	},
 	teams: { Requesters: { policies: ['requester'] }, Reviewers: { policies: ['reviewer'] } }
 };

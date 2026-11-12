@@ -111,7 +111,7 @@ const sliceManifest = {
 	...callbacks,
 	policies: {
 		...callbacks.policies,
-		ops: { description: 'Ops', grants: { customers: { outputs: { default: true }, create: true } } }
+		ops: { description: 'Ops', grants: { customers: { outputs: { default: {} }, create: {} } } }
 	},
 	automations: {
 		stamp: { description: 'Files a customer', on: [{ cron: '*/15 * * * *' }], policies: ['ops'] },

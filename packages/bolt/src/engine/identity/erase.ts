@@ -36,7 +36,7 @@ export function exprFields(e: unknown, out: Set<string>): void {
 }
 
 /**
- * 38e(d)3: a model's stored authored fields that are not a relationship key, a `state`, a `key`, `unique` or
+ * 38e(d)3: a model's stored authored fields that are not a relationship key, a `state`, a `key`, a `unique` or
  * `no_overlap` field, and are read by no `check`, no roll-up (its summed field or its `where`), and no `computed` field
  * that one of those reads. `bolt check` prints this set.
  */
@@ -56,7 +56,7 @@ export function erasableFields(m: EngineManifest, model: string): string[] {
 	for (const [parent, p] of Object.entries(m.models))
 		for (const k of Object.values(p.fields)) {
 			if (k.kind !== 'sum' && k.kind !== 'count') continue;
-			const [rel, summed] = k.of.split('.') as [string, string?];
+			const [rel = '', summed] = k.of.split('.');
 			if (catalog_of(m).models.get(parent)?.many.get(rel)?.child !== model) continue;
 			if (summed !== undefined) read.add(summed);
 			whereFields(k.where, read);
@@ -75,7 +75,6 @@ export function erasableFields(m: EngineManifest, model: string): string[] {
 		.filter(
 			([name, k]) =>
 				!['seq', 'sum', 'count', 'state'].includes(k.kind) &&
-				k.unique !== true &&
 				!fixed.has(name) &&
 				!read.has(name) &&
 				m.relationships[`${model}.${name}`] === undefined

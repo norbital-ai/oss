@@ -49,16 +49,14 @@ function liveFixture(): Plugin {
 const SOURCE = Object.entries({
 	'': 'index',
 	'/declarations': 'declarations',
-	'/artifact': 'engine/artifact/read',
+	'/artifact': 'engine/artifact/index',
 	'/engine': 'engine/index',
 	'/errors': 'decl/errors',
 	'/facilities': 'facilities/index',
-	'/guest-hooks': 'node/guest-hooks',
-	'/host-api': 'protocol/host-api',
+	'/host-api': 'host-api',
 	'/node': 'node/index',
 	'/protocol': 'protocol/index',
-	'/tooling': 'tooling/index',
-	'/tooling/browser': 'tooling/browser'
+	'/tooling': 'tooling/index'
 }).map(([subpath, file]) => ({
 	find: new RegExp(`^@norbital-ai/bolt${subpath}$`),
 	replacement: fileURLToPath(new URL(`./src/${file}.ts`, import.meta.url))

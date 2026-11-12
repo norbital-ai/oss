@@ -9,7 +9,6 @@ import {
 	Http,
 	Port,
 	type DriverOpen,
-	type HttpPort,
 	type Json,
 	type SetupDescription,
 	type SetupField
@@ -37,14 +36,14 @@ import {
 } from '@norbital-ai/providers/errors';
 import { sqlServerDatabase } from './database.ts';
 
-export type DriversOptions = {
+type DriversOptions = {
 	readonly fetch?: typeof fetch;
 	readonly database?: ReturnType<typeof sqlServerDatabase>;
 	/** A channel simulator's URL: its providers are offered beside the real ones. */
 	readonly simulator?: string | undefined;
 };
 /** An injected fetch (a test's) as the engine's HTTP port; without one, requests take the public-network guard. */
-const fetchHttp = (fetcher: typeof fetch): HttpPort => ({
+const fetchHttp = (fetcher: typeof fetch): typeof http_port => ({
 	fetch: async (request, _limits, signal) => {
 		const response = await fetcher(request.url, {
 			method: request.method,

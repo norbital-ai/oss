@@ -70,17 +70,17 @@ function layersOf(request: Readonly<Record<string, Json>>): Result.Result<ReadLa
 	}
 	return Result.succeed(Object.fromEntries(layers));
 }
-export const ReadRequestSchema = Schema.JsonObject.check(Schema.makeFilter((request) => {
+export const ReadRequestJson = Schema.JsonObject.check(Schema.makeFilter((request) => {
 	const decoded = layersOf(request);
 	return Result.isFailure(decoded) ? decoded.failure : undefined;
 }));
-export type ReadRequestJson = typeof ReadRequestSchema.Type;
-const decode = Schema.decodeUnknownResult(ReadRequestSchema);
+export type ReadRequestJson = typeof ReadRequestJson.Type;
+const decode = Schema.decodeUnknownResult(ReadRequestJson);
 /** Decode the single public tree shape, then lower to native paths. */
 export const decode_read_request = (u: unknown): Result.Result<ReadLayersJson, string> =>
 	Result.flatMap(Result.mapError(decode(u), (error) => error.message), layersOf);
 
-const DynamicReadSchema = ReadRequestSchema.pipe(Schema.brand('DynamicRead'));
+const DynamicReadSchema = ReadRequestJson.pipe(Schema.brand('DynamicRead'));
 /** A read request built at runtime (a rule engine's reads): only `dynamic_read` makes one, so a literal never falls to it. */
 export type DynamicRead = typeof DynamicReadSchema.Type;
 /**

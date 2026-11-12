@@ -5,6 +5,7 @@ first lines, else its type's icon), its name, size, type, who uploaded it and wh
 when the host reads), Download, and Remove when `on_remove` is given.
 -->
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	import Icon from '@iconify/svelte';
 	import { Effect, Stream } from 'effect';
 	import { FetchHttpClient, HttpClient } from 'effect/http';
@@ -16,11 +17,10 @@ when the host reads), Download, and Remove when `on_remove` is given.
 	import Button from '../primitives/button/button.svelte';
 	import Image from '../primitives/image/image.svelte';
 	import { format_file_size, ui_text } from '../primitives/utils.js';
-	import { useKinds } from './context.js';
 	import { file_icon, type FileRef, type Value } from './kind.js';
 
-	let { file, on_remove }: { file: FileRef; on_remove?(): void } = $props();
-	const host = useKinds();
+	let { ctx, file, on_remove }: { ctx: UiContext; file: FileRef; on_remove?(): void } = $props();
+	const host = $derived(ctx.ui.kinds);
 	const t = ui_text();
 	const url = $derived(host.file_url?.(file));
 	const imageUrl = $derived(host.file_url?.(file, { preview: 512 }));

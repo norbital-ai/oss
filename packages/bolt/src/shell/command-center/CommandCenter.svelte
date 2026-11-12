@@ -21,7 +21,8 @@
 		type WorkspaceOperationsData,
 		type WorkspaceRange,
 		type WorkspaceScope,
-		type WorkspaceView
+		type WorkspaceView,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import { fork, observe, observe_once } from '@norbital-ai/ui/effect';
 	import { AppHeader, Stack } from '@norbital-ai/ui/layout';
@@ -39,6 +40,7 @@
 	import banner from '../assets/banners/command-center.jpg';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		t,
@@ -54,6 +56,7 @@
 		automation = null,
 		on_automation_close = () => {}
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
@@ -186,7 +189,7 @@
 			{inspection.error.message}
 		</p>{/if}
 	{#if view !== undefined && data !== null}
-		<WorkspaceOperations
+		<WorkspaceOperations {ctx}
 			{data}
 			{range}
 			{view}
@@ -214,7 +217,7 @@
 	{#if conversations.error !== undefined}<p role="alert" class="text-xs text-destructive">
 			{conversations.error.message}
 		</p>{/if}
-	<Table
+	<Table {ctx}
 		of={transcripts}
 		key="inference"
 		on_open={(row) => on_conversation?.(row.id)}
@@ -241,9 +244,9 @@
 		]}
 	>
 		{#if active === 'audit'}
-			<Audit {api} {t} locale={bolt.locale} catalog={bolt.catalog} {admin} />
+			<Audit {ctx} {api} {t} locale={bolt.locale} catalog={bolt.catalog} {admin} />
 		{:else if active === 'automations'}
-			<Runs
+			<Runs {ctx}
 				{api}
 				{bolt}
 				{t}
@@ -256,7 +259,7 @@
 		{:else if active === 'inference'}
 			{@render inference()}
 		{:else if active === 'people'}
-			<People {api} {t} locale={bolt.locale} {configuration} />
+			<People {ctx} {api} {t} locale={bolt.locale} {configuration} />
 		{:else}
 			{@render operations()}
 		{/if}

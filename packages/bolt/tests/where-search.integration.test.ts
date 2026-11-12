@@ -54,7 +54,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			dispatch: {
 				description: 'Dispatch',
-				grants: { sites: { outputs: { default: true } }, jobs: { outputs: { dispatch: true } } }
+				grants: { sites: { outputs: { default: {} } }, jobs: { outputs: { dispatch: {} } } }
 			}
 		},
 		integrations: {},

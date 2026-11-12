@@ -87,7 +87,7 @@ const stored_file = (db: TenantDbShape, id: string) =>
 		Effect.flatMap((row) => Option.isNone(row) ? Effect.fail(FacilityFailure.invalid(`no file '${id}'`)) : Effect.succeed(row.value))
 	);
 
-export const file_loader =
+const file_loader =
 	(db: TenantDbShape, files: Files['Service']) =>
 	(
 		fileId: string
@@ -266,7 +266,7 @@ export const previewPdf = Effect.fn('previewPdf')(function* (
 	return bytes;
 });
 
-export const logged_transport = (
+const logged_transport = (
 	kind: string,
 	log: (line: string) => void
 ): Transport['Service'] => ({
@@ -277,7 +277,7 @@ export const logged_transport = (
 			return { provider_id };
 		})
 });
-export type FacilityPorts = {
+type FacilityPorts = {
 	readonly db: TenantDbShape;
 	readonly manifest: EngineManifest;
 	readonly files: Files['Service'];
@@ -290,7 +290,7 @@ export type FacilityPorts = {
 	readonly decisions: Decisions['Service'];
 };
 
-export function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatch'] {
+function facility_dispatch(ports: FacilityPorts): Facilities['Service']['dispatch'] {
 	const load = file_loader(ports.db, ports.files);
 	const infer = infer_facility(ports.ai, { load });
 	const rowOf = (ref: Json | undefined) =>

@@ -8,10 +8,7 @@ import { readFileSync } from 'node:fs';
 import { Effect } from 'effect';
 import { FacilityFailure } from '../decl/errors.ts';
 import { corpus } from '../engine/docs-corpus.ts';
-export * from '../engine/docs-corpus.ts';
-
-// `src/docs` and `build/docs` are both two levels under the package root, so this resolves from either
-export const DOCS_DIR = new URL('../../build/docs/', import.meta.url);
+import { DOCS_DIR } from '../node/docs.ts';
 /**
  * The docs corpus, read on first run and kept: `index()`, `namespace(ns)`, `symbol(ns, name)`, `search(text)`,
  * `guide(slug)` and `skill(name)`.

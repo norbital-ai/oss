@@ -10,13 +10,15 @@ import { pathToFileURL } from 'node:url';
 import { build, type Rolldown } from 'vite';
 import type { Json, EngineManifest } from '@norbital-ai/bolt/engine';
 import { decode_seed, type PackJson } from '@norbital-ai/bolt/engine';
-import { decode_identity, IDENTITY, type SeedAsset } from '@norbital-ai/bolt/tooling';
+import { decode_identity, IDENTITY } from '@norbital-ai/bolt/tooling';
 import type { CheckDiagnostic } from '../check/index.ts';
 import { asset_path } from '@norbital-ai/bolt/artifact';
 import { rowsIn, seedPack } from '../seed.ts';
 import { BOLT, EXT } from '../bolt.ts';
 import { sha256_hex } from '@norbital-ai/store';
 import { datatype_issues } from '@norbital-ai/std/kind';
+
+type SeedAsset = PackJson['assets'][number];
 
 /** Rows per model, the identity rows (`sys_user`, run-time `sys_integration` instances) included, as JSON. */
 export type SeedRows = {

@@ -3,10 +3,13 @@
 Edits a date, instant, time of day or month as typed segments with a calendar or unit grid, snapped to `precision`.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import { Result } from 'effect';
 	import type { Precision } from './precision.js';
 	/** A calendar date, an instant, a time of day or a month: typed segments, and a calendar or unit grid to pick from. */
 	export type DateInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: string | null;
 		on_change(next: string | null): void;
 		/** `date` → `YYYY-MM-DD`; `instant` → ISO UTC; `time` → `HH:MM`; `month` → `YYYY-MM`. */
@@ -84,13 +87,13 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 	import { cn, narrowViewport, ui_text, use_controls } from '../primitives/utils.js';
 	import CalendarGrid from './calendar-grid.svelte';
 	import { SEGMENT, SEGMENTS } from './classes.js';
-	import { useKinds } from './context.js';
 	import { datePrecision, snapTime, unitStart } from './precision.js';
 	import Show from './show.svelte';
 	import UnitPicker from './unit-picker.svelte';
 	import { fieldPopoverAlignment } from './popover-alignment.svelte.js';
 
 	let {
+		ctx,
 		value,
 		on_change,
 		of = 'date',
@@ -104,7 +107,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 	}: DateInputProps = $props();
 	const controls = use_controls();
 	const disabled = $derived(ownDisabled ?? controls.disabled);
-	const locale = useKinds().locale;
+	const locale = $derived(ctx.ui.kinds.locale);
 	const t = ui_text();
 	let fieldAnchor = $state<HTMLElement | null>(null);
 	let calendarContent = $state<HTMLElement | null>(null);
@@ -175,9 +178,9 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 </script>
 
 {#if readonly ?? controls.readonly}
-	<Show readonly kind={displayKind} {value} {id} />
+	<Show {ctx} readonly kind={displayKind} {value} {id} />
 {:else if of === 'month'}
-	<UnitPicker
+	<UnitPicker {ctx}
 		unit="month"
 		value={value === null ? null : `${value.slice(0, 7)}-01`}
 		on_change={(d) => on_change(d === null ? null : d.slice(0, 7))}
@@ -215,7 +218,7 @@ Edits a date, instant, time of day or month as typed segments with a calendar or
 		</TimeField.Input>
 	</TimeField.Root>
 {:else if unit !== null}
-	<UnitPicker
+	<UnitPicker {ctx}
 		{unit}
 		value={unitValue}
 		on_change={(d) => on_change(d === null ? null : fromDay(kind, d))}

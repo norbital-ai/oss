@@ -39,8 +39,8 @@ const manifest: EngineManifest = {
 			description: 'Synthetic operator',
 			capabilities: { automations: ['place', 'queryplace'] },
 			grants: {
-				quota: { outputs: { default: true } },
-				orders: { outputs: { default: true }, create: true }
+				quota: { outputs: { default: {} } },
+				orders: { outputs: { default: {} }, create: {} }
 			}
 		}
 	},

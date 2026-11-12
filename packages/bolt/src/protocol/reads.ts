@@ -397,7 +397,7 @@ const historyOptions = Schema.decodeUnknownEffect(Schema.Struct({
 	output: Schema.optionalKey(Schema.String),
 	view: Schema.optionalKey(Schema.Literal(true))
 }), { onExcessProperty: 'error' });
-export function history_at(at: typeof HistoryPoint.Type): NonNullable<Extract<ReadIR, { kind: 'history' }>['at']> {
+function history_at(at: typeof HistoryPoint.Type): NonNullable<Extract<ReadIR, { kind: 'history' }>['at']> {
 	if ('instant' in at) return { _tag: 'Instant', instant: at.instant };
 	if ('revision' in at) return { _tag: 'Revision', revision: at.revision };
 	return { _tag: 'Before', before: at.before };

@@ -12,6 +12,7 @@ Use `history` to include related models: each source names its model and the `wh
 
 ```svelte
 <RecordShell
+	{ctx}
 	of="projects"
 	id={project_id}
 	history={{

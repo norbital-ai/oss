@@ -37,7 +37,7 @@ export type PgClient = {
 	on?(event: 'error' | 'end', listener: (error?: unknown) => void): unknown;
 	removeListener?(event: 'error' | 'end', listener: (error?: unknown) => void): unknown;
 };
-export type PgPool = { connect(): Promise<PgClient> };
+type PgPool = { connect(): Promise<PgClient> };
 
 const types = { getTypeParser: (oid: number) => (s: string) => parse(oid, s) };
 const NONE: PgResult = { rows: [], rowCount: 0 };

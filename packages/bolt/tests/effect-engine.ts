@@ -24,7 +24,7 @@ import { node_ports } from '../src/node/ports.ts';
 import { guests } from './support/guests.ts';
 import { keys_port } from '../src/node/keys.ts';
 import { tenant_db_port } from '../src/node/db/port.ts';
-import { facility_layers } from '../src/protocol/host-api.ts';
+import { facility_layers } from '../src/protocol/facility-layers.ts';
 import { TenantDb, type TenantDbShape } from '../src/engine/db/tenant-db.ts';
 import { EngineLive } from '../src/engine/host.ts';
 import { memory_audit } from '../../bolt-cli/src/test/index.ts';

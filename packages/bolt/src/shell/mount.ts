@@ -4,7 +4,7 @@
 import { mount, unmount, type Component } from 'svelte';
 import type { CustomFieldEntry, RepresentationLoader } from '@norbital-ai/ui';
 import type { BoltConfig } from '../page/bolt.ts';
-import type { IntegrationSetupEntry } from '../page/integration.ts';
+import type { IntegrationSetupEntry } from './integration/setup.ts';
 import { await_device, resolve_device, type DeviceApi } from '../page/device.ts';
 import type { ShellManifest } from './nav.ts';
 import type { AgentRequest, ShellBolt, ShellPageContext } from './runtime.ts';

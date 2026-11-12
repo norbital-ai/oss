@@ -94,7 +94,7 @@ const base: EngineManifest = {
 	policies: {
 		ops: {
 			description: 'Ops',
-			grants: { quotes: { outputs: { default: true }, create: true, update: true, delete: true } },
+			grants: { quotes: { outputs: { default: {} }, create: {}, update: {}, delete: {} } },
 			capabilities: { automations: ['classify'] }
 		},
 		// a writer that reads the `titles` output only: its effects see the rows it wrote as that output
@@ -102,21 +102,21 @@ const base: EngineManifest = {
 			description: 'Write quotes, read their titles',
 			grants: {
 				quotes: {
-					outputs: { titles: true },
-					create: true,
-					update: true,
-					delete: true
+					outputs: { titles: {} },
+					create: {},
+					update: {},
+					delete: {}
 				}
 			}
 		},
 		limited: {
 			description: 'Read quote titles and start a manual review',
-			grants: { quotes: { outputs: { titles: true } } },
+			grants: { quotes: { outputs: { titles: {} } } },
 			capabilities: { automations: ['review'] }
 		},
 		writer: {
 			description: 'Write quotes; starts nothing',
-			grants: { quotes: { outputs: { default: true }, create: true } }
+			grants: { quotes: { outputs: { default: {} }, create: {} } }
 		},
 		starter: {
 			description: 'Starts a retitle',
@@ -131,7 +131,7 @@ const base: EngineManifest = {
 					outputs: {
 						default: { scopes: { quotes: { created_by: { eq: { var: 'requestor.id' } } } } }
 					},
-					update: true
+					update: {}
 				}
 			}
 		}

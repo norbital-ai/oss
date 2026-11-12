@@ -256,6 +256,7 @@ const withComposer = async (
 									target,
 									props: {
 										...props,
+										ctx: { ui: { kinds: {} } },
 										t: (key: string) => key,
 										request: { conversation: 'rail-root' }
 									}

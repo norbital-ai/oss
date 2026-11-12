@@ -6,7 +6,7 @@ import {
 	type Headers
 } from 'effect/http';
 import type { Json } from '@norbital-ai/bolt/engine';
-import { answerFailure, ProviderRefused, ProviderUnavailable } from './errors.ts';
+import { answerFailure, ProviderRefused, ProviderUnavailable, retry_after_ms } from './errors.ts';
 
 const Address = Schema.Union([Schema.String, Schema.Array(Schema.String)]);
 export const Email = Schema.Struct({
@@ -61,14 +61,13 @@ export const providerJson = <A>(
 			const reason = Option.isSome(error)
 				? (error.value.message ?? error.value.text ?? text)
 				: text;
-			const retryAfter = api ? Number(response.headers['retry-after']) : Number.NaN;
 			return yield* answerFailure(
 				api
 					? `${label} answered ${response.status}: ${text.slice(0, 500)}`
 					: `${label} ${response.status}: ${reason}`,
 				response.status,
 				undefined,
-				Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined
+				api ? retry_after_ms(response.headers['retry-after']) : undefined
 			);
 		}
 		return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(

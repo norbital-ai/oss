@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	// One year, month or week: a trigger that reads like a field and a popover of one page of units (12 years, a year's
 	// months, a month's week rows), paged from its header — the day calendar's shape at a coarser precision. The value is
 	// the unit's first day (`YYYY-MM-DD`, weeks from Monday).
@@ -6,10 +7,10 @@
 	import * as Popover from '../primitives/popover/index.js';
 	import { cn, ui_text } from '../primitives/utils.js';
 	import { CONTROL } from './classes.js';
-	import { useKinds } from './context.js';
 	import { pageStep, unitEnd, unitPage, unitStart, type Unit } from './precision.js';
 
 	let {
+		ctx,
 		unit,
 		value,
 		on_change,
@@ -22,6 +23,7 @@
 		end,
 		picking_end = false
 	}: {
+		ctx: UiContext;
 		unit: Unit;
 		value: string | null;
 		on_change(next: string | null): void;
@@ -34,7 +36,7 @@
 		end?: string | null;
 		picking_end?: boolean;
 	} = $props();
-	const locale = useKinds().locale;
+	const locale = $derived(ctx.ui.kinds.locale);
 	const t = ui_text();
 	const now = new Date();
 	const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;

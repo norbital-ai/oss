@@ -6,7 +6,7 @@ A toolbar filter trigger with an active-condition count and a popover for custom
 	import type { Snippet } from 'svelte';
 
 	/** The shared toolbar filter trigger and popover, independent of a model or tenant. */
-	export type ToolbarFilterProps = {
+	type ToolbarFilterProps = {
 		open?: boolean;
 		count?: number;
 		label?: string;

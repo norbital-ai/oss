@@ -20,12 +20,12 @@ const attempt = <A>(operation: string, promise: () => Promise<A>, fallback: A) =
 		try: promise,
 		catch: () => new DeviceAccessFailure({ operation })
 	}).pipe(Effect.catch(() => Effect.succeed(fallback)));
-const query = (name: string) =>
+const query = (name: PermissionName) =>
 	typeof navigator === 'undefined' || navigator.permissions === undefined
 		? Effect.succeed<Access | null>(null)
 		: attempt<PermissionStatus | null>(
 				'permissions.query',
-				() => navigator.permissions.query({ name: name as PermissionName }),
+				() => navigator.permissions.query({ name }),
 				null
 			).pipe(Effect.map((status) => status?.state ?? null));
 const proven = new Set<'camera' | 'location'>();

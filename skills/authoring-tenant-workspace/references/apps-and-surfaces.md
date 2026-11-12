@@ -1,6 +1,6 @@
 # Apps and surfaces
 
-Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `AppSpec`, `GroupSpec`.
+Exact shapes: `Parameters<typeof import('@norbital-ai/bolt').workspace>[0]`, `Parameters<typeof import('@norbital-ai/bolt').app>[0]`, `Parameters<typeof import('@norbital-ai/bolt').group>[0]`.
 
 ## Workspace and secrets
 

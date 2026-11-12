@@ -1,3 +1,4 @@
+import { required } from './support/required.ts';
 // `ctx.ai.sys_2.infer({ tools: ['read'] })` in an automation: the model reads workspace records as the run's
 // policies over several turns (the agent's `read` tool: granted outputs, row scopes, bounded pages), then edits and
 // submits; a model outside the policies and an ungranted output are refused, a field outside the granted output never
@@ -68,17 +69,17 @@ const manifest = {
 		matcher: {
 			description: 'Matches invoices',
 			grants: {
-				invoices: { outputs: { default: true }, update: true },
-				purchase_orders: { outputs: { matching: true } }
+				invoices: { outputs: { default: {} }, update: {} },
+				purchase_orders: { outputs: { matching: {} } }
 			}
 		},
-		noter: { description: 'Notes ledgers', grants: { ledgers: { create: true } } },
+		noter: { description: 'Notes ledgers', grants: { ledgers: { create: {} } } },
 		clerk: {
 			description: 'Enters documents',
 			grants: {
-				invoices: { outputs: { default: true }, create: true, update: true },
-				purchase_orders: { outputs: { default: true }, create: true },
-				ledgers: { outputs: { default: true }, create: true }
+				invoices: { outputs: { default: {} }, create: {}, update: {} },
+				purchase_orders: { outputs: { default: {} }, create: {} },
+				ledgers: { outputs: { default: {} }, create: {} }
 			},
 			capabilities: { automations: ['relay'] }
 		}
@@ -189,7 +190,7 @@ const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
 		Effect.map((reply) => {
 			const outcome: Outcome = reply.outcome;
 			if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
-			return outcome.records[0]!.id;
+			return required(outcome.records[0]).id;
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>
@@ -266,7 +267,7 @@ describe("sys_2.infer tools: ['read']", () => {
 					yield* t.run_due();
 					expect(yield* note(t, route, id)).toBe(JSON.stringify({ matched: true, po: 'PO-1' }));
 					expect(ai.requests).toHaveLength(3);
-					const offered = ai.requests[0]!.tools!;
+					const offered = required(required(ai.requests[0]).tools);
 					// the workspace `read` (a read request) first, then the draft tools
 					expect(offered.map((tool) => tool.name)).toEqual([
 						'read',
@@ -281,11 +282,11 @@ describe("sys_2.infer tools: ['read']", () => {
 						Object.keys(
 							Schema.decodeUnknownSync(
 								Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Json) })
-							)(offered[0]!.input).properties
+							)(required(offered[0]).input).properties
 						)
 					).toEqual(['request']);
 					// one bounded page of the matcher's `matching` output: the Acme order only, no margin
-					const [page] = toolResults(ai.requests[1]!);
+					const [page] = toolResults(required(ai.requests[1]));
 					const rows = Schema.decodeUnknownSync(
 						Schema.Struct({
 							purchase_orders: Schema.Struct({
@@ -295,7 +296,7 @@ describe("sys_2.infer tools: ['read']", () => {
 					)(page).purchase_orders.rows;
 					expect(rows.map((row) => row['number'])).toEqual(['PO-1']);
 					expect(rows[0]).not.toHaveProperty('margin');
-					const [, ledgers, defaults] = toolResults(ai.requests[2]!);
+					const [, ledgers, defaults] = toolResults(required(ai.requests[2]));
 					// a root the run's policies cannot read is refused, and the refusal lists the keys it may read and no other
 					expect(ledgers).toEqual({
 						error: "You read no 'ledgers'. Models: invoices, purchase_orders"
@@ -304,7 +305,7 @@ describe("sys_2.infer tools: ['read']", () => {
 					expect(defaults).toHaveProperty('error');
 					expect(JSON.stringify(defaults)).not.toContain('margin');
 					// steps: 2 spent on the two reads; the final turn offers only the draft tools
-					expect(ai.requests[2]!.tools!.map((tool) => tool.name)).toEqual([
+					expect(required(required(ai.requests[2]).tools).map((tool) => tool.name)).toEqual([
 						'edit',
 						'submit',
 						'read_answer',

@@ -170,4 +170,4 @@ A new driver is rarer: add it to `DRIVERS` with `conversation: { kind, handle }`
 
 A workspace cannot supply a provider. A provider holds stored credentials, raw network access and direct `emit`, and it runs in the host outside the compute boundary, so tenant code there would escape the guest wall. An `http` connection cannot host an envoy either.
 
-For a platform nobody supports, an integration definition may verify incoming webhooks and retain deliveries for a model sync. Committed model changes can then run effects or schedule business jobs using `ctx.ai` and `ctx.request`. This supplies no native channel conversation, sender identity or typing. Verification belongs to the integration's `WebhookScheme`; automations declare only cron triggers.
+For a platform nobody supports, an integration definition may verify incoming webhooks and retain deliveries for a model sync. Committed model changes can then run effects or schedule business jobs using `ctx.ai` and `ctx.request`. This supplies no native channel conversation, sender identity or typing. Verification belongs to the integration's webhook scheme; automations declare only cron triggers.

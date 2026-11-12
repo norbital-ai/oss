@@ -44,7 +44,7 @@ bolt dev --host=./dev.host.ts     # another host file
 ```
 
 The workspace's `norbital.host.ts` (or the file `--host` names) default-exports a `Facilities` record ([hosts](./hosts.md)),
-for example bolt-server's `host()`. Guest code runs on bolt-cli's own `node_guests()` runner, as bolt-server's does. Each build is migrated on that host's
+for example bolt-server's `host()`. Guest code runs on bolt-cli's own `node_guests` runner, as bolt-server's does. Each build is migrated on that host's
 `database` and activated through the needs check, so a bundle needing a member the file leaves `off` refuses to
 start, naming it. Served at `http://127.0.0.1:<port>` (default 5180).
 

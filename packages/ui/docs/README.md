@@ -30,6 +30,8 @@ query execution and lifetime. Shared text, cells and actions have their own modu
 
 ## Async reads
 
+Every view, input and editor takes the page's `ctx` as a prop (`<Table {ctx} of="projects">`); nothing reaches
+the view client through Svelte context. A component that renders one takes `ctx` and hands it on whole.
 Use `Form` and `RecordShell` for record editing; they own loading, drafts and mutation feedback.
 `RecordShell` always keeps its native header and footer outside the scrolling content, including custom
 representations and read-only records. Its `footer` and `footer_actions` decorate that existing footer;
@@ -118,12 +120,6 @@ enforces every record's grants and state restrictions and reports refusals or pe
 `toolbar.controls` holds scope controls beside the label. `toolbar.trailing` accepts a compact
 snippet at the right edge, before New, for task controls such as a tooltip icon button. Keep page
 operations in the actions menu unless the task needs a direct control.
-
-`Matrix` accepts the same optional `toolbar`. Omitting it preserves a matrix without toolbar
-chrome. Custom cells can queue owned-child changes in their enclosing `FormState` with
-`queue_children`; omit `edit` and `move` when those changes must be saved together.
-Its `column_header({ col, label })` snippet can place a shared input in a column heading, such as
-the repayment date above an amount cell. Omitting it renders the column label.
 
 ## Form invariants
 

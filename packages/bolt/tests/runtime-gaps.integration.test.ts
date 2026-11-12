@@ -62,8 +62,8 @@ const manifest = Result.getOrThrow(
 			ops: {
 				description: 'Ops',
 				grants: {
-					notes: { outputs: { default: true }, create: true },
-					docs: { outputs: { default: true } }
+					notes: { outputs: { default: {} }, create: {} },
+					docs: { outputs: { default: {} } }
 				},
 				capabilities: { automations: ['report', 'long', 'bundle', 'read_doc'] }
 			}

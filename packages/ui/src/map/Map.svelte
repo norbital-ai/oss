@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { ModelKey, FieldOf, RecordFieldOf, RowOf, WhereOf } from '../model/types.js';
 	import type { Toolbar } from '../model/ViewToolbar.svelte';
 	/** Extra marks drawn over the rows: a labelled point, and optionally a dashed line to it from `from`. */
@@ -9,7 +10,9 @@
 		from?: { lat: number; lng: number };
 	};
 	/** Rows of `of` with a `point` field `at`, on the host's keyless basemap; a click opens the record. */
-	export type MapProps<C = ModelKey> = {
+	type MapProps<C = ModelKey> = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		of: C;
 		at: FieldOf<C>;
 		where?: WhereOf<C>;
@@ -34,9 +37,9 @@
 	import { format_value as show, isPoint } from '../kinds/kind.js';
 	// Needs no provider (P19): OpenStreetMap tiles unless the host overrides them; a tile failure still lists the rows.
 	import type { Map as LeafletMap, LayerGroup } from 'leaflet';
-	import { DEFAULT_BASEMAP, useKinds } from '../kinds/context.js';
+	import { DEFAULT_BASEMAP } from '../kinds/context.js';
 	import { open_record } from '../record/navigation.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { and } from '../filter/scope.js';
 	import { label as labelOf, msg } from '../text/messages.js';
 	import { listRequest, refOf, unref } from '../relations/select.js';
@@ -47,6 +50,7 @@
 	import ViewToolbar from '../model/ViewToolbar.svelte';
 
 	let {
+		ctx,
 		of,
 		at,
 		where,
@@ -58,10 +62,10 @@
 		labels = 'hover',
 		overlays = []
 	}: MapProps<C> = $props();
-	const bolt = useBolt();
-	const host = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const host = $derived(ctx.ui.kinds);
 	const catalog = $derived(host.catalog ?? {});
-	const view = viewState(bolt, {
+	const view = viewState(() => ctx, {
 		key: () => key ?? of,
 		model: () => of,
 		catalog: () => catalog,
@@ -216,7 +220,7 @@
 	);
 </script>
 
-<ViewToolbar
+<ViewToolbar {ctx}
 	config={toolbar}
 	model={of}
 	{view}
@@ -225,7 +229,7 @@
 	bind:q
 	searchable={(catalog[of]?.search?.length ?? 0) > 0}
 />
-<ReadGate state={page} what={labelOf(bolt, of)}>
+<ReadGate {ctx} state={page} what={labelOf(bolt, of)}>
 	{#snippet children(value)}
 		<div class="flex flex-col gap-1" data-view="map">
 			<div class="h-80 w-full rounded-md border" {@attach mount}></div>

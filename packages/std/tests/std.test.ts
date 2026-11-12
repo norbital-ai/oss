@@ -23,7 +23,7 @@ import {
 } from '../src/date.ts';
 import { Cycle, WorkCalendar, add_business_hours, business_days, cycle_of, cycles } from '../src/calendar.ts';
 import { columns, decode, encode } from '../src/sheet.ts';
-import { clone_next, only_shortens, seal_writes, void_once } from '../src/versioned.ts';
+import { clone_next, creates, only_shortens, seal_writes, void_once } from '../src/versioned.ts';
 import { compile, context, evaluate, formula } from '../src/formula.ts';
 import { band, priced_lines } from '../src/pricing.ts';
 import { parse_json, parse_json_result } from '../src/json.ts';
@@ -447,9 +447,10 @@ describe('std/versioned', () => {
 		);
 	});
 	it('clones the successor draft with its children as creates', () => {
-		const next = clone_next(v('a', '2026-01-01', null), '2026-07-01', {
-			lines: [{ id: 'l1', sku: 'X', price: '1.00' }]
-		});
+		const next = {
+			...clone_next(v('a', '2026-01-01', null), '2026-07-01'),
+			lines: creates([{ id: 'l1', sku: 'X', price: '1.00' }])
+		};
 		assert.deepEqual(next, {
 			name: 'a',
 			period: { from: '2026-07-01', to: null },

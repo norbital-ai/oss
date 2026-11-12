@@ -1,6 +1,6 @@
 # Models and modeling
 
-Every field is required unless `optional: true`. Exact shape: `import('@norbital-ai/bolt').ModelLiteral`, `FieldKind`.
+Every field is required unless `optional: true`. Exact shape: `import('@norbital-ai/bolt/declarations').ModelLiteral`, `FieldKind`.
 
 ## Field kinds
 
@@ -52,7 +52,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Write callbacks
 
-- Create and update transforms get changes with `before`, `set`, `after` and `changed(...fields)`. A create's `after` carries its future id. Return sets in order, or `{ sets, with, on_approved }`; delete has no transform.
+- Create and update transforms get changes with `before`, `set`, `after` and `changed(...fields)`. `after` is the stored row with `set` applied: read `c.after.x`, never `c.set.x ?? c.before.x`. A create's `after` carries its future id. Return sets in order, or `{ sets, with, on_approved }`; delete has no transform.
 - `with` and `on_approved` hold `{ [model]: { create?, update?: [{ target, set }] } }`. Each target carries the selected revision; related rows run their own transforms (`ctx.carried_by`).
 - `with` rows are held and rolled back with the root write. `on_approved` rows commit immediately when no approval holds the write, or once in the final approving decision's statement, all or nothing.
 - The approving decision asks the transform again with `ctx.approving` on the stored rows; return only `on_approved` then and never count those rows twice.
@@ -64,7 +64,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 ## Operations
 
 - A model exposes `create`, `update` and `delete`; a unique constraint marked `import_key: true` provides native `import`, and file syncs provide file transfer. There is no public upsert or named model action. A computed read is one read request plus a pure helper.
-- A business operation is an automation, `+<model>_<operation>.automation.ts`, with explicit IDs and typed input; a run has no implicit target. See [automations-and-effects.md](automations-and-effects.md).
+- A business operation is an automation, `+<model>_<operation>.automation.ts`, with typed input; a run has no implicit target. The records it acts on are a `{ kind: 'rows', of: '<model>' }` input: callers send ids, the body receives the rows read under its policies, and each row is its own write `target`. See [automations-and-effects.md](automations-and-effects.md).
 - Every generated write takes an array. Independent writes that must commit together share one `ctx.act({ '<model>.<verb>': inputs })` map; dependent parent and child use write layers. A transform can carry related rows into the same commit.
 
 ## Search
@@ -75,7 +75,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Syncs
 
-Place exchange under `syncs.<name>`. Discover: `import('@norbital-ai/bolt').RemoteSync`, `FileSync`.
+Place exchange under `syncs.<name>`. Discover: `import('@norbital-ai/bolt').RemoteSync`, `FileSyncCtx`.
 
 - Remote: `with: '<integration>'`, optional `every` and partitions, inline `read` and `write`. A read returns rows (`$id`, `$version`, `$deleted`), cursor and more; only returned source fields sync; page progress commits atomically. A write returns the acknowledged id and version, or null for local changes.
 - The engine owns no-echo, ordering, idempotency, retries, approval timing, conflict rollback and dead letters. A failing read rests per connection, one minute doubling to one hour, until a manual start, connection change or good read.

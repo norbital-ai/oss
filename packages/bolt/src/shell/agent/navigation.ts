@@ -17,8 +17,10 @@ type Ledger = {
 	primed: boolean;
 	started: Set<string>;
 };
-const LEDGER = Symbol.for('norbital.bolt.page-actions');
-const ledger: Ledger = ((globalThis as { [LEDGER]?: Ledger })[LEDGER] ??= {
+declare global {
+	var norbital_page_actions: Ledger | undefined;
+}
+const ledger: Ledger = (globalThis.norbital_page_actions ??= {
 	conversation: null,
 	seen: new Set(),
 	primed: false,

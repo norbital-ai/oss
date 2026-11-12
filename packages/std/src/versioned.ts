@@ -7,12 +7,13 @@ import { equal_json } from './json.ts';
 import { Schema } from 'effect';
 
 /** The columns of a versioned row these helpers read. */
-export type Lineage = {
+type Lineage = {
 	readonly id: string;
 	readonly period: DatePeriod;
 	readonly sealed_at?: Instant | string | null;
 	readonly voided_at?: Instant | string | null;
 	readonly void_reason?: string | null;
+	readonly revision?: number;
 };
 type Input = { readonly [field: string]: unknown };
 
@@ -71,17 +72,18 @@ export function seal_writes<V extends Lineage & { readonly revision: number }>(
  * `void_once` judges), else the refusal. Nested relation writes (its lines) are changes, so they are refused too.
  */
 export function only_shortens(before: Lineage, input: Input): string | null {
+	const was = new Map<string, unknown>(Object.entries(before));
 	for (const [field, value] of Object.entries(input)) {
-		if (field === 'voided_at' || field === 'void_reason' || same(value, (before as Input)[field]))
+		if (field === 'voided_at' || field === 'void_reason' || same(value, was.get(field)))
 			continue;
 		if (field === 'period' && isPeriod(value)) {
 			const p = value,
-				was = period_of(before.period);
+				had = period_of(before.period);
 			if (
-				p.from === was.from &&
+				p.from === had.from &&
 				p.to != null &&
 				p.to >= p.from &&
-				(was.to === null || p.to <= was.to)
+				(had.to === null || p.to <= had.to)
 			)
 				continue;
 		}
@@ -112,30 +114,31 @@ export function void_once(before: Lineage, input: Input): string | null {
 	return typeof reason === 'string' && reason.trim() !== '' ? null : 'A void states its reason.';
 }
 
-type Carried = 'id' | 'revision' | 'sealed_at' | 'voided_at' | 'void_reason' | 'period';
-type Rows = { readonly [relation: string]: readonly { readonly [field: string]: unknown }[] };
-
 /**
- * The create input of the successor draft: the version's own values (as the caller selected them) from `from`, open,
- * unsealed, with each relation's rows as explicit nested creates.
+ * The create input of the successor draft: the version's own values (as the caller selected them) from `from`, open and
+ * unsealed. Each relation's rows join it as explicit nested creates through `creates`.
  */
-export function clone_next<V extends Lineage, R extends Rows = {}>(
+export function clone_next<V extends Lineage>(
 	version: V,
-	from: PlainDate | string,
-	children?: R
-): Omit<V, Carried> & { period: DatePeriod } & {
-	[K in keyof R]: { create: Omit<R[K][number], 'id' | 'revision'>[] };
+	from: PlainDate | string
+): Omit<V, 'id' | 'revision' | 'sealed_at' | 'voided_at' | 'void_reason' | 'period'> & {
+	period: DatePeriod;
 } {
-	const start = PlainDate(from);
-	const strip = (row: { readonly [field: string]: unknown }, drop: readonly string[]) =>
-		Object.fromEntries(Object.entries(row).filter(([k]) => !drop.includes(k)));
-	const out: Record<string, unknown> = {
-		...strip(version, ['id', 'revision', 'sealed_at', 'voided_at', 'void_reason']),
-		period: { from: start, to: null }
-	};
-	for (const [rel, rows] of Object.entries(children ?? {}))
-		out[rel] = { create: rows.map((r) => strip(r, ['id', 'revision'])) };
-	return out as Omit<V, Carried> & { period: DatePeriod } & {
-		[K in keyof R]: { create: Omit<R[K][number], 'id' | 'revision'>[] };
-	};
+	const {
+		id: _id,
+		revision: _revision,
+		sealed_at: _sealed,
+		voided_at: _voided,
+		void_reason: _reason,
+		period: _period,
+		...own
+	} = version;
+	return { ...own, period: { from: PlainDate(from), to: null } };
 }
+
+/** A relation's rows as nested creates for `clone_next`: each row without its `id` and `revision`. */
+export const creates = <Row extends { readonly id?: string; readonly revision?: number }>(
+	rows: readonly Row[]
+): { create: Omit<Row, 'id' | 'revision'>[] } => ({
+	create: rows.map(({ id: _id, revision: _revision, ...row }) => row)
+});

@@ -5,6 +5,7 @@ beneath them, and the sixth digit verifies. `session` sends and checks the code 
 which signs the viewer in, signing a newcomer up where the workspace allows it, and reloads the page as them).
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Effect as EffectType } from 'effect';
 	type Said = EffectType.Effect<void, { readonly message: string }>;
 	/** What sends a code to a number and proves it. */
@@ -14,6 +15,8 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	};
 	/** The props of `PhoneVerify`. */
 	export interface PhoneVerifyProps {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		session: CodeSession;
 		/** The number's label; the kit's "Mobile number" by default. */
 		label?: string;
@@ -31,7 +34,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	import PhoneInput from '../kinds/phone-input.svelte';
 	import PinInput from './pin-input.svelte';
 
-	let { session, label, id = 'phone-verify' }: PhoneVerifyProps = $props();
+	let { ctx, session, label, id = 'phone-verify' }: PhoneVerifyProps = $props();
 	const t = ui_text();
 
 	let phone = $state<string | null>(null);
@@ -104,7 +107,7 @@ which signs the viewer in, signing a newcomer up where the workspace allows it, 
 	<div bind:this={row} {@attach lifetime}>
 		<Cluster gap="sm" align="center">
 			<div class="min-w-64 flex-1">
-				<PhoneInput
+				<PhoneInput {ctx}
 					{id}
 					value={phone}
 					disabled={busy}

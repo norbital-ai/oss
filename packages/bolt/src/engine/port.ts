@@ -2,7 +2,7 @@
 // facility failure, never a throw. `Port.fromPromise` is for Promise ports across an ABI (providers and host services).
 import { Crypto, Duration, Effect, Option, Predicate, Schema } from 'effect';
 import { BoltError } from '../protocol/errors.ts';
-import { FACILITY_KINDS, FacilityFailure, Unavailable } from '../decl/errors.ts';
+import { FACILITY_KINDS, FacilityFailure, Unavailable } from '../decl/errors/facility.ts';
 
 /** What a port call fails with: the facility's own failure, or the host providing none. */
 export type PortFailure = FacilityFailure | Unavailable;

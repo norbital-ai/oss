@@ -1,13 +1,11 @@
 import './dom.ts';
 import { required, textOf, browser } from './view-fixture.ts';
 import assert from 'node:assert/strict';
-import { it, vi } from '@effect/vitest';
+import { it } from '@effect/vitest';
 import { and, compact } from '../src/filter/scope.ts';
 import { flat } from '../src/read/aggregate.ts';
 import { label, msg } from '../src/text/messages.ts';
 import { like } from '../src/cell/value.ts';
-import { matrixCells, cellKey } from '../src/matrix/cells.ts';
-import { pivotGrid } from '../src/pivot/grid.ts';
 import { progressOf, runFiles } from '../src/runs/facts.ts';
 import { rangeText, searchRows, readTableState, writeTableState } from '../src/table/model.ts';
 import { readState, failed } from '../src/read/state.ts';
@@ -18,14 +16,12 @@ import type { HistoryEntry, Query, QueryAnswer } from '../src/client/contract.ts
 import { reactive } from './kit-state.svelte.js';
 import { listRequest, unref, refOf, label_read } from '../src/relations/select.ts';
 import { recordText } from '../src/kinds/kind.ts';
-import { Deferred, Effect, Queue } from 'effect';
+import { Effect } from 'effect';
 import { Decimal } from '@norbital-ai/std/decimal';
 import { format_value as show } from '../src/kinds/kind.ts';
 import { jsonRecord, viewFixture } from './view-fixture.ts';
 import type { KindsHost } from '../src/kinds/context.ts';
 import type { Json } from '@norbital-ai/std/wire';
-import type { Clip } from '../src/capture/capture.ts';
-import { audioClip, guided, narrator, observe, HOLD_MS, target } from '../src/capture/capture.ts';
 
 const bolt = { t: (k: string) => k };
 
@@ -222,11 +218,6 @@ it.effect('values display by shape', () =>
 		const dec = Decimal.of('1234.5');
 		assert.equal(show(dec, 'en'), '1,234.5');
 		assert.equal(
-			pivotGrid([{ key: { k: 'a' }, sum: { amount: dec } }], 'k', undefined, { sum: 'amount' })
-				.total,
-			1234.5
-		);
-		assert.equal(
 			show('2026-01-02T03:04:05.000Z', 'en'),
 			new Date('2026-01-02T03:04:05.000Z').toLocaleString('en', {
 				dateStyle: 'medium',
@@ -357,29 +348,7 @@ it.effect('a FK column reads its target label in the page read and shows it besi
 	})
 );
 
-it.effect('Matrix buckets items per row and column; a relation column reads its id', () =>
-	Effect.sync(() => {
-		const cells = matrixCells(
-			[
-				{ id: 'i1', employee: 'e1', day: '2026-09-01' },
-				{ id: 'i2', employee: 'e1', day: '2026-09-01' },
-				{ id: 'i3', employee: { model: 'employees', id: 'e2' }, day: '2026-09-02' }
-			],
-			'employee',
-			'day'
-		);
-		assert.deepEqual(
-			cells.get(cellKey('e1', '2026-09-01'))?.map((r) => r.id),
-			['i1', 'i2']
-		);
-		assert.deepEqual(
-			cells.get(cellKey('e2', '2026-09-02'))?.map((r) => r.id),
-			['i3']
-		);
-	})
-);
-
-it.effect('Pivot and Chart read aggregate rows', () =>
+it.effect('Chart reads aggregate rows', () =>
 	Effect.sync(() => {
 		const agg = [
 			{ key: { region: 'N', stage: 'won' }, sum: { amount: Decimal.of('10') } },
@@ -392,11 +361,6 @@ it.effect('Pivot and Chart read aggregate rows', () =>
 		assert.deepEqual(
 			{ ...flattened, 'sum.amount': Number(String(amount)) },
 			{ region: 'N', stage: 'won', 'sum.amount': 10 }
-		);
-		const g = pivotGrid(agg, 'region', 'stage', { sum: 'amount' });
-		assert.deepEqual(
-			[g.rowKeys, g.colKeys, g.at('S', 'lost'), g.rowTotal('N'), g.colTotal('won'), g.total],
-			[['N', 'S'], ['won', 'lost'], 0, 15, 12.5, 17.5]
 		);
 		assert.deepEqual(
 			series({ rows: [{ key: { month: '2026-01-01' }, count: 4 }], next: null }, 'month', [
@@ -416,178 +380,6 @@ it.effect('run progress and returned files', () =>
 		assert.deepEqual(runFiles({ result: { files: [f], count: 1 } }), [f]);
 		assert.deepEqual(runFiles({ result: f }), [f]);
 	})
-);
-
-it.effect('guided capture takes a pose only after a steady hold with a descriptor', () =>
-	Effect.sync(() => {
-		let s = guided(['straight', 'left']);
-		const straight = { angle: { yaw: 0, pitch: 0 }, embedding: true };
-		s = observe(s, straight, 0).state;
-		assert.equal(observe(s, straight, HOLD_MS - 1).capture, null);
-		assert.equal(observe(s, { ...straight, embedding: false }, HOLD_MS).state.heldSince, null);
-		const step = observe(s, straight, HOLD_MS);
-		assert.equal(step.capture, 'straight');
-		assert.equal(target(step.state), 'left');
-		// the person's left is negative yaw
-		const left = observe(
-			observe(step.state, { angle: { yaw: -0.4, pitch: 0 }, embedding: true }, 0).state,
-			{ angle: { yaw: -0.4, pitch: 0 }, embedding: true },
-			HOLD_MS
-		);
-		assert.equal(left.capture, 'left');
-		assert.equal(target(left.state), null);
-	})
-);
-
-it.effect(
-	'the narrator plays one clip at a time, skips missing clips, and evicts old phrases',
-	() =>
-		Effect.gen(function* () {
-			const played: string[] = [];
-			const clips: ((status: 'played' | 'missing' | 'stopped') => void)[] = [];
-			const started = yield* Queue.unbounded<string>();
-			let drained = yield* Deferred.make<void>();
-			const play = (url: string): Effect.Effect<Clip> =>
-				Effect.gen(function* () {
-					const clip = yield* Deferred.make<'played' | 'missing' | 'stopped'>();
-					played.push(url);
-					yield* Queue.offer(started, url);
-					clips.push((status) => {
-						Deferred.doneUnsafe(clip, Effect.succeed(status));
-					});
-					return {
-						done: Deferred.await(clip),
-						stop: Deferred.succeed(clip, 'stopped').pipe(Effect.asVoid)
-					};
-				});
-			yield* Effect.scoped(
-				Effect.gen(function* () {
-					const n = yield* narrator(
-						play,
-						{
-							a: { en: 'a.mp3' },
-							b: { en: 'b.mp3' },
-							c: { en: 'c.mp3' },
-							d: { en: 'd.mp3' },
-							get nothing() {
-								Deferred.doneUnsafe(drained, Effect.void);
-								return {};
-							}
-						},
-						() => 'en'
-					);
-					yield* n.say('a');
-					assert.equal(yield* Queue.take(started), 'a.mp3');
-					for (const phrase of ['a', 'b', 'c', 'd', 'nothing']) yield* n.say(phrase);
-					assert.deepEqual(played, ['a.mp3']);
-					const first = clips[0];
-					assert.ok(first);
-					first('played');
-					assert.equal(yield* Queue.take(started), 'd.mp3');
-					assert.deepEqual(played, ['a.mp3', 'd.mp3']);
-					const second = clips[1];
-					assert.ok(second);
-					second('missing');
-					yield* Deferred.await(drained);
-					drained = yield* Deferred.make<void>();
-					yield* n.say('d');
-					yield* n.say('nothing');
-					yield* Deferred.await(drained);
-					assert.deepEqual(played, ['a.mp3', 'd.mp3']);
-					assert.ok(n.missing.has('d.mp3'));
-				})
-			);
-		})
-);
-
-const audioProbe = (play: () => Promise<void>) =>
-	Effect.acquireRelease(
-		Effect.sync(() => {
-			class AudioProbe extends EventTarget {
-				static readonly instances: AudioProbe[] = [];
-				pauses = 0;
-				constructor(_url: string) {
-					super();
-					AudioProbe.instances.push(this);
-				}
-				play() {
-					return play();
-				}
-				pause() {
-					this.pauses++;
-				}
-			}
-			vi.stubGlobal('Audio', AudioProbe);
-			return AudioProbe;
-		}),
-		() => Effect.sync(() => vi.unstubAllGlobals())
-	);
-
-it.effect('audio completion removes both event listeners and settles exactly once', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const started = yield* Deferred.make<void>();
-			const Audio = yield* audioProbe(() => {
-				Deferred.doneUnsafe(started, Effect.void);
-				return Promise.resolve();
-			});
-			const clip = yield* audioClip('prompt.mp3');
-			yield* Deferred.await(started);
-			const audio = required(Audio.instances[0]);
-			const removed = yield* Effect.acquireRelease(
-				Effect.sync(() => vi.spyOn(audio, 'removeEventListener')),
-				(spy) => Effect.sync(() => spy.mockRestore())
-			);
-			audio.dispatchEvent(new Event('ended'));
-			audio.dispatchEvent(new Event('error'));
-			yield* clip.stop;
-			assert.equal(yield* clip.done, 'played');
-			assert.equal(audio.pauses, 1);
-			assert.deepEqual(removed.mock.calls.map(([event]) => event).sort(), ['ended', 'error']);
-		})
-	)
-);
-
-it.effect('an autoplay refusal is stopped and a later attempt can play the same URL', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			let attempts = 0;
-			const started = yield* Queue.unbounded<void>();
-			const Audio = yield* audioProbe(() => {
-				Queue.offerUnsafe(started, undefined);
-				return ++attempts === 1
-					? Promise.reject(new DOMException('Touch first', 'NotAllowedError'))
-					: Promise.resolve();
-			});
-			const refused = yield* Effect.scoped(
-				Effect.gen(function* () {
-					const clip = yield* audioClip('prompt.mp3');
-					return yield* clip.done;
-				})
-			);
-			assert.equal(refused, 'stopped');
-			yield* Queue.take(started);
-			const clip = yield* audioClip('prompt.mp3');
-			yield* Queue.take(started);
-			required(Audio.instances[1]).dispatchEvent(new Event('ended'));
-			assert.equal(yield* clip.done, 'played');
-		})
-	)
-);
-
-it.effect('closing the audio scope stops a pending clip exactly once', () =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const Audio = yield* audioProbe(() => Promise.resolve());
-			const clip = yield* Effect.scoped(audioClip('prompt.mp3'));
-			const audio = required(Audio.instances[0]);
-			assert.equal(yield* clip.done, 'stopped');
-			audio.dispatchEvent(new Event('error'));
-			yield* clip.stop;
-			assert.equal(yield* clip.done, 'stopped');
-			assert.equal(audio.pauses, 1);
-		})
-	)
 );
 
 it.live(

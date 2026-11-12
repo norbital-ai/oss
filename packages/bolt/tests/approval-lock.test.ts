@@ -116,7 +116,7 @@ describe('approval relationship traversal', () => {
 			{
 				requester: {
 					description: 'Requests root deletion: its delete check may approve',
-					grants: { root: { outputs: { default: true }, delete: { verdict: true } } }
+					grants: { root: { outputs: { default: {} }, delete: { verdict: true } } }
 				}
 			}
 		);

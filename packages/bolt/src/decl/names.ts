@@ -229,7 +229,6 @@ type OwnedInverseOf<M, R = ManyRelKeys<M>, Keys extends keyof R = keyof R> = {
 	[I in Keys]: AllRels[R[I] & keyof AllRels] extends { owned: true } ? I : never;
 }[Keys] &
 	string;
-export type RelNameOf<M> = (keyof OneRels<M> | keyof ManyRels<M>) & string;
 type FkValue<R, Targets = TargetsOf<R>> =
 	| ([Targets] extends [infer T extends string]
 			? [T] extends [TargetName]
@@ -312,8 +311,6 @@ export type VectorField<M> = OfKind<M, { kind: 'vector' }>;
 export type SearchableField<M> = OfKind<M, { kind: 'text' | 'enum' }>;
 /** Fields a read returns only when its `select` names them (a `get` returns them too): json, custom and file. */
 export type HeavyField<M> = OfKind<M, { kind: 'json' | 'custom' | 'file' }>;
-/** The relation names of model `M`: its FKs and the inverse many-relations. */
-export type RelName<M> = RelNameOf<M>;
 /** A roll-up path: `<many-relation>.<child field>`. */
 export type RelPath<M> = {
 	[R in keyof ManyRels<M> & string]: `${R}.${FieldName<ManyRels<M>[R]>}`;
@@ -499,7 +496,7 @@ export type RowApproval = {
 	readonly requested_by: string;
 };
 /** Where a row's latest change stands with one write sync (`$sync.<name>`): queued, acknowledged, or refused with `message`. */
-export type SyncState = {
+type SyncState = {
 	readonly status: 'pending' | 'ok' | 'failed';
 	readonly message?: string;
 };

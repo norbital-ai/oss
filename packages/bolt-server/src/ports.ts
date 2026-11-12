@@ -11,15 +11,19 @@ import {
 	type AiResponse
 } from '@norbital-ai/bolt/engine';
 import { off, type Facilities } from '@norbital-ai/bolt/facilities';
-import { download_media, type DownloadOptions } from '@norbital-ai/bolt/node';
+import { download_media } from '@norbital-ai/bolt/node';
 import { open_ai_embeddings, open_router_chat } from '@norbital-ai/providers/openrouter';
 import type { HostSettings } from './host.ts';
 
 /** S3-compatible SigV4, with a provider-requested signed URL expiry. */
-export const s3Files = Effect.fn('server.s3Files')(function* (
+export const s3Files: (
 	endpoint: string,
 	credential: string,
-	downloads: DownloadOptions = {}
+	downloads?: NonNullable<Parameters<typeof download_media>[2]>
+) => Effect.Effect<Files['Service'], never, HttpClient.HttpClient> = Effect.fn('server.s3Files')(function* (
+	endpoint: string,
+	credential: string,
+	downloads: NonNullable<Parameters<typeof download_media>[2]> = {}
 ) {
 	const client = yield* HttpClient.HttpClient;
 	const base = new URL(endpoint);
@@ -237,6 +241,8 @@ type Run = <A, E>(
 	effect: Effect.Effect<A, E, HttpClient.HttpClient>,
 	options?: { readonly signal?: AbortSignal | undefined }
 ) => Promise<A>;
+/** What `openAi` provides of the intelligence group. */
+export type OpenAiMembers = Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'>;
 /** The intelligence group over OpenAI-compatible endpoints: `sys_1`, `sys_2` and, when mapped, `embed`. */
 export const openAi = Effect.fn('server.openAi')(function* (
 	endpoints: { sys1: Endpoint & { provider?: string }; sys2: Endpoint; embed?: Endpoint },
@@ -288,7 +294,7 @@ export const openAi = Effect.fn('server.openAi')(function* (
 								: { id: model.model, batch: model.inputs ?? 1 };
 					}
 				});
-	const members: Pick<Facilities['intelligence'], 'system1' | 'system2' | 'embed'> = {
+	const members: OpenAiMembers = {
 		system1: {
 			ask: (request, signal) => run(system1.ask(request), { signal }),
 			...(system1.maxChoices === undefined ? {} : { max_choices: system1.maxChoices })
@@ -335,7 +341,9 @@ const Hit = Schema.Struct({
 	name: Schema.optionalKey(Schema.String),
 	display_name: Schema.String
 });
-export const nominatim = Effect.fn('server.nominatim')(function* (
+export const nominatim: (
+	endpoint: string
+) => Effect.Effect<Geo['Service'], never, HttpClient.HttpClient> = Effect.fn('server.nominatim')(function* (
 	endpoint: string
 ): Effect.fn.Return<Geo['Service'], never, HttpClient.HttpClient> {
 	const client = yield* HttpClient.HttpClient;

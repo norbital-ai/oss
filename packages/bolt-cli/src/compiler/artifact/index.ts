@@ -5,7 +5,8 @@
 // host language tool's type setup), the SOURCE Studio edits (`source/`) and the SEED packs (`seed/<pack>/`), each with
 // its own digest in `release.json`. Every host activates the bundle through `read_artifact`.
 import { Effect, FileSystem, Option, Path, Schema } from 'effect';
-import { TemplateManifest, SKILL_FILE, type EngineManifest, plan } from '@norbital-ai/bolt/engine';
+import { SKILL_FILE, type EngineManifest, plan } from '@norbital-ai/bolt/engine';
+import { TemplateManifest } from '@norbital-ai/bolt/protocol';
 import { HOST_FILE, fingerprint, schema_slice } from '@norbital-ai/bolt/tooling';
 import { constants, cpSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
@@ -18,10 +19,9 @@ import { buildServerPages } from './server.ts';
 import { layerLines, PLATFORM, type PreparedLayer } from './platform.ts';
 import {
 	artifact_hash,
-	ArtifactJsonSchema,
+	ArtifactJson,
 	CONTRACT,
-	tree,
-	type ArtifactJson
+	tree
 } from '@norbital-ai/bolt/artifact';
 import { sha256_hex } from '@norbital-ai/store';
 
@@ -206,7 +206,7 @@ export const writeArtifact = Effect.fn('bolt.writeArtifact')(function* (
 		changed.every((file) => graph.spa.includes(file) && !graph.pages.includes(file));
 	const previous =
 		!stale && (yield* fs.exists(join(out, 'artifact.json')))
-			? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ArtifactJsonSchema))(
+			? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ArtifactJson))(
 					yield* fs.readFileString(join(out, 'artifact.json'))
 				)
 			: undefined;

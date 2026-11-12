@@ -20,7 +20,7 @@ type DeepSeekRouting = {
  * tool arguments), `sort` takes the fastest on the first step, and `session_id` keeps every later step there, where its
  * prefix and cached price are, moving only if that provider fails.
  */
-export const deep_seek_routing = (endpoint: string, model: string): DeepSeekRouting =>
+const deep_seek_routing = (endpoint: string, model: string): DeepSeekRouting =>
 	model.startsWith('deepseek/') && new URL(endpoint).hostname === 'openrouter.ai'
 		? {
 				provider: {

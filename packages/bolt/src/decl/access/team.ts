@@ -4,16 +4,8 @@
 import type { Checked, Exact } from '../fields.ts';
 import type { PolicyName } from '../names.ts';
 
-/** A source team with optional display label and parent (which scopes data, never passes policies down), holding only its listed policies. */
-export type TeamSpec = {
-	readonly name?: string;
-	readonly parent?: string | null;
-	readonly policies: readonly PolicyName[];
-};
-/** A source team entry. */
-export type TeamEntry = TeamSpec;
 /** A team entry as the manifest holds it. */
-export type TeamData = {
+type TeamData = {
 	readonly name?: string;
 	readonly parent?: string | null;
 	readonly policies: readonly string[];

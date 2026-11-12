@@ -7,7 +7,7 @@ A toolbar search trigger and popover with a bound text value or a custom indexed
 	import type * as PopoverControls from '../../primitives/popover/index.js';
 
 	/** The shared toolbar search popover; a custom body keeps a view's indexed search UI. */
-	export type ToolbarSearchProps = {
+	type ToolbarSearchProps = {
 		open?: boolean;
 		value?: string;
 		label: string;

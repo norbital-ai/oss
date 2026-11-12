@@ -137,7 +137,7 @@ bind_model('orders')({
 		...m.orders.spec.create,
 		transform: function* (inputs, ctx) {
 			// @ts-expect-error T3 refuse naming a field the payload cannot hold
-			return inputs.length > 9 ? yield* ctx.refuse('too many', { field: 'total' }) : inputs.map(({ set }) => set);
+			return inputs.length > 9 ? yield* ctx.refuse('errors.refused', { field: 'total' }) : inputs.map(({ set }) => set);
 		}
 	}
 });
@@ -228,7 +228,7 @@ automation({
 		const target =
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
-		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		if (target === null) return yield* ctx.refuse('errors.refused');
 		yield* ctx.act({ 'orders.update': [
 			// @ts-expect-error Q1 `set` naming a computed field (rule 38e)
 			{
@@ -244,7 +244,7 @@ automation({
 		const target =
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
-		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		if (target === null) return yield* ctx.refuse('errors.refused');
 		// @ts-expect-error Q2 a relation array never replaces a set (rule 22): relation actions are explicit
 		yield* ctx.act({ 'orders.update': [{ target, set: { lines: [] } }] });
 	}
@@ -255,7 +255,7 @@ automation({
 		const target =
 			(yield* ctx.query({ orders: { where: { id: { eq: targetId } }, limit: 1 } })).orders
 				.rows[0] ?? null;
-		if (target === null) return yield* ctx.refuse('Choose an existing orders record.');
+		if (target === null) return yield* ctx.refuse('errors.refused');
 		// @ts-expect-error Q3 a state value outside the state's states (rule 40)
 		yield* ctx.act({ 'orders.update': [{ target, set: { status: 'shipped' } }] });
 	}
@@ -407,7 +407,7 @@ policy({
 const run: Id<'sys_run'> | undefined = undefined;
 void run;
 // @ts-expect-error L1 run-grant: no grant names sys_run
-policy({ description: 'x', grants: { sys_run: { outputs: { default: true } } } });
+policy({ description: 'x', grants: { sys_run: { outputs: { default: {} } } } });
 automation({
 	...rt.orders_renote.spec,
 	run: function* (_, ctx) {
@@ -425,11 +425,11 @@ automation({
 });
 // @ts-expect-error L4 nor trigger on it
 automation({ ...rt.nightly.spec, on: [{ created: 'sys_run' }] });
-policy({ description: 'x', grants: { sys_invitation: { outputs: { default: true } } } });
+policy({ description: 'x', grants: { sys_invitation: { outputs: { default: {} } } } });
 policy({
 	description: 'x',
 	// @ts-expect-error Invitations remain read-only.
-	grants: { sys_invitation: { outputs: { default: true }, create: true } }
+	grants: { sys_invitation: { outputs: { default: {} }, create: {} } }
 });
 // @ts-expect-error API keys take no grant.
-policy({ description: 'x', grants: { sys_api_key: { outputs: { default: true } } } });
+policy({ description: 'x', grants: { sys_api_key: { outputs: { default: {} } } } });

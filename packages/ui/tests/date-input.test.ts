@@ -3,13 +3,14 @@ import './dom.ts';
 import { flushSync, mount, unmount } from 'svelte';
 import { expect, it } from 'vitest';
 import DateInput from '../src/kinds/date-input.svelte';
+import { bare_ctx } from './bare-ctx.ts';
 
 it('typing a day or month commits once, when the segment is done', async () => {
 	const target = document.body.appendChild(document.createElement('div'));
 	const changes: (string | null)[] = [];
 	const view = mount(DateInput, {
 		target,
-		props: { value: '2026-09-27', on_change: (v: string | null) => changes.push(v) }
+		props: { ctx: bare_ctx(), value: '2026-09-27', on_change: (v: string | null) => changes.push(v) }
 	});
 	flushSync();
 	const segment = (name: string) => {

@@ -1,12 +1,7 @@
 // `@norbital-ai/bolt/errors` (D3): canonical tagged errors shared by guest bodies, pages and the test kit.
 // The guest loads a family only when an operation needs it; these reexports retain the public class identities.
-export { Refusal } from './errors/refusal.ts';
-export { ActRefused, ActConflict, ActUnknown, act_failure, type ActFailure } from './errors/act.ts';
-export {
-	FACILITY_KINDS,
-	FacilityFailure,
-	Unavailable,
-	facility_failure
-} from './errors/facility.ts';
+export type { Refusal } from './errors/refusal.ts';
+export { ActRefused, ActConflict, type ActFailure } from './errors/act.ts';
+export { FacilityFailure, Unavailable } from './errors/facility.ts';
 export { ReadFailed } from './errors/read.ts';
-export { TransportFailed, ProtocolFailed, DescribeTimeout } from './errors/browser.ts';
+export { ProtocolFailed } from './errors/browser.ts';

@@ -503,8 +503,8 @@ function makeApprovals(m: EngineManifest, db: TenantDbShape, options: ApprovalsO
 				: {
 						writes: [],
 						restored: [],
-						rolled_back: [] as RolledBack[],
-						skipped: [] as Skipped[],
+						rolled_back: Array.of<RolledBack>(),
+						skipped: Array.of<Skipped>(),
 						observations: []
 					};
 		if (plan.skipped.some((record) => record.field === '*' && record.reason !== 'modelRemoved'))

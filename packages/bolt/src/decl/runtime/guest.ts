@@ -115,38 +115,11 @@ const lifted = (call: Call, member: string, family: Family) => {
 	};
 	return cross;
 };
-type RefusalPoint = { readonly row?: number; readonly path?: string };
-function inputPoint(input: unknown, target: object, path = '', row?: number): RefusalPoint | undefined {
-	if (input === target) return { ...(row === undefined ? {} : { row }), ...(path === '' ? {} : { path }) };
-	if (isArray(input)) {
-		for (const [index, item] of input.entries()) {
-			const point = inputPoint(item, target, path, row ?? index);
-			if (point !== undefined) return point;
-		}
-	} else if (Predicate.isObject(input)) {
-		for (const [key, item] of Object.entries(input)) {
-			const point = inputPoint(item, target, row === undefined ? (path === '' ? key : `${path}.${key}`) : path, row);
-			if (point !== undefined) return point;
-		}
-	}
-	return undefined;
-}
 const refuse = (
 	message: unknown,
-	at?: {
-		readonly at?: unknown;
-		readonly field?: string | undefined;
-		readonly row?: number | undefined;
-		readonly path?: string | undefined;
-	},
-	input: unknown = undefined
-): Effect.Effect<never, Refusal> => {
-	const point = at?.at === undefined ? undefined : Predicate.isObject(at.at) ? inputPoint(input, at.at) : undefined;
-	if (at?.at !== undefined && point === undefined)
-		return Effect.die(new Error('refuse at must name a row or change from this input'));
-	const failure = { message: String(message), field: at?.field, row: point?.row ?? at?.row, path: at?.path ?? point?.path };
-	return Effect.fail(new Refusal(failure));
-};
+	at?: { readonly field?: string | undefined; readonly row?: number | undefined }
+): Effect.Effect<never, Refusal> =>
+	Effect.fail(new Refusal({ message: String(message), field: at?.field, row: at?.row }));
 const RowChange = Schema.Struct({
 	before: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
 	set: Schema.Record(Schema.String, Schema.Unknown),
@@ -162,10 +135,9 @@ const changesOf = (input: unknown) => Schema.decodeUnknownSync(Schema.Array(RowC
 	}
 }));
 /** Builds only the members that this invocation kind admits; the prelude carries no ctx functions. */
-const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
+const lift = (call: Call, raw: unknown): unknown => {
 	if (!Predicate.isObject(raw)) return raw;
 	const kind = raw[CTX];
-	const deny = (message: unknown, at?: Parameters<typeof refuse>[1]) => refuse(message, at, input);
 	const cross = (member: string, family: Family = 'engine') => lifted(call, member, family);
 	const facility = (member: FacilityMember) => cross(member, 'facility');
 	const clock = {
@@ -205,18 +177,18 @@ const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
 				admin: raw['admin'] === true,
 				carried_by: typeof raw['carriedBy'] === 'string' ? raw['carriedBy'] : null,
 				approving: raw['approving'] === true,
-				refuse: deny,
+				refuse,
 				...workspace,
 				query: Object.assign(workspace.query, { after: cross('db.after') })
 			};
 		case 'syncRead':
-			return { ...clock, ...actor, ...workspace, refuse: deny, ...instance };
+			return { ...clock, ...actor, ...workspace, refuse, ...instance };
 		case 'syncWrite':
 			return {
 				...clock,
 				...actor,
 				...workspace,
-				refuse: deny,
+				refuse,
 				...instance,
 				...(raw['fileExport'] === true
 					? {
@@ -232,7 +204,7 @@ const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
 				...clock,
 				...actor,
 				...workspace,
-				refuse: deny,
+				refuse,
 				...instance,
 				files: { get: cross('files.get', 'facility') }
 			};
@@ -244,7 +216,7 @@ const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
 				policies,
 				query: workspace.query,
 				allow: Verdict.allow,
-				refuse: deny,
+				refuse,
 				approve: Verdict.approve
 			};
 		case 'page':
@@ -255,7 +227,7 @@ const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
 				...actor,
 				...reads,
 				...writes,
-				refuse: deny,
+				refuse,
 				policies,
 				admin: raw['admin'] === true,
 				target: raw['row']
@@ -268,7 +240,7 @@ const lift = (call: Call, raw: unknown, input?: unknown): unknown => {
 				...actor,
 				...reads,
 				...writes,
-				refuse: deny,
+				refuse,
 				cause: raw['cause'],
 				attempt: raw['attempt'],
 				// an automation run's id and trigger; an effect has none
@@ -363,7 +335,7 @@ const prepare_args = (args: readonly unknown[], at: number): readonly unknown[] 
 		? changesOf(args[0])
 		: undefined;
 	return args.map((arg, i) => i === at
-		? lift(call, arg, changes ?? args[0])
+		? lift(call, arg)
 		: i === 0 && changes !== undefined ? changes : arg);
 };
 /** The generator tag supplies the authoring diagnostic; the typed producer and body_effect own execution proof. */
@@ -395,15 +367,11 @@ const wrap_verdict = <A extends readonly unknown[]>(
 				Effect.map(Verdict.dataOf),
 				Effect.catchIf(
 					(error): error is Refusal => error instanceof Refusal,
-					({ message, field, row, path }) =>
+					({ message, field, row }) =>
 						Effect.succeed({
 							kind: 'deny' as const,
 							message,
-							at: {
-								...(field === undefined ? {} : { field }),
-								...(row === undefined ? {} : { row }),
-								...(path === undefined ? {} : { path })
-							}
+							at: { ...(field === undefined ? {} : { field }), ...(row === undefined ? {} : { row }) }
 						})
 				)
 			);

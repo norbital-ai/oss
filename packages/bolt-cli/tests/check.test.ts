@@ -293,14 +293,14 @@ describe('bolt check', () => {
 				}
 			},
 			policies: {
-				anyone: { description: 'a', grants: { items: { outputs: { public: true } } } },
+				anyone: { description: 'a', grants: { items: { outputs: { public: {} } } } },
 				wide: {
 					description: 'w',
-					grants: { items: { outputs: { default: true, unlabelled: true } } }
+					grants: { items: { outputs: { default: {}, unlabelled: {} } } }
 				},
 				desk: {
 					description: 'd',
-					grants: { items: { outputs: { public: true }, create: true, delete: true } }
+					grants: { items: { outputs: { public: {} }, create: {}, delete: {} } }
 				}
 			},
 			apps: {

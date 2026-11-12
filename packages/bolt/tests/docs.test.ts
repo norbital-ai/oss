@@ -138,21 +138,25 @@ it.effect('the declaration functions are documented, and spec parameters list th
 		'team',
 		'workspace'
 	]);
-	const model = required(docs.symbol('bolt', 'ModelDeclaration'));
-	expect(model.signature).toContain('interface ModelDeclaration');
+	const model = required(docs.symbol('bolt/declarations', 'ModelLiteral'));
+	expect(model.signature).toContain('type ModelLiteral');
 	expect(model.source).toMatch(/^packages\/bolt\/src\/decl\/model\.ts:\d+$/);
-	expect(model.params?.[0]?.fields?.map((f) => f.name)).toContain('fields');
+	expect(model.members?.map((f) => f.name)).toContain('fields');
 }));
 
 it.effect('keeps implementation guidance and parameter documentation on the core public contracts', () => Effect.gen(function* () {
 	const docs = yield* cached;
-	for (const name of [
-		'ModelDeclaration',
-		'IntegrationDeclaration',
-		'workspace',
-		'automation',
-		'secrets'
-	]) {
+	// `model()` and `integration()` are generated bindings: their literals and role cards carry the guidance
+	for (const [name, role] of [['ModelLiteral', 'model'], ['IntegrationLiteral', 'integration']] as const) {
+		expect(docs.symbol('bolt/declarations', name)?.summary, name).not.toBe('');
+		expect(docs.skill('bolt-contract')?.files.find((file) => file.path === `${role}.md`)?.text, name).toContain(
+			`## ${name}`
+		);
+	}
+	expect(docs.skill('bolt-contract')?.files.find((file) => file.path === 'model.md')?.text).toContain(
+		'export default model('
+	);
+	for (const name of ['workspace', 'automation', 'secrets']) {
 		const contract = docs.symbol('bolt', name);
 		expect(
 			contract?.params?.every((param) => Boolean(param.summary)),
@@ -182,10 +186,10 @@ it.effect('svelte components list their props with the props docs', () => Effect
 
 it.effect('search ranks an exact name first and narrows by namespace', () => Effect.gen(function* () {
 	const docs = yield* cached;
-	expect(docs.search('ModelDeclaration')[0]).toMatchObject({
-		namespace: 'bolt',
-		name: 'ModelDeclaration',
-		kind: 'interface'
+	expect(docs.search('ModelLiteral')[0]).toMatchObject({
+		namespace: 'bolt/declarations',
+		name: 'ModelLiteral',
+		kind: 'type'
 	});
 	expect(
 		docs.search('add days', { namespaces: ['std/'] }).every((h) => h.namespace.startsWith('std/'))
@@ -198,7 +202,7 @@ it.effect('search ranks an exact name first and narrows by namespace', () => Eff
 	expect(names).toContain('app');
 	expect(names.some((n) => n.startsWith('Table'))).toBe(true);
 	expect(names).not.toContain('ApprovalPanel'); // "app" matches where a word starts, not inside "approval"
-	expect(docs.search('enum field kind values options')[0]?.name).toBe('FieldKind');
+	expect(docs.search('enum field kind values options')[0]).toMatchObject({ namespace: 'std/kind', name: 'Kind' });
 }));
 
 it.effect('documents native Effect service implementations needed by test layers', () => Effect.gen(function* () {

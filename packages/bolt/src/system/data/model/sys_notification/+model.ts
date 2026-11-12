@@ -14,11 +14,12 @@ export default bind_system_model('sys_notification')({
 		link: { kind: 'json', optional: true },
 		/** Its files: `FileRef`s, and documents (`{ document, to, name }`) converted at delivery. */
 		attachments: { kind: 'json', default: [] },
-		once: { kind: 'text', optional: true, unique: true },
+		once: { kind: 'text', optional: true },
 		at: { kind: 'instant' },
 		member: { kind: 'text', optional: true },
 		read_at: { kind: 'instant', optional: true }
 	},
+	constraints: { once: { unique: ['once'] } },
 	table: {
 		primary: 'text'
 	},

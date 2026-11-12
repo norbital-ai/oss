@@ -42,7 +42,7 @@
 	import { watch } from 'runed';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { AccretionDisc, NorbiusStrip } from '@norbital-ai/ui/brand';
-	import { Button, Combobox, Dialog, format_handle, Icon, type ModelExposure } from '@norbital-ai/ui';
+	import { Button, Combobox, Dialog, format_handle, Icon, type ModelExposure, type UiContext } from '@norbital-ai/ui';
 	import type { AiModel } from '../../engine/contracts.ts';
 	import type { AgentConversation, AgentRow } from '../../protocol/wire.ts';
 	import type { AgentRequest, ShellBolt } from '../runtime.ts';
@@ -75,6 +75,7 @@
 	import { captionOf, ORB, orbState, previewsOf, currentPreview } from './view.ts';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		read,
@@ -90,6 +91,7 @@
 		on_conversation,
 		storage_key
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: Pick<ShellBolt, 'observe' | 'file_url'>;
 		/** The finder's record search read (mentions and commands). */
@@ -1219,7 +1221,7 @@
 			<div class="relative flex min-h-0 w-full flex-1 flex-col">
 				<div class="flex h-full min-h-0 w-full flex-col">
 					{#if current?.plan && current.plan.status !== 'draft'}<PlanCards plan={current.plan} place="current" {starting} {empty} running={status === 'running'} on_revise={() => (mode = 'plan')} on_execute={() => plan(true)} on_discard={() => status === 'running' ? (confirming = 'plan') : plan(false)} {t} />{/if}
-					<Transcript {api} {t} {zone} {admin} {conversation} {rows} {status} {sent} {thread} {automation}
+					<Transcript {ctx} {api} {t} {zone} {admin} {conversation} {rows} {status} {sent} {thread} {automation}
 						goals={current?.goals} plan={current?.plan} {before} loading_older={loadingOlder} load_older={loadOlder}
 						bind:port bind:pinned {latest} load_failed={transcript.error !== undefined} on_retry={() => fork(transcript.refetch())}
 						decision_frame={$transcript === undefined ? undefined : `${$transcript.rows.length}:${$transcript.rows.at(-1)?.id}`}
@@ -1249,7 +1251,7 @@
 					on_open_rail={openRail} on_stop={() => (confirming = 'stop')} on_resume={() => control(false)} />
 			{/if}
 		</div>
-		<SessionRail {rail} bind:rail_el={railEl} bind:focus bind:navigating {conversation} {rows} {inputs} {outputs} {thread} {automation}
+		<SessionRail {ctx} {rail} bind:rail_el={railEl} bind:focus bind:navigating {conversation} {rows} {inputs} {outputs} {thread} {automation}
 			attached_count={attached.length} {meter} model={chosenModel} model_label={chosenModel === null ? '' : modelLabel(chosenModel)} {connectors} {bolt} {api}
 			control={childControl} {dispatch} on_close={closeRail} on_attach={() => picker?.click()} on_create_file={createFile}
 			motion={sessionMotion} file_href={fileHref} {t} />

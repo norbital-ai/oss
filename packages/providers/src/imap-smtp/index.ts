@@ -14,6 +14,7 @@ import type { ProviderDef, ProviderText } from '../abi.ts';
 
 type ProviderSetup = ProviderDef['setup'];
 import {
+	notConnected,
 	OAuthRefused,
 	PairingInvalid,
 	ProviderRefused,
@@ -865,7 +866,7 @@ const open = Effect.fn('Mailbox.open')(function* (
 		close: FiberHandle.clear(supervisor),
 		reconcile: (thread: string, since: string) =>
 			reconciling === null
-				? Effect.fail(new ProviderUnavailable({ message: 'the mailbox is not connected' }))
+				? Effect.fail(notConnected('the mailbox'))
 				: reconciling(thread, since),
 		send: (message: Json, files: readonly OutboundAttachment[] = []) =>
 			Effect.gen(function* () {

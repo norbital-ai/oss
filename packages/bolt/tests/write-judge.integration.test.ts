@@ -68,16 +68,16 @@ const m = Result.getOrThrow(
 					}
 				}
 			},
-			deletion: { description: 'Judges deletions', grants: { orders: { outputs: { default: true }, delete: { verdict: true } } } },
+			deletion: { description: 'Judges deletions', grants: { orders: { outputs: { default: {} }, delete: { verdict: true } } } },
 			mover: {
 				description: '',
-				grants: { orders: { outputs: { default: true }, update: { verdict: true } } }
+				grants: { orders: { outputs: { default: {} }, update: { verdict: true } } }
 			},
 			kiosk: {
 				description: '',
 				grants: {
 					employees: {
-						outputs: { default: true },
+						outputs: { default: {} },
 						update: { columns: { employees: ['face'] }, verdict: true }
 					}
 				}
@@ -85,7 +85,7 @@ const m = Result.getOrThrow(
 			stamp: {
 				description: '',
 				grants: {
-					employees: { outputs: { default: true }, update: { verdict: true } }
+					employees: { outputs: { default: {} }, update: { verdict: true } }
 				}
 			}
 		},

@@ -2,13 +2,15 @@
 import { expectTypeOf } from '@effect/vitest';
 import { automation } from '../../src/index.ts';
 import { bind_model } from '../../src/declarations.ts';
-import type { Change, CreatedRow, Id, Vector, WriteCtx } from '../../src/index.ts';
+import type { CreatedRow, Id, WriteCtx } from '../../src/index.ts';
 import type { CreateSet } from '../../src/decl/ctx.ts';
 import type { AutomationCtx } from '../../src/index.ts';
 import type { AutomationSpecOf } from '../../src/decl/runtime/names.ts';
 import type { StoredRow } from '../../src/decl/names.ts';
 import { orders } from './fixture/models.ts';
 import './registry.ts';
+import type { Change } from '../../src/decl/ctx.ts';
+import type { Vector } from '../../src/decl/values.ts';
 
 bind_model('orders')({
 	...orders.spec,

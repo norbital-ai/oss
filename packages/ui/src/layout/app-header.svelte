@@ -8,7 +8,7 @@
 	import type { Snippet } from 'svelte';
 
 	/** The shared app banner, identity and scope controls used by workspace and host shells. */
-	export interface AppHeaderProps {
+	interface AppHeaderProps {
 		/**
 		 * App banner image (`bolt:banner`). Decorative only — copy sits on the dark scrim.
 		 * Optional: without one the header keeps its base wash and stays legible.

@@ -41,7 +41,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			p: {
 				description: 'P',
-				grants: { docs: { outputs: { default: true }, create: true, update: true } },
+				grants: { docs: { outputs: { default: {} }, create: {}, update: {} } },
 				capabilities: { automations: ['tidy'] }
 			}
 		},

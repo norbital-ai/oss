@@ -187,7 +187,7 @@ describe('decode_manifest', () => {
 								update: { verdict: true, moves: { status: ['draft->sent'] } },
 								delete: { verdict: true }
 							},
-							lines: { outputs: { default: true } }
+							lines: { outputs: { default: {} } }
 						}
 					}
 				}
@@ -203,7 +203,7 @@ describe('decode_manifest', () => {
 		expect(grant?.create).toEqual({ columns: { orders: ['region'], 'orders.lines': ['qty'] } });
 		expect(grant?.update).toEqual({ verdict: true, moves: { status: ['draft->sent'] } });
 		expect(grant?.delete).toEqual({ verdict: true });
-		expect(m.policies.rep?.grants.lines?.outputs?.default).toBe(true);
+		expect(m.policies.rep?.grants.lines?.outputs?.default).toEqual({});
 	});
 
 	it.live(
@@ -347,7 +347,7 @@ describe('project_manifest', () => {
 									orders: {
 										update: { columns: { fields: ['number'] }, verdict: function* () {} },
 										delete: { verdict: function* () {} },
-										outputs: { default: true }
+										outputs: { default: {} }
 									}
 								}
 							}

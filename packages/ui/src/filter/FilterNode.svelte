@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { UiContext } from '../client/contract.js';
 	// One filter row of the view popover (rule 16b): a condition (field ▸ operator ▸ operand ▸ value), an AND/OR/NOT
 	// group, or a related-records row (relation ▸ quantifier ▸ value) with its nested conditions indented under it.
 	// Each condition is one editable sentence. Scope headers explain how their child conditions combine.
@@ -15,7 +16,7 @@
 	import type { Value } from '../kinds/kind.js';
 	import Picker from '../kinds/picker.svelte';
 	import { cn, stepActive } from '../primitives/utils.js';
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import FieldPicker from './FieldPicker.svelte';
 	import { selectField, selectOperator, selectQuantifier, aggregateValue, aggFn, aggOf } from './edit.js';
 	import { argKind, fieldsFor, litKind, operandsFor, operatorsFor, OP_LABEL, varError, variableOf, variablesFor, type FilterVariables } from './operators.js';
@@ -26,6 +27,7 @@
 	import { humanize, msg, catalogText } from '../text/messages.js';
 
 	let {
+		ctx,
 		node,
 		catalog,
 		model,
@@ -36,6 +38,7 @@
 		on_change,
 		on_remove
 	}: {
+		ctx: UiContext;
 		node: Node;
 		catalog: { readonly [c: string]: ModelExposure };
 		model: string;
@@ -49,7 +52,7 @@
 		on_change(next: Node): void;
 		on_remove(): void;
 	} = $props();
-	const bolt = useBolt();
+	const bolt = $derived(bolt_of(ctx));
 	let expanded = $state(true);
 	let operandOpen = $state(false);
 	const scopeId = $props.id();
@@ -111,7 +114,7 @@
 		setArg(next.length === 0 ? null : { _tag: 'list', list: next });
 	const children = (n: Extract<Node, { t: 'group' | 'many' }>, of: readonly Node[]) => {
 		if (of.length > n.of.length) expanded = true;
-		on_change({ ...n, of } as Node);
+		on_change(n.t === 'group' ? { ...n, of } : { ...n, of });
 	};
 </script>
 
@@ -167,7 +170,7 @@
 	<div class="scope-body" id={scopeId} hidden={!expanded} data-nested>
 		{#each n.of as child, i (i)}
 			<div class="scope-branch">
-				<FilterNode
+				<FilterNode {ctx}
 					node={child}
 					{catalog}
 					model={at}
@@ -192,7 +195,7 @@
 {/snippet}
 
 {#snippet addScope(n: Extract<Node, { t: 'group' | 'many' }>)}
-	<AddFilter
+	<AddFilter {ctx}
 		nested
 		icon_only
 		on_condition={() => children(n, [...n.of, blank])}
@@ -205,7 +208,7 @@
 		{@const target = r.targets[0]}
 		{#if target !== undefined}
 			<div class="w-48">
-				<Picker of={target} value={typeof value === 'string' ? value : null} on_change={set} />
+				<Picker {ctx} of={target} value={typeof value === 'string' ? value : null} on_change={set} />
 			</div>
 		{/if}
 	{:else if node.t === 'cond'}
@@ -232,7 +235,7 @@
 							? '6rem'
 							: '11rem'}
 			>
-				<Editor kind={k} {value} on_change={set} name={node.path} />
+				<Editor {ctx} kind={k} {value} on_change={set} name={node.path} />
 			</div>
 		{/if}
 	{/if}
@@ -367,7 +370,7 @@
 				{/if}
 				{#if agg && m.q !== 'count'}<span class="scope-tail">{msg(bolt, 'view.inScope')}</span
 					>{/if}
-				<FieldPicker {catalog} {model} {offers} {prefix} value={m.rel} many={top} on_pick={picked} />
+				<FieldPicker {ctx} {catalog} {model} {offers} {prefix} value={m.rel} many={top} on_pick={picked} />
 				{#if !agg && m.of.length > 0}<span class="scope-tail" data-many-heading
 						>{msg(bolt, 'view.scope.matches')}</span
 					>{/if}
@@ -386,7 +389,7 @@
 					/>
 					{#if aggregateKind?.kind === 'date' || aggregateKind?.kind === 'instant'}
 						<div class="w-48">
-							<Editor
+							<Editor {ctx}
 								kind={{ ...aggregateKind, optional: true }}
 								value={typeof m.n === 'string' ? m.n : null}
 								name={m.field ?? 'date'}
@@ -426,7 +429,7 @@
 	<div class="condition-controls" data-cond={node.path}>
 		<div class="flex min-w-0 flex-col gap-1">
 			<span class="text-muted-foreground sr-only text-xs">{msg(bolt, 'view.field')}</span>
-			<FieldPicker
+			<FieldPicker {ctx}
 				{catalog}
 				{model}
 				{offers}

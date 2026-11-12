@@ -39,11 +39,6 @@
 			"svelte": "./build/brand/index.js",
 			"default": "./build/brand/index.js"
 		},
-		"./capture": {
-			"types": "./build/capture/index.d.ts",
-			"svelte": "./build/capture/index.js",
-			"default": "./build/capture/index.js"
-		},
 		"./effect": {
 			"types": "./build/effect/index.d.ts",
 			"svelte": "./build/effect/index.js",

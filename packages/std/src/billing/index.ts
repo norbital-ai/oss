@@ -12,11 +12,11 @@ import {
 } from './rate-card.js';
 
 /** The trial length of the platform plan, in days. */
-export const DEFAULT_BILLING_TRIAL_DAYS = 30;
+const DEFAULT_BILLING_TRIAL_DAYS = 30;
 /** Cents per dollar of the billing currency. */
-export const CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT = 100;
+const CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT = 100;
 /** The id of the platform product and of its one plan in the catalogue. */
-export const PLATFORM_PRODUCT_ID = 'platform';
+const PLATFORM_PRODUCT_ID = 'platform';
 
 /** The meter AI usage is reported to, in micro-SGD of converted provider cost. */
 export const AI_USAGE_METER_ID = 'bolt_ai_cost_sgd_micros_v1';
@@ -67,7 +67,7 @@ export function ai_provider_cost_sgd_micros(providerCostUsd: number): number {
  * as `line_items[0]` with the metered prices after it, so the base is invoiced on the same
  * subscription as the usage it gates. `amount` is major units, the figure the pricing page reads.
  */
-export const PLATFORM_FLAT_PRICES = [
+const PLATFORM_FLAT_PRICES = [
 	{
 		id: 'platform-base-monthly',
 		name: 'Workspace base',
@@ -87,7 +87,7 @@ export const PLATFORM_FLAT_PRICES = [
 export const PLATFORM_BASE_SGD_PER_MONTH = Number(PLATFORM_FLAT_PRICES[0].amount);
 
 /** The metered AI usage price: provider cost converted to micro-SGD at the published rate. */
-export const AI_METERED_PRICES = [
+const AI_METERED_PRICES = [
 	{
 		id: 'ai-provider-cost-micros-monthly',
 		name: 'AI usage',
@@ -172,8 +172,8 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 ] as const satisfies readonly BillingCatalogueProduct[];
 
 /** Every price of the current catalogue. */
-export const LATEST_CATALOGUE_PRICES = LATEST_CATALOGUE_PRODUCTS[0]
-	.prices as readonly BillingCataloguePrice[];
+const LATEST_CATALOGUE_PRICES: readonly BillingCataloguePrice[] =
+	LATEST_CATALOGUE_PRODUCTS[0].prices;
 
 /**
  * The cost in micro-SGD of `quantity` units of a meter at the current catalogue's unit price; throws on a negative or fractional quantity or an unknown meter.
@@ -191,32 +191,15 @@ export function calculate_catalogue_meter_cost_sgd_micros(meter_id: string, quan
 
 export {
 	AI_SGD_PER_PROVIDER_USD,
-	BILLING_ACCESS_TIERS,
 	BILLING_CURRENCY,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
 	FILES_SGD_PER_GB_MONTH,
-	HOURS_PER_BILLING_MONTH,
-	type BillingAccessTier
+	HOURS_PER_BILLING_MONTH
 } from './rate-card.js';
 
 export {
-	BillingCatalogueIntervalSchema,
 	BillingCataloguePlanSchema,
-	BillingCataloguePriceModelSchema,
 	BillingCataloguePriceSchema,
-	BillingCatalogueProductSchema,
-	BillingCatalogueProviderPriceIdsSchema,
-	BillingCatalogueSchema,
-	BillingCatalogueTierSchema,
-	BillingProviderEnvironmentSchema,
-	type BillingCatalogue,
-	type BillingCatalogueInterval,
-	type BillingCataloguePlan,
-	type BillingCataloguePrice,
-	type BillingCataloguePriceModel,
-	type BillingCatalogueProduct,
-	type BillingCatalogueProviderPriceIds,
-	type BillingCatalogueTier,
-	type BillingProviderEnvironment
+	BillingCatalogueSchema
 } from './schemas.js';

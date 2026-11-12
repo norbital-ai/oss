@@ -72,3 +72,87 @@ The cutover wipes and reseeds every tenant; its plan and activation blockers liv
 - Now Effects: `@norbital-ai/bolt` `docs` (`(yield* docs).symbol(...)`), `history_schema_objects`, store `plan`/`destructive_steps`/`generate`/`generate_squash` `extra` callbacks (return `Effect<readonly SchemaObject[], E>`), `exposure`/`read_catalog`, `compile_authority`, `Authorities.compile/visitor/system`. Boots carry `operation_outputs`; act/sync bodies send `issued_at`; conflict records have no `fields`.
 - 0.0.25 carries main's 0.0.24 features in this vocabulary. `bolt_approvals.state` admits `Withdrawn` in its CHECK (the requester's `withdraw` decision; a run of the automation that raised a request may withdraw it), and `approval_request.status` admits `WITHDRAWN`; HQ approval views and counters must treat it as closed, never as rejected. Touching a record held by an automation-raised request refuses `under_approval`.
 - Integration sync recovery adds shell routes `GET /__bolt/shell/instance-sync-dead-letters?instance=` and `POST /__bolt/shell/instance-sync-retire` (`{ instance, id }`, a member with instance update access); `ShellApi` names them `instance_sync_dead_letters` and `retire_instance_sync`. A host that proxies or reimplements the shell's integration sheet adopts both.
+
+## Test kit engine (`test_engine`)
+
+The kit's engine assembly moved into Bolt behind `test_engine(options)` / `TestEngine` (`@norbital-ai/bolt/tooling`); the internals it named are no longer exported. Colony tests that import them:
+
+- `GuestIsolates`, `Activation` (`@norbital-ai/bolt/engine`) in `tests/kernel-guest-{code-cache,constructor,pool,runner}.test.ts` and `tests/support/guest-fixture.ts`: drive the runner through HostApi (`HostPorts.guests` and activation) or a `test_engine` workspace with `guests`.
+- `Keys` (`/engine`) in `tests/hosting-secrets.test.ts`: supply the key port through HostApi (`Facilities.keys`) and read secrets through the activated workspace.
+- `EngineActor` (`/engine`) in `tests/foundation-browser.ts`: use `Authority['actor']` (`Authority` stays exported).
+- `unmet` (`/facilities`) in `tests/facilities-ports.test.ts`: assert through `activate`/HostApi activation, which refuses naming every unmet need.
+
+## Export surface: one home per symbol, derived types
+
+Bolt's entries now export each symbol once; the types a host hands over or gets back derive from their parent
+(`HostApi`, `HostPorts`, `Facilities`, `StudioState`/`StudioView`/`StudioPort`). Below, `ActiveWorkspace` means
+`Awaited<ReturnType<HostApi['activate']>>`, `System2` means `Exclude<Facilities['intelligence']['system2'], typeof off>`,
+`BrowserPort` means `Exclude<HostPorts['browser'], typeof off>`, `HostApi`/`HostPorts` come from `/host-api` and
+`Facilities`/`off` from `/facilities`.
+
+- Subpaths removed: `/guest-hooks` (its exports are in `/node`), `/page/integrations` (`IntegrationSetup` and
+  `IntegrationSetupEntry` are in `/page`), `/tooling/browser`. `/host-api` and `/artifact` are now listing entries.
+- `/host-api` exports `HOST_API`, `HOST_API_VERSION`, `HostApi`, `HostPorts`, `HostFailure`, `HostApiFailure`,
+  `MigrationImpact`, `render_mode`, `CellEnd`, `Kernel`. Derive the rest (`src/lib/services.ts`,
+  `src/lib/kernel/cells.ts`, `src/lib/hosting/host-api.ts`, `src/lib/hosting/shell-ports.ts`,
+  `src/lib/facilities/{ports,integrations}.ts`, `tests/{facilities-ports,facilities-integrations,hosting-host-api}.test.ts`):
+  `ActiveWorkspace` as above; `BranchPorts` `Parameters<HostApi['branch']>[0]`; `WorkspaceBranch`
+  `Awaited<ReturnType<HostApi['branch']>>`; `PackLoad` `Awaited<ReturnType<WorkspaceBranch['packs']['load']>>`;
+  `LinkHost` `Parameters<HostApi['links']>[0]`; `HostCredentials` `Awaited<ReturnType<HostApi['links']>>['credentials']`;
+  `Release` `HostPorts['release']`; `ShellPorts` `HostPorts['shell']`; `AgentPorts` `HostPorts['agent']`;
+  `HostTenantDb` `HostPorts['facilities']['storage']['database']`; `MintedSession`
+  `NonNullable<Awaited<ReturnType<ActiveWorkspace['identity']['mint']>>>`; `FounderAnswer`
+  `Awaited<ReturnType<WorkspaceBranch['identity']['founder']>>` (the answer is already decoded; Colony needs no Schema).
+- `/engine` port and answer types (P9): `DeadlinesPort` `HostPorts['deadlines']`; `DocsPort` `HostPorts['docs']`;
+  `LinksPort` `Awaited<ReturnType<HostApi['links']>>['port']`; `BrowserPort` as above, `BrowserStep`
+  `Parameters<BrowserPort['act']>[1][number]`, `BrowserViewport` `NonNullable<Parameters<BrowserPort['navigate']>[4]>`;
+  `GuestIsolatesPort` `HostPorts['guests']`, `GuestSessionOptions` `Parameters<HostPorts['guests']['open']>[1]`;
+  `LogPort` `Facilities['logs']['runtime']`, `LogEvent` `Parameters<Facilities['logs']['runtime']['write']>[0]`;
+  `CronEntry` `Awaited<ReturnType<ActiveWorkspace['crons']>>[number]`, `CronFired`
+  `Awaited<ReturnType<ActiveWorkspace['fire']>>`; `AiModel` `Awaited<ReturnType<NonNullable<System2['catalog']>>>['models'][number]`;
+  `SearchRequest`/`SearchAnswer` from `NonNullable<HostPorts['agent']['search']>` (its second parameter, its answer);
+  `WorkspacePort` `NonNullable<Awaited<ReturnType<NonNullable<HostPorts['agent']['draft']>>>>`; `WorkspaceNote`
+  `Awaited<ReturnType<NonNullable<HostPorts['agent']['events']>>>[number]`; `PhoneVerifier`
+  `Exclude<Facilities['transactional']['phone'], typeof off>`; `Blob` `Awaited<ReturnType<FilesPort['put']>>`;
+  `Downloaded` `Awaited<ReturnType<FilesPort['download']>>` (`FilesPort` stays exported); `AiPort` members are
+  `Facilities['intelligence']`'s, `EmbeddingsPort` `Exclude<Facilities['intelligence']['embed'], typeof off>`.
+  `MembershipPort` reaches no Host API member: `src/lib/services.ts` declares its own port type or drops it.
+- `/node`: `DownloadOptions` `NonNullable<Parameters<typeof download_media>[2]>`, `DownloadSink`
+  `Parameters<typeof download_media>[1]` (`src/lib/facilities/ports.ts`); `BUNDLER` is internal
+  (`src/lib/kernel/bundler.ts` keeps its own limits). The language service is one object, `type_service`
+  (`src/lib/lang/type-service.ts`, `src/lib/hosting/studio-lang.ts`, `tests/lang-type-service.test.ts`):
+  `type_service.{PROBE, root_of, refresh, filesystem, holder, offset_in, view, check_workspace}`; `Held`
+  `ReturnType<typeof type_service.holder>`, `LangPosition` `Parameters<typeof type_service.offset_in>[1]`,
+  `LangDiagnostic` `Awaited<ReturnType<ReturnType<typeof type_service.view>['diagnostics']>>[number]`.
+- Studio, host side (`/engine` keeps `studio_view`, `StudioPort`, `StudioState`, `StudioInspectInput`): `StudioOp`,
+  `MERGE_SUMMARY`, `suggest_message` and `impact_lines` come from `/page/studio`, `MigrationImpact` from `/host-api`
+  (`src/lib/hosting/{host,ops,recovery-studio,studio-ports,studio-tools,studio,studio-check}.ts`, `src/lib/services.ts`
+  and the Studio tests). Derive `StudioFile` `NonNullable<Awaited<ReturnType<StudioPort['file']>>>`, `StudioChangeSet`
+  `NonNullable<StudioState['change_sets']>[number]`, `StudioTestRun` `NonNullable<StudioState['tests']>`, `StudioBuild`
+  `NonNullable<StudioState['builds']>[number]`, `StudioApproval` `NonNullable<StudioState['approvals']>[number]`,
+  `StudioInspection` `Awaited<ReturnType<StudioPort['inspect']>>` (`src/lib/command-center/tenant.ts`).
+  `StudioInspectInput` stays a Schema for the command-center filters.
+- Studio, browser side (`src/lib/studio/*`, `src/routes/__host/recovery/+page.svelte`, Studio browser tests):
+  `StudioPhase` `(typeof PHASES)[number]`; `PhaseState`
+  `Extract<Stream.Success<ReturnType<typeof studio_events>>, { kind: 'phase' }>['state']`; `StudioLogLine`
+  `StudioView['log'][number]`; `StudioDiagnostic` `NonNullable<StudioView['diagnostics']>[number]`; `StudioRelease`
+  `StudioView['releases'][number]`; `StudioChangeSet` `NonNullable<StudioView['change_sets']>[number]`; `StudioTab`
+  `StudioProps['tab']`; `StudioMount` is the bundle's own `mount_studio` answer, `{ update(props: StudioProps): void;
+  unmount(): Promise<void> }`; `ShellError` (test only) matches by `_tag: 'ShellError'`.
+- `language_of` and `elapsed_text` are Colony's display helpers now (`src/lib/studio/{ChangePane,FileDiff,SourceEditor,Studio}.svelte`):
+  `language_of(path)` is `'javascript'` for `.[cm]?[jt]s` and `.svelte`, `'json'` for `.json`, else `'plaintext'`;
+  `elapsed_text(ms)` is `m:ss` of the rounded seconds.
+- One name per Schema value and type: `EngineManifest` (was `EngineManifestSchema`), `DecisionResult`, `GuestTaken`,
+  `ArtifactJson` (`/artifact`, was `ArtifactJsonSchema`; `tests/client-cache.test.ts`, `tests/foundation-artifact.ts`),
+  `ReadRequestJson` (`/protocol`, was `ReadRequestSchema`). Pure aliases are gone: `/facilities` `Off` is
+  `typeof off` (`src/lib/facilities/{ai,ports}.ts`, `src/lib/kernel/cells.ts` and seven tests); `Downloaded` as above.
+- One home: `PgliteDb`, `Pristine` and `artifact_port` from `/node` (`tests/hosting-studio-migrations.test.ts`);
+  `client_page` and `TemplateManifest` from `/protocol`; `render_mode` and `MigrationImpact` from `/host-api`;
+  `ModelLiteral`, `Model`, `Integration` from `/declarations`; `Unavailable` from `/errors`. Root `GeoHit`
+  (`src/lib/facilities/geocoding.ts`) is
+  `NonNullable<Awaited<ReturnType<Exclude<HostPorts['geocoder'], typeof off>['reverse']>>>`.
+- Test-only exports removed from `/engine` (`Invocation`, `Guest`, `GuestConfig`, `GuestLive`, `GuestOptions`,
+  `GuestLimits`, `Manifest`, `Telemetry`, `EventIds`, `InvocationEvents`, `Secrets`, `Facilities` (the engine service),
+  `AiPort`, `EmbeddingsPort`, `Blob`, `StudioApproval`): `tests/kernel-guest-*.test.ts`, `tests/support/guest-fixture.ts`,
+  `tests/hosting-secrets.test.ts`, `tests/hosting-runtime.test.ts`, `tests/facilities-web-read.test.ts` drive the engine
+  through `HOST_API` activation or the kit's `test_engine` (`/tooling`), and build local fakes for ports.

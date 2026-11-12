@@ -26,15 +26,11 @@ const decodeDraftChildren = Schema.decodeUnknownOption(
 	Schema.Record(Schema.String, Schema.Array(ChildOperationSchema))
 );
 
-/** Narrows string ids to a model's id type (e.g. for `where: { id: { in: … } }`). */
-export function ids_of<C extends string>(ids: readonly string[]): readonly IdOf<C>[] {
-	return ids as readonly IdOf<C>[];
-}
+/** A model's record id: a non-empty string. */
+export const is_id = <C extends string>(value: unknown): value is IdOf<C> =>
+	typeof value === 'string' && value !== '';
 
 export type Act = ViewBolt['act'];
-type ViewTransitionDocument = Document & {
-	startViewTransition?: (callback: () => void) => unknown;
-};
 let inLayoutUpdate = false;
 let layoutChanges: (() => void)[] = [];
 let layoutFrame: number | undefined;
@@ -46,9 +42,9 @@ function transitionLayout(change: () => void): void {
 		return;
 	}
 	const start =
-		typeof document === 'undefined'
+		typeof document === 'undefined' || !('startViewTransition' in document)
 			? undefined
-			: (document as ViewTransitionDocument).startViewTransition;
+			: document.startViewTransition;
 	if (
 		start === undefined ||
 		(typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
@@ -371,7 +367,7 @@ export class FormState {
 	}
 	id<C extends string>(name: string): IdOf<C> | null {
 		const v = this.get(name);
-		return typeof v === 'string' ? (v as IdOf<C>) : null;
+		return is_id<C>(v) ? v : null;
 	}
 	set(name: string, value: Value): void {
 		if (

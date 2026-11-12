@@ -42,6 +42,7 @@ import {
 } from '../decision.ts';
 import { FileRef, rowsOf, type As } from './schema.ts';
 import { envoyName } from './context.ts';
+import { personMessage } from './queue.ts';
 import { envoySpec, type EnvoySpec } from '../envoys/spec.ts';
 /** The durable run's name: queued runs and the logs carry it across releases. */
 const THROTTLE_RUN = 'agent.triage';
@@ -134,18 +135,23 @@ export const heldLonger = (chain: Chain, conversation: string, at: string) =>
         WHERE ${queued(conversation)} AND input ? 'first'`,
 		{ returning: 'due_at' }
 	);
+/** One holder per key at a time; a key's lock lives only while someone holds or waits for it. */
+export const keyedSerial = Effect.fn('SmartThrottle.keyedSerial')(function* () {
+	const locks = yield* RcMap.make({ lookup: (_key: string) => Semaphore.make(1) });
+	return {
+		serial:
+			(key: string) =>
+			<A, E, R>(work: Effect.Effect<A, E, R>) =>
+				Effect.scoped(RcMap.get(locks, key).pipe(Effect.flatMap((lock) => lock.withPermit(work)))),
+		keys: RcMap.keys(locks)
+	};
+});
 export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: ThrottleConfig) {
 	/** The decisions under way, and the turns they admitted: a turn outlives the decision that started it. */
 	const decisions = yield* FiberSet.make<void, never>(),
 		turns = yield* FiberSet.make<void, never>();
-	// One decision per conversation at a time, releasing the lock after its final waiter exits.
-	const locks = yield* RcMap.make({ lookup: (_conversation: string) => Semaphore.make(1) });
-	const serial =
-		(conversation: string) =>
-		<A, E, R>(work: Effect.Effect<A, E, R>) =>
-			Effect.scoped(
-				RcMap.get(locks, conversation).pipe(Effect.flatMap((lock) => lock.withPermit(work)))
-			);
+	// one decision per conversation at a time
+	const { serial } = yield* keyedSerial();
 	const logs = yield* Logs;
 	const { manifest: m, db } = cfg.engine;
 	const announce = cfg.announce;
@@ -426,7 +432,7 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 							talkingWith: exchange.name ?? 'someone',
 							assistantLastMessage: preview(exchange.text)
 						})
-			} as DecisionRequest['state'],
+			},
 			// ONE call: each message of a group's burst is judged by name against the window, and the burst as a whole for
 			// whether its text has ended
 			questions: {
@@ -601,24 +607,12 @@ export const smartThrottle = Effect.fn('SmartThrottle.make')(function* (cfg: Thr
 			// a person's follow-up in a stopped conversation runs; the stopped turn's cancelled inputs stay cancelled
 			capturePiece(chain, 'reopened', 'sys_conversation',
 				`UPDATE sys_conversation SET status = 'idle' WHERE id = ${chain.p(o.conversation)} AND status = 'stopped'`);
-			const source = postMessage(chain, {
-				conversation: o.conversation,
-				role: 'user',
-				content: { text: o.text, ...(o.tz === undefined ? {} : { tz: o.tz }) },
-				text: o.text,
-				state: 'pending',
-				mode: o.mode,
-				as: o.as,
-				author: o.author,
-				files: o.files ?? []
-			});
+			const source = postMessage(chain, personMessage(o, 'pending'));
 			const written = yield* hold(o.conversation, { chain, source });
 			const rows = yield* rowsOf(written);
 			const row = rows[0];
 			if (row === undefined)
-				return yield* Effect.fail(
-					BoltError.make('corrupt', 'commit', 'a held post returned no message')
-				);
+				return yield* BoltError.make('corrupt', 'commit', 'a held post returned no message');
 			return { id: row.id };
 		}),
 		/** Deterministic trigger: every pending row is queued with it and the run flushed (the caller drains). */

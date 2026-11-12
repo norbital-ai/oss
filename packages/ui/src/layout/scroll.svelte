@@ -16,7 +16,7 @@ A vertical scroll owner is `size="fill"` (the space left in its parent, scrollin
 
 	type ScrollLayout = 'block' | 'inline' | 'stack';
 	/** The props of `Scroll`. */
-	export interface ScrollProps extends LayoutAttributes {
+	interface ScrollProps extends LayoutAttributes {
 		as?: LayoutElement;
 		axis?: ScrollAxis;
 		name: string;

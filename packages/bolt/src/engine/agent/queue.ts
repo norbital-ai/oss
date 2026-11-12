@@ -25,6 +25,29 @@ import {
 import { enqueueTurn } from './turns.ts';
 import { LEASE_MS, leaseUntil } from '../queue.ts';
 
+/** A person's message as the row it posts, in `state`: their text (with their zone) and files. */
+export const personMessage = (
+	o: {
+		readonly conversation: string;
+		readonly text: string;
+		readonly tz?: string | undefined;
+		readonly mode?: MessageRow['mode'] | undefined;
+		readonly as: As;
+		readonly author?: string | null | undefined;
+		readonly files?: readonly Json[] | undefined;
+	},
+	state: 'queued' | 'scheduled' | 'pending'
+) => ({
+	conversation: o.conversation,
+	role: 'user' as const,
+	content: { text: o.text, ...(o.tz === undefined ? {} : { tz: o.tz }) },
+	text: o.text,
+	state,
+	mode: o.mode,
+	as: o.as,
+	author: o.author,
+	files: o.files
+});
 /** One scheduled message's time: its input names the row. */
 export const SCHEDULED_RUN = 'agent.scheduled';
 type QueueConfig = {
@@ -87,17 +110,9 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 			AND newer.role = 'user' AND newer.meta->>'tag' IS DISTINCT FROM 'report'
 			AND newer.state IS DISTINCT FROM 'cancelled' AND newer.state IS DISTINCT FROM 'scheduled')`);
 		const source = postMessage(chain, {
-			conversation: o.conversation,
-			role: 'user',
-			content: { text: o.text, ...(o.tz === undefined ? {} : { tz: o.tz }) },
-			text: o.text,
-			state: 'queued',
-			mode: o.mode ?? 'agent',
-			as: o.as,
+			...personMessage(o, 'queued'),
 			...(o.question === undefined ? {} : { meta: { tag: 'answer', question: o.question } }),
-			author: o.author ?? null,
-			supersedes: o.supersedes ?? null,
-			files: o.files === undefined ? [] : [...o.files]
+			supersedes: o.supersedes
 		}, question === undefined ? 'true' : `EXISTS (SELECT 1 FROM ${question})`);
 		enqueueTurn(chain, o.conversation, due, `EXISTS (SELECT 1 FROM ${source})`);
 		const [row] = yield* commit(chain, source);
@@ -114,7 +129,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		/** Snapshot the settled prefix into an independent chat. Nothing in the original is changed or replayed. */
 		restart: Effect.fn('MessageQueue.restart')(function* (message_id: string, by: Authority) {
 			if (by.actor.kind !== 'member' || by.agent !== undefined)
-				return yield* Effect.fail(new AgentRefusal({ message: 'Only the owner can restart a workspace chat.' }));
+				return yield* new AgentRefusal({ message: 'Only the owner can restart a workspace chat.' });
 			const chain = new Chain();
 			const target = chain.cte('restart_target', `SELECT m.id, m.seq, m.conversation, m.mode, ${MSG}
 				FROM sys_message m JOIN sys_conversation c ON c.id = m.conversation
@@ -168,16 +183,8 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		) {
 			const chain = new Chain();
 			const source = postMessage(chain, {
-				conversation: o.conversation,
-				role: 'user',
-				content: { text: o.text, ...(o.tz === undefined ? {} : { tz: o.tz }) },
-				text: o.text,
-				state: 'scheduled',
-				mode: o.mode ?? 'agent',
-				as: o.as,
-				author: o.author ?? null,
-				meta: { tag: 'scheduled', ...(o.at === null ? {} : { at: o.at }) },
-				files: o.files === undefined ? [] : [...o.files]
+				...personMessage(o, 'scheduled'),
+				meta: { tag: 'scheduled', ...(o.at === null ? {} : { at: o.at }) }
 			});
 			if (o.at !== null)
 				enqueue(chain, {
@@ -187,9 +194,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 				});
 			const [row] = yield* commit(chain, source);
 			if (row === undefined)
-				return yield* Effect.fail(
-					BoltError.make('corrupt', 'commit', 'a scheduled message returned no row')
-				);
+				return yield* BoltError.make('corrupt', 'commit', 'a scheduled message returned no row');
 			return row;
 		}),
 		/** A scheduled message's time came: it goes like any message, and like any follow-up reopens a stopped conversation. */
@@ -267,22 +272,16 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		) {
 			const r: MessageRow | undefined = yield* stored(messageId);
 			if (r === undefined || r.role !== 'user' || r.as === null)
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only a posted message can be revised' })
-				);
+				return yield* new AgentRefusal({ message: 'only a posted message can be revised' });
 			if (by !== undefined && !owns(by, r.as))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only its author revises a message' })
-				);
+				return yield* new AgentRefusal({ message: 'only its author revises a message' });
 			const newer = yield* db.one(Schema.Struct({ found: Schema.Boolean }),
 				sql(`SELECT true AS found FROM sys_message WHERE supersedes = $1 LIMIT 1`, messageId));
 			if (Option.isSome(newer))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only the newest revision can be revised' })
-				);
+				return yield* new AgentRefusal({ message: 'only the newest revision can be revised' });
 			const files = attachments ?? r.files ?? [];
 			if (text.trim() === '' && files.length === 0)
-				return yield* Effect.fail(new AgentRefusal({ message: 'A message needs text or an attachment.' }));
+				return yield* new AgentRefusal({ message: 'A message needs text or an attachment.' });
 			if (r.state === 'queued' || r.state === 'scheduled') {
 				const chain = new Chain();
 				chain.params.push(messageId, text, preview(text));
@@ -301,7 +300,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 					WHERE id = ${chain.p(r.conversation)} AND EXISTS (SELECT 1 FROM ${source})`);
 				const revised = yield* commit(chain, source);
 				if (revised.length === 0)
-					return yield* Effect.fail(new AgentRefusal({ message: 'The message was delivered before the edit. Read the latest conversation.' }));
+					return yield* new AgentRefusal({ message: 'The message was delivered before the edit. Read the latest conversation.' });
 				return r.id;
 			}
 			return (yield* post({
@@ -317,9 +316,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 		remove: Effect.fn('MessageQueue.remove')(function* (messageId: string, by?: Authority) {
 			const r = yield* stored(messageId);
 			if (by !== undefined && (r === undefined || !owns(by, r.as)))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only its author removes a queued message' })
-				);
+				return yield* new AgentRefusal({ message: 'only its author removes a queued message' });
 			if (r === undefined) return;
 			const chain = new Chain();
 			chain.params.push(messageId);
@@ -348,9 +345,7 @@ export const messageQueue = Effect.fn('MessageQueue.make')(function* (cfg: Queue
 					})
 				);
 			if (by !== undefined && queued.some((r) => !owns(by, r.as)))
-				return yield* Effect.fail(
-					new AgentRefusal({ message: 'only its author reorders a queued message' })
-				);
+				return yield* new AgentRefusal({ message: 'only its author reorders a queued message' });
 			// the rows swap their own seq values, so nothing else in the transcript moves
 			const chain = new Chain();
 			chain.params.push(JSON.stringify(ids));

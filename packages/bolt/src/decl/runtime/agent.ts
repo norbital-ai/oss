@@ -14,7 +14,7 @@ export type McpBase = {
 	tools?: readonly string[];
 };
 /** The checked MCP spec: every secret is a `SecretName` declared in `+secrets.ts`. */
-export type McpSpec = {
+type McpSpec = {
 	description: string;
 	/** Streamable HTTP, the current MCP revision; the URL and credentials are workspace secrets. */
 	url: SecretName;

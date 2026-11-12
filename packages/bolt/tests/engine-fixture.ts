@@ -89,7 +89,7 @@ export const manifest = {
 		rep: {
 			description: 'Sales rep',
 			grants: {
-				customers: { outputs: { default: true } },
+				customers: { outputs: { default: {} } },
 				orders: {
 					outputs: {
 						default: { scopes: { orders: { created_by: { eq: { var: 'requestor.id' } } } } }
@@ -111,8 +111,8 @@ export const manifest = {
 		auditor: {
 			description: 'Reads every order',
 			grants: {
-				customers: { outputs: { default: true } },
-				orders: { outputs: { audit: true } }
+				customers: { outputs: { default: {} } },
+				orders: { outputs: { audit: {} } }
 			}
 		}
 	},

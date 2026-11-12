@@ -112,7 +112,7 @@ const manifest: EngineManifest = {
 				}
 			}
 		},
-		reviewer: { description: 'Finance', grants: { orders: { outputs: { default: true } } } },
+		reviewer: { description: 'Finance', grants: { orders: { outputs: { default: {} } } } },
 		partner: {
 			description: 'Northern orders, briefly',
 			grants: {
@@ -128,14 +128,14 @@ const manifest: EngineManifest = {
 	agent: { skills: {} }
 };
 /** `rep`'s checks: `COUNT` answers the batch it judged (rows, nested lines), a non-positive quantity is denied at its
- * path, a `BIG` order is approved by finance; an update needs a draft with lines; a delete is always denied. */
+ * row, a `BIG` order is approved by finance; an update needs a draft with lines; a delete is always denied. */
 const source = `export default { policy: { rep: { grants: { orders: {
 	create: { verdict: function* (changes, ctx) {
 		const rows = changes.map((change) => change.after);
 		const lines = rows.flatMap((r) => r.lines ?? []);
 		if (rows.some((r) => r.number === 'COUNT')) return yield* ctx.refuse('rows:' + rows.length + ';lines:' + lines.length);
 		const row = rows.findIndex((r) => (r.lines ?? []).some((l) => typeof l !== 'string' && l.quantity <= 0));
-		if (row >= 0) return yield* ctx.refuse('Quantities must be positive.', { row, path: 'orders.lines', field: 'quantity' });
+		if (row >= 0) return yield* ctx.refuse('Quantities must be positive.', { row, field: 'region' });
 		if (rows.some((r) => r.number.startsWith('BIG'))) return ctx.approve({ steps: [{ name: 'Finance', teams: ['finance'] }] });
 		return ctx.allow();
 	} },
@@ -388,7 +388,7 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 		)
 	);
 
-	it.effect('`deny` refuses the whole batch at the row, path and field it names', () =>
+	it.effect('a refusal refuses the whole batch at the row and field it names', () =>
 		run(
 			Effect.gen(function* () {
 				const { t, route, rep } = yield* setup;
@@ -402,8 +402,7 @@ layer(workspace)('write layers: columns first, then one check over the batch', (
 					code: 'refused',
 					rule: 'rep.orders.create',
 					row: 1,
-					path: 'orders.lines',
-					field: 'quantity'
+					field: 'region'
 				});
 				const written = dynamic_read({ orders: { where: { number: { in: ['OK', 'BAD'] } } } });
 				const writtenPage = yield* t.stored_query(written).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrderIds)));

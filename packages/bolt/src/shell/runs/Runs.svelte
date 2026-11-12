@@ -19,7 +19,8 @@
 		Form,
 		Icon,
 		Show,
-		Table
+		Table,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import { Cluster } from '@norbital-ai/ui/layout';
 	import { LIMITS, type LogRow } from '../../engine/contracts.ts';
@@ -32,6 +33,7 @@
 	import { date_time } from '../i18n.ts';
 
 	let {
+		ctx,
 		api,
 		bolt,
 		t,
@@ -41,6 +43,7 @@
 		initial_automation = null,
 		on_automation_close
 	}: {
+		ctx: UiContext;
 		api: ShellApi;
 		bolt: ShellBolt;
 		t: (key: string) => string;
@@ -260,7 +263,7 @@
 	{#if rows === null}
 		<p class="text-sm text-muted-foreground">{t('Loading…')}</p>
 	{:else}
-		<Table
+		<Table {ctx}
 			of={rows}
 			key="runs"
 			on_open={(r) => on_run(r.id)}
@@ -292,7 +295,7 @@
 {#if run !== null && one !== null}
 	{@const w = warnings(one)}
 	{@const input = bolt.automations?.[one.automation]?.input}
-	<DetailSheet
+	<DetailSheet {ctx}
 		title={`${one.automation} · ${t(one.status)}`}
 		acts={acts(one)}
 		on_close={() => on_run(null)}
@@ -324,7 +327,7 @@
 			{#if one?.files?.length}
 				<div class="grid gap-2" data-run-output-files>
 					<p class="text-meta">{t('Files')}</p>
-					<Show
+					<Show {ctx}
 						kind={{ kind: 'file', accept: ['*/*'], max: '1024GiB', many: true }}
 						value={one.files}
 						readonly
@@ -368,7 +371,7 @@
 					>{t('Fill in this automation’s input before it runs.')}</Dialog.Description
 				>
 			</Dialog.Header>
-			<Form of={{ automation: entering }} submit={t('Run')} on_outcome={closeAutomation} />
+			<Form {ctx} of={{ automation: entering }} submit={t('Run')} on_outcome={closeAutomation} />
 		</Dialog.Content>
 	</Dialog.Root>
 {/if}

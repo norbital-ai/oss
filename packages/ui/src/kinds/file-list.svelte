@@ -4,6 +4,7 @@ Files already uploaded share one preview control. Pending uploads have their own
 The add control sits at the end.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { FileRef } from './kind.js';
 
 	/** An upload in flight (`error` absent) or failed (retry or dismiss). */
@@ -18,6 +19,7 @@ The add control sits at the end.
 	import FileCollection from './file-collection.svelte';
 
 	let {
+		ctx,
 		refs,
 		pending = [],
 		on_remove,
@@ -27,6 +29,7 @@ The add control sits at the end.
 		class: className,
 		children
 	}: {
+		ctx: UiContext;
 		refs: readonly FileRef[];
 		pending?: readonly PendingFile[];
 		on_remove?(ref: FileRef): void;
@@ -73,6 +76,6 @@ The add control sits at the end.
 			{/if}
 		</span>
 	{/each}
-	{#if refs.length}<FileCollection {refs} on_remove={disabled ? undefined : on_remove} />{/if}
+	{#if refs.length}<FileCollection {ctx} {refs} on_remove={disabled ? undefined : on_remove} />{/if}
 	{@render children?.()}
 </span>

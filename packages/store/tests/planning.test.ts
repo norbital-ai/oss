@@ -1,20 +1,8 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect } from 'effect';
-import {
-	build,
-	destructive_steps,
-	generate,
-	plan,
-	read_snapshot,
-	schema,
-	schema_snapshot,
-	statements,
-	table,
-	unaccepted,
-	type FieldSpec,
-	type SchemaObject
-} from '../src/index.ts';
+import { build, destructive_steps, generate, plan, read_snapshot, schema, schema_snapshot, statements, table, type FieldSpec, type SchemaObject } from '../src/index.ts';
 import { database, script } from './support.ts';
+import { unaccepted } from '../src/schema/plan.ts';
 
 describe('lossless schema planning', () => {
 	it.live('adds, recalculates and removes an optional indexed record label on existing rows', () =>

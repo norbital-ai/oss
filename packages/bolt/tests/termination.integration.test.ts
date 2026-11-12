@@ -52,7 +52,7 @@ const manifest = Result.getOrThrow(
 		policies: {
 			p: {
 				description: 'P',
-				grants: { docs: { outputs: { default: true }, create: true } },
+				grants: { docs: { outputs: { default: {} }, create: {} } },
 				capabilities: { automations: ['hang', 'pair', 'relay'] }
 			}
 		},

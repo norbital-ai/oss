@@ -57,7 +57,7 @@ export function writeFields(manifest: EngineManifest, model: string, value: Json
 		if (isList(actions) !== (mode === 'create'))
 			throw BoltError.make('invalid_input', 'decode', `${model}.${field} takes ${mode === 'create' ? 'a list of new children or existing rows' : 'explicit child actions'}.`);
 		if (isList(actions)) return [field, actions.map((row) =>
-			typeof row === 'string' || (Predicate.isObject(row) && Object.hasOwn(row, 'id'))
+			Predicate.isObject(row) && Object.hasOwn(row, 'id')
 				? writeTarget(manifest, relation.child, row)
 				: writeFields(manifest, relation.child, row, 'create', depth + 1))];
 		if (!Predicate.isObject(actions)) return [field, actions];

@@ -44,8 +44,8 @@ const manifest = {
 		rep: {
 			description: 'Rep',
 			grants: {
-				orders: { outputs: { default: true }, create: true },
-				notes: { outputs: { default: true }, create: true }
+				orders: { outputs: { default: {} }, create: {} },
+				notes: { outputs: { default: {} }, create: {} }
 			},
 			capabilities: { automations: ['orders_place'] }
 		}
@@ -191,9 +191,9 @@ describe('a read request (`bolt.query({ … })`)', () => {
 				grants: {
 					orders: {
 						outputs: { default: { scopes: { orders: { status: { eq: 'open' } } } } },
-						create: true
+						create: {}
 					},
-					notes: { outputs: { default: true }, create: true }
+					notes: { outputs: { default: {} }, create: {} }
 				}
 			}
 		},

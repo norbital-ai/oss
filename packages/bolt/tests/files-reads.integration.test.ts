@@ -6,8 +6,9 @@ import { Effect, Layer, Schema } from 'effect';
 import { program } from '../../bolt-cli/src/test/guest.ts';
 import { act_reply, json, route_fixture } from './support/route-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
-import { layer, TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace, type WorkspaceServices } from '../../bolt-cli/src/test/index.ts';
 import { uuidv7 } from '../src/protocol/wire.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const manifest = {
 	workspace: { tz: 'UTC', locale: 'en' },
@@ -34,7 +35,7 @@ const manifest = {
 	policies: {
 		ops: {
 			description: 'Ops',
-			grants: { docs: { outputs: { default: true } } },
+			grants: { docs: { outputs: { default: {} } } },
 			capabilities: { automations: ['read'] }
 		}
 	},

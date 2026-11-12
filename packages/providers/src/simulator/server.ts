@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { Schema } from 'effect';
 import { parse } from '../chat/http.ts';
 
-export type SimulatedMessage = {
+type SimulatedMessage = {
 	readonly seq: number;
 	readonly channel: 'whatsapp' | 'telegram' | 'chat';
 	/** The connected account: a WhatsApp number, a bot's token id or a chat connection. */
@@ -46,10 +46,11 @@ const send = (res: ServerResponse, status: number, body: unknown) => {
 const bodyOf = async (req: IncomingMessage): Promise<Json> => {
 	const chunks: Buffer[] = [];
 	let size = 0;
-	for await (const chunk of req as AsyncIterable<Buffer>) {
-		size += chunk.byteLength;
+	for await (const chunk of req) {
+		const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+		size += bytes.byteLength;
 		if (size > BODY_BYTES) throw new Error('body too large');
-		chunks.push(chunk);
+		chunks.push(bytes);
 	}
 	const text = Buffer.concat(chunks).toString('utf8');
 	if (!(req.headers['content-type'] ?? '').includes('json') || text === '') return {};
@@ -317,7 +318,8 @@ export async function startSimulator(port = 0) {
 		});
 	});
 	await new Promise<void>((listening) => server.listen(port, '127.0.0.1', listening));
-	const { port: bound } = server.address() as AddressInfo;
+	const address = server.address();
+	const bound = address !== null && typeof address === 'object' ? address.port : port;
 	return {
 		url: `http://127.0.0.1:${bound}`,
 		messages: () => log,

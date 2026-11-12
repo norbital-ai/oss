@@ -2,8 +2,8 @@
 // limits, so a message is sent as one line. Chat goes out on an app token this adapter mints; a whisper needs the bot's own
 // user token, which lasts until it expires because a refreshed one has nowhere to persist here. The EventSub subscriptions
 // are created once by hand: Twitch checks a new one by calling the webhook, which is not live while `connect` runs.
-import { tokenCache } from '../token.ts';
-import { Schema } from 'effect';
+import { loadToken, tokenCache } from '../token.ts';
+import { Effect, Schema } from 'effect';
 import { parse as parseJson, json } from '../http.ts';
 import type { ChatConnection, ChatPlatform, Incoming } from '../adapter.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
@@ -136,26 +136,30 @@ export const twitch: ChatPlatform = {
 	) {
 		if (webhookSecret.length < 10 || webhookSecret.length > 100)
 			throw new PlatformError('the EventSub secret must be 10 to 100 characters', 400);
-		const tokens = tokenCache(async () => {
-			const response = await host.fetch(TOKEN, {
-				method: 'POST',
-				body: new URLSearchParams({
-					client_id: clientId,
-					client_secret: clientSecret,
-					grant_type: 'client_credentials'
+		const tokens = await Effect.runPromise(
+			tokenCache(() =>
+				loadToken(async () => {
+					const response = await host.fetch(TOKEN, {
+						method: 'POST',
+						body: new URLSearchParams({
+							client_id: clientId,
+							client_secret: clientSecret,
+							grant_type: 'client_credentials'
+						})
+					});
+					if (!response.ok)
+						throw new PlatformError(`Twitch answered ${response.status}`, response.status);
+					const made = await json(
+						Schema.Struct({
+							access_token: Schema.String,
+							expires_in: Schema.optionalKey(Schema.Number)
+						}),
+						response
+					);
+					return { token: made.access_token, ttl: (made.expires_in ?? 3600) * 1000 - EARLY_MS };
 				})
-			});
-			if (!response.ok)
-				throw new PlatformError(`Twitch answered ${response.status}`, response.status);
-			const made = await json(
-				Schema.Struct({
-					access_token: Schema.String,
-					expires_in: Schema.optionalKey(Schema.Number)
-				}),
-				response
-			);
-			return { token: made.access_token, ttl: (made.expires_in ?? 3600) * 1000 - EARLY_MS };
-		});
+			)
+		);
 		const helix = async (path: string, token: string, body?: object): Promise<Response> => {
 			const response = await host.fetch(`${API}${path}`, {
 				method: body === undefined ? 'GET' : 'POST',
@@ -176,11 +180,11 @@ export const twitch: ChatPlatform = {
 		};
 		/** With the app's token; one Twitch refuses is dropped and minted again, once. */
 		const asApp = async (path: string, body?: object) => {
-			const token = await tokens.get();
+			const token = await Effect.runPromise(tokens.get());
 			return helix(path, token, body).catch((error: unknown) => {
 				if (!(error instanceof PlatformError) || error.status !== 401) throw error;
-				tokens.invalidate();
-				return tokens.get().then((fresh) => helix(path, fresh, body));
+				Effect.runSync(tokens.invalidate);
+				return Effect.runPromise(tokens.get()).then((fresh) => helix(path, fresh, body));
 			});
 		};
 		const { data = [] } = await json(

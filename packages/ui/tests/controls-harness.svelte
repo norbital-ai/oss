@@ -1,30 +1,26 @@
 <script lang="ts">
-	// A form laid out by hand: one field overriding the form's mode, and a bare Input inside a Fieldset.
+	// A form laid out by hand: one field overriding the form's mode.
 	import Field from '../src/form/field.svelte';
-	import Fieldset from '../src/form/fieldset.svelte';
 	import Form from '../src/form/form.svelte';
 	import type { Row } from '../src/model/types.js';
-	import Input from '../src/primitives/input/input.svelte';
+	import type { UiContext } from '../src/client/contract.js';
 
 	let {
+		ctx,
 		record,
 		readonly,
 		disabled,
-		override,
-		group
+		override
 	}: {
+		ctx: UiContext;
 		record: Row | null | undefined;
 		readonly?: boolean;
 		disabled?: boolean;
 		override?: boolean;
-		group: 'readonly' | 'disabled';
 	} = $props();
 </script>
 
-<Form of="jobs" id="j1" {record} {readonly} {disabled}>
-	<Field name="title" />
-	<Field name="crew" readonly={override} />
+<Form {ctx} of="jobs" id="j1" {record} {readonly} {disabled}>
+	<Field {ctx} name="title" />
+	<Field {ctx} name="crew" readonly={override} />
 </Form>
-<Fieldset readonly={group === 'readonly'} disabled={group === 'disabled'}>
-	<div data-bare><Input value="bare" /></div>
-</Fieldset>

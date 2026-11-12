@@ -3,14 +3,16 @@ import type { ViewNames } from '../decl/ctx.ts';
 import type { PageBolt } from './page-bolt.ts';
 import type { ShellBolt } from '../shell/runtime.ts';
 import type { PublicClient } from '../shell/public/client.ts';
-export type { PageAct, PageBolt, PageCall, PageClock, PageRun, Query } from './page-bolt.ts';
+import type { UiContext } from '@norbital-ai/ui';
+export type { PageBolt } from './page-bolt.ts';
 export type { PageSnapshotHost } from './bolt.ts';
-export { resolve_device, type DeviceApi } from './device.ts';
 export { file_ref } from './file-ref.ts';
-export { framework_text } from '../shell/i18n.ts';
+export { default as IntegrationSetup } from './IntegrationSetup.svelte';
+export type { IntegrationSetupEntry } from '../shell/integration/setup.ts';
 
-export type PageContext = Omit<ShellBolt, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt;
-export type PublicPageContext = Omit<PublicClient, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt;
+/** A page's `ctx`; its `ui` is what every `@norbital-ai/ui` view takes, so a page passes `ctx` whole (`<Table {ctx} of="projects">`). */
+export type PageContext = Omit<ShellBolt, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt & UiContext;
+export type PublicPageContext = Omit<PublicClient, keyof PageBolt | 'native_query' | 'observe' | 'closed' | 'sync'> & PageBolt & UiContext;
 
 // ui's views are typed by the same names (§3.6): `of`, `columns`, `values`, `record` and ids per model.
 declare module '@norbital-ai/ui' {

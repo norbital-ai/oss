@@ -58,12 +58,12 @@ const manifest = Result.getOrThrow(
 			rep: {
 				description: 'Rep',
 				grants: {
-					orders: { outputs: { default: { history: true } }, create: true, update: true }
+					orders: { outputs: { default: { history: true } }, create: {}, update: {} }
 				}
 			},
 			reader: {
 				description: 'Current rows',
-				grants: { orders: { outputs: { default: true } } }
+				grants: { orders: { outputs: { default: {} } } }
 			},
 			historian: {
 				description: 'History of alpha orders',

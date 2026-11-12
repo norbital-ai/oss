@@ -14,7 +14,8 @@ sits under the table there. -->
 		Table,
 		ToolbarSearch,
 		type Kind,
-		type ModelExposure
+		type ModelExposure,
+		type UiContext
 	} from '@norbital-ai/ui';
 	import { Cluster, Scroll } from '@norbital-ai/ui/layout';
 	import { fork, observe_once } from '@norbital-ai/ui/effect';
@@ -36,12 +37,14 @@ sits under the table there. -->
 	import { date_time } from '../i18n.ts';
 
 	let {
+		ctx,
 		api,
 		admin,
 		locale,
 		catalog,
 		t
 	}: {
+		ctx: UiContext;
 		api: Pick<ShellApi, 'audit' | 'audit_detail' | 'settings'>;
 		admin: boolean;
 		locale: string;
@@ -642,7 +645,7 @@ sits under the table there. -->
 			{/if}
 		</div>
 		<div class="flex min-h-64 min-w-0 flex-1 flex-col" aria-busy={page.loading} data-audit-table>
-			<Table
+			<Table {ctx}
 				of={rows}
 				key="audit-events"
 				toolbar={false}
@@ -663,7 +666,7 @@ sits under the table there. -->
 </div>
 
 {#if admin && selected !== null}
-	<DetailSheet
+	<DetailSheet {ctx}
 		title={phrase(selected.action)}
 		on_close={() => {
 			selected = null;
@@ -700,7 +703,7 @@ sits under the table there. -->
 								{t('No field changes were recorded for this event.')}
 							</p>
 						{:else}
-							<StructuredData
+							<StructuredData {ctx}
 								before={change.before}
 								kind={change.kind}
 								value={change.after}
@@ -737,7 +740,7 @@ sits under the table there. -->
 							</Button>
 						</div>
 						<div aria-label={t('Full event payload')} class="max-h-[50dvh] overflow-auto">
-							<StructuredData value={detail.payload} name={t('Payload')} />
+							<StructuredData {ctx} value={detail.payload} name={t('Payload')} />
 						</div>
 					</div>
 				</details>

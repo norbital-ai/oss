@@ -4,6 +4,7 @@ Edits a `point`: a compact trigger opens address suggestions and the map. Typed 
 and the browser's location also set the point.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { Value, Point } from './kind.js';
 
 	/**
@@ -13,6 +14,8 @@ and the browser's location also set the point.
 	 * `on_address` receives what the box holds (`Field address="<field>"` wires both).
 	 */
 	export type PointInputProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		value: Value;
 		on_change(next: Point | null): void;
 		address?: string | null;
@@ -33,11 +36,12 @@ and the browser's location also set the point.
 	import * as Popover from '../primitives/popover/index.js';
 	import { CONTROL_ICON, SELECT_TRIGGER } from './classes.js';
 	import { cn, ui_text } from '../primitives/utils.js';
-	import { photon_geocoder, regionOf, useKinds, type Geocoder } from './context.js';
+	import { photon_geocoder, regionOf, type Geocoder } from './context.js';
 	import { formatPoint, isPoint, parsePoint } from './kind.js';
 	import PointMap from './point-map.svelte';
 
 	let {
+		ctx,
 		value,
 		on_change,
 		address = null,
@@ -47,8 +51,8 @@ and the browser's location also set the point.
 		invalid = false,
 		map = true
 	}: PointInputProps = $props();
-	const host = useKinds();
-	const geocoder: Geocoder = host.geocoder ?? photon_geocoder;
+	const host = $derived(ctx.ui.kinds);
+	const geocoder: Geocoder = $derived(host.geocoder ?? photon_geocoder);
 	const t = ui_text();
 	const uid = $props.id();
 	const point = $derived(((v) => (isPoint(v) ? v : null))(value));
@@ -336,7 +340,7 @@ and the browser's location also set the point.
 			{:else if failed}<p class="text-xs text-muted-foreground">
 					{t('addressSearchUnavailable')}
 				</p>{/if}
-			{#if map}<PointMap value={point} on_pick={set} {disabled} class="h-48 sm:h-56" />{/if}
+			{#if map}<PointMap {ctx} value={point} on_pick={set} {disabled} class="h-48 sm:h-56" />{/if}
 			{#if point !== null}<p class="text-meta tabular-nums">{formatPoint(point)}</p>{/if}
 			{#if locateError}<p class="text-xs text-muted-foreground">{t('locationDenied')}</p>{/if}
 		</Popover.Content>

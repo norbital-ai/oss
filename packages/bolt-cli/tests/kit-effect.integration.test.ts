@@ -60,7 +60,7 @@ const manifest = {
 	policies: {
 		reader: {
 			description: 'Reads customers',
-			grants: { customers: { outputs: { default: true } } }
+			grants: { customers: { outputs: { default: {} } } }
 		}
 	},
 	automations: {},

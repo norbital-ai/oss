@@ -81,7 +81,7 @@ export function fork<A, E>(effect: Effect.Effect<A, E>, onFailure?: (error: E) =
 }
 
 /** Component-owned query state shared by one-shot Effects and live Streams. */
-export type QueryState<A, E> = {
+type QueryState<A, E> = {
 	readonly result: AsyncResult.AsyncResult<A, E>;
 	readonly current: A | undefined;
 	readonly error: E | undefined;
@@ -94,12 +94,19 @@ export type QueryState<A, E> = {
 /** A server answer may seed the first render and hydration, never a later query scope. */
 export type QueryOptions<A> = { readonly initial?: NoInfer<A> };
 /** Fresh arrays and plain row objects let Svelte's keyed items observe every frame; native class values retain identity. */
-const fresh = <A>(value: A): A =>
-	(Array.isArray(value)
+function fresh<A>(value: A): A;
+function fresh(value: unknown): unknown {
+	return Array.isArray(value)
 		? value.map(fresh)
 		: Predicate.isObject(value) && Object.getPrototypeOf(value) === Object.prototype
 			? { ...value }
-			: value) as A;
+			: value;
+}
+/** `target` carrying `source`'s getters, live. */
+function with_getters<T extends object, S extends object>(target: T, source: S): T & S;
+function with_getters(target: object, source: object): object {
+	return Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+}
 
 /**
  * A live read in a component (call it while the component initializes): the stream `source()` names, or none for
@@ -271,10 +278,10 @@ export function reactive_query<A, E>(
 			};
 		}
 	};
-	return Object.defineProperties(
+	return with_getters(
 		Effect.suspend(() => effect),
-		Object.getOwnPropertyDescriptors(state)
-	) as Effect.Effect<A, E> & typeof state;
+		state
+	);
 }
 
 /** A visible-page clock ticks at calendar boundaries in the workspace's zone; no unit is a fixed snapshot. */

@@ -24,7 +24,7 @@ import pg from 'pg';
 import { TenantDb } from '@norbital-ai/bolt/engine';
 import type { Facilities, Serving } from '@norbital-ai/bolt/facilities';
 import { PgliteDb, PostgresDb, tenant_db_port } from '@norbital-ai/bolt/node';
-import { host, type Facility, type HostSettings, type Provider } from '../src/index.ts';
+import { host, type Facility, type HostSettings, type Provider } from '../src/host.ts';
 
 const env = (name: string): string | undefined => {
 	const value = process.env[name]?.trim();

@@ -30,8 +30,9 @@ it.effect(
 			const declaration = schema({
 				entry: table({
 					key: 'text',
+					unique: [{ fields: ['code'] }],
 					fields: {
-						code: { kind: 'text', unique: true },
+						code: { kind: 'text' },
 						title: { kind: 'text' },
 						status: { kind: 'enum', values: ['open', 'closed'], default: 'open' },
 						optional: { kind: 'text', optional: true },
@@ -74,7 +75,8 @@ it.effect(
 				company: table({ key: 'text', fields: { name: { kind: 'text' } } }),
 				profile: table({
 					key: 'text',
-					fields: { person: { kind: 'ref', to: 'person', unique: true } }
+					unique: [{ fields: ['person'] }],
+					fields: { person: { kind: 'ref', to: 'person' } }
 				}),
 				note: table({ key: 'text', fields: { about: { kind: 'ref', to: ['person', 'company'] } } }),
 				optional_note: table({

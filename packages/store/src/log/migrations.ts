@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { StoreError } from '../errors.ts';
 import { canonical } from '@norbital-ai/std/hash';
+import { equal_json } from '@norbital-ai/std/json';
 import {
 	APPLIED,
 	MIGRATION_GUARD_CODES,
@@ -76,7 +77,7 @@ export const verify_log = (
 		yield* log_current(snapshot, declaration);
 		yield* Effect.forEach(files, check_file);
 		const names = ['', ...files.map((file) => file.name)].sort();
-		if (JSON.stringify(Object.keys(physical).sort()) !== JSON.stringify(names))
+		if (!equal_json(Object.keys(physical).sort(), names))
 			return yield* invalid('physical proof must cover every migration prefix exactly');
 		const last = files.at(-1)?.name ?? '';
 		if (

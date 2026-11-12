@@ -84,15 +84,13 @@ Each word names one thing:
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `@norbital-ai/bolt`                   | The declaration functions and their types.                                            |
 | `@norbital-ai/bolt/errors`            | The canonical tagged errors shared by guest bodies, pages and tests.                  |
-| `@norbital-ai/bolt/page`              | Page context types and device helpers.                              |
-| `@norbital-ai/bolt/page/integrations` | An integration instance's browser client and setup view.                              |
+| `@norbital-ai/bolt/page`              | Page context types, device helpers and the integration setup view.                    |
 | `@norbital-ai/bolt/engine`            | Native engine services, Layers and host ports.                                        |
 | `@norbital-ai/bolt/artifact`          | A host's reader of built artifacts.                                                   |
 | `@norbital-ai/bolt/protocol`          | Wire and artifact types and schemas, including the page cursor decoder.   |
 | `@norbital-ai/bolt/host-api`          | The Host API between a host and a pinned release.                                     |
 | `@norbital-ai/bolt/docs`              | The API reference as data.                                                            |
-| `@norbital-ai/bolt/guest-hooks`       | The prelude's host hooks every guest runner serves.                                   |
-| `@norbital-ai/bolt-cli/test`          | `TestWorkspace` and the Effect Vitest helpers; `/test/browser` mounts shell controls. |
+| `@norbital-ai/bolt-cli/test`          | `TestWorkspace` and the Effect Vitest helpers.                                        |
 
 ## Authoring and pages
 
@@ -354,7 +352,7 @@ copies. Unresolved recovery fences remain during an audit-store outage.
 ## Approvals
 
 A policy grants each model's default and named `outputs`. The model fixes each output's shape.
-Use `true` for every row or `{ where, relation: { where } }` for nested scopes. The root
+Use `{}` for every row or `{ where, relation: { where } }` for nested scopes. The root
 `where` scopes roots and may follow relations. A child scope filters its related rows or nulls a
 ref. The granting policies' scopes union for that output.
 
@@ -365,14 +363,16 @@ reads `sys_user`'s `directory` output (id, name): staff read staff, externals th
 party; a read of `sys_user` without a `default` grant names `output: 'directory'`. `sys_file` declares
 `default` (name, type, size, digest, field, uploader) and `meta` (id, name, mime) for a holder that only
 lists files. A `create` or `update`
-grant is `true` or `{ columns?: { fields: [...], '<relation>': { fields: [...] } }, verdict? }`.
-An update grant also lists allowed state edges in `moves`. A delete grant is `true` or
+grant is `{ columns?: { fields: [...], '<relation>': { fields: [...] } }, verdict? }`; `{}` admits
+every declared column. Columns are always this tree, as outputs are: `fields`, then one key per
+relation. An update grant also lists allowed state edges in `moves`. A delete grant is
 `{ verdict? }`. Columns are checked before the verdict judges the batch, including nested rows.
 Return `ctx.allow()`, `ctx.approve({ steps, superseded_by })` or
-`yield* ctx.refuse(message, { row?, path?, field? })`. Among the holder's policies any allow
+`yield* ctx.refuse(message_key, { row?, field? })`, where `message_key` is a catalogue key and
+`field` a root column. Among the holder's policies any allow
 executes. Otherwise the first approval in team-policy order holds the batch for review, or the
 first refusal supplies the failure
-(`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row`, `path` and `field`). A grant
+(`code: 'refused'`, `rule: '<policy>.<model>.<op>'`, with its `row` and `field`). A grant
 guards its root's whole tree: a layer is never judged by its own model's policy.
 
 ```ts
@@ -438,18 +438,19 @@ Sign-in codes are issued only for active workspace members, unexpired open invit
 allowed by the workspace's open `signup`. An ineligible address returns `not_member` before a challenge
 is stored or a code is sent, so the sign-in form stays on the address step.
 
-`@norbital-ai/bolt/engine` exposes native service tags and Layers. `EngineLive(manifest)` composes
-the engine areas over `TenantDb`, `Activation` and the host port services. `PgliteDb.layer(from?)`
-owns its PGlite resource; `PostgresDb.layer(pool)` uses a pool owned by the host. `BoltHostLive`
-composes the engine's request handlers with the shell/session services in a fixed route order.
-These modules return Effects; the host owns execution and resource lifetime.
+`@norbital-ai/bolt/engine` exposes the port service tags and contracts a host fills; a host activates a
+release through HostApi (`@norbital-ai/bolt/host-api`). The test kit's whole host (the engine over
+`TenantDb`, its activation and the port services, then the shell/session routes in their fixed order) is
+one scoped Layer, `test_engine` in `@norbital-ai/bolt/tooling`. `PgliteDb.layer(from?)` owns its PGlite
+resource; `PostgresDb.layer(pool)` uses a pool owned by the host. These modules return Effects; the host
+owns execution and resource lifetime.
 
-`EngineHost` includes `Crypto.Crypto` for secure UUID generation. At a Node entry, provide
+The engine's host requirements include `Crypto.Crypto` for secure UUID generation. At a Node entry, provide
 `NodeCrypto.layer` or the complete `NodeServices.layer` from `@effect/platform-node`.
 Engine and identity constructors capture this service for their returned operations.
 
 Bolt carries no guest runner, and the runner is no facility: each host owns its own and hands it to
-the engine as `HostPorts.guests` (`GuestIsolatesPort`). bolt-cli's `node_guests()`
+the engine as `HostPorts.guests` (`GuestIsolatesPort`). bolt-cli's `node_guests`
 (`@norbital-ai/bolt-cli/guests`) runs Node vm contexts in the host's own process: each call runs under
 a timeout of what is left of the session's CPU budget, and the thread's CPU around it is metered. A vm
 context shares the host's heap and is not a security boundary, so it caps no guest memory and runs

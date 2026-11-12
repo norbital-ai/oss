@@ -4,6 +4,7 @@
 import { Schema } from 'effect';
 import { parse as parseJson, json, fileOf } from '../http.ts';
 import type { ChatConnection, ChatPlatform } from '../adapter.ts';
+import { retry_after_ms } from '../../errors.ts';
 import { nothing, PlatformError, Unverified } from '../adapter.ts';
 import { fresh, hmac, signed } from '../verify.ts';
 
@@ -85,7 +86,7 @@ export const agentphone: ChatPlatform = {
 					throw new PlatformError(
 						`${response.status}: ${await response.text()}`,
 						response.status,
-						Number(response.headers.get('retry-after')) * 1000 || undefined
+						retry_after_ms(response.headers.get('retry-after'))
 					);
 				return {
 					id: (

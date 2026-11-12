@@ -7,11 +7,11 @@ Two panes side by side at a ratio (`rail`, `sidebar`, `third`, `half`, `wide`) t
 	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutSize } from './layout.shared.js';
 
 	/** How a `Split` divides its width between `start` and `end`. */
-	export type SplitRatio = 'rail' | 'sidebar' | 'third' | 'half' | 'wide';
+	type SplitRatio = 'rail' | 'sidebar' | 'third' | 'half' | 'wide';
 	/** What a `Split` does when narrow: `stack` the panes, `switch` between them, or `none`. */
-	export type SplitCollapse = 'stack' | 'switch' | 'none';
+	type SplitCollapse = 'stack' | 'switch' | 'none';
 	/** The props of `Split`. */
-	export interface SplitProps extends LayoutAttributes {
+	interface SplitProps extends LayoutAttributes {
 		as?: LayoutElement;
 		ratio?: SplitRatio;
 		collapse?: SplitCollapse;

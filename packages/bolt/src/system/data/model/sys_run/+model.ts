@@ -11,7 +11,7 @@ export default bind_system_model('sys_run')({
 		automation: { kind: 'text' },
 		input: { kind: 'json' },
 		due_at: { kind: 'instant' },
-		key: { kind: 'text', optional: true, unique: true },
+		key: { kind: 'text', optional: true },
 		cause: { kind: 'text' },
 		depth: { kind: 'int' },
 		state: { kind: 'text', default: 'queued' },
@@ -29,6 +29,7 @@ export default bind_system_model('sys_run')({
 		// who or what started an automation run (`RunTrigger`); never its authority
 		trigger: { kind: 'json', optional: true }
 	},
+	constraints: { key: { unique: ['key'] } },
 	table: { primary: 'text' },
 	outputs: { default: { fields: 'all' } },
 	indexes: {

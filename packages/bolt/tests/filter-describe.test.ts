@@ -125,6 +125,7 @@ const present = <A>(value: A | null | undefined): A => {
 	return value;
 };
 
+const exposures: EngineManifest['exposures'] = manifest.exposures;
 const TRUE: Pred = { t: 'const', value: true };
 const arm: Arm = { policy: 'dispatch', where: TRUE };
 /** A policy's read of `model`'s `output`: one arm per path the output declares, as a compiled authority holds it. */
@@ -132,7 +133,7 @@ const grant = (model: string, output = 'default'): ModelAuthority => ({
 	read: {
 		[output]: Object.fromEntries(
 			Object.keys(
-				present(manifest.exposures[model as keyof typeof manifest.exposures].outputs[output as 'default'])
+				present(present(exposures[model]).outputs[output])
 			).map((path) => [path, [arm]])
 		)
 	},

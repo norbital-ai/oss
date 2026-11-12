@@ -13,7 +13,7 @@
 		"check:packages:ci": "pnpm exec turbo run build --concurrency=1 && pnpm exec turbo run lint --concurrency=1 && pnpm types:compat && pnpm test && pnpm publication:check",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"lint": "turbo lint && node packages/bolt-cli/src/test/lint.ts packages scripts",
+		"lint": "turbo lint && node packages/bolt-cli/src/test/lint.ts packages scripts && node scripts/lint-assertions.ts packages scripts",
 		"packages:build": "pnpm --filter @norbital-ai/ui... build",
 		"packages:resolve": "node scripts/resolve-published-packages.ts",
 		"publication:check": "node scripts/validate-package-publication.ts",

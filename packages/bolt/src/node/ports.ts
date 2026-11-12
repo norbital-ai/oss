@@ -20,7 +20,7 @@ import { keys_port } from './keys.ts';
 import { mcp_port } from './mcp.ts';
 import { http_port } from './net.ts';
 
-export type NodePortsOptions = {
+type NodePortsOptions = {
 	/** The release directory; its seed packs are `../seed/<pack>`. Without one there is no artifact port. */
 	readonly release?: string | undefined;
 	/** The tenant's 32-byte secrets key; without one nothing seals or opens. */

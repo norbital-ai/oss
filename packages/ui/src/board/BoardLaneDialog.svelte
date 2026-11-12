@@ -1,12 +1,12 @@
 <script lang="ts" generics="C extends ModelKey">
+	import type { UiContext } from '../client/contract.js';
 	// One lane expanded in the board's dialog: the same cards and pages as a responsive grid, with a search and filter of
 	// its own ANDed under the lane's condition (which already carries the board's scope), so it only ever narrows.
 	import { onDestroy, untrack } from 'svelte';
 	import { Debounced, watch } from 'runed';
 	import type { ModelKey, RowOf } from '../model/types.js';
 	import type { Json } from '../client/contract.js';
-	import { useBolt } from '../client/context.js';
-	import { useKinds } from '../kinds/context.js';
+	import { bolt_of } from '../client/context.js';
 	import * as Dialog from '../primitives/dialog/index.js';
 	import { and } from '../filter/scope.js';
 	import { orderOf, sortable } from '../filter/order.js';
@@ -18,6 +18,7 @@
 	import BoardLane from './BoardLane.svelte';
 
 	let {
+		ctx,
 		of,
 		card,
 		label,
@@ -33,7 +34,7 @@
 		on_select,
 		on_change,
 		on_open
-	}: Pick<BoardProps<C>, 'of' | 'card'> & {
+	}: Pick<BoardProps<C>, 'ctx' | 'of' | 'card'> & {
 		label: string;
 		/** The lane dot's tone class, or null. */
 		dot: string | null;
@@ -52,11 +53,11 @@
 		on_change: () => void;
 		on_open: (id: string) => void;
 	} = $props();
-	const bolt = useBolt();
-	const kinds = useKinds();
+	const bolt = $derived(bolt_of(ctx));
+	const kinds = $derived(ctx.ui.kinds);
 	const catalog = $derived(kinds.catalog ?? {});
 	const key = untrack(() => `${view_key}.lane`);
-	const view = viewState(bolt, {
+	const view = viewState(() => ctx, {
 		key: () => key,
 		model: () => of,
 		catalog: () => catalog,
@@ -95,7 +96,7 @@
 					bind:value={q}
 					label={msg(bolt, 'table.search')}
 				/>{/if}
-			<ViewPopover
+			<ViewPopover {ctx}
 				{view}
 				{catalog}
 				model={of}
@@ -110,7 +111,7 @@
 			class="grid grid-cols-[repeat(auto-fill,minmax(min(16rem,100%),1fr))] content-start gap-3"
 			data-lane-grid
 		>
-			<BoardLane
+			<BoardLane {ctx}
 				{of}
 				{card}
 				lane={label}

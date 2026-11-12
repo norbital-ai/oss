@@ -9,9 +9,9 @@ A region with a height contract (`content`, `fill`, `viewport`), optional paddin
 	/**
 	 * A `Bound`'s height contract: a layout `size` (`content`, `fill`), or `viewport` — the space below the page chrome.
 	 */
-	export type BoundSize = LayoutSize | 'viewport';
+	type BoundSize = LayoutSize | 'viewport';
 	/** The props of `Bound`. */
-	export interface BoundProps extends LayoutAttributes {
+	interface BoundProps extends LayoutAttributes {
 		as?: LayoutElement;
 		/**
 		 * `content` (default): its own height — a clip or inset boundary; `fill`: the space left in

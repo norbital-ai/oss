@@ -3,9 +3,12 @@
 The live status of one automation run: queued, running with its progress, or its result or error.
 -->
 <script lang="ts" module>
+	import type { UiContext } from '../client/contract.js';
 	import type { RunRow } from '../client/contract.js';
 	/** `run` is a run id, a `RunHandle`, or a row already read (RunsFor), which is shown without a second read. */
-	export type RunStatusProps = {
+	type RunStatusProps = {
+		/** The page context (`ctx`), passed whole. */
+		ctx: UiContext;
 		automation: string;
 		run: string | { readonly id: string } | RunRow;
 		/** The automation's name; else its catalog label (`automations.<key>.label`), else its name in words (`jobs.send_pdf` → `Send pdf`). */
@@ -17,16 +20,16 @@ The live status of one automation run: queued, running with its progress, or its
 
 <script lang="ts">
 	// One run, live (rule 56): status, progress, the error code, and download links for the files it returned.
-	import { useBolt } from '../client/context.js';
+	import { bolt_of } from '../client/context.js';
 	import { watch } from '../read/live.svelte.js';
 	import { humanize, msg, catalogText } from '../text/messages.js';
 	import { progressOf, runFiles } from './facts.js';
 	import ReadGate from '../read/ReadGate.svelte';
 
-	let { automation, run, title, download = false }: RunStatusProps = $props();
-	const bolt = useBolt();
+	let { ctx, automation, run, title, download = false }: RunStatusProps = $props();
+	const bolt = $derived(bolt_of(ctx));
 	const id = $derived(typeof run === 'string' ? run : run.id);
-	const runs = bolt.runs;
+	const runs = $derived(bolt.runs);
 	const given = $derived(
 		typeof run !== 'string' && 'status' in run ? { rows: [run], next: null } : null
 	);
@@ -55,7 +58,7 @@ The live status of one automation run: queued, running with its progress, or its
 		{msg(bolt, 'run.unavailable', { id })}
 	</p>
 {:else}
-	<ReadGate {state} what={automation}>
+	<ReadGate {ctx} {state} what={automation}>
 		{#snippet children(page)}
 			{@const r = page.rows[0]}
 			{#if r === undefined}

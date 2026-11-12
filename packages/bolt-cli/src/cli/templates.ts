@@ -14,7 +14,7 @@ import { ChildProcess } from 'effect/process';
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http';
 import { stripVTControlCharacters } from 'node:util';
 import { availableParallelism } from 'node:os';
-import { TemplateManifest } from '@norbital-ai/bolt/engine';
+import { TemplateManifest } from '@norbital-ai/bolt/protocol';
 import { read_artifact } from '@norbital-ai/bolt/artifact';
 import { ReleaseJson, schemaSql } from '../compiler/artifact/index.ts';
 import { workers } from './test.ts';

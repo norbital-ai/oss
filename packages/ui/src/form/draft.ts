@@ -11,10 +11,9 @@ import {
 	type Kind
 } from '../kinds/kind.js';
 import { matchesLock } from '../record/lock.js';
-import { encode_wire } from '@norbital-ai/std/wire';
+import { equal_json } from '@norbital-ai/std/json';
 import { UUID_PATTERN } from '@norbital-ai/std/id';
 import type { Where } from '@norbital-ai/std/kind';
-import { Equal } from 'effect';
 import type { Outcome } from '../client/contract.js';
 
 /** A row's values by field name. */
@@ -146,9 +145,7 @@ export function startValues(
 	);
 }
 
-const same = (a: Value | undefined, b: Value | undefined) =>
-	// Equal caches object comparisons; wire snapshots keep mutable drafts and exact decimals current.
-	Equal.equals(encode_wire(a ?? null), encode_wire(b ?? null));
+const same = (a: Value | undefined, b: Value | undefined) => equal_json(a ?? null, b ?? null);
 /** Only changed fields are sent (§5.10): a field no one touched never overwrites a concurrent change. */
 export const changed = (base: Row, draft: Row): Record<string, Value> =>
 	Object.fromEntries(Object.entries(draft).filter(([k, v]) => !same(base[k], v)));

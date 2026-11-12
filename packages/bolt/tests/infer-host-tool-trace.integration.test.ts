@@ -1,3 +1,4 @@
+import { required } from './support/required.ts';
 // An automation's `ctx.ai.sys_2.infer` host tool steps (web search, browsing) each leave one `infer.tool` event on the
 // run: what was searched or opened, so a research run proves the steps it took.
 import { describe, expect, it } from '@effect/vitest';
@@ -60,17 +61,17 @@ const manifest = {
 		matcher: {
 			description: 'Matches invoices',
 			grants: {
-				invoices: { outputs: { default: true }, update: true },
-				purchase_orders: { outputs: { default: true } }
+				invoices: { outputs: { default: {} }, update: {} },
+				purchase_orders: { outputs: { default: {} } }
 			},
 			capabilities: { tools: ['web_search'] }
 		},
 		clerk: {
 			description: 'Enters documents',
 			grants: {
-				invoices: { outputs: { default: true }, create: true, update: true },
-				purchase_orders: { outputs: { default: true }, create: true },
-				ledgers: { outputs: { default: true }, create: true }
+				invoices: { outputs: { default: {} }, create: {}, update: {} },
+				purchase_orders: { outputs: { default: {} }, create: {} },
+				ledgers: { outputs: { default: {} }, create: {} }
 			}
 		}
 	},
@@ -168,7 +169,7 @@ const create = (t: Kit, route: FixtureRoute, callable: string, input: Json) =>
 		Effect.map((reply) => {
 			const outcome: Outcome = reply.outcome;
 			if (outcome.kind !== 'committed') throw new Error(JSON.stringify(outcome));
-			return outcome.records[0]!.id;
+			return required(outcome.records[0]).id;
 		})
 	);
 const note = (t: Kit, route: FixtureRoute, id: string) =>

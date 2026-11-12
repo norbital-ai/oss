@@ -1,7 +1,7 @@
 import { expect } from '@effect/vitest';
 import { Effect } from 'effect';
 import { HostIdentity } from '../src/engine/services.ts';
-import { layer, TestWorkspace } from '../../bolt-cli/src/test/index.ts';
+import { TestWorkspace } from '../../bolt-cli/src/test/index.ts';
 import { Authorities } from '../src/engine/identity/actor.ts';
 import { assign_team, invite, issueKey } from '../src/engine/identity/members.ts';
 import { decode_identity, load_pack, source_of, type Pack } from '../src/engine/write/pack.ts';
@@ -9,6 +9,7 @@ import { Chain, noticeInsert } from '../src/engine/write/sql.ts';
 import { manifest } from './catalogue-fixture.ts';
 import type { EngineManifest } from '../src/engine/manifest.ts';
 import { plan, read_applied } from '../src/engine/schema/plan.ts';
+import { layer } from '../../bolt-cli/src/test/effect.ts';
 
 const source = {
 	...manifest,
