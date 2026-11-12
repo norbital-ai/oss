@@ -41,7 +41,7 @@ export type CheckResult = {
 	errors: CheckDiagnostic[];
 	manifest?: EngineManifest;
 	guest?: GuestProgram;
-	/** The model transforms, per verb: `'<model>.create'`, `'<model>.update'`. */
+	/** The model transforms, per verb: `'<model>.create'`, `'<model>.update'`, `'<model>.delete'`. */
 	transforms: string[];
 	seed?: SeedPack;
 };
@@ -487,9 +487,9 @@ const SERIALIZE = `(() => { const d = globalThis.__ns.default, bodies = { transf
 		const b = m?.bodies ?? {};
 		if (hasBody(b)) bodies.models.push(n);
 		if (Object.hasOwn(m?.spec ?? {}, 'queries')) throw new Error('model ' + JSON.stringify(n) + ' cannot declare queries: read layers, then transform them in src/lib');
-		for (const body of [b.create, b.update, ...Object.values(b.effect ?? {})]) generator(body);
+		for (const body of [b.create, b.update, b.delete, ...Object.values(b.effect ?? {})]) generator(body);
 		for (const s of Object.values(b.syncs ?? {})) { generator(s?.read); generator(s?.write); for (const p of Object.values(s?.parse ?? {})) generator(p); }
-		for (const verb of ['create', 'update']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
+		for (const verb of ['create', 'update', 'delete']) if (typeof b[verb] === 'function') bodies.transforms.push(n + '.' + verb);
 		mark(m?.spec);
 		d.model[n] = { name: m?.name, spec: m?.spec };
 	}

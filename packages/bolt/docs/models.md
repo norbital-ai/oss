@@ -159,6 +159,11 @@ Declare application-layer immutability once, on the model or the field:
   Named lock constraints own editable exceptions through `except`. Policies authorize edges through
   `update.moves`.
 
+Every named constraint (`unique`, `check`, `no_overlap`, `locked`) takes an optional `message`, a catalogue
+key without placeholders: `constraints: { names_its_movement: { check: { days: { ne: 0 } }, message: 'errors.no_movement' } }`.
+A violation refuses with that message's text and `key`, as `ctx.refuse` does, naming the `field` when the rule has one
+column. Without a message the refusal keeps its default text. A message is no schema: changing it needs no migration.
+
 Do not reimplement either rule in `update.transform` or a template form: the host
 and the generated record UI already enforce them.
 
@@ -167,7 +172,7 @@ Work that follows a committed write is the model's `effect`, one generator per v
 ```ts
 create: { /* columns, transform, ... */ effect: function* (changes, ctx) {} },
 update: { /* columns, transform, ... */ effect: function* (changes, ctx) {} },
-delete: { effect: function* (changes, ctx) {} }
+delete: { transform: function* (changes, ctx) {}, effect: function* (changes, ctx) {} }
 ```
 
 Each runs after the commit, once per committed batch, as the durable run `<model>.effect.<verb>`
@@ -238,8 +243,9 @@ Every generated write's input is an array of rows (`[{ … }]`, `[{ target, set 
 there is no single-row form. Create and update transforms receive `{ before, set, after, changed }`
 changes and return sets in order. `after` is the row as the write leaves it: the stored values with
 `set` applied, so read a value from `c.after.x`, never `c.set.x ?? c.before.x`, and test a change with
-`c.changed('x')`. A create's `after` carries its future id. Delete has no transform;
-policies and native constraints judge deletion. Shared logic is an ordinary helper called by both verbs.
+`c.changed('x')`. A create's `after` carries its future id. A delete transform receives `{ before, set: {}, after: null }`
+per deleted row; it returns nothing or only what the delete carries (`{ with, on_approved }`), never rows.
+Shared logic is an ordinary helper called by both verbs.
 
 `target` is a row: pass the row you read or received (it carries its `id` and `revision`, and a newer
 stored revision is a conflict). An automation that acts on records takes them as
@@ -255,7 +261,7 @@ batch or list the body received, and `field` one of its root columns. A message 
 one. The engine renders the key with the workspace catalogue, the path `ctx.t` takes: a refused act's
 `message`, a run's error and the agent read the text, with `key` and `values` beside it.
 
-A transform may instead return `{ sets, with, on_approved }`,
+A create or update transform may instead return `{ sets, with, on_approved }`, and a delete transform `{ with, on_approved }`,
 each carried map `{ [model]: { create?: [row], update?: [{ target, set }] } }`: rows of other models the
 write carries into its own transaction. They run their own model's callbacks (`ctx.carried_by` names the
 carrying model), the root write's grant admits them, and a target's selected revision older than the
@@ -266,7 +272,7 @@ stored one is a conflict.
 - `on_approved` follows the write once it is approved: at once when no approval holds it. When one does,
   the approving decision asks the request model's callback again (`ctx.approving`) for every held row
   at once, one call per verb, on the records as they now stand (an update has current `before` and
-  `after` trees, an empty `set` and `changed(...)`),
+  `after` trees, an empty `set` and `changed(...)`; a delete has each row as it stood before the request),
   plans what they carry together and commits it in the decision's one statement. A refusal or conflict
   there leaves the request pending; a rejection writes none. A change to a held record waits the same
   way. Ledger and balance postings belong here.

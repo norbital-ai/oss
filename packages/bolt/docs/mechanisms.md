@@ -46,8 +46,8 @@ own business callback. Defaults, checks, uniqueness, FK actions, audit and expre
 invariants have native database enforcement. Raw SQL is privileged and does not gain application
 policy checks. A model lock is an application rule, not a SQL permission.
 
-Create and update transforms receive before/set/after/changed records and return sets. Delete has no
-transform. Transforms may carry other models' rows into the same commit (`with`, or `on_approved` once the
+Create and update transforms receive before/set/after/changed records and return sets. A delete transform
+receives the deleted rows and returns no rows. Transforms may carry other models' rows into the same commit (`with`, or `on_approved` once the
 write is approved). They plan and validate, not perform external I/O. Seed restore and derived roll-ups are
 explicit bypasses. A callback handles up to 1,000 rows per invocation and batches dependent reads;
 all chunks of an import remain in its one transaction. See [Models](./models.md).

@@ -60,6 +60,8 @@ export const ModelData = Schema.Struct({
 		semantic: Schema.optionalKey(Schema.Struct({ fields: ModelStrings, model: Schema.String, dim: Schema.Number })),
 		indexes: Schema.optionalKey(Schema.Record(Schema.String, SearchIndexData))
 	})),
+	/** Each named constraint's refusal message: a catalogue key, rendered as a refusal's (no schema effect). */
+	messages: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 	/** Native physical keys and numbered fields, never a workspace authoring option. */
 	table: Schema.optionalKey(SystemTableData)
 });
@@ -78,17 +80,19 @@ export const ConstraintData = /* @__PURE__ */ (() => {
 	const where = Schema.Record(Schema.String, Schema.Json);
 	const optionalWhere = Schema.optionalKey(where);
 	const fields = Schema.Array(Schema.String);
+	const message = Schema.optionalKey(Schema.String);
 	return Schema.Record(
 		Schema.String,
 		Schema.Union([
 			Schema.Struct({
 				unique: Schema.NonEmptyArray(Schema.String),
 				where: optionalWhere,
-				import_key: Schema.optionalKey(Schema.Literal(true))
+				import_key: Schema.optionalKey(Schema.Literal(true)),
+				message
 			}),
-			Schema.Struct({ check: where }),
-			Schema.Struct({ no_overlap: Schema.String, per: fields, where: optionalWhere }),
-			Schema.Struct({ locked: where, except: Schema.optionalKey(fields) })
+			Schema.Struct({ check: where, message }),
+			Schema.Struct({ no_overlap: Schema.String, per: fields, where: optionalWhere, message }),
+			Schema.Struct({ locked: where, except: Schema.optionalKey(fields), message })
 		])
 	);
 })();
@@ -133,7 +137,9 @@ const SourceModelData = Schema.Struct({
 	update: Schema.optionalKey(Schema.Struct({
 		columns: Schema.Unknown, transform: Schema.optionalKey(Schema.Unknown), effect: Schema.optionalKey(Schema.Unknown)
 	})),
-	delete: Schema.optionalKey(Schema.Struct({ effect: Schema.optionalKey(Schema.Unknown) })),
+	delete: Schema.optionalKey(Schema.Struct({
+		transform: Schema.optionalKey(Schema.Unknown), effect: Schema.optionalKey(Schema.Unknown)
+	})),
 	syncs: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({
 		with: Schema.String,
 		parser: Schema.optionalKey(Schema.Array(Schema.Union([
@@ -204,14 +210,16 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 			relationships[`${name}.${field}`] = decodeRelationship(relationship);
 		}
 	}
-	type RuleData = Pick<ModelSpec, 'key' | 'unique' | 'check' | 'no_overlap' | 'locks'>;
+	type RuleData = Pick<ModelSpec, 'key' | 'unique' | 'check' | 'no_overlap' | 'locks' | 'messages'>;
 	const rules: { -readonly [K in keyof RuleData]: RuleData[K] } = {};
 	if (constraints !== undefined) {
 		const unique: NonNullable<ModelSpec['unique']>[number][] = [];
 		const check: Record<string, NonNullable<ModelSpec['check']>[string]> = {};
 		const no_overlap: NonNullable<ModelSpec['no_overlap']>[number][] = [];
 		const locks: Record<string, NonNullable<ModelSpec['locks']>[string]> = {};
+		const messages: Record<string, string> = {};
 		for (const [rule, constraint] of Object.entries(constraints)) {
+			if (constraint.message !== undefined) messages[rule] = constraint.message;
 			if ('unique' in constraint) {
 				const { unique: fields, where, import_key } = constraint;
 				if (import_key === true) {
@@ -238,6 +246,7 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 		if (Object.keys(check).length > 0) rules.check = check;
 		if (no_overlap.length > 0) rules.no_overlap = no_overlap;
 		if (Object.keys(locks).length > 0) rules.locks = locks;
+		if (Object.keys(messages).length > 0) rules.messages = messages;
 	}
 	const physical: NonNullable<ModelSpec['indexes']>[number][] = [];
 	const text = new Set<string>();
@@ -318,6 +327,7 @@ function model_parts(name: string, literal: typeof SourceModelData.Type): ModelP
 					}
 				}),
 		...(del === undefined ? {} : { delete: {
+			...(del.transform === undefined ? {} : { transform: true }),
 			...(del.effect === undefined ? {} : { effect: true })
 		} }),
 		...(syncs === undefined

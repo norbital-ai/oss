@@ -50,6 +50,8 @@
 | `group(name, { label, defaultChild })` | Use `group({ title, default_child })`. The folder names the group and `default_child` names a direct child. |
 | `customField(name, spec)` | Use `custom_field(spec)`. The folder names the field and `validate` infers its input from the declared shape. |
 | Model `read: 'all'` or `read: { model: { fields }, 'model.relation': { fields } }`, and flat named outputs | Move the default into `outputs.default` and put child projections under their relation names. Use `outputs: { default: { fields: 'all', relation: { fields: [...] } }, named: { fields: [...] } }`. |
+| A delete's postings written by a separate automation or `delete.effect` (undo entries, amendments) | Return them from `delete.transform`: `function* (changes, ctx) { return { with: { ledger: { create: … } } }; }`. `changes` carry the deleted `before` rows; the carried rows commit in the delete's own statement and are held and rolled back with it. It returns no rows. |
+| A constraint that refused without meaningful text (a check that once carried a message) | Add `message: '<catalogue key>'` to the named constraint: `constraints: { names_its_movement: { check: …, message: 'errors.no_movement' } }`. The key takes no placeholders; a violation refuses with its rendered text. |
 | Model ref `onDelete: 'setNull'` | Use `on_delete: 'set_null'`. Other delete actions keep their values. |
 | Model `unique: [{ fields, where, name }]` | Use `constraints: { [name]: { unique: fields, where } }`. Give unnamed rules a name. |
 | Model `check: { rule: where }` | Use `constraints: { rule: { check: where } }`. |

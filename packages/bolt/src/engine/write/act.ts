@@ -1454,7 +1454,7 @@ const prepareChanges = Effect.fn('Bolt.prepareChanges')(function* (
 		);
 		for (const roots of groups.values()) {
 			const first = roots[0];
-			if (first === undefined || first.change.op === 'upsert' || first.change.op === 'delete') continue;
+			if (first === undefined || first.change.op === 'upsert') continue;
 			const model = first.change.model,
 				verb = first.change.op;
 			if (!hasCallback(m, model, verb)) continue;
@@ -1562,8 +1562,9 @@ const prepareChanges = Effect.fn('Bolt.prepareChanges')(function* (
 						...(owner?.belongs === undefined ? {} : { belongs: owner.belongs })
 					};
 				});
+				// a delete keeps its rows: only what it carries joins the act
 				const replacedPaths = new Set(
-					chunk.map((item) => canonical(item.change.path))
+					verb === 'delete' ? [] : chunk.map((item) => canonical(item.change.path))
 				);
 				items = [
 					...items.filter(
@@ -2224,7 +2225,7 @@ function syncOwnership(m: EngineManifest, r: ActRequest, items: readonly Item[])
 	}
 	return null;
 }
-export const hasCallback = (m: EngineManifest, model: string, verb: 'create' | 'update'): boolean =>
+export const hasCallback = (m: EngineManifest, model: string, verb: 'create' | 'update' | 'delete'): boolean =>
 	m.exposures[model]?.[verb]?.transform === true;
 /** Without fields this checks deletion. An update checks only the fields it changes. */
 const modelLock = Effect.fnUntraced(function* (
@@ -3033,9 +3034,12 @@ export type CarriedWrite =
 			readonly target: { readonly id: string; readonly revision?: number };
 			readonly set: RowData;
 	  };
-/** The callback returns its sets in input order, with optional carried writes in the same commit or on approval. */
+/**
+ * The callback returns its sets in input order, with optional carried writes in the same commit or on approval. A delete
+ * returns no sets: nothing, or only what it carries.
+ */
 export const answerOf = (
-	verb: 'create' | 'update',
+	verb: 'create' | 'update' | 'delete',
 	output: Json,
 	count: number,
 	m: EngineManifest,
@@ -3049,10 +3053,13 @@ export const answerOf = (
 	| string => {
 	try {
 	const whole = record(output) ? output : undefined;
+	if (verb === 'delete' && output !== null && (whole === undefined || 'sets' in whole))
+		return 'a delete callback returns nothing, or only with and on_approved';
 	if (whole !== undefined && Object.keys(whole).some((key) => !['sets', 'with', 'on_approved'].includes(key)))
 		return 'a callback answer contains only sets, with and on_approved';
-	const sets = whole === undefined ? output : (whole['sets'] ?? null);
-	if (!Array.isArray(sets) || sets.length !== count)
+	// a delete keeps its rows: it answers no sets
+	const sets = verb === 'delete' ? [] : whole === undefined ? output : (whole['sets'] ?? null);
+	if (!Array.isArray(sets) || (verb !== 'delete' && sets.length !== count))
 		return 'a write callback returns one set per input';
 	const groups: { with: CarriedWrite[]; on_approved: CarriedWrite[] } = { with: [], on_approved: [] };
 	for (const key of ['with', 'on_approved'] as const) {
@@ -3078,7 +3085,7 @@ export const answerOf = (
 			}
 		}
 	}
-	return { sets: sets.map((set) => writeFields(m, rootModel, set, verb)), ...groups };
+	return { sets: verb === 'delete' ? [] : sets.map((set) => writeFields(m, rootModel, set, verb)), ...groups };
 	} catch (error) {
 		return error instanceof BoltError ? error.message : String(error);
 	}

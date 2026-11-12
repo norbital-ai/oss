@@ -8,9 +8,12 @@ import type { ConstraintMeta } from '@norbital-ai/store';
 const quoted = (message: string, before: string): string | undefined =>
 	new RegExp(`${before} "([^"]+)"`).exec(message)?.[1];
 
+/** A constraint as the SQLSTATE map reads it: its authored message's catalogue `key` beside the rendered `message`. */
+export type RuleMeta = ConstraintMeta & { readonly key?: string };
+
 export function refusalOf(
 	e: DbError,
-	constraints: ReadonlyMap<string, ConstraintMeta>
+	constraints: ReadonlyMap<string, RuleMeta>
 ): Refused | 'conflict' | BoltError {
 	const meta = e.constraint === undefined ? undefined : constraints.get(e.constraint);
 	const column = (meta?.fields.length === 1 ? meta.fields[0] : undefined) ?? e.column;
@@ -20,7 +23,11 @@ export function refusalOf(
 		code: Refused['code'],
 		message: string,
 		extra: { field?: string } = field
-	): Refused => ({ kind: 'refused', code, message, ...extra });
+	): Refused =>
+		// an authored rule message replaces the default text, keyed as an authored refusal is
+		meta?.key !== undefined && meta.message !== undefined
+			? { kind: 'refused', code, message: meta.message, key: meta.key, ...extra }
+			: { kind: 'refused', code, message, ...extra };
 	switch (e.sqlstate) {
 		case '23505':
 			return refused('unique', `another record already has this ${names || 'value'}`);

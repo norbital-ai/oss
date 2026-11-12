@@ -25,7 +25,7 @@ import { attached, attached_verdict } from ${JSON.stringify(bodies)};
 const gen = (fn, at, attach = attached) => typeof fn === 'function' && Object.prototype.toString.call(fn) === '[object GeneratorFunction]' ? attach(fn, at) : fn;
 for (const c of Object.values(value.model ?? {})) {
 	if (!c?.bodies) continue;
-	for (const key of ['create','update']) c.bodies[key] = gen(c.bodies[key], 1);
+	for (const key of ['create','update','delete']) c.bodies[key] = gen(c.bodies[key], 1);
 	for (const verb of ['create','update','delete']) if (c.bodies.effect?.[verb]) c.bodies.effect[verb] = gen(c.bodies.effect[verb], 1);
 	for (const sync of Object.values(c.bodies.syncs ?? {})) {
 		for (const key of ['read','write']) sync[key] = gen(sync[key],1);

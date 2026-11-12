@@ -17,6 +17,8 @@ import type { TenantDbShape } from '../db/tenant-db.ts';
 import type { EngineManifest } from '../manifest.ts';
 import { BoltError, from_store } from '../../protocol/errors.ts';
 import { tables_of } from '../../protocol/catalog.ts';
+import { message_text } from '../../decl/errors/refusal.ts';
+import type { RuleMeta } from './refusal.ts';
 import { engineObjects } from './engine.ts';
 import { audit_triggers } from './audit.ts';
 import { history_schema_objects } from './history.ts';
@@ -125,13 +127,16 @@ export const destructiveSteps = (
 		engineBeside
 	).pipe(Effect.catchTag('StoreError', (e) => Effect.fail(from_store(e))));
 };
-const constraints = new WeakMap<EngineManifest, ReadonlyMap<string, ConstraintMeta>>();
+const constraints = new WeakMap<EngineManifest, ReadonlyMap<string, RuleMeta>>();
 // by slice too: every load of one workspace is another manifest object over the same schema
 const bySlice = new Map<string, ReadonlyMap<string, ConstraintMeta>>();
-/** Constraint name → its declaration, for the SQLSTATE map; once per schema, which `bolt check` proved. */
+/**
+ * Constraint name → its declaration, for the SQLSTATE map; once per schema, which `bolt check` proved. A rule's authored
+ * message (`messages`) is no schema: it joins per manifest, as its catalogue key and the workspace catalogue's text.
+ */
 export const constraintIndex = Effect.fnUntraced(function* (
 	m: EngineManifest
-): Effect.fn.Return<ReadonlyMap<string, ConstraintMeta>, BoltError> {
+): Effect.fn.Return<ReadonlyMap<string, RuleMeta>, BoltError> {
 	const known = constraints.get(m);
 	if (known !== undefined) return known;
 	const slice = schema_slice(m),
@@ -143,6 +148,10 @@ export const constraintIndex = Effect.fnUntraced(function* (
 		for (const old of bySlice.keys()) if (bySlice.size >= 64) bySlice.delete(old);
 		bySlice.set(key, c);
 	}
-	constraints.set(m, c);
-	return c;
+	const keyed = new Map<string, RuleMeta>([...c].map(([name, meta]) => {
+		const message = meta.rule === undefined ? undefined : m.models[meta.model]?.messages?.[meta.rule];
+		return [name, message === undefined ? meta : { ...meta, key: message, message: message_text(m.messages, message) }] as const;
+	}));
+	constraints.set(m, keyed);
+	return keyed;
 });

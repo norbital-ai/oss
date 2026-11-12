@@ -374,7 +374,7 @@ function start(kind, path, inputJson, ctxJson, invocation_id) {
 	if (typeof body !== 'function') { state = ['missing', path.join('.')]; return; }
 	const input = JSON.parse(inputJson, revive_wire);
 	let ctx;
-	if (['create', 'update', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
+	if (['create', 'update', 'delete', 'policy', 'syncRead', 'syncWrite', 'parse', 'tool', 'automation', 'effect', 'integration', 'page'].includes(kind)) {
 		const raw = JSON.parse(ctxJson, revive_wire);
 		Object.defineProperty(G, Symbol.for('norbital.bolt.secrets'), { value: Object.freeze(raw.$secrets ?? {}), configurable: true });
 		delete raw.$secrets;

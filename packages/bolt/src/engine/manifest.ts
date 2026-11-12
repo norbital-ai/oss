@@ -110,7 +110,7 @@ const ExposureData = Schema.Struct({
 		})
 	),
 	update: Schema.optionalKey(Schema.Struct({ columns: Columns, transform: Marker, effect: Marker })),
-	delete: Schema.optionalKey(Schema.Struct({ effect: Marker })),
+	delete: Schema.optionalKey(Schema.Struct({ transform: Marker, effect: Marker })),
 	syncs: Schema.optionalKey(Schema.Record(Schema.String, SyncData))
 });
 

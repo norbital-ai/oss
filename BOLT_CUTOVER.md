@@ -29,7 +29,7 @@ All fifteen decisions are answered; none remains an owner-decision blocker.
 6. Custom approval notifications run in effects; platform default notices remain.
 7. Use one non-partial unique constraint marked `import_key: true` (implementation choice delegated).
 8. Leave HR/payroll and templates untouched; remove Bolt’s `attaches` API.
-9. Delete has no transform hook.
+9. A delete's transform returns no rows; it may carry other models' writes (`with`, `on_approved`) into its commit (owner, 0.0.28).
 10. Use PGlite only; add no native PostgreSQL/staging acceptance suite.
 11. Preserve fleet-browser refresh. Explicit refresh before inspection is the implementation choice;
     ordinary workspace tabs retain streams, with no replacement tenant polling timer.

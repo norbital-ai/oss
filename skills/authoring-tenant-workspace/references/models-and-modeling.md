@@ -35,7 +35,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 - A foreign key is a field with `{ kind: 'ref', to, inverse }` and optional `optional`, `owned`, `on_delete`, `where` and `default` settings. A list in `to` declares a polymorphic ref. A model with two refs represents a many-to-many relation.
 - `on_delete` accepts `restrict` by default, `cascade`, or `set_null` for optional refs. Owned refs cascade.
-- Named `constraints` enforce uniqueness and checks, guard periods with `no_overlap` and declare locks with `locked`. One unique constraint may set `import_key: true` for import matching. A lock lists editable fields in `except`. Computed fields carry their typed expression on `computed`. A value needing I/O or hashing is stored by a transform or automation.
+- Named `constraints` enforce uniqueness and checks, guard periods with `no_overlap` and declare locks with `locked`. One unique constraint may set `import_key: true` for import matching. A lock lists editable fields in `except`. Any named constraint may set `message: '<catalogue key>'` (no placeholders) for its refusal text. Computed fields carry their typed expression on `computed`. A value needing I/O or hashing is stored by a transform or automation.
 - Each output is a tree with `fields` and one nested key per relation. Declaring `outputs.default` exposes the model as a read root.
 - `create.columns` and `update.columns` are trees with root `fields` and one nested key per child relation, up to five levels. Each write layer is a many-relation. The engine fills its parent FK. `create.filled` uses the same tree for columns the transform fills.
 - Nothing is deleted by omission: an update names child changes per layer as `{ create, update, delete, link, unlink }`.
@@ -52,7 +52,7 @@ Every field is required unless `optional: true`. Exact shape: `import('@norbital
 
 ## Write callbacks
 
-- Create and update transforms get changes with `before`, `set`, `after` and `changed(...fields)`. `after` is the stored row with `set` applied: read `c.after.x`, never `c.set.x ?? c.before.x`. A create's `after` carries its future id. Return sets in order, or `{ sets, with, on_approved }`; delete has no transform.
+- Create and update transforms get changes with `before`, `set`, `after` and `changed(...fields)`. `after` is the stored row with `set` applied: read `c.after.x`, never `c.set.x ?? c.before.x`. A create's `after` carries its future id. Return sets in order, or `{ sets, with, on_approved }`. A delete transform gets `before` rows and returns nothing or `{ with, on_approved }`, never rows.
 - `with` and `on_approved` hold `{ [model]: { create?, update?: [{ target, set }] } }`. Each target carries the selected revision; related rows run their own transforms (`ctx.carried_by`).
 - `with` rows are held and rolled back with the root write. `on_approved` rows commit immediately when no approval holds the write, or once in the final approving decision's statement, all or nothing.
 - The approving decision asks the transform again with `ctx.approving` on the stored rows; return only `on_approved` then and never count those rows twice.
